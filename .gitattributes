@@ -1,0 +1,4 @@
+# Force LF for text files to avoid cross-platform EOL issues on Windows/Linux
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
