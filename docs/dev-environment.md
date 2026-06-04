@@ -79,11 +79,24 @@ ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 P
    cd ../etl
    python runner.py
    ```
-   - 스크립트가 돌아가며 사용자 등록 키워드로 YouTube를 분석하고 Gemini API 및 Geocoding API를 타서 DB에 최종 적재하는 로그를 관측할 수 있습니다.
+   - 스크립트가 돌아가며 사용자 등록 키워드로 YouTube를 분석하고 Gemini API, Kakao/Naver 지오코딩, VWorld 역지오코딩을 거쳐 DB에 최종 적재하는 로그를 관측할 수 있습니다.
 
 ---
 
-## 5. E2E 통합 테스트 (Playwright)
+## 5. MCP 서버 로컬 테스트 (구현 후)
+
+MCP 서버는 웹 브라우저를 거치지 않는 AI 에이전트용 읽기/쓰기 UX입니다. T-010 구현 후에는 백엔드와 같은 `.env`를 사용하되, 쓰기 도구 활성화 여부를 명시적으로 확인합니다.
+
+```powershell
+MCP_WRITE_ENABLED=true
+MCP_TRANSPORT=stdio
+```
+
+구현 후 실행 명령은 `mcp/` 디렉토리의 README 또는 스크립트에 맞춰 이 문서에 추가합니다. 모든 쓰기 도구는 감사 로그를 남겨야 하며, Windows 로컬 테스트에서는 실제 API 키가 로그에 출력되지 않는지 함께 확인합니다.
+
+---
+
+## 6. E2E 통합 테스트 (Playwright)
 
 본 프로젝트는 프론트엔드와 백엔드가 정상적으로 메시지를 교환하고 SQLite3 DB 적재 및 VWorld 지도 로딩이 깨지지 않는지 Playwright E2E로 검증합니다.
 
@@ -109,7 +122,7 @@ ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 P
 
 ---
 
-## 6. Windows 트러블슈팅
+## 7. Windows 트러블슈팅
 
 ### 1. SQLite3 DB Locked Error
 ETL 스크립트가 대량의 쓰기(Write) 연산을 수행하는 중에 사용자가 웹에서 API를 조회/변경하면 데이터베이스 락이 발생할 수 있습니다.

@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-06-04: 상세 기획서 반영 및 MCP UX 계획 추가
+
+- **담당자**: Codex
+- **작업 내용**:
+  - `G:\My Drive\tripmate\AI유튜브여행_상세기획서.docx`의 핵심 설계 요소를 현재 개발 계획에 반영.
+  - 상세 기획서의 다음 항목을 백로그와 아키텍처에 승격:
+    - Gemini 기반 파생 키워드와 `season_context` 저장.
+    - 채널, 재생목록, 일반 검색 결과의 우선순위 큐.
+    - `yt-dlp` 기반 `skip_download`, `extract_flat` 수집.
+    - `youtube-transcript-api` → `yt-dlp` 자막 추출 → `faster-whisper` 3단계 전사 폴백.
+    - Gemini JSON Schema 기반 POI 추출.
+    - FFmpeg Input Seeking 대표 프레임 추출.
+    - 지오코딩 캐시, API 429 지수 백오프, 좌표계 정규화.
+    - 작업 상태, heartbeat, retry_count, stale 작업 재투입.
+  - 웹 UX 외에 AI 에이전트가 사용할 MCP 서버 읽기/쓰기 UX를 별도 사용자 접점으로 추가.
+  - 최신 요청에 따라 `kraddr-geo` 연계는 취소하고, Kakao / Naver / VWorld 공급자 어댑터 기반 Geocoding/Reverse Geocoding으로 정리.
+  - `docs/decisions.md`에 ADR-7 ~ ADR-10 추가:
+    - MCP 서버 읽기/쓰기 UX 채택.
+    - 지오코딩 공급자 전략 및 `kraddr-geo` 제외.
+    - ETL 복원력 보강 원칙.
+    - SQLite3 우선 구현과 PostGIS 전환 유보.
+- **다음 작업**:
+  - `frontend/`, `backend/`, `etl/`, `tests/`, `mcp/` 디렉토리 뼈대와 실제 구현 파일 생성 (T-003).
+
+---
+
 ## 2026-06-03: 프로젝트 초기화 및 문서 시스템 정교화
 
 - **담당자**: AI 에이전트 (Antigravity 2.0)

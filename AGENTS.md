@@ -17,10 +17,11 @@
 
 ## 역할
 
-이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 Gemini를 활용하여 YouTube의 여행 컨텐츠를 검색, 분석, 요약하고 정리하여 여행지 데이터를 구축하는 **지능형 여행 비서 애플리케이션**이다. 시스템은 다음 세 부분으로 구성된다:
+이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 Gemini를 활용하여 YouTube의 여행 컨텐츠를 검색, 분석, 요약하고 정리하여 여행지 데이터를 구축하는 **지능형 여행 비서 애플리케이션**이다. 시스템은 다음 네 부분으로 구성된다:
 1. **Next.js & React 프론트엔드**: 수집된 데이터 조회, 검색 키워드 및 유튜버 CRUD, VWorld 지도 기반 위치 매핑, Gemini Deep Research 실행 및 설정 화면.
-2. **FastAPI & SQLAlchemy 2.0 백엔드**: SQLite3(sqlite3) 데이터베이스를 기반으로 API 엔드포인트 및 도메인 로직 서빙.
-3. **ETL 파이프라인**: 3단계(유튜브 키워드 검색 및 업데이트 탐색 → Gemini 활용 영상 정리/요약 및 DB 저장 → 외부 REST API 연동 주소 보정) 작업 수행.
+2. **MCP 서버 UX**: AI 에이전트가 여행 데이터베이스를 조회하고 키워드/유튜버 CRUD, 보정, 병합, ETL 실행 트리거를 수행하는 읽기/쓰기 도구 표면.
+3. **FastAPI & SQLAlchemy 2.0 백엔드**: SQLite3(sqlite3) 데이터베이스를 기반으로 API 엔드포인트 및 도메인 로직 서빙.
+4. **ETL 파이프라인**: 유튜브 키워드 검색 및 업데이트 탐색 → 자막/전사/Gemini 활용 영상 정리 및 POI 추출 → 대표 프레임 추출 → 외부 REST API 연동 주소 보정 작업 수행.
 
 ## 식별자 (혼동 방지)
 
@@ -33,6 +34,8 @@
 | 지도 뷰 라이브러리 | `maplibre-vworld-js` |
 | E2E 테스트 도구 | Playwright (Windows 구동) |
 | LLM API | Gemini API (1.5 / 2.0 / Flash 등 설정 가능) |
+| MCP UX | 읽기/쓰기 모두 가능한 MCP 서버 |
+| Geocoding / Reverse Geocoding | Kakao / Naver / VWorld 공급자 어댑터 (`kraddr-geo` 연계 없음) |
 
 ## 개발 환경 정책
 
@@ -40,14 +43,14 @@ PC 개발 및 평가는 **Windows 호스트**에서 직접 진행한다.
 - **Python 환경**: 가상환경(`.venv`)을 생성하여 Python 3.10+ 기반으로 FastAPI 및 SQLAlchemy, ETL 스크립트를 구동한다.
 - **Node.js 환경**: Node.js 20+ 버전을 사용하며, frontend 폴더 내에서 Next.js를 구동한다.
 - **Playwright 구동**: Windows 환경에 맞게 브라우저 바이너리를 설치하고 Headless/Headed 모드로 E2E 테스트를 수행한다.
-- **API 키 관리**: VWorld, Gemini, YouTube, Geocoding API 키는 절대 코드에 하드코딩하지 않고 `.env` 파일로 주입하며 로그 출력 시 마스킹 처리한다.
+- **API 키 관리**: VWorld, Gemini, YouTube, Kakao, Naver 등 외부 API 키는 절대 코드에 하드코딩하지 않고 `.env` 파일로 주입하며 로그 출력 시 마스킹 처리한다.
 
 작업 전에 반드시 다음을 읽는다:
 
 1. `CLAUDE.md` — 현재 작업과 잔존 부채
 2. `SKILL.md` — 에이전트 매뉴얼 및 Windows 개발 팁
 3. `docs/architecture.md` — 전체 시스템 아키텍처 및 ETL 데이터 흐름
-4. `docs/decisions.md` — ADR-1 ~ ADR-6
+4. `docs/decisions.md` — ADR-1 ~ ADR-10
 5. `docs/tasks.md` — T-NNN 백로그
 
 ## 지시 우선순위
