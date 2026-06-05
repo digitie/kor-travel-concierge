@@ -1,11 +1,17 @@
-"""도메인 서비스 패키지 (스캐폴드).
+"""도메인 서비스 패키지.
 
-API·MCP·scheduler가 공유하는 도메인 로직을 모은다. T-004 이후 다음 서비스를
-구현한다.
+API·MCP·scheduler가 공유하는 도메인 로직을 모은다.
 
-구현 대상:
-    - crawl_runs 작업 생성/claim/heartbeat 서비스
+구현 완료(T-004):
+    - crawl_run_service : 작업 생성/claim/heartbeat/완료/실패/stale 재투입
+    - audit_service     : audit_logs 기록
+    - settings_service  : system_settings 조회/upsert
+
+구현 대상(T-005 이후):
     - 장소 조회·근접 중복 탐색(공간 함수 캡슐화) 서비스
     - 매칭 검수(needs_review) 보정·병합 서비스
-    - audit_logs 기록 서비스
 """
+
+from app.services import audit_service, crawl_run_service, settings_service
+
+__all__ = ["crawl_run_service", "audit_service", "settings_service"]

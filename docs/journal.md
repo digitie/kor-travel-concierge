@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-06-05: T-004 FastAPI 비동기 백엔드 기반 구축
+
+- **담당자**: Claude
+- **작업 내용**:
+  - **공통 모델 구현**: `crawl_runs`(작업 테이블), `audit_logs`, `system_settings`를 SQLAlchemy 2.0 선언형으로 구현. `RunState`/`RunSource` enum, `TimestampMixin` 도입.
+  - **도메인 서비스**:
+    - `crawl_run_service`: 작업 생성, FIFO `claim_next_pending`(pending→running 전이), heartbeat·진행률 갱신, 완료/실패 처리, heartbeat 만료(stale) 작업 재투입·최대 재시도 초과 격리.
+    - `audit_service`: 감사 로그 기록·조회.
+    - `settings_service`: `system_settings` upsert·조회, `.env` 기본값 병합.
+  - **DB 초기화**: `init_db()`(create_all + SpatiaLite 메타데이터 멱등 초기화)를 lifespan에 연결. `get_session` async 의존성 제공. `mod_spatialite` 미로드 환경에서도 동작하도록 graceful skip.
+  - **API 연동**: `POST /api/harvest`가 `crawl_runs` 작업만 생성하고 `job_id` 즉시 반환(ADR-13), `GET /api/harvest/{job_id}` 상태 조회, `/api/settings` GET/POST를 서비스에 연결. 작업 생성·설정 변경 시 감사 로그 기록.
+  - **테스트**: `backend/tests/`에 pytest-asyncio 기반 서비스·API 테스트 17건 추가, 전부 통과.
+- **다음 작업**:
+  - T-005: SpatiaLite 공간 데이터 모델(`travel_places.geom` 등)과 근접 중복 조회 저장소 계층 구현.
+
+---
+
 ## 2026-06-05: T-003 스캐폴딩 정비 — 코드 구현 진입 준비
 
 - **담당자**: Claude

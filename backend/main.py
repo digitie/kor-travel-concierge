@@ -4,12 +4,22 @@
 작업은 직접 수행하지 않고, 라우터가 `crawl_runs` 작업만 생성한다.
 """
 
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
 from app.core.config import get_settings
+from app.core.database import init_db
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """애플리케이션 lifespan: 시작 시 DB 테이블을 초기화한다."""
+    await init_db()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -20,6 +30,7 @@ def create_app() -> FastAPI:
         title="TripMate Agent API",
         description="FastAPI Backend for YouTube Travel Curation with Gemini",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     # CORS: 개발 단계에서는 프론트엔드 베이스 URL을 허용한다.
