@@ -1,3 +1,10 @@
+"""ETL 3단계 지오코딩 스크립트 (CLI 데모용 placeholder).
+
+실제 Kakao/Naver/VWorld 어댑터, 좌표 정규화, 429 백오프, 매칭 평가 및
+needs_review 처리는 `backend/app/etl/` 패키지(`geocoding`/`geocode_service`)에
+구현되어 있다(T-008). 이 파일은 단독 실행 데모 흐름만 유지한다.
+"""
+
 import os
 from dotenv import load_dotenv
 

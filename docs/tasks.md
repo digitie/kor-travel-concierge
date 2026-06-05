@@ -6,20 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-008**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-009**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-008**: 지오코딩·역지오코딩 구현
-  - Kakao Local API 1차 지오코딩
-  - Naver API 보조 검증
-  - VWorld API 기반 역지오코딩과 행정/도로명 주소 보강
-  - `pyproj` `always_xy=True` 좌표 정규화
-  - API 429 지수 백오프, 지터, 동시성 상한 적용
-  - 지오코딩 실패, 후보 과다, 낮은 신뢰도 결과를 `needs_review` 후보로 남김
-  - `kraddr-geo` 연계는 구현하지 않음
 
 - **T-009**: 대표 프레임 추출 구현
   - POI 시작 타임스탬프에 5~10초 오프셋 적용
@@ -79,6 +70,7 @@
 
 ## 완료
 
+- [x] **T-008**: 지오코딩·역지오코딩 구현 — `geocoding`: Kakao Local 1차/Naver 보조 검증/VWorld 역지오코딩 어댑터(httpx 주입), `pyproj always_xy` 좌표 정규화(미설치 graceful), 429 지수 백오프+지터·Semaphore 동시성 상한, `evaluate_geocode`(단일 매칭/Naver 디스앰비규에이션/후보 과다·실패 시 `needs_review`). `geocode_service`: 매칭 시 좌표 근접 중복 재사용 또는 신규 `travel_places` 생성·VWorld 주소 보강, 실패·모호는 needs_review 유지(자동 확정 금지). `kraddr-geo` 미연계. pytest 72건 통과. (2026-06-05)
 - [x] **T-007**: 자막·전사·Gemini POI 추출 구현 — `transcript`(youtube-transcript-api→yt-dlp→faster-whisper provider 체인, 지연 import·executor 격리), `poi_extraction`(Gemini JSON Schema·파싱 실패 재시도, 주입형 llm), `media_store`(RustFS 저장 추상화 + `media_assets` 기록, 무기한 보존), `summarize_service`(자막 RustFS 저장→POI 추출→설명 보정본 저장·원문 보존→`needs_review` 후보 생성). pytest 60건 통과. (2026-06-05)
 - [x] **T-006**: 공식 YouTube Data API v3 수집 파이프라인 구현 — `backend/app/etl/` 비동기 패키지: `youtube_client`(search/playlistItems/channels/videos.list, 쿼터 누적), `keyword_expansion`(주입형 Gemini generator + 결정론적 폴백, `season_context`), `ranking`(업로드 최신성·키워드 유사도·참여도 정규화 점수), `ingest_service`(`video_id` 멱등 upsert, 파생 키워드 저장, 채널 워터마크), `pipeline.run_harvest` 오케스트레이션. httpx `MockTransport` 통합 테스트 포함 pytest 45건 통과. 비공식 크롤러 미사용(ADR-11). (2026-06-05)
 - [x] **T-005**: SpatiaLite 공간 데이터 모델 구현 — `search_keywords`/`source_targets`/`youtube_videos`/`travel_places`/`extracted_place_candidates`/`video_place_mappings`/`media_assets` 모델, 설명 원문·Gemini 보정/보강 필드 분리, `match_status`·검수 메타데이터, `media_assets` 무기한 보존. `app.core.spatial`이 `geom` Point(4326)·R-Tree를 ORM 밖 SpatiaLite DDL로 관리(ADR-17), `place_service` 근접/중복 탐색(bbox+Haversine, PostGIS 대체 가능)·검수 큐 조회, `/api/destinations`·`/api/destinations/unmatched` 연동. pytest 30건 통과. (2026-06-05)

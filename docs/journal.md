@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-05: T-008 지오코딩·역지오코딩 구현
+
+- **담당자**: Claude
+- **작업 내용**:
+  - **geocoding**: Kakao Local(1차)·Naver(보조 검증)·VWorld(역지오코딩) 어댑터를 `httpx.AsyncClient` 주입형으로 구현(ADR-8, `kraddr-geo` 미연계). `normalize_to_wgs84`로 `pyproj always_xy=True` 좌표 정규화(미설치/4326은 graceful identity).
+  - **복원력**: `request_with_backoff`로 429 지수 백오프 + 지터 재시도, `asyncio.Semaphore` 동시성 상한.
+  - **평가**: `evaluate_geocode`가 단일 결과는 확정, 후보 과다 시 Naver 최상위 좌표 근접도로 디스앰비규에이션, 실패·모호·낮은 신뢰도는 `needs_review`로 판정(자동 확정 금지, ADR-16).
+  - **geocode_service**: 매칭 시 좌표 근접 중복(T-005 저장소 계층)을 재사용하거나 새 `travel_places`를 만들고, VWorld 역지오코딩으로 도로명·지번 주소 보강. 미매칭은 후보를 `needs_review`로 유지하고 사유 기록.
+  - 루트 `etl/geocode.py`에 정규 구현 위치 명시.
+  - **테스트**: 어댑터 파싱, 백오프 재시도/포기, 좌표 정규화, 평가 분기(no_result/single/ambiguous/disambiguated), 적용 영속화(매칭 생성·중복 재사용·needs_review 유지·VWorld 보강)까지 pytest 72건 통과.
+- **다음 작업**:
+  - T-009: `yt-dlp` 스트림 URL + FFmpeg Input Seeking 대표 프레임 추출, RustFS `tripmate-frames` 저장.
+
+---
+
 ## 2026-06-05: T-007 자막·전사·Gemini POI 추출 구현
 
 - **담당자**: Claude
