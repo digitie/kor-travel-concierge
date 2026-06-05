@@ -132,7 +132,14 @@ async def test_run_once_isolates_stale_when_retries_exhausted(session, session_f
     assert "max retries" in refreshed.last_error
 
 
-async def test_harvest_handler_rejects_non_keyword_target(session):
+async def test_harvest_handler_passes_channel_target(monkeypatch, session):
+    captured = {}
+
+    async def fake_run_harvest(session, client, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "target_type": "channel"}
+
+    monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -143,8 +150,38 @@ async def test_harvest_handler_rejects_non_keyword_target(session):
     )
     claimed = await crawl_run_service.claim_next_pending(session)
 
-    with pytest.raises(ValueError, match="target_type"):
-        await worker.harvest_handler(session, claimed)
+    result = await worker.harvest_handler(session, claimed)
+
+    assert result == {"ok": True, "target_type": "channel"}
+    assert captured["channel_id"] == "UC123"
+    assert captured["seed_keyword"] is None
+    assert captured["playlist_id"] is None
+
+
+async def test_harvest_handler_passes_playlist_target(monkeypatch, session):
+    captured = {}
+
+    async def fake_run_harvest(session, client, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "target_type": "playlist"}
+
+    monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="harvest",
+        source="web",
+        target_type="playlist",
+        target_id="PL123",
+        payload={"playlist_id": "PL123"},
+    )
+    claimed = await crawl_run_service.claim_next_pending(session)
+
+    result = await worker.harvest_handler(session, claimed)
+
+    assert result == {"ok": True, "target_type": "playlist"}
+    assert captured["playlist_id"] == "PL123"
+    assert captured["seed_keyword"] is None
+    assert captured["channel_id"] is None
 
 
 async def test_load_payload_rejects_invalid_json(session):

@@ -60,13 +60,53 @@ _VIDEOS_RESPONSE = {
     ]
 }
 
+_CHANNEL_RESPONSE = {
+    "items": [
+        {
+            "contentDetails": {
+                "relatedPlaylists": {
+                    "uploads": "PL_UPLOADS",
+                }
+            }
+        }
+    ]
+}
+
+_PLAYLIST_PAGE_1 = {
+    "items": [
+        {"contentDetails": {"videoId": "v1"}},
+        {"snippet": {"resourceId": {"videoId": "v2"}}},
+    ],
+    "nextPageToken": "NEXT",
+}
+
+_PLAYLIST_PAGE_2 = {
+    "items": [
+        {"contentDetails": {"videoId": "v3"}},
+    ]
+}
+
 
 def _handler(request: httpx.Request) -> httpx.Response:
     path = request.url.path
     if path.endswith("/search"):
         return httpx.Response(200, json=_SEARCH_RESPONSE)
+    if path.endswith("/channels"):
+        return httpx.Response(200, json=_CHANNEL_RESPONSE)
+    if path.endswith("/playlistItems"):
+        if request.url.params.get("pageToken") == "NEXT":
+            return httpx.Response(200, json=_PLAYLIST_PAGE_2)
+        return httpx.Response(200, json=_PLAYLIST_PAGE_1)
     if path.endswith("/videos"):
-        return httpx.Response(200, json=_VIDEOS_RESPONSE)
+        requested = set((request.url.params.get("id") or "").split(","))
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    item for item in _VIDEOS_RESPONSE["items"] if item["id"] in requested
+                ]
+            },
+        )
     return httpx.Response(404, json={"error": "unexpected"})
 
 
@@ -108,6 +148,48 @@ async def test_run_harvest_idempotent_rerun(session, yt_client):
 
     videos = (await session.execute(select(YoutubeVideo))).scalars().all()
     assert len(videos) == 3
+
+
+async def test_run_harvest_playlist_reuses_ingest_path(session, yt_client):
+    summary = await pipeline.run_harvest(
+        session,
+        yt_client,
+        playlist_id="PL_DIRECT",
+        max_videos=2,
+        now=NOW,
+    )
+    assert summary["target_type"] == "playlist"
+    assert summary["target_id"] == "PL_DIRECT"
+    assert summary["playlist_id"] == "PL_DIRECT"
+    assert summary["derived_keywords"] == []
+    assert summary["discovered"] == 2
+    assert summary["inserted"] == 2
+    # playlistItems(1) + videos(1)
+    assert summary["quota_used"] == 2
+
+    videos = (await session.execute(select(YoutubeVideo))).scalars().all()
+    assert {v.video_id for v in videos} == {"v1", "v2"}
+
+
+async def test_run_harvest_channel_uses_uploads_playlist(session, yt_client):
+    summary = await pipeline.run_harvest(
+        session,
+        yt_client,
+        channel_id="UC1",
+        max_videos=3,
+        now=NOW,
+    )
+    assert summary["target_type"] == "channel"
+    assert summary["target_id"] == "UC1"
+    assert summary["channel_id"] == "UC1"
+    assert summary["uploads_playlist_id"] == "PL_UPLOADS"
+    assert summary["discovered"] == 3
+    assert summary["inserted"] == 3
+    # channels(1) + playlistItems(1) + playlistItems(1) + videos(1)
+    assert summary["quota_used"] == 4
+
+    videos = (await session.execute(select(YoutubeVideo))).scalars().all()
+    assert {v.video_id for v in videos} == {"v1", "v2", "v3"}
 
 
 async def test_build_candidate_scoring():

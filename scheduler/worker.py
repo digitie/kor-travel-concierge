@@ -57,19 +57,27 @@ def _max_videos_from_payload(payload: Mapping[str, Any]) -> int:
 async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
     """기본 `harvest` 작업 handler.
 
-    현재 구현된 수집 오케스트레이터는 keyword 기반 수집(T-006)을 처리한다. channel
-    및 playlist 수집은 YouTubeClient 메서드는 준비되어 있으나 오케스트레이션은
-    후속 작업에서 확장한다.
+    keyword/channel/playlist target을 모두 같은 수집·상세조회·ranking·ingest 경로로
+    처리한다(T-019).
     """
     payload = load_payload(run)
-    if run.target_type not in (None, "keyword"):
-        raise ValueError(f"아직 지원하지 않는 harvest target_type: {run.target_type}")
-
-    query = payload.get("query") or (
-        run.target_id if run.target_type == "keyword" else None
+    target_type = run.target_type or "keyword"
+    query = payload.get("query") or (run.target_id if target_type == "keyword" else None)
+    channel_id = payload.get("channel_id") or (
+        run.target_id if target_type == "channel" else None
     )
-    if not query:
-        raise ValueError("harvest 작업에는 query 또는 keyword target_id가 필요하다")
+    playlist_id = payload.get("playlist_id") or (
+        run.target_id if target_type == "playlist" else None
+    )
+
+    if target_type == "keyword" and not query:
+        raise ValueError("keyword harvest 작업에는 query 또는 target_id가 필요하다")
+    if target_type == "channel" and not channel_id:
+        raise ValueError("channel harvest 작업에는 channel_id 또는 target_id가 필요하다")
+    if target_type == "playlist" and not playlist_id:
+        raise ValueError("playlist harvest 작업에는 playlist_id 또는 target_id가 필요하다")
+    if target_type not in ("keyword", "channel", "playlist"):
+        raise ValueError(f"지원하지 않는 harvest target_type: {target_type}")
 
     settings = get_settings()
     async with httpx.AsyncClient(timeout=30.0) as http_client:
@@ -77,7 +85,9 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
         return await run_harvest(
             session,
             client,
-            seed_keyword=str(query),
+            seed_keyword=str(query) if query else None,
+            channel_id=str(channel_id) if channel_id else None,
+            playlist_id=str(playlist_id) if playlist_id else None,
             max_videos=_max_videos_from_payload(payload),
         )
 
