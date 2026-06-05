@@ -1,3 +1,11 @@
+"""ETL 1단계 검색 스크립트 (CLI 데모용 placeholder).
+
+실제 비동기 수집 파이프라인(공식 YouTube Data API v3 클라이언트, 파생 키워드,
+정규화 점수, 멱등 적재)은 scheduler가 import하는 `backend/app/etl/` 패키지
+(`youtube_client`/`keyword_expansion`/`ranking`/`ingest_service`/`pipeline`)에
+구현되어 있다(T-006). 이 파일은 단독 실행 데모 흐름만 유지한다.
+"""
+
 import os
 from dotenv import load_dotenv
 

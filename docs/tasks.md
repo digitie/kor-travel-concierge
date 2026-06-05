@@ -6,18 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-006**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-007**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-006**: 공식 YouTube Data API v3 수집 파이프라인 구현
-  - Gemini 기반 시드 키워드 → 파생 키워드 생성 및 `season_context` 저장
-  - `search.list`, `playlistItems.list`, `channels.list`, `videos.list` 클라이언트 구현
-  - 검색 결과를 업로드일, 키워드 유사도, 조회수 대비 참여도 기준으로 정규화
-  - `video_id` 기준 멱등 처리와 채널 워터마크 저장
-  - 비공식 검색 크롤러는 초기 범위에서 제외
 
 - **T-007**: 자막·전사·Gemini POI 추출 구현
   - `youtube-transcript-api` 1차 자막 추출
@@ -96,6 +89,7 @@
 
 ## 완료
 
+- [x] **T-006**: 공식 YouTube Data API v3 수집 파이프라인 구현 — `backend/app/etl/` 비동기 패키지: `youtube_client`(search/playlistItems/channels/videos.list, 쿼터 누적), `keyword_expansion`(주입형 Gemini generator + 결정론적 폴백, `season_context`), `ranking`(업로드 최신성·키워드 유사도·참여도 정규화 점수), `ingest_service`(`video_id` 멱등 upsert, 파생 키워드 저장, 채널 워터마크), `pipeline.run_harvest` 오케스트레이션. httpx `MockTransport` 통합 테스트 포함 pytest 45건 통과. 비공식 크롤러 미사용(ADR-11). (2026-06-05)
 - [x] **T-005**: SpatiaLite 공간 데이터 모델 구현 — `search_keywords`/`source_targets`/`youtube_videos`/`travel_places`/`extracted_place_candidates`/`video_place_mappings`/`media_assets` 모델, 설명 원문·Gemini 보정/보강 필드 분리, `match_status`·검수 메타데이터, `media_assets` 무기한 보존. `app.core.spatial`이 `geom` Point(4326)·R-Tree를 ORM 밖 SpatiaLite DDL로 관리(ADR-17), `place_service` 근접/중복 탐색(bbox+Haversine, PostGIS 대체 가능)·검수 큐 조회, `/api/destinations`·`/api/destinations/unmatched` 연동. pytest 30건 통과. (2026-06-05)
 - [x] **T-004**: FastAPI 비동기 백엔드 기반 구축 — `crawl_runs`/`audit_logs`/`system_settings` SQLAlchemy 2.0 모델, `crawl_run_service`(생성·claim·heartbeat·완료·실패·stale 재투입)/`audit_service`/`settings_service` 도메인 서비스, `get_session` 의존성과 lifespan `init_db`, `/api/harvest` 작업 생성·상태 조회 및 `/api/settings` 연동 구현. REST는 작업 생성만 하고 직접 실행하지 않음. pytest 17건 통과. (2026-06-05)
 - [x] **T-003**: 소형 프로젝트 기준 스캐폴딩 정비 — `backend/app/`(config·database·logging·models·services·api) 구조화, `mcp/`·`scheduler/`·`etl/media.py` 신설, Docker Compose 초안(`frontend`/`api`/`mcp`/`scheduler`/`rustfs`)과 `Dockerfile.python`·`frontend/Dockerfile`, RustFS 버킷 초기화 스크립트, 컴포넌트별 requirements, 프론트 App Router 스캐폴드 작성. `.env.example`과 `Settings` 환경 변수 이름 동기화 완료. (Docker/Playwright 통합 빌드 검증은 T-014로 이관) (2026-06-05)
