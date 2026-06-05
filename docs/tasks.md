@@ -15,7 +15,9 @@
 - **T-003**: 소형 프로젝트 기준 스캐폴딩 정비
   - `frontend/`, `backend/`, `etl/`, `tests/`, `mcp/`, `scheduler/` 디렉토리 구조 정리
   - Docker Compose 기준 `frontend`, `api`, `mcp`, `scheduler` 서비스 초안 작성
+  - 별도 로컬 Docker RustFS 서비스와 S3 API `9003`, 콘솔 `9004` 포트 기준 정리
   - SQLite + SpatiaLite 데이터 볼륨과 Windows 개발 경로 정책 정리
+  - RustFS 버킷(`tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`) 초기화 절차 정리
   - `.env.example`과 실제 실행 코드의 환경 변수 이름 동기화
 
 - **T-004**: FastAPI 비동기 백엔드 기반 구축
@@ -26,8 +28,11 @@
   - REST 요청은 장시간 작업을 직접 수행하지 않고 `crawl_runs` 작업만 생성
 
 - **T-005**: SpatiaLite 공간 데이터 모델 구현
-  - `search_keywords`, `source_targets`, `youtube_videos`, `travel_places`, `video_place_mappings` 모델 작성
+  - `search_keywords`, `source_targets`, `youtube_videos`, `travel_places`, `extracted_place_candidates`, `video_place_mappings`, `media_assets` 모델 작성
   - `travel_places.geom` Point(4326) 컬럼과 R-Tree 공간 인덱스 구성
+  - `youtube_videos.description_raw`, `youtube_videos.description_gemini_corrected`, `travel_places.gemini_enriched_description` 필드 구현
+  - 매칭 실패 후보의 `match_status`, 검수자, 검수 시각, 검수 메모 필드 구현
+  - RustFS 객체 URI, 체크섬, 크기, 무기한 보존 정책을 `media_assets`에 저장
   - 좌표 근접성 기반 중복 후보 조회 함수 구현
   - PostGIS 전환을 고려해 공간 함수 호출을 저장소 계층에 캡슐화
 
@@ -42,6 +47,9 @@
   - `youtube-transcript-api` 1차 자막 추출
   - `yt-dlp` 자막 추출 폴백
   - `faster-whisper` 로컬 전사 최종 폴백
+  - 확보한 자막 파일과 전사 결과를 RustFS에 저장하고 `media_assets`에 기록
+  - YouTube 영상 설명 원문 저장 및 Gemini 오탈자·문맥 보정 설명 저장
+  - Gemini가 추가·보강한 장소 설명을 별도 필드에 저장
   - 블로킹 작업을 executor 또는 프로세스풀로 격리
   - Gemini JSON Schema 기반 POI 추출 및 파싱 실패 재시도 처리
 
@@ -51,13 +59,15 @@
   - VWorld API 기반 역지오코딩과 행정/도로명 주소 보강
   - `pyproj` `always_xy=True` 좌표 정규화
   - API 429 지수 백오프, 지터, 동시성 상한 적용
+  - 지오코딩 실패, 후보 과다, 낮은 신뢰도 결과를 `needs_review` 후보로 남김
   - `kraddr-geo` 연계는 구현하지 않음
 
 - **T-009**: 대표 프레임 추출 구현
   - POI 시작 타임스탬프에 5~10초 오프셋 적용
   - `yt-dlp`로 직접 스트림 URL 확보
   - FFmpeg Input Seeking 방식으로 JPEG 대표 프레임 추출
-  - 로컬 파일 저장소 인터페이스를 먼저 두고 추후 객체 스토리지 전환 가능하게 설계
+  - 대표 프레임 JPEG를 RustFS `tripmate-frames` 버킷에 저장
+  - 원본 동영상 또는 오디오 다운로드가 필요한 경우 RustFS `tripmate-raw-videos` 버킷에 무기한 보존
 
 - **T-010**: APScheduler 단일 실행자 구현
   - `scheduler` 실행자가 `crawl_runs.pending` 작업을 claim
@@ -71,6 +81,7 @@
   - `get_harvest_status` 작업 상태 조회 도구
   - `search_existing_places`, `get_place_detail` 조회 도구
   - `correct_place`, `merge_places`, `trigger_deep_research` 쓰기 도구
+  - `review_unmatched_place`, `resolve_place_candidate` 매칭 검수 쓰기 도구
   - 모든 쓰기 도구에 스키마 검증, 멱등 키, 감사 로그 기록 적용
 
 - **T-012**: Next.js 프론트엔드 스택 정비
@@ -82,13 +93,18 @@
 - **T-013**: 지도·리스트·운영 패널 구현
   - `maplibre-vworld-js` 지도 표시
   - 장소 리스트, 지도 마커, 상세 패널 동기화
+  - 매칭되지 않은 장소 후보 검수 큐와 수동 보정 폼 작성
+  - 영상 설명 원문, Gemini 보정 설명, Gemini 장소 보강 설명 비교 표시
   - 작업 상태, 실패 작업, API 쿼터, MCP 쓰기 로그 운영 패널 작성
+  - RustFS 저장 용량, 객체 수, 최근 저장 실패 로그 표시
   - Deep Research 트리거 및 완료 결과 표시
 
 - **T-014**: Windows 및 Docker Compose 통합 검증
   - Windows PowerShell 기준 백엔드, 프론트엔드, MCP, scheduler 실행 검증
   - Docker Compose로 단일 호스트 다중 컨테이너 실행 검증
   - SQLite/SpatiaLite 데이터 볼륨, WAL, 확장 로드 확인
+  - 별도 RustFS 로컬 Docker 서비스의 `/health` 또는 `/health/live` 상태 확인
+  - RustFS S3 API, 콘솔, 버킷 생성, 객체 업로드·조회 검증
 
 - **T-015**: Playwright E2E 검증
   - 수집 시작 → `job_id` 반환 → 상태 폴링 → 완료 결과 표시 시나리오
@@ -104,6 +120,7 @@
 
 ## 완료
 
+- [x] **T-018**: RustFS 미디어 저장, 무기한 보존, 매칭 실패 장소 수동 검수, Gemini 설명 보정·보강 필드 요구사항을 개발 계획에 반영. (2026-06-05)
 - [x] **T-017**: Google Docs 소형 프로젝트 SpatiaLite 명세 반영 — 공식 YouTube API 중심, SQLite + SpatiaLite, 전면 asyncio, APScheduler 단일 실행자, REST/MCP 분리, 프론트 스택 기준으로 문서 재정렬. (2026-06-05)
 - [x] **T-002**: 프로젝트 `docs/` 디렉토리 문서 자산 생성 및 상세 기획서 반영 — `architecture.md`, `decisions.md`, `tasks.md`, `journal.md`, `dev-environment.md` 작성 및 MCP UX 계획 반영 완료. (2026-06-04)
 - [x] **T-001**: 프로젝트 루트 문서 자산 생성 — `README.md`, `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, `.env.example` 작성 완료. (2026-06-03)

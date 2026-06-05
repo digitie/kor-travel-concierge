@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/Gemini_API-8E75C2?style=for-the-badge&logo=google-gemini&logoColor=white" alt="Gemini" />
   <img src="https://img.shields.io/badge/SpatiaLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SpatiaLite" />
+  <img src="https://img.shields.io/badge/RustFS-111827?style=for-the-badge" alt="RustFS" />
   <img src="https://img.shields.io/badge/Playwright-2EAD33?style=for-the-badge&logo=playwright&logoColor=white" alt="Playwright" />
 
   <h1>TripMate Agent</h1>
@@ -20,8 +21,11 @@
 - **공식 YouTube Data API v3 중심 수집**: 검색과 메타데이터는 `search.list`, `playlistItems.list`, `channels.list`, `videos.list`를 사용합니다. 비공식 검색 크롤러는 초기 설계에서 제외합니다.
 - **격리된 자막 폴백**: 타인 영상 자막은 공식 captions API로 처리하기 어렵기 때문에 `youtube-transcript-api` → `yt-dlp` → `faster-whisper` 순서로 폴백합니다.
 - **Gemini 기반 POI 추출**: 자막과 메타데이터에서 장소명, 위치 단서, 설명, 타임스탬프를 JSON Schema 기반으로 추출합니다.
+- **RustFS 미디어 저장**: 다운로드한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 무기한 보존합니다.
 - **SQLite + SpatiaLite 공간 DB**: 별도 DB 서버 없이 단일 파일에 장소, 영상, 매핑, 작업 상태, 공간 인덱스를 저장합니다.
 - **Kakao/Naver/VWorld 지오코딩**: 장소명은 Kakao/Naver로 보정하고, 좌표 기반 주소 보강은 VWorld 역지오코딩을 사용합니다. `kraddr-geo` 연계는 현재 계획에 포함하지 않습니다.
+- **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
+- **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
 - **전면 비동기 실행**: `httpx.AsyncClient`, `aiosqlite`, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
 - **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, `maplibre-vworld-js`를 기준으로 합니다.
@@ -38,7 +42,7 @@
 [MCP 서버] ── 도구 호출 / 작업 생성 ────────┤
                                            │
                                            ▼
-                                  [APScheduler 실행자]
+                         [APScheduler 실행자] ── 객체 저장 ──► [RustFS 로컬 Docker]
                                            │
                                            ▼
                  [YouTube Data API / Gemini / Kakao / Naver / VWorld]
@@ -72,6 +76,18 @@ GEMINI_ENGINE_VERSION=gemini-2.0-flash
 # YouTube Data API v3
 YOUTUBE_API_KEY=your_youtube_api_key_here
 YOUTUBE_USE_OFFICIAL_API=true
+
+# RustFS
+RUSTFS_ENABLED=true
+RUSTFS_ENDPOINT=http://localhost:9003
+RUSTFS_CONSOLE_URL=http://localhost:9004
+RUSTFS_ACCESS_KEY=your_rustfs_access_key_here
+RUSTFS_SECRET_KEY=your_rustfs_secret_key_here
+RUSTFS_BUCKET_RAW_VIDEOS=tripmate-raw-videos
+RUSTFS_BUCKET_SUBTITLES=tripmate-subtitles
+RUSTFS_BUCKET_FRAMES=tripmate-frames
+RUSTFS_HEALTH_PATH=/health/live
+MEDIA_RETENTION_POLICY=infinite
 
 # 지오코딩 / 역지오코딩
 GEOLOCATION_PROVIDER=kakao
