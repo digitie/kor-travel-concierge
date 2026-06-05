@@ -9,11 +9,16 @@ def geocode_address(raw_address: str) -> dict:
     표준 주소와 경위도 좌표로 변환하는 함수
     """
     provider = os.getenv("GEOLOCATION_PROVIDER", "kakao")
-    api_key = os.getenv("GEOLOCATION_API_KEY")
+    api_key_by_provider = {
+        "kakao": os.getenv("KAKAO_REST_API_KEY"),
+        "naver": os.getenv("NAVER_CLIENT_ID"),
+        "vworld": os.getenv("VWORLD_SERVICE_KEY"),
+    }
+    api_key = api_key_by_provider.get(provider)
     
     print(f"[Geocode Log] {raw_address} 좌표 변환 시도 중 (Provider: {provider})...")
     
-    # Placeholder: 외부 REST API 호출
+    # Placeholder: 공급자별 공식 REST API 호출
     # 리턴 값 구조 예시
     return {
         "formatted_address": "부산광역시 해운대구 우동 124",

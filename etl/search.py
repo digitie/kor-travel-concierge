@@ -17,11 +17,12 @@ def refine_query_with_gemini(raw_keyword: str) -> str:
 
 def search_youtube_videos(query: str):
     """
-    유튜브 API 또는 우회 스크래퍼를 통해 영상을 탐색하는 함수
+    공식 YouTube Data API v3를 통해 영상을 탐색하는 함수
     """
     youtube_key = os.getenv("YOUTUBE_API_KEY")
-    print(f"[YouTube Log] {query} 조건으로 신규 영상 탐색 실행...")
-    # Placeholder: 유튜브 크롤링/API 연동 결과 반환 예정
+    use_official_api = os.getenv("YOUTUBE_USE_OFFICIAL_API", "true").lower() == "true"
+    print(f"[YouTube Log] {query} 조건으로 공식 API 신규 영상 탐색 실행 (official={use_official_api})...")
+    # Placeholder: YouTube Data API v3 연동 결과 반환 예정
     return []
 
 if __name__ == "__main__":

@@ -8,8 +8,9 @@
 이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
 - **프론트엔드**: Next.js (App Router) + React. `maplibre-vworld-js`를 활용하여 VWorld 지도 시각화를 시뮬레이션 및 구현한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
-- **백엔드**: FastAPI + SQLAlchemy 2.0. SQLite3 데이터베이스에 연동하여 비즈니스 데이터 및 설정 정보를 보관한다.
-- **ETL 모듈**: YouTube 데이터 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(yt-dlp/FFmpeg) → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
+- **백엔드**: FastAPI + SQLAlchemy 2.0 + `aiosqlite`. SQLite + SpatiaLite 데이터베이스에 연동하여 비즈니스 데이터, 공간 데이터, 작업 상태를 보관한다.
+- **ETL 모듈**: 공식 YouTube Data API v3 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(`yt-dlp`/FFmpeg) → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
+- **스케줄러**: APScheduler 단일 실행자가 `crawl_runs`의 pending 작업을 claim하고 전면 비동기 파이프라인을 실행한다.
 
 ### 개발 환경 기본 요건
 
@@ -48,10 +49,11 @@ npx playwright test
 
 1. **`main` 직접 푸시 금지**: 반드시 기능별 feature 브랜치를 생성하여 작업하고 PR을 머지한다.
 2. **API 키 평문 커밋 금지**: Gemini API 키, VWorld 서비스 키, YouTube API 키 등은 절대 커밋하지 않는다. `.env.example`만 템플릿으로 제공하고 실제 키는 로컬 `.env`에 보관한다.
-3. **YouTube API 할당량 무단 낭비 금지**: 검색 API(YouTube Data API v3 search)는 1회 호출에 100 할당량을 소모하여 일일 제한(10,000)을 빠르게 채운다. 따라서:
+3. **YouTube API 할당량 무단 낭비 금지**: 공식 YouTube Data API v3를 기본 수집 경로로 사용한다. 검색 API(`search.list`)는 1회 호출에 100 유닛을 소모하므로:
    - Gemini API를 활용하여 검색 키워드를 조합 및 극도로 최적화한 후 호출 횟수를 조율한다.
-   - 가능하면 `yt-dlp` 기반 메타데이터 수집과 비공식 파서를 함께 검토하여 할당량 소모를 방어한다.
-   - 한 번 수집된 비디오 정보는 SQLite3 데이터베이스에 캐싱하여 재수집을 배제한다.
+   - `playlistItems.list`, `channels.list`, `videos.list`처럼 1 유닛 호출로 해결 가능한 경로를 우선한다.
+   - 비공식 검색 크롤러는 기본 설계에서 제외하고, 비공식 의존은 자막 추출과 프레임 추출 구간으로 격리한다.
+   - 한 번 수집된 비디오 정보는 SQLite + SpatiaLite 데이터베이스에 캐싱하여 재수집을 배제한다.
 4. **FastAPI 비동기 세션 leak 방지**: SQLAlchemy 2.0의 `AsyncSession` 또는 동기 `Session`을 사용할 때 Context Manager(`with` 또는 `async with`)를 사용하거나 Depends 주입 방식을 명확히 준수하여 DB 연결 누수를 막는다.
 5. **Windows 비호환 쉘 파일 작성 금지**: 윈도우 환경이므로 `.sh` 파일에 개발 유틸 스크립트를 작성하여 그것으로만 검증하도록 요구하지 않는다. 가급적 Node.js 스크립트(`package.json` scripts)나 Python 스크립트, 혹은 `.ps1` 형태로 크로스 플랫폼을 고려해 작성한다.
 6. **`kraddr-geo` 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 연계는 취소되었다. Geocoding/Reverse Geocoding은 Kakao, Naver, VWorld 공급자 어댑터로 정리한다.
@@ -70,10 +72,11 @@ npx playwright test
 - **위치**: `etl/` 디렉토리와 백엔드 작업 상태 모델.
 - **설명**:
   - 검색 키워드는 원본 키워드와 Gemini 파생 키워드를 1:N으로 저장하고 `season_context`를 남긴다.
-  - YouTube 수집은 YouTube Data API 최소 호출, `yt-dlp` `skip_download`, `extract_flat` 조합을 우선 고려한다.
+  - YouTube 검색·메타데이터는 공식 YouTube Data API v3를 사용한다.
   - 자막은 `youtube-transcript-api` → `yt-dlp` 자막 추출 → `faster-whisper` 순서로 폴백한다.
   - Gemini POI 추출은 자유 텍스트가 아니라 JSON Schema 기반 결과를 요구한다.
-  - 장시간 작업은 `etl_jobs`에 상태, heartbeat, retry_count, last_error를 기록한다.
+  - 장시간 작업은 `crawl_runs`에 상태, heartbeat, retry_count, last_error를 기록한다.
+  - HTTP I/O는 `httpx.AsyncClient`로 작성하고, 블로킹 라이브러리는 executor로 격리한다.
 
 ### MCP 서버 도구 추가
 - **위치**: `mcp/` 디렉토리 및 FastAPI 도메인 서비스.
@@ -96,6 +99,8 @@ npx playwright test
 | **MCP 서버 UX** | AI 에이전트가 브라우저 없이도 여행 데이터베이스를 읽고 쓰는 도구 기반 사용자 경험. |
 | **Geocoding API** | YouTube 영상 설명 속 불완전한 텍스트 장소명을 Kakao Local API 또는 Naver API로 표준 주소 및 위경도에 매핑하는 외부 REST 서비스. |
 | **Reverse Geocoding API** | 위경도 좌표를 VWorld API 등으로 행정 주소, 도로명 주소, 지번 주소에 매핑하는 외부 REST 서비스. |
+| **SpatiaLite** | SQLite에 공간 함수와 R-Tree 인덱스를 더해 반경 검색과 중복 장소 탐지를 지원하는 임베디드 공간 DB 확장. |
+| **crawl_runs** | Web REST, MCP, 정기 스케줄러가 공유하는 작업 상태 테이블. |
 | **ETL Runner** | 수집(Extract), 요약(Transform), 보정(Load) 단계를 조율하여 백그라운드 또는 CLI 명령으로 전체 여행지 데이터를 자동 갱신해주는 실행 스크립트. |
 
 ## 6. 작업 후 체크리스트

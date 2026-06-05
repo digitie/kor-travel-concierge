@@ -1,167 +1,203 @@
 # 아키텍처
 
-본 문서는 `tripmate-agent` 프로젝트의 전체 시스템 설계와 구성 요소 간 데이터 흐름을 다룬다. 의사결정의 역사는 `decisions.md`의 ADR에서 별도로 관리한다.
+본 문서는 `tripmate-agent` 프로젝트의 전체 시스템 설계와 구성 요소 간 데이터 흐름을 다룬다. 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`이며, 의사결정의 역사는 `decisions.md`의 ADR에서 별도로 관리한다.
 
 ---
 
-## 1. 전체 시스템 구조
+## 1. 설계 기준
 
-`tripmate-agent`는 웹 화면만 제공하는 도구가 아니라, 사람이 브라우저로 쓰는 UX와 AI 에이전트가 도구 호출로 쓰는 UX를 함께 제공하는 여행 데이터 구축 시스템으로 설계한다.
+`tripmate-agent`는 1~2인이 개발·운영하고 동시 사용자가 10명 내외인 소형 프로젝트를 전제로 한다. 따라서 대규모 분산 크롤링보다 운영 단순성, 장애 원인 축소, 재현 가능한 로컬/단일 호스트 배포를 우선한다.
+
+핵심 원칙은 다음과 같다.
+
+- 검색·메타데이터 수집은 공식 YouTube Data API v3를 기본으로 한다.
+- 비공식 의존은 공식 대안이 없는 자막 추출과 프레임 추출로만 격리한다.
+- 공간 DB는 별도 DB 서버 없이 SQLite + SpatiaLite로 시작한다.
+- 백엔드와 ETL은 전면 `asyncio` 기반으로 작성한다.
+- 블로킹 라이브러리(`yt-dlp`, `faster-whisper`, FFmpeg, SpatiaLite 동기 호출)는 executor로 격리한다.
+- 정기 크롤 실행자는 APScheduler 단일 실행자로 시작하며, Celery, Redis, RabbitMQ, PostgreSQL Advisory Lock은 초기 범위에서 제외한다.
+- 사람용 Web REST UX와 AI 에이전트용 MCP UX는 분리하되 같은 작업 테이블과 같은 파이프라인을 공유한다.
+
+---
+
+## 2. 전체 시스템 구조
 
 ```
                   ┌────────────────────────────────────────┐
                   │          Next.js 프론트엔드             │
-                  │  - 리스트 / 상세 / 설정 / 지도 UX       │
+                  │  - React Hook Form / Zod               │
+                  │  - shadcn/ui / Tailwind                │
+                  │  - TanStack Query 상태 조회·폴링        │
                   │  - maplibre-vworld-js 지도 뷰           │
                   └───────────────────┬────────────────────┘
                                       │
-                              HTTP REST API
+                              Web REST API
                                       │
                   ┌───────────────────▼────────────────────┐
-                  │          FastAPI 백엔드                 │
-                  │  - 도메인 서비스 / REST API             │
-                  │  - Deep Research 트리거                 │
-                  │  - 작업 상태 및 감사 로그               │
+                  │          FastAPI API 서버               │
+                  │  - 세분 CRUD REST 엔드포인트             │
+                  │  - crawl_runs 작업 생성                 │
+                  │  - 조회·설정·감사 로그 API              │
                   └─────────┬───────────────────▲──────────┘
                             │                   │
-                            │ 내부 서비스 호출   │ 도구 호출
+                            │ 공유 도메인 서비스 │ 작업 생성
                             │                   │
                   ┌─────────▼───────────────────┴──────────┐
-                  │          MCP 서버 UX                    │
-                  │  - 읽기 도구: 검색, 조회, 상태 확인      │
-                  │  - 쓰기 도구: CRUD, 보정, 병합, 실행     │
+                  │            MCP 서버                     │
+                  │  - 굵은 단위 에이전트 도구              │
+                  │  - 수집 실행 / 상태 조회 / 장소 조회     │
+                  │  - 보정 / 병합 / Deep Research           │
                   └─────────┬───────────────────▲──────────┘
                             │                   │
-                     읽기 / 쓰기                │ DB 갱신
+                            │ crawl_runs 생성    │ 상태 조회
                             ▼                   │
-                  ┌───────────────────┐         │
-                  │     SQLite3       │         │
-                  │   (tripmate.db)   │         │
-                  └─────────▲─────────┘         │
+                  ┌────────────────────────────────────────┐
+                  │        Scheduler / Worker              │
+                  │  - APScheduler                         │
+                  │  - pending 작업 단일 claim              │
+                  │  - async ETL 파이프라인 실행             │
+                  └─────────┬───────────────────▲──────────┘
                             │                   │
-                  ┌─────────┴───────────────────┴──────────┐
-                  │            ETL 파이프라인               │
-                  │  - 키워드 확장 및 우선순위 큐            │
-                  │  - yt-dlp / 자막 / 전사 / 요약           │
-                  │  - 지오코딩 / 역지오코딩 / 프레임 추출    │
-                  └───────────────────┬────────────────────┘
-                                      │
-                                외부 서비스 호출
-                                      │
-                  ┌───────────────────▼────────────────────┐
+                            │ aiosqlite + WAL   │ 결과 적재
+                            ▼                   │
+                  ┌────────────────────────────────────────┐
+                  │        SQLite + SpatiaLite             │
+                  │  - tripmate.db                         │
+                  │  - 공간 함수 / R-Tree 인덱스            │
+                  │  - crawl_runs / places / mappings       │
+                  └─────────┬──────────────────────────────┘
+                            │
+                            │ 외부 서비스 호출
+                            ▼
+                  ┌────────────────────────────────────────┐
                   │              외부 API                   │
-                  │  - YouTube / yt-dlp                     │
-                  │  - Google Gemini API                    │
-                  │  - Kakao / Naver / VWorld               │
+                  │  - YouTube Data API v3                 │
+                  │  - Google Gemini API                   │
+                  │  - Kakao / Naver / VWorld              │
+                  │  - youtube-transcript-api / yt-dlp      │
+                  │  - faster-whisper / FFmpeg              │
                   └────────────────────────────────────────┘
 ```
 
-초기 저장소는 AGENTS.md의 현재 기준에 따라 **FastAPI + SQLAlchemy 2.0 + SQLite3**를 우선 구현한다. 다만 상세 기획서가 요구한 공간 중복 제거, 반경 검색, 대량 크롤링 운영성이 커지는 시점에는 PostgreSQL/PostGIS 전환을 별도 ADR로 검토한다.
+Docker Compose 배포 시에는 `frontend`, `api`, `mcp`, `scheduler` 컨테이너가 같은 SQLite/SpatiaLite 데이터 볼륨을 공유한다. 실제 무거운 작업 실행은 `scheduler`가 단일 claim 방식으로 담당하여 API 서버와 MCP 서버가 직접 장시간 작업을 수행하지 않게 한다.
 
 ---
 
-## 2. UX 표면
+## 3. UX 표면
 
-### 2.1 웹 기반 UX
+### 3.1 웹 기반 UX
 
-웹 UX는 사람이 여행 데이터를 탐색하고 운영 설정을 조정하는 기본 화면이다.
+웹 UX는 사람이 데이터를 입력·검수·조회하는 화면이다.
 
-- 여행지 목록, 상세 카드, 원본 영상 링크, 요약 문장, 대표 프레임 이미지를 제공한다.
-- `maplibre-vworld-js` 기반 지도에서 장소 마커, 목록 선택 동기화, 지도 레이어 토글을 제공한다.
-- 검색 키워드, 유튜버, 재생목록, Gemini 엔진 설정, 지오코딩 공급자 설정을 CRUD로 관리한다.
-- 사용자가 특정 장소를 선택하면 Deep Research를 트리거하고 완료 상태를 확인할 수 있다.
+- 키워드, 유튜버, 재생목록, 수집 옵션을 관리한다.
+- 수집 시작 시 `POST /api/harvest`로 작업을 만들고 `job_id`를 즉시 받는다.
+- TanStack Query `refetchInterval`로 `GET /api/harvest/{job_id}`를 폴링한다.
+- 완료된 장소는 리스트와 `maplibre-vworld-js` 지도에 함께 표시한다.
+- 실패 작업, 쿼터 사용량, 최근 MCP 쓰기 로그를 운영 패널에서 확인한다.
 
-### 2.2 MCP 서버 읽기/쓰기 UX
+### 3.2 MCP 서버 읽기/쓰기 UX
 
-MCP 서버는 브라우저 UI와 동등한 1급 UX로 둔다. AI 에이전트가 여행 데이터베이스를 조회하고 운영 작업을 수행할 수 있도록 읽기와 쓰기 도구를 모두 제공한다.
+MCP는 에이전트용 UX다. REST API의 세분 CRUD를 그대로 노출하지 않고, 에이전트가 한 번에 사용할 수 있는 굵은 단위 도구를 제공한다.
 
-읽기 도구 범위:
+대표 도구:
 
-- 여행지 검색, 여행지 상세 조회, 영상별 장소 조회
-- 검색 키워드, 유튜버, 재생목록, 파생 키워드 조회
-- ETL 작업 상태, 실패 작업, 최근 실행 로그, API 쿼터 사용량 조회
-- 지오코딩 결과, 역지오코딩 결과, 중복 후보 조회
+- `harvest_travel_destinations(query, channel_id, playlist_id, max_videos)`:
+  검색어·채널·재생목록 기준으로 수집 작업을 만들고 `job_id`를 반환한다.
+- `get_harvest_status(job_id)`:
+  작업 상태, 진행률, 실패 원인, 완료 요약을 반환한다.
+- `search_existing_places(query, radius, category)`:
+  이미 적재된 장소를 검색한다.
+- `get_place_detail(place_id)`:
+  장소 상세, 원본 영상, 대표 프레임, 위치 보정 근거를 반환한다.
+- `correct_place`, `merge_places`, `trigger_deep_research`:
+  보정·병합·심층 조사 쓰기 작업을 생성한다.
 
-쓰기 도구 범위:
-
-- 검색 키워드, 유튜버, 재생목록 등록/수정/비활성화
-- ETL 수집, 자막 전사, Gemini 요약, 지오코딩, Deep Research 작업 트리거
-- 여행지 설명, 카테고리, 주소, 좌표, 대표 이미지, 공개 상태 보정
-- 중복 여행지 병합 및 영상-장소 매핑 수정
-
-쓰기 도구는 실제 변경을 수행할 수 있어야 한다. 대신 모든 쓰기 도구는 Pydantic 스키마 검증, 멱등 키, 감사 로그, 실패 재시도 상태를 남겨 브라우저 조작과 동일한 수준으로 추적 가능하게 만든다.
+모든 MCP 쓰기 도구는 Pydantic 스키마 검증, 멱등 키, 감사 로그, 작업 상태 기록을 거친다.
 
 ---
 
-## 3. ETL 파이프라인 상세 아키텍처
+## 4. ETL 파이프라인
 
-유튜브 여행 영상으로부터 양질의 여행지 정보를 정제하여 DB를 구축하는 ETL은 다음 단계로 구동한다.
+### 4.1 검색 의도 확장
 
+사용자가 입력한 시드 키워드에 현재 월·계절 정보를 넣어 Gemini로 2~3개의 파생 키워드를 생성한다. 원본 키워드와 파생 키워드는 `search_keywords`에 1:N으로 저장하고, 계절 맥락은 `season_context`로 남긴다.
+
+### 4.2 공식 YouTube Data API v3 수집
+
+검색·메타데이터 수집은 공식 API를 기본으로 한다.
+
+| 엔드포인트 | 용도 | 쿼터 비용 |
+| --- | --- | --- |
+| `search.list` | 키워드/채널 검색 | 호출당 100 |
+| `playlistItems.list` | 재생목록 항목 나열 | 호출당 1 |
+| `channels.list` | 채널 업로드 목록 조회 | 호출당 1 |
+| `videos.list` | 영상 상세 메타데이터 조회 | 호출당 1 |
+
+소형 프로젝트에서는 일일 10,000 유닛 한도에 도달할 가능성이 낮다. 따라서 `scrapetube`류 비공식 검색 크롤러는 기본 설계에서 제외한다. 검색 결과의 최신성, 키워드 유사도, 업로드일, 조회수 대비 참여도는 애플리케이션 레벨에서 정규화해 우선순위 큐에 적재한다.
+
+### 4.3 자막·전사 폴백
+
+타인 영상 자막은 공식 captions API로 받을 수 없으므로 비공식 의존을 이 구간에만 허용한다.
+
+1. `youtube-transcript-api`로 수동/자동 자막을 우선 확보한다.
+2. 차단, 포맷 변경, 자막 부재 시 `yt-dlp --write-auto-sub` 또는 `--write-subs`로 폴백한다.
+3. 두 경로 모두 실패하면 `faster-whisper` 로컬 전사를 최종 폴백으로 사용한다.
+
+### 4.4 Gemini POI 추출
+
+타임스탬프가 포함된 자막을 Gemini에 전달하고 자유 텍스트가 아니라 JSON Schema 기반 출력을 요구한다.
+
+필수 추출 필드:
+
+- 영상 전체 요약
+- 장소명
+- 화자 설명
+- 위치 단서
+- 시작/종료 타임스탬프
+- 장소 카테고리 후보
+
+### 4.5 지오코딩·역지오코딩
+
+지오코딩은 공식 Kakao / Naver / VWorld API만 사용한다. `kraddr-geo`는 현재 계획에 포함하지 않는다.
+
+- Kakao Local API: 1차 장소 검색, 좌표 변환, 카테고리 식별
+- Naver API: 모호한 결과의 보조 검증과 검색 메타데이터 보강
+- VWorld API: 좌표 기반 행정 주소, 도로명 주소, 지번 주소 보강
+- `pyproj` `always_xy=True`: 모든 좌표를 WGS84(EPSG:4326) 경도/위도 순서로 정규화
+- 429 응답: 지수 백오프와 지터 적용
+
+### 4.6 대표 프레임 추출
+
+Gemini가 식별한 시작 타임스탬프에 5~10초 오프셋을 더하고, `yt-dlp`로 직접 스트림 URL을 확보한 뒤 FFmpeg Input Seeking으로 JPEG 대표 프레임을 추출한다.
+
+핵심 규칙:
+
+```powershell
+ffmpeg -ss 00:03:25 -i "<STREAM_URL>" -frames:v 1 -q:v 2 -f image2 pipe:1
 ```
-[시작]
-  │
-  ├─► 1단계: 검색 의도 확장 및 수집 큐 생성
-  │     ├── 사용자가 CRUD한 검색 키워드, 유튜버, 재생목록 조회
-  │     ├── Gemini API로 계절, 월, 지역, 테마를 반영한 파생 키워드 생성
-  │     ├── 원본 키워드와 파생 키워드의 1:N 관계 및 season_context 저장
-  │     ├── YouTube Data API는 최소 호출하고 yt-dlp 기반 탐색을 병행
-  │     └── 최신성, 채널 지정 여부, 참여도, 키워드 유사도로 우선순위 큐 적재
-  │
-  ├─► 2단계: 메타데이터, 자막, 전사, POI 추출
-  │     ├── yt-dlp skip_download / extract_flat로 메타데이터 우선 수집
-  │     ├── 기존 video_id는 DB 캐시로 스킵하여 멱등성 보장
-  │     ├── youtube-transcript-api → yt-dlp 자막 → faster-whisper 순서로 전사 폴백
-  │     ├── Gemini API에 JSON Schema 기반 POI 추출 프롬프트 전달
-  │     └── 장소명, 위치 단서, 설명, 시작/종료 타임스탬프를 임시 저장
-  │
-  ├─► 3단계: 대표 프레임 추출
-  │     ├── Gemini가 식별한 timestamp_start에 5~10초 오프셋 적용
-  │     ├── yt-dlp로 직접 스트림 URL 확보
-  │     ├── FFmpeg `-ss`를 `-i` 앞에 두는 Input Seeking 방식 사용
-  │     └── JPEG 바이트를 로컬 저장 또는 추후 객체 스토리지에 저장
-  │
-  └─► 4단계: 지오코딩, 역지오코딩, 중복 병합
-        ├── 내부 DB 캐시에서 기존 보정 결과 우선 확인
-        ├── Kakao Local API를 1차 지오코딩 공급자로 사용
-        ├── 결과가 없거나 모호하면 Naver API로 2차 보강
-        ├── VWorld API로 좌표 기반 역지오코딩 및 행정/도로명 주소 보강
-        ├── pyproj `always_xy=True`로 WGS84(EPSG:4326) 좌표계 정규화
-        ├── 429 응답에는 지수 백오프와 지터를 적용
-        └── 좌표 근접성 및 이름 유사도로 중복 후보를 병합 [완료]
-```
 
-현재 계획에서 `kraddr-geo` 연계는 채택하지 않는다. 지오코딩과 역지오코딩은 Kakao, Naver, VWorld 공급자 어댑터를 우선 구현하고, 공급자 교체가 가능하도록 Strategy Pattern으로 감싼다.
+`-ss`는 반드시 `-i` 앞에 둔다. 뒤에 두면 FFmpeg이 시작부터 목표 시점까지 디코딩하여 비용이 커진다.
 
 ---
 
-## 4. 스케줄링 및 복원력
+## 5. 비동기 실행 모델
 
-상세 기획서는 3~7일 주기 크롤링과 작업 복원력을 강하게 요구한다. 초기 구현은 별도 브로커 없이 SQLite3 상태 테이블과 프로세스 내 스케줄러로 시작하되, 다음 원칙을 코드 설계에 반영한다.
+파이프라인의 I/O 작업은 `async def` 코루틴으로 작성한다.
 
-- 작업 상태는 `pending`, `running`, `done`, `failed`로 기록한다.
-- `started_at`, `heartbeat_at`, `retry_count`, `last_error`를 남겨 실패 원인을 추적한다.
-- 일정 시간 heartbeat가 갱신되지 않은 `running` 작업은 stale로 보고 재시도 큐에 되돌린다.
-- 채널별 마지막 크롤 시점 또는 최신 `published_at` 워터마크를 저장해 증분 크롤링만 수행한다.
-- 업로드 빈도가 낮은 채널은 다음 크롤 간격을 14일 또는 30일까지 늘려 호출량을 줄인다.
-- 대량 처리와 다중 워커가 필요해지면 PostgreSQL Advisory Lock 또는 PgQueuer 계열을 후속 ADR로 검토한다.
+- HTTP 호출: `httpx.AsyncClient`
+- 동시성 상한: `asyncio.Semaphore`
+- DB 접근: `aiosqlite`
+- SQLite 동시 접근 완화: WAL 모드
+- 블로킹 격리: `asyncio.to_thread()` 또는 `loop.run_in_executor()`
+- CPU 집약 전사: 필요 시 별도 프로세스풀
 
----
-
-## 5. 프론트엔드 컴포넌트 아키텍처
-
-Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시하기 위해 `maplibre-vworld-js`를 활용한다.
-
-- **지도 연동**: `.env`에 정의된 `NEXT_PUBLIC_VWORLD_SERVICE_KEY`를 사용해 VWorld WMTS 타일을 렌더한다.
-- **리스트-지도 동기화**: 리스트 뷰에서 특정 여행지를 호버/클릭하면 지도 마커가 포커스되거나 바운드가 이동한다.
-- **설정 저장소**: Gemini 엔진 버전, 지오코딩 공급자 우선순위, ETL 주기 설정은 FastAPI의 `settings` API를 통해 SQLite3에 저장한다.
-- **Deep Research 트리거**: 사용자가 특정 여행지를 선택해 Deep Research를 지시하면 백엔드가 Gemini 기반 심층 조사 작업을 생성하고 완료 후 해당 장소의 상세 소개 정보를 업데이트한다.
-- **운영 상태 표시**: ETL 큐, 실패 작업, API 쿼터, 최근 MCP 쓰기 작업을 웹에서도 확인할 수 있게 한다.
+API 서버, MCP 서버, 정기 스케줄러는 모두 같은 작업 테이블(`crawl_runs`)을 통해 작업을 만들고 조회한다. 실제 실행은 scheduler가 `pending` 작업을 claim하여 처리한다.
 
 ---
 
 ## 6. 데이터베이스 엔티티 구조
 
-초기 구현은 SQLite3로 시작하되, 공간 데이터 확장을 염두에 둔 필드명을 사용한다.
+초기 DB는 SQLite + SpatiaLite다. SQLAlchemy 2.0과 `aiosqlite`를 사용하며, 공간 함수와 R-Tree 인덱스는 SpatiaLite로 제공한다.
 
 ### 6.1 `search_keywords`
 
@@ -172,14 +208,16 @@ Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시
 - `is_active` (Boolean)
 - `created_at` (DateTime)
 
-### 6.2 `subscribed_youtubers`
+### 6.2 `source_targets`
 
 - `id` (Integer, PK)
-- `channel_id` (String, Unique)
-- `channel_name` (String)
+- `target_type` (String) - `keyword`, `channel`, `playlist`
+- `source_value` (String)
+- `display_name` (String, Nullable)
 - `is_active` (Boolean)
-- `last_scraped_at` (DateTime)
-- `next_scrape_at` (DateTime, Nullable)
+- `last_crawled_at` (DateTime, Nullable)
+- `next_crawl_at` (DateTime, Nullable)
+- `created_at` (DateTime)
 
 ### 6.3 `youtube_videos`
 
@@ -187,31 +225,35 @@ Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시
 - `title` (String)
 - `url` (String)
 - `channel_id` (String)
+- `channel_name` (String, Nullable)
 - `published_at` (DateTime, Nullable)
+- `view_count` (Integer, Nullable)
+- `like_count` (Integer, Nullable)
 - `engagement_score` (Float, Nullable)
 - `crawl_status` (String)
 - `crawled_at` (DateTime)
 
-### 6.4 `travel_destinations`
+### 6.4 `travel_places`
 
-- `id` (Integer, PK)
+- `place_id` (Integer, PK)
 - `name` (String)
-- `description` (Text)
-- `address` (String)
+- `description` (Text, Nullable)
+- `official_address` (String, Nullable)
 - `road_address` (String, Nullable)
 - `latitude` (Float)
 - `longitude` (Float)
+- `geom` (SpatiaLite Point, 4326)
 - `api_source` (String, Nullable)
 - `category` (String, Nullable)
 - `is_geocoded` (Boolean)
 - `detailed_research_content` (Text, Nullable)
 - `created_at` (DateTime)
 
-### 6.5 `video_destination_mappings`
+### 6.5 `video_place_mappings`
 
 - `id` (Integer, PK)
 - `video_id` (String, FK)
-- `destination_id` (Integer, FK)
+- `place_id` (Integer, FK)
 - `ai_summary` (Text)
 - `speaker_note` (Text, Nullable)
 - `timestamp_start` (String, Nullable)
@@ -219,13 +261,15 @@ Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시
 - `frame_image_path` (String, Nullable)
 - `created_at` (DateTime)
 
-### 6.6 `etl_jobs`
+### 6.6 `crawl_runs`
 
 - `id` (Integer, PK)
 - `job_type` (String)
+- `source` (String) - `web`, `mcp`, `scheduler`
 - `target_type` (String, Nullable)
 - `target_id` (String, Nullable)
-- `state` (String)
+- `state` (String) - `pending`, `running`, `done`, `failed`
+- `progress` (Float)
 - `started_at` (DateTime, Nullable)
 - `heartbeat_at` (DateTime, Nullable)
 - `finished_at` (DateTime, Nullable)
@@ -241,7 +285,7 @@ Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시
 ### 6.8 `audit_logs`
 
 - `id` (Integer, PK)
-- `actor_type` (String) - `web`, `mcp`, `etl`
+- `actor_type` (String) - `web`, `mcp`, `scheduler`
 - `action` (String)
 - `target_type` (String)
 - `target_id` (String, Nullable)
@@ -250,11 +294,35 @@ Next.js React Client Component 단에서 VWorld 지도를 선언적으로 표시
 
 ---
 
-## 7. PostGIS 전환 후보
+## 7. 프론트엔드 아키텍처
 
-상세 기획서는 PostGIS 기반 `ST_DWithin`, GiST 인덱스, geography 캐스팅을 권장한다. 현재 AGENTS.md 기준은 SQLite3이므로 즉시 변경하지 않는다. 대신 다음 조건 중 하나가 충족되면 PostgreSQL/PostGIS 전환 ADR을 작성한다.
+프론트엔드는 다음 스택을 기준으로 한다.
 
-- 동일 장소 중복이 문자열/좌표 휴리스틱만으로 관리하기 어려울 정도로 증가한다.
-- 반경 검색, 주변 추천, 지도 클러스터링, 행정구역 기반 필터가 핵심 기능이 된다.
-- 백그라운드 ETL과 MCP 쓰기 도구의 동시 쓰기가 SQLite3 락으로 반복 실패한다.
-- 작업 큐와 스케줄링을 DB 레벨 락 또는 `FOR UPDATE SKIP LOCKED`로 안정화해야 한다.
+| 영역 | 채택 기술 | 역할 |
+| --- | --- | --- |
+| 프레임워크 | Next.js + React | App Router 기반 화면 구성 |
+| 폼 | React Hook Form | 키워드, 타겟, 설정 입력 |
+| 검증 | Zod | 폼·API 응답 스키마 검증 |
+| UI | shadcn/ui + Tailwind CSS | 일관된 컴포넌트와 스타일 |
+| 서버 상태 | TanStack Query | 조회 캐싱, 작업 상태 폴링, mutation |
+| 지도 | `maplibre-vworld-js` | VWorld 지도 표시 |
+
+Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack Query가, 폼 상태는 React Hook Form이 처리하므로 별도 전역 클라이언트 상태 수요가 명확해질 때 추가한다.
+
+---
+
+## 8. 대규모 전환 후보
+
+다음 조건이 실제로 발생하면 후속 ADR로 전환을 검토한다.
+
+- 동시 사용자나 수집 대상이 늘어 SQLite 동시 쓰기 한계가 반복된다.
+- 멀티 워커가 필요해 scheduler 단일 실행자 모델이 병목이 된다.
+- 반경 검색, 클러스터링, 공간 조인이 SpatiaLite로 감당하기 어려워진다.
+- 작업 큐 모니터링과 재시도 투명성이 더 중요해진다.
+
+전환 후보:
+
+- PostgreSQL/PostGIS: SpatiaLite 공간 함수를 PostGIS `ST_DWithin`, GiST 인덱스로 이전
+- PgQueuer: `LISTEN/NOTIFY` + `SKIP LOCKED` 기반 DB 네이티브 큐
+- Celery + Beat: 수십 워커 분산 처리가 필요할 때만 검토
+- Airflow / Dagster: 수백 데이터소스 의존성을 관리해야 할 때만 검토

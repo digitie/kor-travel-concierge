@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1, // 로컬 SQLite3 락 충돌 방지를 위해 순차적 실행 권장
+  workers: 1, // 로컬 SQLite + SpatiaLite 락 충돌 방지를 위해 순차적 실행 권장
   reporter: 'html',
   use: {
     baseURL: 'http://localhost:3000',
