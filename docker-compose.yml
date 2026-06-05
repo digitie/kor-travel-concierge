@@ -1,0 +1,75 @@
+# TripMate Agent 단일 호스트 Docker Compose 초안 (T-003)
+# 서비스: rustfs(미디어 저장) / api(FastAPI) / mcp / scheduler / frontend(Next.js)
+# api·mcp·scheduler는 같은 SQLite + SpatiaLite 데이터 볼륨을 공유한다.
+# RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 서비스로 구동한다(ADR-15).
+
+services:
+  rustfs:
+    # 별도 로컬 Docker RustFS 서비스. S3 API 9003, 콘솔 9004.
+    image: rustfs/rustfs:latest
+    ports:
+      - "9003:9003"
+      - "9004:9004"
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+    volumes:
+      - rustfs-data:/data
+    # 무기한 보존: lifecycle 만료 정책을 두지 않는다.
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - sqlite-data:/data
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+    depends_on:
+      - rustfs
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    command: python /app/mcp/server.py
+    env_file: .env
+    volumes:
+      - sqlite-data:/data
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+    depends_on:
+      - api
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    command: python /app/scheduler/worker.py
+    env_file: .env
+    volumes:
+      - sqlite-data:/data
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+    depends_on:
+      - api
+      - rustfs
+
+  frontend:
+    build:
+      context: ./frontend
+    env_file: .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  # SQLite + SpatiaLite 데이터 볼륨 (api/mcp/scheduler 공유)
+  sqlite-data:
+  # RustFS 객체 데이터 볼륨 (무기한 보존)
+  rustfs-data:

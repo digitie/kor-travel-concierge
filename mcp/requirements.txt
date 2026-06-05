@@ -1,0 +1,6 @@
+# MCP 서버 의존성
+# 백엔드 도메인 서비스/DB 세션을 공유하므로 backend 의존성을 재사용한다.
+-r ../backend/requirements.txt
+
+# MCP 서버 SDK
+mcp>=1.2.0

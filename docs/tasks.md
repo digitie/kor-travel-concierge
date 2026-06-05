@@ -6,19 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-003**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-004**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-003**: 소형 프로젝트 기준 스캐폴딩 정비
-  - `frontend/`, `backend/`, `etl/`, `tests/`, `mcp/`, `scheduler/` 디렉토리 구조 정리
-  - Docker Compose 기준 `frontend`, `api`, `mcp`, `scheduler` 서비스 초안 작성
-  - 별도 로컬 Docker RustFS 서비스와 S3 API `9003`, 콘솔 `9004` 포트 기준 정리
-  - SQLite + SpatiaLite 데이터 볼륨과 Windows 개발 경로 정책 정리
-  - RustFS 버킷(`tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`) 초기화 절차 정리
-  - `.env.example`과 실제 실행 코드의 환경 변수 이름 동기화
 
 - **T-004**: FastAPI 비동기 백엔드 기반 구축
   - FastAPI 라우터, 도메인 서비스, 설정 로더 분리
@@ -120,6 +112,7 @@
 
 ## 완료
 
+- [x] **T-003**: 소형 프로젝트 기준 스캐폴딩 정비 — `backend/app/`(config·database·logging·models·services·api) 구조화, `mcp/`·`scheduler/`·`etl/media.py` 신설, Docker Compose 초안(`frontend`/`api`/`mcp`/`scheduler`/`rustfs`)과 `Dockerfile.python`·`frontend/Dockerfile`, RustFS 버킷 초기화 스크립트, 컴포넌트별 requirements, 프론트 App Router 스캐폴드 작성. `.env.example`과 `Settings` 환경 변수 이름 동기화 완료. (Docker/Playwright 통합 빌드 검증은 T-014로 이관) (2026-06-05)
 - [x] **T-018**: RustFS 미디어 저장, 무기한 보존, 매칭 실패 장소 수동 검수, Gemini 설명 보정·보강 필드 요구사항을 개발 계획에 반영. (2026-06-05)
 - [x] **T-017**: Google Docs 소형 프로젝트 SpatiaLite 명세 반영 — 공식 YouTube API 중심, SQLite + SpatiaLite, 전면 asyncio, APScheduler 단일 실행자, REST/MCP 분리, 프론트 스택 기준으로 문서 재정렬. (2026-06-05)
 - [x] **T-002**: 프로젝트 `docs/` 디렉토리 문서 자산 생성 및 상세 기획서 반영 — `architecture.md`, `decisions.md`, `tasks.md`, `journal.md`, `dev-environment.md` 작성 및 MCP UX 계획 반영 완료. (2026-06-04)

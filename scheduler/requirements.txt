@@ -1,0 +1,6 @@
+# 스케줄러(단일 실행자) 의존성
+# 백엔드 도메인 서비스/DB 세션을 공유하므로 backend 의존성을 재사용한다.
+-r ../backend/requirements.txt
+
+# APScheduler 단일 실행자 (ADR-13)
+apscheduler>=3.10.4

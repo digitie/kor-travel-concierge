@@ -1,0 +1,20 @@
+# ETL 파이프라인 의존성
+# 백엔드 공통 설정/HTTP/Gemini 의존성은 backend/requirements.txt를 재사용한다.
+-r ../backend/requirements.txt
+
+# 공식 YouTube Data API v3 클라이언트
+google-api-python-client>=2.122.0
+
+# 자막·전사 폴백 (공식 대안이 없는 구간으로 격리)
+youtube-transcript-api>=0.6.2
+yt-dlp>=2024.4.9
+faster-whisper>=1.0.1
+
+# 대표 프레임 추출 (FFmpeg 래퍼)
+ffmpeg-python>=0.2.0
+
+# 좌표계 정규화 (always_xy=True)
+pyproj>=3.6.1
+
+# RustFS(S3 호환) 객체 업로드
+boto3>=1.34.0

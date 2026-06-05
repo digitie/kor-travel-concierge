@@ -1,0 +1,38 @@
+# TripMate Agent Python 서비스 공용 이미지 (초안)
+# api / mcp / scheduler / etl 가 동일 이미지를 공유하고, compose에서 command로 분기한다.
+FROM python:3.11-slim
+
+# SpatiaLite 확장 및 FFmpeg(대표 프레임 추출) 시스템 의존성
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libsqlite3-mod-spatialite \
+        ffmpeg \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 의존성 레이어 캐싱: 매니페스트 먼저 복사
+COPY backend/requirements.txt backend/requirements.txt
+COPY etl/requirements.txt etl/requirements.txt
+COPY scheduler/requirements.txt scheduler/requirements.txt
+COPY mcp/requirements.txt mcp/requirements.txt
+RUN pip install --no-cache-dir \
+    -r backend/requirements.txt \
+    -r etl/requirements.txt \
+    -r scheduler/requirements.txt \
+    -r mcp/requirements.txt
+
+# 애플리케이션 소스
+COPY backend backend
+COPY etl etl
+COPY scheduler scheduler
+COPY mcp mcp
+
+# `app` 패키지(backend/app)와 mcp/scheduler 루트 패키지를 모두 import 가능하게 한다.
+ENV PYTHONPATH=/app:/app/backend
+ENV PYTHONUNBUFFERED=1
+
+# 기본 command는 compose에서 서비스별로 재정의한다.
+WORKDIR /app/backend
+CMD ["python", "main.py"]
