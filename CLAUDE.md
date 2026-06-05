@@ -117,6 +117,7 @@ npx playwright test
 - **ADR-14**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query 프론트 스택 채택
 - **ADR-15**: RustFS 기반 원본 미디어 저장과 무기한 보존
 - **ADR-16**: 장소 매칭 검수 UX와 Gemini 설명 보정 필드 분리
+- **ADR-17**: 공간 컬럼은 ORM 밖 SpatiaLite DDL로 관리하고 저장소 계층에 캡슐화
 
 상세는 `docs/decisions.md`를 참고한다.
 

@@ -55,7 +55,7 @@ PC 개발 및 평가는 **Windows 호스트**에서 직접 진행한다.
 1. `CLAUDE.md` — 현재 작업과 잔존 부채
 2. `SKILL.md` — 에이전트 매뉴얼 및 Windows 개발 팁
 3. `docs/architecture.md` — 전체 시스템 아키텍처 및 ETL 데이터 흐름
-4. `docs/decisions.md` — ADR-1 ~ ADR-16
+4. `docs/decisions.md` — ADR-1 ~ ADR-17
 5. `docs/tasks.md` — T-NNN 백로그
 
 ## 지시 우선순위

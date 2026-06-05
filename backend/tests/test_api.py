@@ -58,3 +58,27 @@ async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_destinations_reflect_db(client, session_factory):
+    from app.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+
+    async with session_factory() as s:
+        s.add(TravelPlace(name="해운대", latitude=35.1587, longitude=129.1604, is_geocoded=True))
+        s.add(YoutubeVideo(video_id="v1", title="t", url="u", channel_id="c"))
+        await s.commit()
+        s.add(
+            ExtractedPlaceCandidate(
+                video_id="v1", source_text="s", ai_place_name="검수대상",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            )
+        )
+        await s.commit()
+
+    dest = await client.get("/api/destinations")
+    assert dest.status_code == 200
+    assert any(d["name"] == "해운대" for d in dest.json())
+
+    unmatched = await client.get("/api/destinations/unmatched")
+    assert unmatched.status_code == 200
+    assert any(u["ai_place_name"] == "검수대상" for u in unmatched.json())

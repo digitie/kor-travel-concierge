@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.models import RunSource
-from app.services import audit_service, crawl_run_service, settings_service
+from app.services import (
+    audit_service,
+    crawl_run_service,
+    place_service,
+    settings_service,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -111,15 +116,43 @@ async def list_keywords() -> list[dict[str, Any]]:
 
 
 @router.get("/destinations")
-async def list_destinations() -> list[dict[str, Any]]:
-    # T-005에서 travel_places 모델 기반으로 구현한다.
-    return []
+async def list_destinations(
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """확정 여행지 목록을 반환한다."""
+    places = await place_service.list_places(session)
+    return [
+        {
+            "place_id": p.place_id,
+            "name": p.name,
+            "latitude": p.latitude,
+            "longitude": p.longitude,
+            "category": p.category,
+            "official_address": p.official_address,
+            "is_geocoded": p.is_geocoded,
+        }
+        for p in places
+    ]
 
 
 @router.get("/destinations/unmatched")
-async def list_unmatched_candidates() -> list[dict[str, Any]]:
-    """매칭 실패(`needs_review`) 후보 검수 큐 (T-005/T-008에서 구현)."""
-    return []
+async def list_unmatched_candidates(
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """매칭 실패(`needs_review`) 후보 검수 큐."""
+    candidates = await place_service.list_unmatched_candidates(session)
+    return [
+        {
+            "id": c.id,
+            "video_id": c.video_id,
+            "ai_place_name": c.ai_place_name,
+            "location_hint": c.location_hint,
+            "candidate_category": c.candidate_category,
+            "match_status": c.match_status,
+            "timestamp_start": c.timestamp_start,
+        }
+        for c in candidates
+    ]
 
 
 # --- 설정 ---

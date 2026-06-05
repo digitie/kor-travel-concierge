@@ -81,8 +81,11 @@ async def init_db() -> None:
     작업/감사/설정 테이블을 만들고, SpatiaLite 메타데이터를 초기화한다.
     """
     # 등록된 모든 모델 메타데이터를 로드한다.
+    from app.core.spatial import ensure_geometry_columns
     from app.models import Base  # 지연 import로 순환 의존 회피
 
     async with engine.begin() as conn:
         await init_spatial_metadata(conn)
         await conn.run_sync(Base.metadata.create_all)
+        # travel_places.geom Point(4326)와 R-Tree 인덱스 구성 (SpatiaLite 가용 시)
+        await ensure_geometry_columns(conn)
