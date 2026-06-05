@@ -6,17 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-012**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-013**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-012**: Next.js 프론트엔드 스택 정비
-  - Tailwind CSS와 shadcn/ui 초기화
-  - React Hook Form + Zod 폼 검증 구성
-  - TanStack Query로 수집 시작 mutation과 작업 상태 폴링 구현
-  - Zustand는 명확한 전역 클라이언트 상태 수요가 생길 때까지 보류
 
 - **T-013**: 지도·리스트·운영 패널 구현
   - `maplibre-vworld-js` 지도 표시
@@ -44,10 +38,16 @@
   - 규모 증가 시 PostgreSQL/PostGIS 전환 ADR 작성
   - 멀티 워커 필요 시 PgQueuer 또는 APScheduler + Advisory Lock 검토
 
+- **T-020**: Next.js 메이저 업그레이드 및 npm audit 대응 검토
+  - T-012 기준 `npm audit`이 Next 14 / `eslint-config-next` 계열 transitive 취약점 5건(1 moderate, 4 high)을 보고
+  - 자동 수정은 Next 16 major upgrade를 요구하므로 프론트 안정화 후 별도 브랜치에서 Next/React 호환성 검토
+  - 업그레이드 시 `next lint` 대체 전략(ESLint flat config 또는 Next 최신 lint workflow)도 함께 정리
+
 ---
 
 ## 완료
 
+- [x] **T-012**: Next.js 프론트엔드 스택 정비 — shadcn/ui 초기화(`components.json`, `Button`, `Input`, `Select`, `Field`, `Badge`, `cn`), Tailwind semantic token 구성, React Hook Form + Zod 수집 폼, TanStack Query provider 및 수집 시작 mutation/상태 polling 구현. `maplibre-vworld` npm 의존성은 공개 패키지가 없어 제거하고 `maplibre-gl`은 유지. Next 14 호환을 위해 ESLint 8 + `eslint-config-next@14.2.35` 설정 추가. `npm run lint`, `npm run type-check`, `npm run build` 통과. dev server `http://127.0.0.1:3001/` 응답 확인. (2026-06-05)
 - [x] **T-011**: MCP 서버 읽기/쓰기 UX 구현 — 외부 MCP SDK와 로컬 `mcp/` 실행 디렉터리 이름 충돌을 피하기 위해 실제 구현을 `tripmate_mcp` 패키지로 분리하고 `mcp/server.py`는 Docker Compose 호환 래퍼로 유지. FastMCP 서버 등록, 읽기 도구(`get_harvest_status`, `search_existing_places`, `get_place_detail`), 쓰기 도구(`harvest_travel_destinations`, `correct_place`, `merge_places`, `trigger_deep_research`, `review_unmatched_place`, `resolve_place_candidate`) 구현. 쓰기 도구는 Pydantic 스키마 검증, 필수 `idempotency_key`, `audit_logs` 기록을 적용. `place_service`에 장소 보정, 병합, 후보 검수/해결 도메인 함수 추가. pytest 103건 통과. (2026-06-05)
 - [x] **T-019**: 채널·재생목록 harvest 오케스트레이션 보강 — `pipeline.run_harvest`가 `seed_keyword`/`channel_id`/`playlist_id` 입력을 모두 처리하고, channel은 `channels.list`로 uploads playlist를 찾아 `playlistItems.list`로 video_id를 수집하며, playlist는 직접 `playlistItems.list`를 사용. 모든 target은 기존 `videos.list` 상세 조회, ranking, `ingest_service` 멱등 적재 경로를 재사용하고 `target_type`/`target_id`/`quota_used`/`uploads_playlist_id`를 결과에 기록. scheduler 기본 `harvest` handler도 keyword/channel/playlist를 모두 전달. pytest 93건 통과. (2026-06-05)
 - [x] **T-010**: APScheduler 단일 실행자 구현 — `scheduler.worker`: `run_once`가 stale running 작업 재투입/격리 후 FIFO pending 작업을 claim하고 handler를 실행, `execute_run`이 heartbeat/progress/done/failed 상태 전이를 일원화, unknown job과 handler 예외를 failed로 격리, 기본 `harvest` handler를 keyword `pipeline.run_harvest`에 연결. `worker_loop`는 APScheduler interval job(`max_instances=1`, `coalesce=True`)으로 `run_once` 반복 실행. scheduler poll/heartbeat/stale/max retry 환경 변수 추가. channel/playlist harvest 오케스트레이션 갭은 T-019로 분리. pytest 90건 통과. (2026-06-05)

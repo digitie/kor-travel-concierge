@@ -86,7 +86,7 @@ MEDIA_RETENTION_POLICY=infinite
 1. 프로젝트 루트에서 `frontend` 디렉토리로 이동하여 Node.js 의존성 패키지를 설치합니다:
    ```powershell
    cd frontend
-   npm install
+   npm ci
    ```
 
 2. 프로젝트 루트로 이동하여 로컬 개발 환경용 `.env` 파일을 생성합니다:
@@ -105,6 +105,13 @@ MEDIA_RETENTION_POLICY=infinite
    npm run dev
    ```
    웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다.
+
+4. 정적 검증을 실행합니다:
+   ```powershell
+   npm run lint
+   npm run type-check
+   npm run build
+   ```
 
 ---
 
