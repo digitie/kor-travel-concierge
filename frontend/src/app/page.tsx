@@ -1,18 +1,16 @@
+import { HarvestConsole } from "@/components/HarvestConsole";
 import { VWorldMap } from "@/components/VWorldMap";
 
-// 메인 화면: 장소 리스트 + VWorld 지도 뷰 (스캐폴드).
-// 리스트/마커/상세 패널 동기화와 검수 큐는 T-013에서 구현한다.
 export default function HomePage() {
   return (
-    <main className="flex h-screen">
+    <main className="flex min-h-screen flex-col bg-background md:flex-row">
       <section
         id="destination-list"
-        className="w-1/3 overflow-y-auto border-r p-4"
+        className="min-h-[42rem] border-b md:h-screen md:w-[24rem] md:border-b-0 md:border-r"
       >
-        <h1 className="text-lg font-semibold">TripMate Agent</h1>
-        {/* T-013: 수집된 여행지 리스트 */}
+        <HarvestConsole />
       </section>
-      <section className="w-2/3">
+      <section className="min-h-[32rem] flex-1 md:h-screen">
         <VWorldMap />
       </section>
     </main>
