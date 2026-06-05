@@ -5,23 +5,25 @@
 
 ## 프로젝트 현황 (2026-06-05)
 
-Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시각화, MCP 읽기/쓰기 도구 UX를 함께 제공하는 `tripmate-agent` 개발 초기 단계이다. 최신 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`이며, 1~2인 운영 기준 소형 프로젝트로 설계를 경량화한다.
+Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시각화, MCP 읽기/쓰기 도구 UX를 함께 제공하는 `tripmate-agent` 개발 초기 단계이다. 최신 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`와 후속 RustFS 미디어 저장 요구사항이며, 1~2인 운영 기준 소형 프로젝트로 설계를 경량화한다.
 
 ### 현재 작업
 
-- **T-017**: Google Docs 소형 프로젝트 SpatiaLite 명세를 로컬 문서 계획에 반영.
+- **T-018**: RustFS 미디어 저장, 무기한 보존, 매칭 실패 장소 검수, Gemini 설명 보정·보강 필드를 로컬 문서 계획에 반영.
 - **T-003 이후**: `frontend`, `backend`, `etl`, `tests`, `mcp`, `scheduler` 디렉토리 뼈대와 실제 구현을 순차 진행.
 - **지오코딩 결정**: 최신 요청에 따라 `kraddr-geo` 연계는 취소하고, Kakao / Naver / VWorld 공급자 어댑터 기반으로 정리.
 - **YouTube 수집 결정**: 소형 프로젝트 기준 공식 YouTube Data API v3를 기본 수집 경로로 사용하고, 비공식 의존은 자막/프레임 구간으로 격리.
+- **미디어 저장 결정**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 무기한 보존한다.
+- **데이터 품질 결정**: 매칭 실패 장소는 자동 확정하지 않고 웹 UI/MCP 검수 큐에서 사용자가 보정한다. 영상 설명 원문, Gemini 보정 설명, Gemini 장소 보강 설명은 별도 필드로 저장한다.
 
 ### 잔존 기술 부채
 
 - 아직 코드 구현 전이므로 런타임 부채는 없다.
-- 현재 문서는 Google Docs 소형 프로젝트 명세 기준으로 정렬되었고, 실제 구현은 T-003부터 환경 변수, 디렉토리 구조, 비동기 실행 모델을 코드에 반영해야 한다.
+- 현재 문서는 Google Docs 소형 프로젝트 명세와 RustFS 후속 요구사항 기준으로 정렬되었고, 실제 구현은 T-003부터 환경 변수, 디렉토리 구조, 비동기 실행 모델, RustFS 저장 계층을 코드에 반영해야 한다.
 
 ### 브랜치 상태
 
-- `main`에서 `codex/google-doc-plan-sync` 브랜치를 생성하여 Google Docs 명세 반영 작업 중이다.
+- `main` 직접 푸시는 금지한다. 모든 변경은 작업별 `codex/*` 브랜치에서 커밋하고 PR 생성 후 머지한다.
 
 ## 로컬 개발 환경 레이아웃
 
@@ -38,13 +40,15 @@ F:\dev\tripmate-agent\
 │   ├── app/
 │   │   ├── api/          # API 라우터 (키워드 CRUD, 유튜버 CRUD 등)
 │   │   ├── core/         # DB 세션 및 공통 설정
-│   │   └── models/       # SQLAlchemy 2.0 모델 (SQLite + SpatiaLite)
+│   │   ├── models/       # SQLAlchemy 2.0 모델 (SQLite + SpatiaLite)
+│   │   └── services/     # 도메인 서비스 및 RustFS 저장 계층
 │   ├── requirements.txt
 │   └── main.py
 ├── etl/                  # 비동기 ETL 파이프라인 스크립트
 │   ├── search.py         # 1단계: 키워드 조합 YouTube 검색 (Gemini 보정)
-│   ├── summarize.py      # 2단계: 신규 영상 요약 정리 (Gemini API)
+│   ├── summarize.py      # 2단계: 신규 영상 요약 정리 및 설명 보정 (Gemini API)
 │   ├── geocode.py        # Kakao/Naver/VWorld 기반 지오코딩 및 역지오코딩
+│   ├── media.py          # RustFS 원본 동영상/자막/전사 결과/프레임 저장
 │   └── runner.py         # ETL 통합 실행기 (스케줄러/CLI)
 ├── scheduler/            # APScheduler 단일 실행자 (계획)
 │   └── worker.py         # crawl_runs pending 작업 claim 및 실행
@@ -57,7 +61,7 @@ F:\dev\tripmate-agent\
 │   └── package.json
 └── docs/                 # 아키텍처 및 이력 관리 문서
     ├── architecture.md   # 전체 시스템 흐름도
-    ├── decisions.md      # ADR 기록 (ADR-1 ~ ADR-14)
+    ├── decisions.md      # ADR 기록 (ADR-1 ~ ADR-16)
     ├── tasks.md          # 백로그 추적
     ├── journal.md        # 일지 기록
     └── dev-environment.md# Windows 개발 환경 구축 가이드
@@ -111,6 +115,8 @@ npx playwright test
 - **ADR-12**: SQLite + SpatiaLite 임베디드 공간 DB 채택
 - **ADR-13**: 전면 asyncio와 APScheduler 단일 실행자 채택
 - **ADR-14**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query 프론트 스택 채택
+- **ADR-15**: RustFS 기반 원본 미디어 저장과 무기한 보존
+- **ADR-16**: 장소 매칭 검수 UX와 Gemini 설명 보정 필드 분리
 
 상세는 `docs/decisions.md`를 참고한다.
 

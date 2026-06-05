@@ -12,7 +12,7 @@ Windows 호스트에 다음 도구들이 설치되어 있어야 합니다.
 - **Python**: v3.10 이상 (Windows x86-64 executable installer로 설치 시 'Add Python to PATH' 옵션 필수 활성화)
 - **SQLite3 + SpatiaLite**: SQLite3는 Python에 기본 내장되어 있으나, 공간 함수 사용을 위해 SpatiaLite 확장 설치가 필요합니다.
 - **Git**: Windows용 Git 설치 ([다운로드](https://git-scm.com/))
-- **Docker Desktop**: Docker Compose 기반 단일 호스트 실행 검증에 사용합니다. (T-014)
+- **Docker Desktop**: Docker Compose 기반 단일 호스트 실행 검증과 별도 RustFS 로컬 서비스를 구동하는 데 사용합니다. (T-014)
 
 ---
 
@@ -51,16 +51,47 @@ Windows 호스트에 다음 도구들이 설치되어 있어야 합니다.
 
 ---
 
-## 3. 프론트엔드 (Next.js) 환경 구축
+## 3. RustFS 로컬 미디어 저장소
 
-1. `frontend` 디렉토리로 이동하여 Node.js 의존성 패키지를 설치합니다:
+RustFS는 앱 컨테이너에 포함하지 않고 별도의 로컬 Docker 서비스로 구동합니다. ETL이 확보한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 RustFS에 저장하고 SQLite + SpatiaLite에는 객체 URI와 체크섬만 기록합니다.
+
+권장 로컬 포트:
+
+- S3 API: `http://localhost:9003`
+- 콘솔: `http://localhost:9004`
+
+`.env`에는 다음 값을 둡니다.
+
+```powershell
+RUSTFS_ENABLED=true
+RUSTFS_ENDPOINT=http://localhost:9003
+RUSTFS_CONSOLE_URL=http://localhost:9004
+RUSTFS_ACCESS_KEY=your_rustfs_access_key_here
+RUSTFS_SECRET_KEY=your_rustfs_secret_key_here
+RUSTFS_BUCKET_RAW_VIDEOS=tripmate-raw-videos
+RUSTFS_BUCKET_SUBTITLES=tripmate-subtitles
+RUSTFS_BUCKET_FRAMES=tripmate-frames
+RUSTFS_HEALTH_PATH=/health/live
+MEDIA_RETENTION_POLICY=infinite
+```
+
+초기 버킷은 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`입니다. 객체 저장소 lifecycle 만료 정책은 설정하지 않습니다. DB에서 영상이나 장소가 제외 처리되더라도 RustFS 객체는 자동 삭제하지 않습니다.
+
+상태 확인은 RustFS 이미지가 제공하는 `/health` 또는 `/health/live` 엔드포인트로 수행합니다. 구현 후에는 PowerShell 실행 스크립트나 Docker Compose 파일에 헬스체크를 명시하고, 객체 업로드·조회 검증을 T-014에서 수행합니다.
+
+---
+
+## 4. 프론트엔드 (Next.js) 환경 구축
+
+1. 프로젝트 루트에서 `frontend` 디렉토리로 이동하여 Node.js 의존성 패키지를 설치합니다:
    ```powershell
-   cd ../frontend
+   cd frontend
    npm install
    ```
 
-2. 로컬 개발 환경용 `.env` 파일을 생성합니다:
+2. 프로젝트 루트로 이동하여 로컬 개발 환경용 `.env` 파일을 생성합니다:
    ```powershell
+   cd ..
    Copy-Item .env.example .env
    ```
    `.env` 파일을 메모장 등으로 열고, 발급받은 VWorld 지도 서비스 API 키를 입력합니다:
@@ -70,15 +101,16 @@ Windows 호스트에 다음 도구들이 설치되어 있어야 합니다.
 
 3. Next.js 개발 서버를 실행합니다:
    ```powershell
+   cd frontend
    npm run dev
    ```
    웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다.
 
 ---
 
-## 4. ETL 파이프라인 작동 테스트
+## 5. ETL 파이프라인 작동 테스트
 
-ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 Python 명령으로 트리거하거나, 구현 후 APScheduler 실행자가 `crawl_runs`의 pending 작업을 처리합니다.
+ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 Python 명령으로 트리거하거나, 구현 후 APScheduler 실행자가 `crawl_runs`의 pending 작업을 처리합니다. RustFS가 켜져 있으면 자막, 전사 결과, 대표 프레임, 필요 시 원본 동영상 또는 오디오가 RustFS에 저장되어야 합니다.
 
 1. `.env` 환경 변수가 루트에 선언되어 있거나, `etl/` 폴더 내에 배치되어 있는지 확인합니다.
 2. 가상환경이 활성화된 터미널에서 다음 스크립트를 구동합니다:
@@ -87,10 +119,11 @@ ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 P
    python runner.py
    ```
    - 스크립트가 돌아가며 공식 YouTube Data API v3, Gemini API, Kakao/Naver 지오코딩, VWorld 역지오코딩을 거쳐 SQLite + SpatiaLite DB에 최종 적재하는 로그를 관측할 수 있습니다.
+   - RustFS 저장이 활성화된 경우 `media_assets`에 객체 URI, 체크섬, 크기, `retention_policy = infinite`가 기록되는지 확인합니다.
 
 ---
 
-## 5. MCP 서버 로컬 테스트 (구현 후)
+## 6. MCP 서버 로컬 테스트 (구현 후)
 
 MCP 서버는 웹 브라우저를 거치지 않는 AI 에이전트용 읽기/쓰기 UX입니다. T-010 구현 후에는 백엔드와 같은 `.env`를 사용하되, 쓰기 도구 활성화 여부를 명시적으로 확인합니다.
 
@@ -103,7 +136,7 @@ MCP_TRANSPORT=stdio
 
 ---
 
-## 6. APScheduler 실행자 테스트 (구현 후)
+## 7. APScheduler 실행자 테스트 (구현 후)
 
 스케줄러는 API 서버나 MCP 서버가 만든 `crawl_runs.pending` 작업을 단일 실행자로 claim해 처리합니다.
 
@@ -117,7 +150,7 @@ HTTP_MAX_CONCURRENT_REQUESTS=8
 
 ---
 
-## 7. E2E 통합 테스트 (Playwright)
+## 8. E2E 통합 테스트 (Playwright)
 
 본 프로젝트는 프론트엔드와 백엔드가 정상적으로 메시지를 교환하고 SQLite + SpatiaLite DB 적재 및 VWorld 지도 로딩이 깨지지 않는지 Playwright E2E로 검증합니다.
 
@@ -143,7 +176,7 @@ HTTP_MAX_CONCURRENT_REQUESTS=8
 
 ---
 
-## 8. Windows 트러블슈팅
+## 9. Windows 트러블슈팅
 
 ### 1. SQLite3 DB Locked Error
 ETL 스크립트가 대량의 쓰기(Write) 연산을 수행하는 중에 사용자가 웹에서 API를 조회/변경하면 데이터베이스 락이 발생할 수 있습니다.
@@ -160,3 +193,7 @@ Windows 빌드 도구 누락으로 일부 네이티브 Node 패키지 빌드 오
 ### 4. VWorld 타일 로드 실패 (403 Forbidden)
 지도가 나오지 않고 회색 배경만 출력되는 현상입니다.
 - **해결책**: VWorld 개발자 센터에 등록된 API 키의 사용 도메인 설정이 `http://localhost:3000` 및 `http://localhost:8000`을 명시적으로 포함하고 있는지 재차 점검하십시오.
+
+### 5. RustFS 헬스체크 실패
+RustFS 컨테이너는 실행 중인데 앱에서 저장소 연결 실패가 발생할 수 있습니다.
+- **해결책**: `RUSTFS_ENDPOINT`가 S3 API 포트(`9003`)를 가리키는지 확인하고, 브라우저 콘솔 포트(`9004`)와 혼동하지 마십시오. 사용하는 RustFS 이미지에 따라 `/health`와 `/health/live` 중 실제 200 응답을 반환하는 경로를 `RUSTFS_HEALTH_PATH`에 지정합니다.
