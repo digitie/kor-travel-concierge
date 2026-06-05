@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-06-05: T-013 지도·리스트·운영 패널 구현
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **REST 운영 표면 추가**: `/api/runs`, `/api/audit-logs`, `/api/storage/rustfs`, `/api/destinations/{place_id}/correct`, `/api/destinations/{place_id}/deep-research`, `/api/destinations/unmatched/{candidate_id}/resolve` 추가.
+  - **RustFS 패널 데이터**: `media_assets`의 asset type별 객체 수·크기 합계와 RustFS `/health/live` 연결 상태를 반환.
+  - **지도 구현**: 공개 npm 패키지 `maplibre-vworld`/`maplibre-vworld-js`가 없어, `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 구성. VWorld 키가 없으면 fallback background로 렌더링.
+  - **장소 리스트/지도 동기화**: 장소 목록 선택 시 지도 중심 이동, marker 클릭 시 선택 장소 변경, Deep Research 작업 생성 버튼 연결.
+  - **검수 큐**: `needs_review` 후보 목록, 신규 장소 생성 폼, 제외 처리 버튼을 구현하고 처리 후 장소/후보/감사 로그 query를 갱신.
+  - **운영 패널**: 최근 작업, 실패 작업 수, RustFS 객체 수/헬스 상태, 최근 MCP·웹 쓰기 감사 로그를 표시.
+  - **테스트**: API endpoint 테스트를 보강. backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build` 통과. dev server 3001 포트에서 첫 화면 응답과 `장소`/`검수 큐`/`운영` 렌더링 확인.
+- **다음 작업**:
+  - T-014: Windows 및 Docker Compose 통합 검증. API, MCP, scheduler, frontend, RustFS를 단일 호스트 구성으로 검증한다.
+
+---
+
 ## 2026-06-05: T-012 Next.js 프론트엔드 스택 정비
 
 - **담당자**: Codex

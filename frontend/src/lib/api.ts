@@ -31,11 +31,82 @@ export type HarvestStatus = {
 export type DestinationSummary = {
   place_id: number;
   name: string;
+  description?: string | null;
+  gemini_enriched_description?: string | null;
   latitude: number;
   longitude: number;
   category: string | null;
   official_address: string | null;
+  road_address?: string | null;
   is_geocoded: boolean;
+};
+
+export type UnmatchedCandidate = {
+  id: number;
+  video_id: string;
+  ai_place_name: string;
+  location_hint: string | null;
+  candidate_category: string | null;
+  match_status: string;
+  timestamp_start: string | null;
+};
+
+export type CrawlRunSummary = {
+  job_id: string;
+  job_type: string;
+  source: string;
+  target_type: string | null;
+  target_id: string | null;
+  state: string;
+  progress: number;
+  retry_count: number;
+  last_error: string | null;
+  result: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type AuditLogSummary = {
+  id: number;
+  actor_type: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type RustfsAssetSummary = {
+  asset_type: string;
+  count: number;
+  size_bytes: number;
+};
+
+export type RustfsStatus = {
+  enabled: boolean;
+  endpoint: string;
+  console_url: string;
+  retention_policy: string;
+  health: {
+    ok: boolean;
+    url: string;
+    status_code: number | null;
+    error: string | null;
+  };
+  assets: RustfsAssetSummary[];
+};
+
+export type ResolveCandidateInput = {
+  action: "match_existing" | "create_place" | "ignore";
+  placeId?: number;
+  correctedName?: string;
+  latitude?: number;
+  longitude?: number;
+  officialAddress?: string;
+  roadAddress?: string;
+  category?: string;
+  reviewNote?: string;
 };
 
 function harvestPayload(input: StartHarvestInput) {
@@ -78,4 +149,55 @@ export async function getHarvestStatus(jobId: string): Promise<HarvestStatus> {
 
 export async function listDestinations(): Promise<DestinationSummary[]> {
   return requestJson<DestinationSummary[]>("/api/destinations");
+}
+
+export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
+  return requestJson<UnmatchedCandidate[]>("/api/destinations/unmatched");
+}
+
+export async function listRuns(): Promise<CrawlRunSummary[]> {
+  return requestJson<CrawlRunSummary[]>("/api/runs?limit=12");
+}
+
+export async function listAuditLogs(): Promise<AuditLogSummary[]> {
+  return requestJson<AuditLogSummary[]>("/api/audit-logs?limit=10");
+}
+
+export async function getRustfsStatus(): Promise<RustfsStatus> {
+  return requestJson<RustfsStatus>("/api/storage/rustfs");
+}
+
+export async function resolveCandidate(
+  candidateId: number,
+  input: ResolveCandidateInput,
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(
+    `/api/destinations/unmatched/${candidateId}/resolve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        action: input.action,
+        place_id: input.placeId,
+        corrected_name: input.correctedName,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        official_address: input.officialAddress,
+        road_address: input.roadAddress,
+        category: input.category,
+        review_note: input.reviewNote,
+      }),
+    },
+  );
+}
+
+export async function triggerDeepResearch(
+  placeId: number,
+): Promise<{ job_id: string; state: string; place_id: number }> {
+  return requestJson<{ job_id: string; state: string; place_id: number }>(
+    `/api/destinations/${placeId}/deep-research`,
+    {
+      method: "POST",
+      body: JSON.stringify({ max_sources: 8 }),
+    },
+  );
 }
