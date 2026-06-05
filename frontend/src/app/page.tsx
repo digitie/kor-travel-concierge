@@ -1,5 +1,5 @@
+import { DestinationWorkspace } from "@/components/DestinationWorkspace";
 import { HarvestConsole } from "@/components/HarvestConsole";
-import { VWorldMap } from "@/components/VWorldMap";
 
 export default function HomePage() {
   return (
@@ -11,7 +11,7 @@ export default function HomePage() {
         <HarvestConsole />
       </section>
       <section className="min-h-[32rem] flex-1 md:h-screen">
-        <VWorldMap />
+        <DestinationWorkspace />
       </section>
     </main>
   );

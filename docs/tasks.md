@@ -6,20 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-013**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-014**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-013**: 지도·리스트·운영 패널 구현
-  - `maplibre-vworld-js` 지도 표시
-  - 장소 리스트, 지도 마커, 상세 패널 동기화
-  - 매칭되지 않은 장소 후보 검수 큐와 수동 보정 폼 작성
-  - 영상 설명 원문, Gemini 보정 설명, Gemini 장소 보강 설명 비교 표시
-  - 작업 상태, 실패 작업, API 쿼터, MCP 쓰기 로그 운영 패널 작성
-  - RustFS 저장 용량, 객체 수, 최근 저장 실패 로그 표시
-  - Deep Research 트리거 및 완료 결과 표시
 
 - **T-014**: Windows 및 Docker Compose 통합 검증
   - Windows PowerShell 기준 백엔드, 프론트엔드, MCP, scheduler 실행 검증
@@ -47,6 +38,7 @@
 
 ## 완료
 
+- [x] **T-013**: 지도·리스트·운영 패널 구현 — `maplibre-gl` 기반 VWorld WMTS raster style과 장소 marker 표시, 장소 리스트/선택 동기화, Deep Research 트리거, 매칭 실패 후보 검수 큐(신규 장소 생성·제외), 최근 작업/실패 작업/MCP·웹 감사 로그/RustFS 객체·헬스 요약 운영 패널 구현. `/api/runs`, `/api/audit-logs`, `/api/storage/rustfs`, 장소 보정, 후보 해결, Deep Research REST endpoint 추가. 공개 npm 패키지 `maplibre-vworld`/`maplibre-vworld-js`가 없어 T-013 구현은 `maplibre-gl` 직접 WMTS 구성으로 진행. backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build` 통과. dev server `http://127.0.0.1:3001/` 응답 및 패널 렌더링 확인. (2026-06-05)
 - [x] **T-012**: Next.js 프론트엔드 스택 정비 — shadcn/ui 초기화(`components.json`, `Button`, `Input`, `Select`, `Field`, `Badge`, `cn`), Tailwind semantic token 구성, React Hook Form + Zod 수집 폼, TanStack Query provider 및 수집 시작 mutation/상태 polling 구현. `maplibre-vworld` npm 의존성은 공개 패키지가 없어 제거하고 `maplibre-gl`은 유지. Next 14 호환을 위해 ESLint 8 + `eslint-config-next@14.2.35` 설정 추가. `npm run lint`, `npm run type-check`, `npm run build` 통과. dev server `http://127.0.0.1:3001/` 응답 확인. (2026-06-05)
 - [x] **T-011**: MCP 서버 읽기/쓰기 UX 구현 — 외부 MCP SDK와 로컬 `mcp/` 실행 디렉터리 이름 충돌을 피하기 위해 실제 구현을 `tripmate_mcp` 패키지로 분리하고 `mcp/server.py`는 Docker Compose 호환 래퍼로 유지. FastMCP 서버 등록, 읽기 도구(`get_harvest_status`, `search_existing_places`, `get_place_detail`), 쓰기 도구(`harvest_travel_destinations`, `correct_place`, `merge_places`, `trigger_deep_research`, `review_unmatched_place`, `resolve_place_candidate`) 구현. 쓰기 도구는 Pydantic 스키마 검증, 필수 `idempotency_key`, `audit_logs` 기록을 적용. `place_service`에 장소 보정, 병합, 후보 검수/해결 도메인 함수 추가. pytest 103건 통과. (2026-06-05)
 - [x] **T-019**: 채널·재생목록 harvest 오케스트레이션 보강 — `pipeline.run_harvest`가 `seed_keyword`/`channel_id`/`playlist_id` 입력을 모두 처리하고, channel은 `channels.list`로 uploads playlist를 찾아 `playlistItems.list`로 video_id를 수집하며, playlist는 직접 `playlistItems.list`를 사용. 모든 target은 기존 `videos.list` 상세 조회, ranking, `ingest_service` 멱등 적재 경로를 재사용하고 `target_type`/`target_id`/`quota_used`/`uploads_playlist_id`를 결과에 기록. scheduler 기본 `harvest` handler도 keyword/channel/playlist를 모두 전달. pytest 93건 통과. (2026-06-05)
