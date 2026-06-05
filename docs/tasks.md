@@ -6,18 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-004**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-005**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-004**: FastAPI 비동기 백엔드 기반 구축
-  - FastAPI 라우터, 도메인 서비스, 설정 로더 분리
-  - SQLAlchemy 2.0 + `aiosqlite` 연결 구성
-  - SQLite WAL 모드와 SpatiaLite 확장 로드 초기화
-  - `crawl_runs`, `audit_logs`, `system_settings` 공통 모델 구현
-  - REST 요청은 장시간 작업을 직접 수행하지 않고 `crawl_runs` 작업만 생성
 
 - **T-005**: SpatiaLite 공간 데이터 모델 구현
   - `search_keywords`, `source_targets`, `youtube_videos`, `travel_places`, `extracted_place_candidates`, `video_place_mappings`, `media_assets` 모델 작성
@@ -112,6 +105,7 @@
 
 ## 완료
 
+- [x] **T-004**: FastAPI 비동기 백엔드 기반 구축 — `crawl_runs`/`audit_logs`/`system_settings` SQLAlchemy 2.0 모델, `crawl_run_service`(생성·claim·heartbeat·완료·실패·stale 재투입)/`audit_service`/`settings_service` 도메인 서비스, `get_session` 의존성과 lifespan `init_db`, `/api/harvest` 작업 생성·상태 조회 및 `/api/settings` 연동 구현. REST는 작업 생성만 하고 직접 실행하지 않음. pytest 17건 통과. (2026-06-05)
 - [x] **T-003**: 소형 프로젝트 기준 스캐폴딩 정비 — `backend/app/`(config·database·logging·models·services·api) 구조화, `mcp/`·`scheduler/`·`etl/media.py` 신설, Docker Compose 초안(`frontend`/`api`/`mcp`/`scheduler`/`rustfs`)과 `Dockerfile.python`·`frontend/Dockerfile`, RustFS 버킷 초기화 스크립트, 컴포넌트별 requirements, 프론트 App Router 스캐폴드 작성. `.env.example`과 `Settings` 환경 변수 이름 동기화 완료. (Docker/Playwright 통합 빌드 검증은 T-014로 이관) (2026-06-05)
 - [x] **T-018**: RustFS 미디어 저장, 무기한 보존, 매칭 실패 장소 수동 검수, Gemini 설명 보정·보강 필드 요구사항을 개발 계획에 반영. (2026-06-05)
 - [x] **T-017**: Google Docs 소형 프로젝트 SpatiaLite 명세 반영 — 공식 YouTube API 중심, SQLite + SpatiaLite, 전면 asyncio, APScheduler 단일 실행자, REST/MCP 분리, 프론트 스택 기준으로 문서 재정렬. (2026-06-05)

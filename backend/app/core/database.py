@@ -61,10 +61,28 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def init_spatial_metadata() -> None:
-    """SpatiaLite 메타데이터 테이블을 초기화한다 (최초 1회).
+async def init_spatial_metadata(conn) -> None:
+    """SpatiaLite 메타데이터 테이블을 초기화한다 (최초 1회, 멱등).
 
-    실제 호출은 T-005 모델 구현 이후 애플리케이션 lifespan에서 수행한다.
+    `mod_spatialite`가 로드되지 않은 환경(개발용 일부 OS)에서는 조용히 건너뛴다.
+    공간 컬럼/인덱스 구성은 T-005에서 보강한다.
     """
-    async with engine.begin() as conn:
+    try:
         await conn.execute(text("SELECT InitSpatialMetaData(1);"))
+    except Exception:
+        # 확장 미로드 환경에서는 공간 메타데이터 초기화를 건너뛴다.
+        pass
+
+
+async def init_db() -> None:
+    """모든 ORM 테이블을 생성한다 (없을 때만).
+
+    애플리케이션 lifespan 시작 시 호출한다. SQLite + SpatiaLite 기준으로 공통
+    작업/감사/설정 테이블을 만들고, SpatiaLite 메타데이터를 초기화한다.
+    """
+    # 등록된 모든 모델 메타데이터를 로드한다.
+    from app.models import Base  # 지연 import로 순환 의존 회피
+
+    async with engine.begin() as conn:
+        await init_spatial_metadata(conn)
+        await conn.run_sync(Base.metadata.create_all)
