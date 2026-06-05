@@ -6,21 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-007**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-008**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-007**: 자막·전사·Gemini POI 추출 구현
-  - `youtube-transcript-api` 1차 자막 추출
-  - `yt-dlp` 자막 추출 폴백
-  - `faster-whisper` 로컬 전사 최종 폴백
-  - 확보한 자막 파일과 전사 결과를 RustFS에 저장하고 `media_assets`에 기록
-  - YouTube 영상 설명 원문 저장 및 Gemini 오탈자·문맥 보정 설명 저장
-  - Gemini가 추가·보강한 장소 설명을 별도 필드에 저장
-  - 블로킹 작업을 executor 또는 프로세스풀로 격리
-  - Gemini JSON Schema 기반 POI 추출 및 파싱 실패 재시도 처리
 
 - **T-008**: 지오코딩·역지오코딩 구현
   - Kakao Local API 1차 지오코딩
@@ -89,6 +79,7 @@
 
 ## 완료
 
+- [x] **T-007**: 자막·전사·Gemini POI 추출 구현 — `transcript`(youtube-transcript-api→yt-dlp→faster-whisper provider 체인, 지연 import·executor 격리), `poi_extraction`(Gemini JSON Schema·파싱 실패 재시도, 주입형 llm), `media_store`(RustFS 저장 추상화 + `media_assets` 기록, 무기한 보존), `summarize_service`(자막 RustFS 저장→POI 추출→설명 보정본 저장·원문 보존→`needs_review` 후보 생성). pytest 60건 통과. (2026-06-05)
 - [x] **T-006**: 공식 YouTube Data API v3 수집 파이프라인 구현 — `backend/app/etl/` 비동기 패키지: `youtube_client`(search/playlistItems/channels/videos.list, 쿼터 누적), `keyword_expansion`(주입형 Gemini generator + 결정론적 폴백, `season_context`), `ranking`(업로드 최신성·키워드 유사도·참여도 정규화 점수), `ingest_service`(`video_id` 멱등 upsert, 파생 키워드 저장, 채널 워터마크), `pipeline.run_harvest` 오케스트레이션. httpx `MockTransport` 통합 테스트 포함 pytest 45건 통과. 비공식 크롤러 미사용(ADR-11). (2026-06-05)
 - [x] **T-005**: SpatiaLite 공간 데이터 모델 구현 — `search_keywords`/`source_targets`/`youtube_videos`/`travel_places`/`extracted_place_candidates`/`video_place_mappings`/`media_assets` 모델, 설명 원문·Gemini 보정/보강 필드 분리, `match_status`·검수 메타데이터, `media_assets` 무기한 보존. `app.core.spatial`이 `geom` Point(4326)·R-Tree를 ORM 밖 SpatiaLite DDL로 관리(ADR-17), `place_service` 근접/중복 탐색(bbox+Haversine, PostGIS 대체 가능)·검수 큐 조회, `/api/destinations`·`/api/destinations/unmatched` 연동. pytest 30건 통과. (2026-06-05)
 - [x] **T-004**: FastAPI 비동기 백엔드 기반 구축 — `crawl_runs`/`audit_logs`/`system_settings` SQLAlchemy 2.0 모델, `crawl_run_service`(생성·claim·heartbeat·완료·실패·stale 재투입)/`audit_service`/`settings_service` 도메인 서비스, `get_session` 의존성과 lifespan `init_db`, `/api/harvest` 작업 생성·상태 조회 및 `/api/settings` 연동 구현. REST는 작업 생성만 하고 직접 실행하지 않음. pytest 17건 통과. (2026-06-05)

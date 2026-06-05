@@ -1,3 +1,11 @@
+"""ETL 2단계 요약 스크립트 (CLI 데모용 placeholder).
+
+실제 자막/전사 provider 체인, Gemini JSON Schema POI 추출, RustFS 저장,
+설명 보정본·매칭 후보 생성은 `backend/app/etl/` 패키지
+(`transcript`/`poi_extraction`/`media_store`/`summarize_service`)에 구현되어
+있다(T-007). 이 파일은 단독 실행 데모 흐름만 유지한다.
+"""
+
 import os
 from dotenv import load_dotenv
 
