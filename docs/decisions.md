@@ -107,7 +107,7 @@ Python 기반의 **FastAPI**를 API 백엔드로 선정하고, ORM으로 **SQLAl
 
 ## ADR-5: YouTube API 할당량 절약을 위한 Scraping / Caching 전략
 
-- 상태: accepted
+- 상태: superseded by ADR-11
 - 날짜: 2026-06-03
 - 결정자: AI agent, human
 
@@ -243,7 +243,7 @@ ETL 구현 범위를 다음 원칙으로 보강한다.
 
 ## ADR-10: SQLite3 우선 구현과 PostGIS 전환 유보
 
-- 상태: accepted
+- 상태: superseded by ADR-12
 - 날짜: 2026-06-04
 - 결정자: AI agent, human
 
@@ -264,3 +264,133 @@ ETL 구현 범위를 다음 원칙으로 보강한다.
 
 ### 결과 (부정)
 - 대량 장소 중복 제거와 반경 검색은 SQLite3 휴리스틱으로 먼저 구현되며, 규모가 커지면 전환 비용이 발생한다.
+
+---
+
+## ADR-11: 소형 프로젝트 기준 공식 YouTube Data API 우선
+
+- 상태: accepted
+- 날짜: 2026-06-05
+- 결정자: AI agent, human
+
+### 컨텍스트
+이전 계획은 YouTube Data API 쿼터를 과도하게 우려하여 비공식 검색/스크래퍼를 수집 경로의 주요 백업 수단으로 두었다. 그러나 최신 Google Docs 명세는 1~2인 운영, 동시 사용자 10명 내외, 3~7일 주기 수집을 전제로 한다. 이 규모에서는 일일 10,000 유닛 한도에 도달할 가능성이 낮고, 비공식 검색 크롤러 파손 대응 시간이 더 큰 비용이다.
+
+### 결정
+검색과 메타데이터 수집은 공식 YouTube Data API v3를 기본으로 한다. 비공식 의존은 공식 대안이 없는 자막 추출과 대표 프레임 추출에만 격리한다.
+
+구체 기준:
+
+- 키워드 검색: `search.list`
+- 재생목록 항목: `playlistItems.list`
+- 채널 업로드 목록: `channels.list`
+- 영상 상세: `videos.list`
+- 자막: `youtube-transcript-api` → `yt-dlp` 폴백
+- 자막 최종 폴백: `faster-whisper`
+- 대표 프레임: `yt-dlp` 직접 스트림 URL + FFmpeg
+
+### 근거
+- 소형 프로젝트에서는 공식 API 쿼터보다 비공식 크롤러 파손 대응 시간이 더 비싸다.
+- 공식 API는 응답 계약, 인증, 쿼터, 오류 처리가 명확하다.
+- 자막은 공식 captions API가 타인 영상에 적합하지 않으므로 예외적으로 비공식 경로를 둔다.
+
+### 결과 (긍정)
+- 수집 경로의 불확실성이 줄어든다.
+- 장애 원인이 공식 API 응답, 자막 추출, 전사 폴백으로 분리되어 추적이 쉬워진다.
+
+### 결과 (부정)
+- `search.list` 호출은 비용이 높으므로 키워드 확장 수, 수집 주기, 검색 대상 수를 설정으로 제한해야 한다.
+
+---
+
+## ADR-12: SQLite + SpatiaLite 임베디드 공간 DB 채택
+
+- 상태: accepted
+- 날짜: 2026-06-05
+- 결정자: AI agent, human
+
+### 컨텍스트
+이전 계획은 SQLite3로 시작하되 PostGIS 전환 가능성을 크게 열어 두었다. 최신 Google Docs 명세는 별도 DB 서버 없는 소형 프로젝트를 명확히 전제로 하며, 공간 검색은 SQLite + SpatiaLite로 처리하는 쪽이 운영 비용과 백업·이전 비용 면에서 더 적합하다고 판단한다.
+
+### 결정
+초기 데이터베이스는 SQLite + SpatiaLite로 확정한다. Python 접근은 `aiosqlite`를 사용하고, SQLite WAL 모드를 켜 동시 접근을 완화한다. 공간 컬럼과 R-Tree 인덱스는 SpatiaLite를 사용한다.
+
+### 근거
+- 파일 하나로 백업, 복사, 이전이 가능하다.
+- PostGIS 서버 운영이 필요 없어 Windows 로컬 개발과 Docker Compose 배포가 단순하다.
+- SpatiaLite와 PostGIS는 OGC `ST_*` 계열 함수 개념을 공유하므로 대규모 전환 시 이전 부담이 제한적이다.
+
+### 결과 (긍정)
+- 초기 인프라 복잡도를 낮춘다.
+- 반경 검색과 중복 장소 탐지에 필요한 최소 공간 DB 기능을 확보한다.
+
+### 결과 (부정)
+- SpatiaLite 확장 설치와 Windows 경로 설정을 개발 환경 문서에서 명확히 다뤄야 한다.
+- 멀티 워커·대량 동시 쓰기에는 PostGIS보다 한계가 빠르게 온다.
+
+---
+
+## ADR-13: 전면 asyncio와 APScheduler 단일 실행자 채택
+
+- 상태: accepted
+- 날짜: 2026-06-05
+- 결정자: AI agent, human
+
+### 컨텍스트
+YouTube API, Gemini, 지오코딩, DB 접근은 대부분 네트워크 또는 파일 I/O 대기다. 기존 문서에는 작업 상태 추적과 stale 재시도는 있었지만, 실행 주체가 API 서버, MCP 서버, 스케줄러 사이에서 어떻게 일원화되는지가 명확하지 않았다.
+
+### 결정
+백엔드와 ETL은 전면 `asyncio` 기반으로 작성한다. REST API, MCP 서버, 정기 스케줄러는 모두 `crawl_runs` 작업 행을 생성하거나 조회하고, 실제 실행은 APScheduler 기반 scheduler 실행자가 단일 claim 방식으로 처리한다.
+
+동기·블로킹 라이브러리는 다음처럼 격리한다.
+
+- `yt-dlp`: executor
+- FFmpeg subprocess: executor 또는 비동기 subprocess 래퍼
+- `faster-whisper`: CPU/GPU 부하에 따라 프로세스풀 검토
+- SpatiaLite 동기 호출: 필요한 경우 executor로 격리
+
+### 근거
+- API/MCP 요청은 즉시 `job_id`를 반환해야 하며 장시간 수집을 직접 수행하면 안 된다.
+- 단일 실행자가 pending 작업을 claim하면 소형 단계에서 분산 락이 필요 없다.
+- 하나의 비동기 파이프라인을 공유하면 REST, MCP, 정기 크롤 경로가 어긋나지 않는다.
+
+### 결과 (긍정)
+- 작업 생성과 작업 실행의 책임이 분리된다.
+- 중복 실행과 API 요청 타임아웃 위험이 줄어든다.
+
+### 결과 (부정)
+- executor 경계, 동시성 상한, 취소 처리, heartbeat 갱신을 구현 규칙으로 강제해야 한다.
+
+---
+
+## ADR-14: 프론트엔드 폼·상태·UI 스택 채택
+
+- 상태: accepted
+- 날짜: 2026-06-05
+- 결정자: AI agent, human
+
+### 컨텍스트
+기존 문서에는 Next.js와 React만 명확했고, 폼 검증, 서버 상태, 컴포넌트 시스템이 구체화되지 않았다. 최신 Google Docs 명세는 Web REST와 비동기 작업 폴링이 핵심 흐름임을 전제로 한다.
+
+### 결정
+프론트엔드 기본 스택을 다음으로 확정한다.
+
+- 폼: React Hook Form
+- 검증: Zod
+- UI: shadcn/ui + Tailwind CSS
+- 서버 상태: TanStack Query
+- 지도: `maplibre-vworld-js`
+
+Zustand는 초기 범위에서 보류한다. 서버 데이터는 TanStack Query가, 폼 상태는 React Hook Form이 처리하므로 순수 클라이언트 전역 상태가 2~3개 이상 명확해질 때 추가한다.
+
+### 근거
+- `POST /api/harvest` → `job_id` → `GET /api/harvest/{job_id}` 폴링 흐름은 TanStack Query에 적합하다.
+- React Hook Form과 Zod를 결합하면 입력 폼과 API 계약을 일관되게 검증할 수 있다.
+- shadcn/ui와 Tailwind CSS는 작은 팀이 빠르게 일관된 운영 UI를 만들기에 적합하다.
+
+### 결과 (긍정)
+- 비동기 작업 UI의 로딩, 에러, 재요청, 캐싱 처리가 단순해진다.
+- 폼 검증과 API 응답 검증이 같은 스키마에서 출발할 수 있다.
+
+### 결과 (부정)
+- shadcn/ui 컴포넌트 생성 규칙과 Tailwind 설정을 초기 스캐폴딩에서 함께 관리해야 한다.

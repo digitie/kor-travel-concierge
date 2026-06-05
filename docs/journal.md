@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-06-05: Google Docs 소형 프로젝트 SpatiaLite 명세 반영
+
+- **담당자**: Codex
+- **작업 내용**:
+  - Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서` 내용을 확인하고 로컬 문서 계획을 최신 기준으로 재정렬.
+  - 기존 문서의 대규모 지향 설계와 충돌하는 항목을 보완:
+    - 비공식 검색/스크래퍼 중심 표현을 공식 YouTube Data API v3 우선 전략으로 교체.
+    - 단순 SQLite3 표현을 SQLite + SpatiaLite 임베디드 공간 DB 기준으로 보강.
+    - 장시간 작업 실행 주체를 API/MCP가 아니라 APScheduler 단일 실행자로 명확화.
+    - `etl_jobs` 중심 표현을 Web REST, MCP, scheduler가 공유하는 `crawl_runs` 작업 테이블로 정리.
+    - 프론트엔드 스택에 React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query를 반영.
+    - Zustand는 초기 범위에서 보류하는 것으로 정리.
+  - `docs/decisions.md`에서 ADR-5와 ADR-10을 superseded 처리하고 ADR-11 ~ ADR-14를 추가.
+  - `docs/tasks.md`를 T-003 이후 실제 구현 순서에 맞게 재정렬.
+- **다음 작업**:
+  - T-003: 소형 프로젝트 기준 스캐폴딩, Docker Compose, SpatiaLite 환경 변수, scheduler 디렉토리 구조 정비.
+
+---
+
 ## 2026-06-04: 상세 기획서 반영 및 MCP UX 계획 추가
 
 - **담당자**: Codex
