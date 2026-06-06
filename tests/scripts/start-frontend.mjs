@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,6 +6,10 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const testsRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(testsRoot, "..");
 const frontendDir = path.join(repoRoot, "frontend");
+const normalizeNextEnvScript = path.join(
+  frontendDir,
+  "scripts/normalize-next-env.mjs",
+);
 const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const command = process.platform === "win32" ? "cmd.exe" : "npm";
@@ -47,7 +51,15 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+function normalizeNextEnv() {
+  spawnSync(process.execPath, [normalizeNextEnvScript], {
+    cwd: frontendDir,
+    stdio: "inherit",
+  });
+}
+
 child.on("exit", (code, signal) => {
+  normalizeNextEnv();
   if (signal) {
     process.kill(process.pid, signal);
     return;
