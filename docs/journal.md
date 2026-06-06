@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-05: T-022 PR #1~5 리뷰 정합성 반영
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **MCP 안전 기본값**: `.env.example`과 `Settings.MCP_WRITE_ENABLED` 기본값을 `false`로 조정. 쓰기 검증·운영 허용 시에만 `.env`에서 `true`로 명시하도록 README와 개발 환경 문서를 갱신.
+  - **RustFS 보존 설명 보강**: `subtitle`/`transcript` 자산이 `tripmate-subtitles` 버킷을 공유한다는 점과 `MEDIA_RETENTION_POLICY`가 `media_assets.retention_policy`의 전역 기본값이라는 점을 명시.
+  - **ADR 정합성 보정**: ADR-9의 YouTube 수집 원칙을 ADR-11의 공식 YouTube Data API 우선 정책과 맞추고, `yt-dlp`는 자막·대표 프레임 구간에만 격리한다고 정리.
+  - **문서·빌드 위생**: README 환경 변수 예시를 `dotenv` 블록으로 바꾸고, MIT `LICENSE` 파일을 추가. frontend Dockerfile은 lockfile 기준 재현 설치를 위해 `npm ci`를 사용하도록 변경.
+- **다음 작업**:
+  - PR #6~19 리뷰 중 백엔드 코어·MCP·스케줄러 묶음을 반영한다.
+
+---
+
 ## 2026-06-05: T-020 Next.js 메이저 업그레이드 및 npm audit 대응
 
 - **담당자**: Codex

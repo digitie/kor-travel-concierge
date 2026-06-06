@@ -48,7 +48,7 @@
                  [YouTube Data API / Gemini / Kakao / Naver / VWorld]
                                            │
                                            ▼
-                         [youtube-transcript-api / yt-dlp / FFmpeg]
+                     [youtube-transcript-api / yt-dlp / faster-whisper / FFmpeg]
 ```
 
 ## 시작하기
@@ -59,7 +59,7 @@
 
 루트의 `.env.example`을 참고하여 `.env` 파일을 생성합니다.
 
-```bash
+```dotenv
 # 프론트엔드
 NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_browser_key_here
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
@@ -97,12 +97,14 @@ NAVER_CLIENT_SECRET=your_naver_client_secret_here
 VWORLD_SERVICE_KEY=your_vworld_server_key_here
 
 # MCP
-MCP_WRITE_ENABLED=true
+MCP_WRITE_ENABLED=false
 MCP_TRANSPORT=stdio
 MCP_HOST=127.0.0.1
 MCP_PORT=8010
 MCP_STREAMABLE_HTTP_PATH=/mcp
 ```
+
+쓰기 도구를 실제로 검증하거나 운영에서 허용할 때만 `.env`에서 `MCP_WRITE_ENABLED=true`로 명시합니다. Docker Compose의 MCP 서버는 같은 값을 사용하되 transport는 `streamable-http`로 override합니다.
 
 ### 백엔드 실행
 
@@ -118,7 +120,7 @@ python main.py
 
 ```powershell
 cd ../frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -133,7 +135,7 @@ python runner.py
 
 ```powershell
 cd ../tests
-npm install
+npm ci
 npx playwright install
 npx playwright test
 ```
@@ -152,4 +154,4 @@ Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 
 
 ## 라이선스
 
-MIT License.
+MIT License. 자세한 내용은 [`LICENSE`](./LICENSE)를 참고합니다.

@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     VWORLD_SERVICE_KEY: str = ""
 
     # --- 3. MCP 서버 ---
-    MCP_WRITE_ENABLED: bool = True
+    MCP_WRITE_ENABLED: bool = False
     MCP_TRANSPORT: str = "stdio"
     MCP_HOST: str = "127.0.0.1"
     MCP_PORT: int = 8010
