@@ -7,15 +7,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
 
 
-class TargetType(StrEnum):
+class TargetType(str, Enum):
     KEYWORD = "keyword"
     CHANNEL = "channel"
     PLAYLIST = "playlist"
@@ -23,9 +23,16 @@ class TargetType(StrEnum):
 
 class SourceTarget(TimestampMixin, Base):
     __tablename__ = "source_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_type",
+            "source_value",
+            name="uq_source_targets_target_type_source_value",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_value: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -16,6 +16,7 @@ from app.models import (  # noqa: E402
     AuditLog,
     ExtractedPlaceCandidate,
     MatchStatus,
+    MediaAsset,
     RunSource,
     TravelPlace,
     VideoPlaceMapping,
@@ -152,7 +153,15 @@ async def test_merge_places_moves_mappings_and_deletes_source(session_factory):
             place_id=source.place_id,
             ai_summary="요약",
         )
-        session.add(mapping)
+        asset = MediaAsset(
+            asset_type="frame",
+            video_id=video.video_id,
+            place_id=source.place_id,
+            bucket="tripmate-frames",
+            object_key="video-merge/frame.jpg",
+            object_uri="http://localhost:9003/tripmate-frames/video-merge/frame.jpg",
+        )
+        session.add_all([mapping, asset])
         await session.commit()
 
     result = await _runtime(session_factory).merge_places(
@@ -166,8 +175,25 @@ async def test_merge_places_moves_mappings_and_deletes_source(session_factory):
         assert await session.get(TravelPlace, source.place_id) is None
         moved = (await session.execute(select(VideoPlaceMapping))).scalars().one()
         assert moved.place_id == target.place_id
+        moved_asset = (await session.execute(select(MediaAsset))).scalars().one()
+        assert moved_asset.place_id == target.place_id
         refreshed_target = await session.get(TravelPlace, target.place_id)
         assert refreshed_target.description == "중복 설명"
+
+
+async def test_idempotency_key_rejects_parameter_mismatch(session_factory):
+    runtime = _runtime(session_factory)
+
+    await runtime.harvest_travel_destinations(
+        idempotency_key="harvest-key-2",
+        query="부산 맛집",
+    )
+
+    with pytest.raises(ValueError, match="다른 요청 파라미터"):
+        await runtime.harvest_travel_destinations(
+            idempotency_key="harvest-key-2",
+            query="제주 맛집",
+        )
 
 
 async def test_trigger_deep_research_creates_pending_run(session_factory):

@@ -23,6 +23,7 @@ async def record(
     target_type: str,
     target_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> AuditLog:
     """감사 로그 1건을 기록한다."""
     log = AuditLog(
@@ -33,8 +34,9 @@ async def record(
         payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     )
     session.add(log)
-    await session.commit()
-    await session.refresh(log)
+    if commit:
+        await session.commit()
+        await session.refresh(log)
     return log
 
 

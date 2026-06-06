@@ -11,7 +11,7 @@ SpatiaLite Point(4326) `geom` 컬럼과 R-Tree 공간 인덱스는 ORM 밖에서
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 
 
-class DescriptionReviewStatus(StrEnum):
+class DescriptionReviewStatus(str, Enum):
     AI_GENERATED = "ai_generated"
     USER_REVIEWED = "user_reviewed"
     REJECTED = "rejected"
@@ -32,8 +32,8 @@ class TravelPlace(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     gemini_enriched_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    description_review_status: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, default=DescriptionReviewStatus.AI_GENERATED
+    description_review_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DescriptionReviewStatus.AI_GENERATED
     )
     official_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
     road_address: Mapped[str | None] = mapped_column(String(512), nullable=True)

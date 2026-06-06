@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-05: T-023 PR #6~19 백엔드 코어·MCP·스케줄러 리뷰 반영
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Python 3.10 호환 모델 정리**: `StrEnum` 의존을 제거하고 `str, Enum` 기반 enum으로 변경. 모델에는 중복 방지 제약, `BigInteger` 파일 크기, non-null 설명 검수 상태를 반영.
+  - **설정 API 보호**: `/api/settings`와 `settings_service`를 whitelist 기반으로 제한하고, 여러 설정 저장은 검증 후 단일 트랜잭션으로 처리. 알 수 없는 키와 API 키 평문 저장 시도를 400으로 거절.
+  - **SQLite 연결 보강**: 연결 시 `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`을 적용하고 SpatiaLite 미설치 경로에는 debug 로그를 남기도록 변경.
+  - **MCP 정합성 보강**: 장소 병합 시 `media_assets.place_id`를 target 장소로 이전. MCP 쓰기는 도메인 변경과 감사 로그를 같은 commit으로 묶고, 같은 `idempotency_key`로 다른 파라미터가 들어오면 명시 오류를 반환.
+  - **scheduler race 제거**: 배포 직후 즉시 실행을 수동 `run_once` 호출이 아니라 APScheduler `next_run_time`으로 처리해 `max_instances=1` 보호 안에 넣음.
+  - **검증**: backend 전체 `pytest` 114건 통과.
+- **다음 작업**:
+  - PR #6~19 리뷰 중 ETL·동영상·지오코딩 묶음을 반영한다.
+
+---
+
 ## 2026-06-05: T-022 PR #1~5 리뷰 정합성 반영
 
 - **담당자**: Codex

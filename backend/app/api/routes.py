@@ -119,6 +119,7 @@ async def start_harvest(
         target_type=target_type,
         target_id=target_id,
         payload=payload.model_dump(),
+        commit=False,
     )
     await audit_service.record(
         session,
@@ -266,6 +267,7 @@ async def correct_destination(
             session,
             place_id=place_id,
             updates=updates,
+            commit=False,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -297,6 +299,7 @@ async def trigger_deep_research(
         target_type="place",
         target_id=str(place_id),
         payload=payload.model_dump(),
+        commit=False,
     )
     await audit_service.record(
         session,
@@ -338,6 +341,7 @@ async def resolve_unmatched_candidate(
             review_note=payload.review_note,
             place_id=payload.place_id,
             place_data=place_data,
+            commit=False,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -418,8 +422,11 @@ async def get_settings_endpoint(
 async def update_settings_endpoint(
     settings: dict[str, Any], session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
-    for key, value in settings.items():
-        await settings_service.set_setting(session, key, str(value))
+    values = {key: str(value) for key, value in settings.items()}
+    try:
+        await settings_service.set_many(session, values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await audit_service.record(
         session,
         actor_type="web",

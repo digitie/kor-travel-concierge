@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -14,6 +14,14 @@ from app.models.base import Base, TimestampMixin
 
 class SearchKeyword(TimestampMixin, Base):
     __tablename__ = "search_keywords"
+    __table_args__ = (
+        UniqueConstraint(
+            "seed_keyword",
+            "derived_keyword",
+            "season_context",
+            name="uq_search_keywords_seed_derived_season",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     seed_keyword: Mapped[str] = mapped_column(String(255), nullable=False, index=True)

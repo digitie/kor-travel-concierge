@@ -29,12 +29,37 @@ async def persist_derived_keywords(
     session: AsyncSession, *, seed: str, derived: list[str], season: str
 ) -> list[SearchKeyword]:
     """시드와 파생 키워드를 `search_keywords`에 1:N으로 저장한다."""
-    rows = [
-        SearchKeyword(seed_keyword=seed, derived_keyword=kw, season_context=season)
-        for kw in derived
-    ]
-    session.add_all(rows)
-    await session.commit()
+    if not derived:
+        return []
+
+    stmt = select(SearchKeyword).where(
+        SearchKeyword.seed_keyword == seed,
+        SearchKeyword.season_context == season,
+        SearchKeyword.derived_keyword.in_(derived),
+    )
+    result = await session.execute(stmt)
+    existing_by_keyword = {
+        row.derived_keyword: row for row in result.scalars().all() if row.derived_keyword
+    }
+
+    rows: list[SearchKeyword] = []
+    new_rows: list[SearchKeyword] = []
+    for keyword in derived:
+        existing = existing_by_keyword.get(keyword)
+        if existing is not None:
+            rows.append(existing)
+            continue
+        row = SearchKeyword(
+            seed_keyword=seed,
+            derived_keyword=keyword,
+            season_context=season,
+        )
+        rows.append(row)
+        new_rows.append(row)
+
+    if new_rows:
+        session.add_all(new_rows)
+        await session.commit()
     return rows
 
 

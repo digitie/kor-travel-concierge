@@ -15,7 +15,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -29,6 +31,7 @@ from app.models import CrawlRun
 from app.services import crawl_run_service
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 def load_payload(run: CrawlRun) -> dict[str, Any]:
@@ -106,8 +109,11 @@ async def _heartbeat_loop(
     """장시간 작업 중 heartbeat를 주기적으로 갱신한다."""
     while True:
         await asyncio.sleep(interval_seconds)
-        async with session_factory() as session:
-            await crawl_run_service.heartbeat(session, run_id)
+        try:
+            async with session_factory() as session:
+                await crawl_run_service.heartbeat(session, run_id)
+        except Exception as exc:  # pragma: no cover - DB 상태에 따라 메시지가 달라진다.
+            logger.warning("crawl_run heartbeat 갱신 실패(run_id=%s): %s", run_id, exc)
 
 
 async def execute_run(
@@ -149,7 +155,7 @@ async def execute_run(
             await crawl_run_service.mark_failed(session, run.id, error=str(exc))
     finally:
         heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await heartbeat_task
 
 
@@ -204,11 +210,12 @@ async def worker_loop(
         raise RuntimeError("APScheduler가 설치되어 있지 않다") from exc
 
     settings = get_settings()
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(timezone=timezone.utc)
     scheduler.add_job(
         run_once,
         "interval",
         seconds=settings.SCHEDULER_POLL_INTERVAL_SECONDS,
+        next_run_time=datetime.now(timezone.utc),
         kwargs={"session_factory": session_factory, "handlers": handlers},
         id="crawl-run-worker",
         max_instances=1,
@@ -216,12 +223,8 @@ async def worker_loop(
     )
     scheduler.start()
 
-    # 시작 직후 1회 실행해 배포 직후 pending 작업을 즉시 처리한다.
-    await run_once(session_factory, handlers=handlers)
-
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await asyncio.Event().wait()
     finally:
         scheduler.shutdown(wait=False)
 

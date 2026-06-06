@@ -7,6 +7,7 @@ T-004/T-005에서 채운다.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy import event, text
@@ -19,6 +20,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 
 def _enable_spatialite(dbapi_connection, _connection_record) -> None:
     """SQLite 연결마다 SpatiaLite 확장과 WAL 모드를 적용한다.
@@ -27,24 +30,26 @@ def _enable_spatialite(dbapi_connection, _connection_record) -> None:
     `connect` 이벤트 안에서만 실행되며, 일반 쿼리 경로는 async를 유지한다.
     """
     settings = get_settings()
+    dbapi_connection.execute("PRAGMA foreign_keys=ON;")
+    dbapi_connection.execute("PRAGMA busy_timeout=5000;")
     if hasattr(dbapi_connection, "run_async"):
         dbapi_connection.run_async(lambda conn: conn.enable_load_extension(True))
         try:
             dbapi_connection.run_async(
                 lambda conn: conn.load_extension(settings.SPATIALITE_EXTENSION_PATH)
             )
-        except Exception:
+        except Exception as exc:
             # 개발 환경에 mod_spatialite가 없을 수 있으므로 graceful하게 건너뛴다.
-            pass
+            logger.debug("SpatiaLite 확장을 로드하지 못해 공간 DDL을 건너뜁니다: %s", exc)
         finally:
             dbapi_connection.run_async(lambda conn: conn.enable_load_extension(False))
     else:
         dbapi_connection.enable_load_extension(True)
         try:
             dbapi_connection.load_extension(settings.SPATIALITE_EXTENSION_PATH)
-        except Exception:
+        except Exception as exc:
             # 개발 환경에 mod_spatialite가 없을 수 있으므로 graceful하게 건너뛴다.
-            pass
+            logger.debug("SpatiaLite 확장을 로드하지 못해 공간 DDL을 건너뜁니다: %s", exc)
         finally:
             dbapi_connection.enable_load_extension(False)
     if settings.SQLITE_WAL_ENABLED:
@@ -88,9 +93,9 @@ async def init_spatial_metadata(conn) -> None:
         if existing.scalar_one() > 0:
             return
         await conn.execute(text("SELECT InitSpatialMetaData(1);"))
-    except Exception:
+    except Exception as exc:
         # 확장 미로드 환경에서는 공간 메타데이터 초기화를 건너뛴다.
-        pass
+        logger.debug("SpatiaLite 메타데이터 초기화를 건너뜁니다: %s", exc)
 
 
 async def init_db() -> None:
