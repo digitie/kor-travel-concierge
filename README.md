@@ -62,7 +62,7 @@
 ```dotenv
 # 프론트엔드
 NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_browser_key_here
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_API_BASE_URL=http://localhost:9041
 
 # SQLite + SpatiaLite
 DATABASE_URL=sqlite+aiosqlite:///./tripmate.db
@@ -116,12 +116,20 @@ pip install -r requirements.txt
 python main.py
 ```
 
+Windows 호스트에서 직접 띄우는 live 포트는 API `http://localhost:9041`, Web `http://localhost:9042`로 고정합니다.
+
 ### 프론트엔드 실행
 
 ```powershell
 cd ../frontend
 npm ci
-npm run dev
+npm run dev:live
+```
+
+포트가 이미 점유 중이면 다음 스크립트가 해당 리스너를 종료한 뒤 고정 포트로 서버를 다시 띄웁니다.
+
+```powershell
+.\scripts\start-windows-live.ps1
 ```
 
 ### ETL 실행

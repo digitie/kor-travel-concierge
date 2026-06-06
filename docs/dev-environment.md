@@ -47,7 +47,7 @@ Windows 호스트에 다음 도구들이 설치되어 있어야 합니다.
    ```powershell
    python main.py
    ```
-   서버는 기본적으로 `http://localhost:8000`에서 실행되며, API 명세(Swagger UI)는 `http://localhost:8000/docs`에서 확인할 수 있습니다.
+   서버는 Windows live 고정 포트인 `http://localhost:9041`에서 실행되며, API 명세(Swagger UI)는 `http://localhost:9041/docs`에서 확인할 수 있습니다.
 
 ---
 
@@ -112,11 +112,17 @@ RustFS health 확인 후 기본 버킷을 만들고 `healthcheck/t014-smoke.txt`
 3. Next.js 개발 서버를 실행합니다:
    ```powershell
    cd frontend
-   npm run dev
+   npm run dev:live
    ```
-   웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다.
+   웹 브라우저에서 Windows live 고정 포트인 `http://localhost:9042`로 접속하여 프론트엔드 화면을 확인합니다. 프론트엔드는 기본적으로 API `http://localhost:9041`을 호출합니다.
 
-4. 정적 검증을 실행합니다:
+4. 포트 점유 중인 서버를 종료하고 API/Web을 고정 포트로 함께 띄우려면 프로젝트 루트에서 다음 스크립트를 실행합니다:
+   ```powershell
+   .\scripts\start-windows-live.ps1
+   ```
+   이 스크립트는 `9041`, `9042`를 점유한 리스너 PID를 먼저 종료한 뒤 RustFS, API, Web을 순서대로 준비합니다.
+
+5. 정적 검증을 실행합니다:
    ```powershell
    npm run lint
    npm run type-check
@@ -239,7 +245,7 @@ Copy-Item .env.example .env
 1. `docker compose config --quiet`로 Compose 문법과 환경 변수 해석을 확인합니다.
 2. `api`, `mcp`, `scheduler`, `frontend` 이미지를 빌드합니다.
 3. `rustfs`, `api`, `mcp`, `scheduler`, `frontend`를 단일 프로젝트로 실행합니다.
-4. `http://localhost:9003/health/live`, `http://localhost:8000/health`, `http://localhost:3000` 응답을 확인합니다.
+4. `http://localhost:9003/health/live`, `http://localhost:9041/health`, `http://localhost:9042` 응답을 확인합니다.
 5. MCP `streamable-http` 포트(`8010`)가 리스닝 중인지 확인합니다. MCP endpoint는 일반 브라우저 GET이 아니라 MCP client protocol로 접근해야 합니다.
 6. `api` 컨테이너 안에서 `scripts/verify_rustfs.py`를 실행해 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames` 버킷 생성과 객체 업로드·조회를 확인합니다.
 7. 기본적으로 `docker compose down`으로 컨테이너를 정리합니다.
@@ -322,7 +328,7 @@ Windows 빌드 도구 누락으로 일부 네이티브 Node 패키지 빌드 오
 
 ### 4. VWorld 타일 로드 실패 (403 Forbidden)
 지도가 나오지 않고 회색 배경만 출력되는 현상입니다.
-- **해결책**: VWorld 개발자 센터에 등록된 API 키의 사용 도메인 설정이 `http://localhost:3000` 및 `http://localhost:8000`을 명시적으로 포함하고 있는지 재차 점검하십시오.
+- **해결책**: VWorld 개발자 센터에 등록된 API 키의 사용 도메인 설정이 `http://localhost:9042` 및 필요 시 `http://localhost:9041`을 명시적으로 포함하고 있는지 재차 점검하십시오.
 
 ### 5. RustFS 헬스체크 실패
 RustFS 컨테이너는 실행 중인데 앱에서 저장소 연결 실패가 발생할 수 있습니다.

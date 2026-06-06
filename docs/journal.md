@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-07: T-027 Windows live 포트 고정
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **고정 포트 반영**: Windows live API 포트를 `9041`, Web 포트를 `9042`로 정하고 `.env.example`, backend 설정 fallback, frontend API fallback, Docker Compose host port 기본값을 갱신.
+  - **실행 스크립트 추가**: `scripts/start-windows-live.ps1`을 추가해 `9041`/`9042` 점유 리스너를 먼저 종료하고 RustFS/API/Web을 고정 포트로 띄우도록 구성.
+  - **문서 갱신**: README, 개발 환경 문서, 아키텍처, ADR-18, 에이전트 컨텍스트 문서에 Windows live 포트와 포트 점유 시 처리 방법을 반영.
+- **다음 작업**:
+  - Windows 호스트에서 서버를 띄우고 live test를 진행한다.
+
+---
+
 ## 2026-06-05: T-026 Next.js route type 생성물 안정화
 
 - **담당자**: Codex

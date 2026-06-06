@@ -511,6 +511,7 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 
 - RustFS 컨테이너 내부 포트는 S3 API `9000`, 콘솔 `9001`을 유지하고, Windows 호스트 포트는 기본 `9003`, `9004`로 노출한다.
 - 앱 컨테이너의 `RUSTFS_ENDPOINT`는 `http://rustfs:9000`으로 override하고, Windows 호스트에서 직접 실행하는 `.env` 기본값은 `http://localhost:9003`으로 둔다.
+- API와 Web의 Windows live 고정 포트는 각각 `9041`, `9042`다. Compose 내부 포트는 API `8000`, Web `3000`을 유지하되 host port 기본값을 `9041`, `9042`로 매핑한다.
 - `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT`로 host port override를 허용한다.
 - Compose의 MCP 서버는 `streamable-http` transport를 사용하고 `0.0.0.0:8010/mcp`로 실행한다. 로컬 개발 기본값은 기존처럼 `stdio`로 유지한다.
 - API 서비스에 `/health` healthcheck를 두고, MCP/scheduler/frontend는 API healthy 이후 시작한다.

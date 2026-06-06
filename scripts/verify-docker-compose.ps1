@@ -2,9 +2,9 @@ param(
     [string]$ProjectName = "tripmate-agent-t014",
     [int]$RustfsHostPort = 9003,
     [int]$RustfsConsoleHostPort = 9004,
-    [int]$ApiHostPort = 8000,
+    [int]$ApiHostPort = 9041,
     [int]$McpHostPort = 8010,
-    [int]$FrontendHostPort = 3000,
+    [int]$FrontendHostPort = 9042,
     [switch]$SkipBuild,
     [switch]$KeepRunning
 )
