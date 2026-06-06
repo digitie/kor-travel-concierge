@@ -6,16 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-016** 또는 **T-020**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-020**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-016**: 고도화 후보 검토
-  - sqlite-vec 기반 의미론적 검색 후보 검토
-  - 규모 증가 시 PostgreSQL/PostGIS 전환 ADR 작성
-  - 멀티 워커 필요 시 PgQueuer 또는 APScheduler + Advisory Lock 검토
 
 - **T-020**: Next.js 메이저 업그레이드 및 npm audit 대응 검토
   - T-012 기준 `npm audit`이 Next 14 / `eslint-config-next` 계열 transitive 취약점 5건(1 moderate, 4 high)을 보고
@@ -26,6 +21,7 @@
 
 ## 완료
 
+- [x] **T-016**: 고도화 후보 검토 — sqlite-vec / SQLite Vec1 의미론적 검색, PostgreSQL/PostGIS 전환, PgQueuer, APScheduler + PostgreSQL advisory lock 후보를 공식 문서 기준으로 검토. 현재 소형 프로젝트 단계에서는 선제 도입하지 않고, 의미론적 검색은 `place_embeddings` optional feature, PostGIS는 확정 장소 100,000건·매핑 1,000,000건·반경 검색 p95 500ms 초과·SQLite write lock 반복, PgQueuer는 PostgreSQL 전환 이후 backlog 5분 이상 지속 또는 단일 worker SLA 미달 시 검토하는 것으로 ADR-20에 결정. 아키텍처 대규모 전환 후보 표와 wrapper 최소화 원칙을 갱신. (2026-06-05)
 - [x] **T-015**: Playwright E2E 검증 — `tests/playwright.config.ts`가 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100` 개발 서버를 자동 기동하도록 구성. `tests/scripts/seed_e2e.py`로 SQLite E2E DB에 장소, 검수 후보, MCP 감사 로그, RustFS 대표 프레임 메타데이터를 매 테스트마다 재시드. 메인 화면의 VWorld 지도 fallback/패널 렌더링, 수집 시작 `job_id`/`pending` 표시, Deep Research 트리거, 매칭 실패 후보 수동 보정 후 장소 목록 반영, 설정 페이지 Gemini 엔진 저장을 브라우저에서 검증. CORS 허용 origin 설정, E2E 산출물 ignore, 공용 `Input` ref 전달 보정, 검수/장소/운영 패널 접근성 이름을 추가. Browser plugin은 현재 세션에 없어 일반 Playwright로 검증. `npm test` 4건, `npm run lint`, `npm run type-check`, `npm run build`, backend `compileall`, backend pytest, `docker compose --env-file .env config --quiet` 통과. (2026-06-05)
 - [x] **T-021**: VWorld 우선 지오코딩 및 Kakao 키워드 장소 검색 보강 — 지오코딩 기본 우선순위를 VWorld → Kakao → Naver로 조정하고, VWorld는 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하도록 `VWorldGeocoder`/`VWorldReverseGeocoder` 내부 wrapper class를 제거. `backend/requirements.txt`에 `python-vworld-api` GitHub archive commit pin 추가, 로컬 검증은 `F:\dev\python-vworld-api` editable 설치로 수행. Kakao Local은 주소 검색 결과가 없을 때 공식 `GET /v2/local/search/keyword.json` 키워드 장소 검색 fallback을 사용해 POI명·도로명 주소·지번 주소·카테고리를 후보로 저장. `.env.example`, README, 아키텍처, 개발 환경, ADR-19, 에이전트 문서를 최신 정책으로 갱신. 지오코딩 단위 테스트 15건, backend 전체 pytest, `compileall`, `docker compose config --quiet`, Python Compose image build, API 컨테이너 `AsyncVworldClient` import, RustFS smoke, `npm run lint`, `npm run type-check`, `npm run build` 통과. (2026-06-05)
 - [x] **T-014**: Windows 및 Docker Compose 통합 검증 — Compose를 `.env` optional 구성과 host port override(`RUSTFS_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT`) 가능 구조로 보강. RustFS는 호스트 `9003/9004`, 컨테이너 내부 `rustfs:9000/9001`로 분리하고, API health 이후 MCP/scheduler/frontend가 시작되도록 `depends_on.condition` 적용. Docker Compose MCP는 `streamable-http` transport(`8010/mcp`)로 실행. `.dockerignore` 추가로 Docker build context를 root 6.47KB, frontend 1.34KB 수준으로 축소. `aiosqlite` SpatiaLite extension loading을 `run_async` 경유로 보정하고 공간 컬럼 검사 버그를 수정. `scripts/verify-docker-compose.ps1`와 `scripts/verify_rustfs.py`로 health, MCP port, RustFS 버킷 생성, 객체 업로드·조회 smoke 검증 자동화. WSL Docker CLI에서 override 포트 `19003/19004`, `18000`, `18010`, `13000`으로 `rustfs/api/mcp/scheduler/frontend` 전체 실행, HTTP health 200, RustFS 3개 버킷 smoke 객체 업로드·조회, SQLite DB 생성 확인. Windows PowerShell은 현재 세션 PATH에서 Docker CLI를 찾지 못해 래퍼 preflight 메시지까지만 확인. backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build`, `docker compose config --quiet` 통과. (2026-06-05)
