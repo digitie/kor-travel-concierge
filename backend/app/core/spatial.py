@@ -37,7 +37,7 @@ async def ensure_geometry_columns(conn) -> bool:
             "WHERE f_table_name = 'travel_places' AND f_geometry_column = 'geom';"
         )
     )
-    if existing.scalar() and existing.scalar() > 0:
+    if existing.scalar_one() > 0:
         return True
 
     try:

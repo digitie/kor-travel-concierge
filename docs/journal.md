@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-06-05: T-021 VWorld 우선 지오코딩 및 Kakao 키워드 장소 검색 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **VWorld 직접 사용**: `python-vworld-api`의 `AsyncVworldClient`를 직접 받도록 `geocode_service`를 바꾸고, 기존 `VWorldGeocoder`/`VWorldReverseGeocoder` 내부 wrapper class를 제거. 내부에는 응답 dict를 `GeocodeCandidate`와 주소 dict로 바꾸는 최소 변환 함수만 유지.
+  - **로컬 패키지 활용**: `backend/requirements.txt`에 `python-vworld-api` GitHub archive commit pin을 추가하고, 검증 환경에는 `F:\dev\python-vworld-api`를 editable 설치해 사용.
+  - **Kakao 공식 기능 반영**: Kakao Local 주소 검색 결과가 없을 때 공식 `GET /v2/local/search/keyword.json` 키워드 장소 검색 fallback을 호출하도록 보강. POI명, 도로명 주소, 지번 주소, 카테고리를 후보에 저장.
+  - **우선순위 정리**: 지오코딩·역지오코딩 정책을 VWorld → Kakao → Naver로 갱신하고, `GEOLOCATION_PROVIDER` 기본값과 `.env.example`을 `vworld`로 정리.
+  - **문서 보강**: README, `docs/architecture.md`, `docs/dev-environment.md`, `docs/decisions.md` ADR-19, `AGENTS.md`, `SKILL.md`, `CLAUDE.md`에 wrapper 최소화와 VWorld 우선 원칙을 반영.
+  - **테스트**: Kakao 키워드 장소 검색 fallback, VWorld `AsyncVworldClient` 직접 geocode/reverse 변환, 기존 DB 적용 경로를 포함한 지오코딩 테스트 15건 통과. backend 전체 pytest, `compileall`, `docker compose config --quiet`, Python Compose image build, API 컨테이너 `AsyncVworldClient` import, RustFS smoke, `npm run lint`, `npm run type-check`, `npm run build` 통과.
+- **다음 작업**:
+  - T-015: Playwright E2E 검증. 수집 시작, 상태 폴링, 지도/검수/운영 패널, MCP 쓰기 반영 경로를 브라우저에서 확인한다.
+
+---
+
+## 2026-06-05: T-014 Windows 및 Docker Compose 통합 검증
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Compose 실행 계약 보강**: `.env`가 없어도 `docker compose config --quiet`가 통과하도록 optional `env_file`을 적용하고, 기본 포트가 이미 사용 중인 환경을 위해 `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT` override를 추가.
+  - **RustFS 네트워크 분리**: Windows 호스트 URL은 `localhost:9003/9004`, 컨테이너 내부 endpoint는 `http://rustfs:9000`으로 분리. RustFS 기본 버킷 환경 변수와 무기한 보존 정책을 Compose 공통 환경에 포함.
+  - **MCP Compose 실행**: 로컬 기본값은 `stdio`로 유지하고, Docker Compose에서는 `streamable-http` transport를 `0.0.0.0:8010/mcp`로 실행하도록 설정.
+  - **시작 순서 보정**: API healthcheck를 추가하고 MCP/scheduler/frontend는 API healthy 이후 시작하도록 구성해 SQLite DDL race를 방지.
+  - **DB 초기화 수정**: `aiosqlite` connect event에서 SpatiaLite extension loading을 `run_async` 경유로 수행하게 수정하고, 공간 컬럼 존재 검사에서 `scalar()`를 두 번 소비하던 버그를 수정.
+  - **검증 자동화**: `scripts/verify-docker-compose.ps1`과 `scripts/verify_rustfs.py`를 추가. health, MCP port listening, RustFS 버킷 생성, smoke 객체 업로드·조회를 수행.
+  - **빌드 최적화**: 루트와 프론트엔드 `.dockerignore`를 추가해 Docker build context를 root 6.47KB, frontend 1.34KB 수준으로 축소.
+  - **실행 검증**: 기존 로컬 서비스가 기본 포트를 사용 중이라 `19003/19004`, `18000`, `18010`, `13000`으로 override하여 `rustfs`, `api`, `mcp`, `scheduler`, `frontend` 전체 실행 확인. RustFS/API/frontend HTTP 200, MCP port listening, RustFS 3개 버킷 smoke 객체 업로드·조회, SQLite DB 파일 생성 확인.
+  - **제한 사항**: Windows PowerShell에서 Docker CLI가 PATH에 없어 PowerShell 래퍼는 preflight 실패 메시지까지만 확인. 같은 Docker engine에 대해 WSL Docker CLI로 Compose smoke를 완료.
+  - **테스트**: backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build`, `docker compose config --quiet`, Docker Compose build/up/RustFS smoke 통과.
+- **다음 작업**:
+  - T-015: Playwright E2E 검증. 수집 시작, 상태 폴링, 지도/검수/운영 패널, MCP 쓰기 반영 경로를 브라우저에서 확인한다.
+
+---
+
 ## 2026-06-05: T-013 지도·리스트·운영 패널 구현
 
 - **담당자**: Codex
@@ -105,7 +139,7 @@
 
 - **담당자**: Claude
 - **작업 내용**:
-  - **geocoding**: Kakao Local(1차)·Naver(보조 검증)·VWorld(역지오코딩) 어댑터를 `httpx.AsyncClient` 주입형으로 구현(ADR-8, `kraddr-geo` 미연계). `normalize_to_wgs84`로 `pyproj always_xy=True` 좌표 정규화(미설치/4326은 graceful identity).
+  - **geocoding**: Kakao Local(1차)·Naver(보조 검증)·VWorld(역지오코딩) 초기 호출 계층을 `httpx.AsyncClient` 주입형으로 구현(ADR-8, `kraddr-geo` 미연계). 이후 T-021에서 VWorld 우선 및 `python-vworld-api` 직접 client 사용으로 보강. `normalize_to_wgs84`로 `pyproj always_xy=True` 좌표 정규화(미설치/4326은 graceful identity).
   - **복원력**: `request_with_backoff`로 429 지수 백오프 + 지터 재시도, `asyncio.Semaphore` 동시성 상한.
   - **평가**: `evaluate_geocode`가 단일 결과는 확정, 후보 과다 시 Naver 최상위 좌표 근접도로 디스앰비규에이션, 실패·모호·낮은 신뢰도는 `needs_review`로 판정(자동 확정 금지, ADR-16).
   - **geocode_service**: 매칭 시 좌표 근접 중복(T-005 저장소 계층)을 재사용하거나 새 `travel_places`를 만들고, VWorld 역지오코딩으로 도로명·지번 주소 보강. 미매칭은 후보를 `needs_review`로 유지하고 사유 기록.
@@ -257,7 +291,7 @@
     - 지오코딩 캐시, API 429 지수 백오프, 좌표계 정규화.
     - 작업 상태, heartbeat, retry_count, stale 작업 재투입.
   - 웹 UX 외에 AI 에이전트가 사용할 MCP 서버 읽기/쓰기 UX를 별도 사용자 접점으로 추가.
-  - 최신 요청에 따라 `kraddr-geo` 연계는 취소하고, Kakao / Naver / VWorld 공급자 어댑터 기반 Geocoding/Reverse Geocoding으로 정리.
+  - 최신 요청에 따라 `kraddr-geo` 연계는 취소하고, Kakao / Naver / VWorld 기반 Geocoding/Reverse Geocoding으로 정리. 이후 T-021에서 VWorld 우선 및 `python-vworld-api` 직접 client 사용으로 보강.
   - `docs/decisions.md`에 ADR-7 ~ ADR-10 추가:
     - MCP 서버 읽기/쓰기 UX 채택.
     - 지오코딩 공급자 전략 및 `kraddr-geo` 제외.

@@ -29,6 +29,7 @@ COPY etl etl
 COPY scheduler scheduler
 COPY mcp mcp
 COPY tripmate_mcp tripmate_mcp
+COPY scripts scripts
 
 # `app` 패키지(backend/app)와 실행 래퍼/서비스 패키지를 import 가능하게 한다.
 ENV PYTHONPATH=/app:/app/backend

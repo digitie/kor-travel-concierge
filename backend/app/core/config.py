@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     MEDIA_RETENTION_POLICY: str = "infinite"
 
     # --- Geocoding / Reverse Geocoding ---
-    GEOLOCATION_PROVIDER: str = "kakao"
+    GEOLOCATION_PROVIDER: str = "vworld"
     KAKAO_REST_API_KEY: str = ""
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""
@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # --- 3. MCP 서버 ---
     MCP_WRITE_ENABLED: bool = True
     MCP_TRANSPORT: str = "stdio"
+    MCP_HOST: str = "127.0.0.1"
+    MCP_PORT: int = 8010
+    MCP_STREAMABLE_HTTP_PATH: str = "/mcp"
 
     # --- 4. 스케줄러 및 동시성 ---
     SCHEDULER_ENABLED: bool = True

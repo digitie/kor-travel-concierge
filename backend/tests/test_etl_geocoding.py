@@ -1,4 +1,4 @@
-"""geocoding 어댑터·백오프·정규화·평가 테스트."""
+"""geocoding 호출 유틸리티·백오프·정규화·평가 테스트."""
 
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ from app.etl.geocoding import (
     KakaoGeocoder,
     NaverGeocoder,
     evaluate_geocode,
+    geocode_with_vworld,
     normalize_to_wgs84,
     request_with_backoff,
+    reverse_with_vworld,
 )
 
 _KAKAO_SINGLE = {
@@ -39,6 +41,21 @@ _KAKAO_MULTI = {
     "meta": {"total_count": 2},
 }
 
+_KAKAO_KEYWORD = {
+    "documents": [
+        {
+            "place_name": "카카오프렌즈 코엑스점",
+            "category_name": "가정,생활 > 문구,팬시 > 캐릭터상품",
+            "category_group_name": "생활,편의",
+            "address_name": "서울 강남구 삼성동 159",
+            "road_address_name": "서울 강남구 영동대로 513",
+            "x": "127.05902969025047",
+            "y": "37.51207412593136",
+        }
+    ],
+    "meta": {"total_count": 1},
+}
+
 
 def test_normalize_wgs84_identity():
     assert normalize_to_wgs84(129.16, 35.15) == (129.16, 35.15)
@@ -58,6 +75,82 @@ async def test_kakao_geocode_parses(monkeypatch):
     assert results[0].longitude == 129.1604
     assert results[0].road_address == "부산 해운대구 해운대해변로 264"
     assert results[0].source == "kakao"
+
+
+async def test_kakao_keyword_search_used_when_address_has_no_result():
+    seen_paths: list[str] = []
+
+    def handler(request):
+        seen_paths.append(request.url.path)
+        assert request.headers["Authorization"].startswith("KakaoAK ")
+        if request.url.path.endswith("/address.json"):
+            return httpx.Response(200, json={"documents": [], "meta": {"total_count": 0}})
+        assert request.url.path.endswith("/keyword.json")
+        assert request.url.params["query"] == "카카오프렌즈 코엑스점"
+        return httpx.Response(200, json=_KAKAO_KEYWORD)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        geo = KakaoGeocoder("k", http, base_delay=0.0)
+        results = await geo.geocode("카카오프렌즈 코엑스점")
+
+    assert seen_paths == [
+        "/v2/local/search/address.json",
+        "/v2/local/search/keyword.json",
+    ]
+    assert len(results) == 1
+    assert results[0].place_name == "카카오프렌즈 코엑스점"
+    assert results[0].road_address == "서울 강남구 영동대로 513"
+    assert results[0].category == "가정,생활 > 문구,팬시 > 캐릭터상품"
+    assert results[0].source == "kakao_keyword"
+
+
+async def test_vworld_client_direct_geocode_parses():
+    class FakeVWorldClient:
+        calls: list[tuple[str, str]]
+
+        def __init__(self):
+            self.calls = []
+
+        async def get_coord(self, address, type, **kwargs):
+            self.calls.append((address, type))
+            if type == "parcel":
+                return {"response": {"status": "NOT_FOUND"}}
+            return {
+                "response": {
+                    "status": "OK",
+                    "result": {
+                        "refined": {"text": "경기도 성남시 분당구 판교로 242"},
+                        "point": {"x": "127.101313354", "y": "37.402352535"},
+                    },
+                }
+            }
+
+    client = FakeVWorldClient()
+    results = await geocode_with_vworld(client, "판교로 242")
+
+    assert client.calls == [("판교로 242", "road"), ("판교로 242", "parcel")]
+    assert len(results) == 1
+    assert results[0].source == "vworld"
+    assert results[0].longitude == 127.101313354
+    assert results[0].latitude == 37.402352535
+    assert results[0].road_address == "경기도 성남시 분당구 판교로 242"
+
+
+async def test_vworld_client_direct_reverse_parses():
+    class FakeVWorldClient:
+        async def reverse_geocode_latlon(self, lat, lon, **kwargs):
+            if kwargs["type"] == "road":
+                text = "경기도 성남시 분당구 판교로 242"
+            else:
+                text = "경기도 성남시 분당구 삼평동 681"
+            return {"response": {"status": "OK", "result": [{"text": text}]}}
+
+    result = await reverse_with_vworld(FakeVWorldClient(), 37.402352535, 127.101313354)
+
+    assert result == {
+        "road_address": "경기도 성남시 분당구 판교로 242",
+        "parcel_address": "경기도 성남시 분당구 삼평동 681",
+    }
 
 
 async def test_backoff_retries_on_429():
@@ -102,7 +195,7 @@ def test_evaluate_ambiguous_needs_review():
         GeocodeCandidate(latitude=35.10, longitude=129.10),
         GeocodeCandidate(latitude=37.50, longitude=127.00),
     ]
-    d = evaluate_geocode(kakao, naver=[])
+    d = evaluate_geocode(kakao, secondary=[])
     assert d.status == "needs_review"
     assert d.reason == "ambiguous"
 

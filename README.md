@@ -23,12 +23,12 @@
 - **Gemini 기반 POI 추출**: 자막과 메타데이터에서 장소명, 위치 단서, 설명, 타임스탬프를 JSON Schema 기반으로 추출합니다.
 - **RustFS 미디어 저장**: 다운로드한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 무기한 보존합니다.
 - **SQLite + SpatiaLite 공간 DB**: 별도 DB 서버 없이 단일 파일에 장소, 영상, 매핑, 작업 상태, 공간 인덱스를 저장합니다.
-- **Kakao/Naver/VWorld 지오코딩**: 장소명은 Kakao/Naver로 보정하고, 좌표 기반 주소 보강은 VWorld 역지오코딩을 사용합니다. `kraddr-geo` 연계는 현재 계획에 포함하지 않습니다.
+- **VWorld 우선 지오코딩**: 지오코딩과 역지오코딩은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고, Kakao Local 주소 검색·키워드 장소 검색과 Naver를 보조 경로로 사용합니다. `kraddr-geo` 연계는 현재 계획에 포함하지 않습니다.
 - **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
 - **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
 - **전면 비동기 실행**: `httpx.AsyncClient`, `aiosqlite`, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
-- **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, `maplibre-vworld-js`를 기준으로 합니다.
+- **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, `maplibre-gl` + VWorld WMTS를 기준으로 합니다.
 
 ## 시스템 구성도
 
@@ -90,7 +90,7 @@ RUSTFS_HEALTH_PATH=/health/live
 MEDIA_RETENTION_POLICY=infinite
 
 # 지오코딩 / 역지오코딩
-GEOLOCATION_PROVIDER=kakao
+GEOLOCATION_PROVIDER=vworld
 KAKAO_REST_API_KEY=your_kakao_rest_api_key_here
 NAVER_CLIENT_ID=your_naver_client_id_here
 NAVER_CLIENT_SECRET=your_naver_client_secret_here
@@ -99,6 +99,9 @@ VWORLD_SERVICE_KEY=your_vworld_server_key_here
 # MCP
 MCP_WRITE_ENABLED=true
 MCP_TRANSPORT=stdio
+MCP_HOST=127.0.0.1
+MCP_PORT=8010
+MCP_STREAMABLE_HTTP_PATH=/mcp
 ```
 
 ### 백엔드 실행
