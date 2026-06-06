@@ -31,8 +31,9 @@ class Settings(BaseSettings):
 
     # --- 1. 프론트엔드 (참조용, 백엔드에서는 사용하지 않음) ---
     NEXT_PUBLIC_VWORLD_SERVICE_KEY: str = ""
-    NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:8000"
+    NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:9041"
     CORS_ALLOW_ORIGINS: str = (
+        "http://localhost:9042,http://127.0.0.1:9042,"
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:13000,http://127.0.0.1:13000,"
         "http://localhost:13100,http://127.0.0.1:13100"

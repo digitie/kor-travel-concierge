@@ -30,13 +30,15 @@ python -m venv .venv
 pip install -r requirements.txt
 python main.py
 ```
+Windows live 고정 포트는 API `9041`이다.
 
 ### 프론트엔드 실행
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev:live
 ```
+Windows live 고정 포트는 Web `9042`이다. 포트가 이미 점유 중이면 프로젝트 루트에서 `.\scripts\start-windows-live.ps1`을 실행해 해당 리스너를 종료하고 다시 띄운다.
 
 ### Playwright 테스트 실행
 ```powershell
