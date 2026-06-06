@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models import (
@@ -150,8 +151,8 @@ async def test_video_place_mapping_relations(session):
     assert m.id is not None
 
 
-async def test_video_place_mapping_unique_video_place(session):
-    v = YoutubeVideo(video_id="vid-unique", title="t", url="u", channel_id="c")
+async def test_video_place_mapping_allows_repeated_mentions(session):
+    v = YoutubeVideo(video_id="vid-repeat", title="t", url="u", channel_id="c")
     p = TravelPlace(name="장소", latitude=37.5, longitude=127.0, is_geocoded=True)
     session.add_all([v, p])
     await session.commit()
@@ -163,7 +164,7 @@ async def test_video_place_mapping_unique_video_place(session):
             VideoPlaceMapping(video_id=v.video_id, place_id=p.place_id, ai_summary="요약2"),
         ]
     )
+    await session.commit()
 
-    with pytest.raises(IntegrityError):
-        await session.commit()
-    await session.rollback()
+    result = await session.execute(select(VideoPlaceMapping))
+    assert len(result.scalars().all()) == 2

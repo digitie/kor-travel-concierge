@@ -68,6 +68,8 @@ npx playwright test
 ### 데이터베이스 스키마 및 CRUD 추가
 - **위치**: `backend/app/models/`에 SQLAlchemy 2.0 스타일 모델 정의.
 - **설명**: CRUD 관련 엔드포인트는 `backend/app/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
+- **장소 언급 소스**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지는 `video_place_mappings`와 `youtube_videos` 조인으로 계산한다. 같은 영상에서 같은 장소가 여러 구간에 반복 등장할 수 있으므로 `video_id`, `place_id` 조합은 unique로 가정하지 않는다.
+- **장소 export**: 선택 또는 전체 장소 내보내기는 `/api/destinations/export`에서 처리한다. `xlsx`는 장소-언급 행 단위, `gpx`/`kml`은 장소 좌표와 소스 설명 중심으로 생성한다.
 
 ### Gemini API 프롬프트 및 엔진 설정
 - **위치**: `etl/summarize.py` 및 `etl/search.py`.
@@ -84,6 +86,7 @@ npx playwright test
   - 장소 설명은 기본 설명과 Gemini 보강 설명(`gemini_enriched_description`)을 분리한다.
   - Gemini POI 추출은 자유 텍스트가 아니라 JSON Schema 기반 결과를 요구한다.
   - 지오코딩은 VWorld → Kakao → Naver 순서로 시도한다. VWorld는 `AsyncVworldClient` 직접 호출, Kakao는 주소 검색 후 공식 키워드 장소 검색 fallback, Naver는 보조 검증으로 사용한다.
+  - 장소 카테고리는 Kakao Local 공식 `category_name`을 우선하되, Gemini 후보 카테고리와 VWorld/Naver 주소 맥락을 보조 근거로 삼는다. 근거가 충돌하면 자동 확정하지 않고 검수 큐에 남긴다.
   - 지오코딩 실패 또는 모호한 후보는 `extracted_place_candidates.match_status = needs_review`로 남긴다.
   - 장시간 작업은 `crawl_runs`에 상태, heartbeat, retry_count, last_error를 기록한다.
   - HTTP I/O는 `httpx.AsyncClient`로 작성하고, 블로킹 라이브러리는 executor로 격리한다.

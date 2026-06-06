@@ -662,3 +662,38 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - Next 16과 React 19는 major upgrade이므로 앞으로 shadcn/ui 또는 Base UI 업데이트 시 peer compatibility를 계속 확인해야 한다.
 - `postcss` override는 Next가 내부 의존성을 올릴 때 제거 가능 여부를 재검토해야 한다.
 - Tailwind v4 전환은 이번 범위에서 제외했으므로, shadcn CLI가 생성하는 Tailwind v4용 CSS import는 계속 수동으로 걸러야 한다.
+
+---
+
+## ADR-22: 장소 언급 소스 집계와 export 계약
+
+- 상태: accepted
+- 날짜: 2026-06-07
+- 결정자: 사용자, AI agent
+
+### 컨텍스트
+사용자는 확정 장소가 어느 YouTube 영상과 어느 유튜버에서 언급되었는지 확인하고, 같은 장소가 여러 번 등장하는 경우 그 횟수로 정렬하며, 선택 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보내길 원했다. 또한 장소 카테고리를 추가하고, Kakao 검색 기반 추정이 적절한지 검토가 필요했다.
+
+### 결정
+- 장소 언급 근거는 새 테이블을 만들지 않고 기존 `video_place_mappings`와 `youtube_videos`를 집계한다.
+- 같은 영상 안에서 같은 장소가 여러 구간에 반복 등장할 수 있으므로 `video_place_mappings`의 `video_id`, `place_id` unique 제약을 제거한다.
+- `/api/destinations`는 `mention_count`, `source_channel_count`, `source_videos`를 반환하고 `sort=mention_count|latest|name|category`를 지원한다.
+- `/api/destinations/export`는 `format=xlsx|gpx|kml`, 선택 ID 목록(`ids`)을 받아 선택 장소만 내보내며, ID가 없으면 전체 장소를 내보낸다.
+- `xlsx`는 장소-언급 행 단위로 영상 제목, 유튜버, URL, 타임스탬프, 요약을 포함한다. `gpx`/`kml`은 지도 앱 호환성을 우선해 장소별 waypoint 또는 placemark를 만들고, 언급 소스는 설명 필드에 넣는다.
+- 카테고리 추정은 Kakao Local 공식 `category_name`을 1순위 근거로 사용한다. 다만 Gemini가 문맥에서 추출한 `candidate_category`, VWorld 주소·행정 맥락, Naver 보조 검증 결과를 함께 비교하고, 충돌하거나 신뢰도가 낮으면 자동 확정하지 않고 검수 큐에 남긴다.
+
+### 근거
+- `video_place_mappings`는 이미 영상, 장소, 후보, 타임스탬프, 대표 프레임을 연결하는 도메인 테이블이다. 이 테이블을 집계하면 웹, MCP, export가 같은 기준으로 언급 횟수를 계산할 수 있다.
+- 같은 영상에서 장소가 여러 번 등장하는 것은 여행 브이로그와 맛집 투어에서 자연스러운 데이터다. unique 제약을 유지하면 반복 등장 횟수와 구간별 타임스탬프를 잃는다.
+- Kakao Local은 국내 POI 업종 카테고리가 강하지만, 관광지·자연지명·행정구역성 장소는 Gemini 문맥 또는 VWorld 주소 맥락이 더 안정적일 수 있다.
+- `xlsx`는 사람이 검토하기 좋은 표 형식이고, `gpx`/`kml`은 지도·내비게이션 도구와 교환하기 좋다.
+
+### 결과 (긍정)
+- 사용자는 장소별로 어느 영상과 유튜버에서 언급되었는지 웹 UI와 export 파일에서 확인할 수 있다.
+- 여러 영상 또는 같은 영상의 반복 언급이 `mention_count`에 반영되어 인기·중복 등장 장소를 우선 검토할 수 있다.
+- 카테고리 자동 추정의 공급자별 책임이 명확해지고, 불확실한 결과를 검수 큐로 넘기는 기존 품질 원칙이 유지된다.
+
+### 결과 (부정)
+- 기존 DB에 이미 생성된 unique index가 있는 경우에는 별도 스키마 마이그레이션 또는 DB 재초기화가 필요할 수 있다.
+- `mention_count`는 매핑 행 수 기준이므로 ETL이 같은 후보를 중복 생성하지 않도록 후보 멱등성은 계속 관리해야 한다.
+- GPX/KML은 표 형식보다 속성 표현력이 낮아 상세 소스 목록은 설명 문자열에 직렬화된다.

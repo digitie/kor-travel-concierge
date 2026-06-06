@@ -100,8 +100,15 @@ async def main() -> None:
             size_bytes=1024,
             retention_policy="infinite",
         )
+        mapping = VideoPlaceMapping(
+            video_id="e2e-video-1",
+            place_id=place.place_id,
+            ai_summary="월정리 해변을 산책하고 카페 거리로 이동한다.",
+            timestamp_start="00:00:45",
+            timestamp_end="00:01:20",
+        )
 
-        session.add_all([candidate, run, audit, asset])
+        session.add_all([candidate, run, audit, asset, mapping])
         await session.commit()
 
 

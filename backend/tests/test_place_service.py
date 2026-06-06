@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from app.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+from app.models import (
+    ExtractedPlaceCandidate,
+    MatchStatus,
+    TravelPlace,
+    VideoPlaceMapping,
+    YoutubeVideo,
+)
 from app.services import place_service as svc
 
 
@@ -77,3 +83,34 @@ async def test_list_unmatched_candidates(session):
     unmatched = await svc.list_unmatched_candidates(session)
     assert len(unmatched) == 1
     assert unmatched[0].ai_place_name == "검수대상"
+
+
+async def test_list_place_summaries_sorts_by_mention_count(session):
+    video = YoutubeVideo(
+        video_id="v-source",
+        title="부산 여행",
+        url="https://youtu.be/source",
+        channel_id="uc-source",
+        channel_name="여행 채널",
+    )
+    first = TravelPlace(name="첫 장소", latitude=35.0, longitude=129.0, is_geocoded=True)
+    second = TravelPlace(name="반복 장소", latitude=35.1, longitude=129.1, is_geocoded=True)
+    session.add_all([video, first, second])
+    await session.commit()
+    await session.refresh(first)
+    await session.refresh(second)
+    session.add_all(
+        [
+            VideoPlaceMapping(video_id=video.video_id, place_id=second.place_id, ai_summary="1"),
+            VideoPlaceMapping(video_id=video.video_id, place_id=second.place_id, ai_summary="2"),
+            VideoPlaceMapping(video_id=video.video_id, place_id=first.place_id, ai_summary="3"),
+        ]
+    )
+    await session.commit()
+
+    summaries = await svc.list_place_summaries(session, sort="mention_count")
+
+    assert summaries[0].place.name == "반복 장소"
+    assert summaries[0].mention_count == 2
+    assert summaries[0].source_channel_count == 1
+    assert summaries[0].source_videos[0].channel_name == "여행 채널"
