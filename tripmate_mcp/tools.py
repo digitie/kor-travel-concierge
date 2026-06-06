@@ -121,7 +121,9 @@ class CorrectPlaceInput(StrictModel):
     name: str | None = Field(default=None, min_length=1)
     description: str | None = None
     gemini_enriched_description: str | None = None
-    description_review_status: str | None = None
+    description_review_status: Literal[
+        "ai_generated", "user_reviewed", "rejected"
+    ] | None = None
     official_address: str | None = None
     road_address: str | None = None
     latitude: float | None = Field(default=None, ge=-90, le=90)
@@ -221,8 +223,11 @@ class ToolRuntime:
         payload = HarvestTravelDestinationsInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "harvest.create"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
 
@@ -240,6 +245,7 @@ class ToolRuntime:
                 target_type=target_type,
                 target_id=target_id,
                 payload=payload.model_dump(),
+                commit=False,
             )
             result = {
                 "job_id": str(run.id),
@@ -254,7 +260,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="crawl_run",
                 target_id=str(run.id),
-                request=payload.model_dump(),
+                request=request,
                 result=result,
             )
             return result
@@ -328,13 +334,16 @@ class ToolRuntime:
         payload = CorrectPlaceInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "place.correct"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
             updates = _non_none_update_fields(payload, exclude={"idempotency_key", "place_id"})
             place = await place_service.correct_place(
-                session, place_id=payload.place_id, updates=updates
+                session, place_id=payload.place_id, updates=updates, commit=False
             )
             result = {"place": _serialize_place(place), "idempotent": False}
             await self._record_write(
@@ -343,7 +352,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="travel_place",
                 target_id=str(place.place_id),
-                request=payload.model_dump(exclude_none=True),
+                request=request,
                 result=result,
             )
             return result
@@ -352,14 +361,18 @@ class ToolRuntime:
         payload = MergePlacesInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "place.merge"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
             target = await place_service.merge_places(
                 session,
                 source_place_id=payload.source_place_id,
                 target_place_id=payload.target_place_id,
+                commit=False,
             )
             result = {
                 "target_place": _serialize_place(target),
@@ -372,7 +385,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="travel_place",
                 target_id=str(payload.target_place_id),
-                request=payload.model_dump(exclude_none=True),
+                request=request,
                 result=result,
             )
             return result
@@ -381,8 +394,11 @@ class ToolRuntime:
         payload = TriggerDeepResearchInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "deep_research.create"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
             place = await place_service.get_place(session, payload.place_id)
@@ -395,6 +411,7 @@ class ToolRuntime:
                 target_type="place",
                 target_id=str(payload.place_id),
                 payload=payload.model_dump(),
+                commit=False,
             )
             result = {
                 "job_id": str(run.id),
@@ -408,7 +425,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="crawl_run",
                 target_id=str(run.id),
-                request=payload.model_dump(exclude_none=True),
+                request=request,
                 result=result,
             )
             return result
@@ -417,8 +434,11 @@ class ToolRuntime:
         payload = ReviewUnmatchedPlaceInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "candidate.review"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
             candidate = await place_service.review_candidate(
@@ -426,6 +446,7 @@ class ToolRuntime:
                 candidate_id=payload.candidate_id,
                 reviewed_by=payload.reviewed_by,
                 review_note=payload.review_note,
+                commit=False,
             )
             result = {"candidate": _serialize_candidate(candidate), "idempotent": False}
             await self._record_write(
@@ -434,7 +455,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="extracted_place_candidate",
                 target_id=str(payload.candidate_id),
-                request=payload.model_dump(exclude_none=True),
+                request=request,
                 result=result,
             )
             return result
@@ -443,8 +464,11 @@ class ToolRuntime:
         payload = ResolvePlaceCandidateInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "candidate.resolve"
+        request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
-            cached = await self._idempotent_result(session, action, payload.idempotency_key)
+            cached = await self._idempotent_result(
+                session, action, payload.idempotency_key, request=request
+            )
             if cached is not None:
                 return cached
             place_data = None
@@ -468,6 +492,7 @@ class ToolRuntime:
                 review_note=payload.review_note,
                 place_id=payload.place_id,
                 place_data=place_data,
+                commit=False,
             )
             result = {
                 "candidate": _serialize_candidate(candidate),
@@ -481,7 +506,7 @@ class ToolRuntime:
                 idempotency_key=payload.idempotency_key,
                 target_type="extracted_place_candidate",
                 target_id=str(payload.candidate_id),
-                request=payload.model_dump(exclude_none=True),
+                request=request,
                 result=result,
             )
             return result
@@ -491,7 +516,12 @@ class ToolRuntime:
             raise PermissionError("MCP 쓰기 도구가 비활성화되어 있다")
 
     async def _idempotent_result(
-        self, session: AsyncSession, action: str, idempotency_key: str
+        self,
+        session: AsyncSession,
+        action: str,
+        idempotency_key: str,
+        *,
+        request: dict[str, Any],
     ) -> dict[str, Any] | None:
         log = await audit_service.find_by_idempotency_key(
             session,
@@ -502,6 +532,9 @@ class ToolRuntime:
         if log is None or not log.payload_json:
             return None
         payload = json.loads(log.payload_json)
+        previous_request = payload.get("request") or {}
+        if previous_request != request:
+            raise ValueError("같은 idempotency_key로 다른 요청 파라미터를 사용할 수 없다")
         result = dict(payload.get("result") or {})
         result["idempotent"] = True
         result["audit_log_id"] = log.id

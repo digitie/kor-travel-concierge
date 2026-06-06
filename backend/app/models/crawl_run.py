@@ -8,7 +8,7 @@ REST/MCP는 작업을 생성만 하고, scheduler 단일 실행자가 `pending` 
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 
 from sqlalchemy import DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 
 
-class RunState(StrEnum):
+class RunState(str, Enum):
     """작업 상태."""
 
     PENDING = "pending"
@@ -25,7 +25,7 @@ class RunState(StrEnum):
     FAILED = "failed"
 
 
-class RunSource(StrEnum):
+class RunSource(str, Enum):
     """작업 생성 주체."""
 
     WEB = "web"

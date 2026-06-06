@@ -7,15 +7,15 @@ RustFS에 저장한 원본 동영상·자막·전사 결과·대표 프레임의
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import BigInteger, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
 
 
-class AssetType(StrEnum):
+class AssetType(str, Enum):
     RAW_VIDEO = "raw_video"
     SUBTITLE = "subtitle"
     TRANSCRIPT = "transcript"
@@ -26,7 +26,7 @@ class MediaAsset(TimestampMixin, Base):
     __tablename__ = "media_assets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    asset_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    asset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     video_id: Mapped[str | None] = mapped_column(
         ForeignKey("youtube_videos.video_id"), nullable=True, index=True
     )
@@ -40,7 +40,7 @@ class MediaAsset(TimestampMixin, Base):
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
     object_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retention_policy: Mapped[str] = mapped_column(
         String(16), nullable=False, default="infinite"

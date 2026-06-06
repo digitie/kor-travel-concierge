@@ -30,6 +30,7 @@ async def create_run(
     target_type: str | None = None,
     target_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> CrawlRun:
     """새 작업을 `pending` 상태로 생성한다."""
     run = CrawlRun(
@@ -43,8 +44,9 @@ async def create_run(
     )
     session.add(run)
     await session.flush()
-    await session.commit()
-    await session.refresh(run)
+    if commit:
+        await session.commit()
+        await session.refresh(run)
     return run
 
 

@@ -54,6 +54,12 @@ async def test_settings_roundtrip(client):
     assert get_resp.json()["gemini_engine_version"] == "gemini-1.5-pro"
 
 
+async def test_settings_rejects_unknown_keys(client):
+    resp = await client.post("/api/settings", json={"GEMINI_API_KEY": "plain-secret"})
+    assert resp.status_code == 400
+    assert "지원하지 않는 설정 키" in resp.json()["detail"]
+
+
 async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200

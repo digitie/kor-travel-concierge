@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.services import audit_service, settings_service
 
 
@@ -24,9 +26,17 @@ async def test_get_all_merges_env_default(session):
     # DB에 값이 없어도 .env 기반 기본값이 들어온다.
     assert "gemini_engine_version" in merged
 
-    await settings_service.set_setting(session, "custom_key", "custom_value")
+    with pytest.raises(ValueError, match="지원하지 않는 설정 키"):
+        await settings_service.set_setting(session, "custom_key", "custom_value")
+
+
+async def test_set_many_commits_allowed_settings_together(session):
+    await settings_service.set_many(
+        session,
+        {"gemini_engine_version": "gemini-1.5-flash"},
+    )
     merged2 = await settings_service.get_all(session)
-    assert merged2["custom_key"] == "custom_value"
+    assert merged2["gemini_engine_version"] == "gemini-1.5-flash"
 
 
 async def test_audit_record_and_list(session):

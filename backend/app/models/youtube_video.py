@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 
 from sqlalchemy import DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, utcnow
 
 
-class CrawlStatus(StrEnum):
+class CrawlStatus(str, Enum):
     DISCOVERED = "discovered"
     SUMMARIZED = "summarized"
     GEOCODED = "geocoded"
@@ -48,7 +48,7 @@ class YoutubeVideo(Base):
     description_gemini_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     crawl_status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=CrawlStatus.DISCOVERED
+        String(32), nullable=False, default=CrawlStatus.DISCOVERED
     )
     crawled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False

@@ -18,9 +18,11 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.spatial import sync_place_geometry
 from app.models import (
     MatchStatus,
     ExtractedPlaceCandidate,
+    MediaAsset,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeVideo,
@@ -208,6 +210,7 @@ async def correct_place(
     *,
     place_id: int,
     updates: dict[str, Any],
+    commit: bool = True,
 ) -> TravelPlace:
     """장소명·주소·좌표·카테고리·설명을 수동 보정한다."""
     place = await session.get(TravelPlace, place_id)
@@ -232,11 +235,14 @@ async def correct_place(
         raise ValueError("보정할 필드가 필요하다")
     for key, value in applied.items():
         setattr(place, key, value)
-    if "latitude" in applied or "longitude" in applied:
+    if ("latitude" in applied or "longitude" in applied) and "is_geocoded" not in applied:
         place.is_geocoded = True
+    if ("latitude" in applied or "longitude" in applied) and place.is_geocoded:
+        await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
     place.last_reviewed_at = utcnow()
-    await session.commit()
-    await session.refresh(place)
+    if commit:
+        await session.commit()
+        await session.refresh(place)
     return place
 
 
@@ -245,6 +251,7 @@ async def merge_places(
     *,
     source_place_id: int,
     target_place_id: int,
+    commit: bool = True,
 ) -> TravelPlace:
     """중복 장소를 병합하고 source 장소를 삭제한다."""
     if source_place_id == target_place_id:
@@ -273,6 +280,13 @@ async def merge_places(
     for candidate in moved_candidates:
         candidate.matched_place_id = target_place_id
 
+    asset_result = await session.execute(
+        select(MediaAsset).where(MediaAsset.place_id == source_place_id)
+    )
+    moved_assets = list(asset_result.scalars().all())
+    for asset in moved_assets:
+        asset.place_id = target_place_id
+
     for field in (
         "description",
         "gemini_enriched_description",
@@ -286,8 +300,9 @@ async def merge_places(
             setattr(target, field, getattr(source, field))
     target.last_reviewed_at = utcnow()
     await session.delete(source)
-    await session.commit()
-    await session.refresh(target)
+    if commit:
+        await session.commit()
+        await session.refresh(target)
     return target
 
 
@@ -297,6 +312,7 @@ async def review_candidate(
     candidate_id: int,
     reviewed_by: str,
     review_note: str | None = None,
+    commit: bool = True,
 ) -> ExtractedPlaceCandidate:
     """매칭 검수 후보에 검수 메타데이터를 남긴다."""
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
@@ -305,8 +321,9 @@ async def review_candidate(
     candidate.reviewed_by = reviewed_by
     candidate.reviewed_at = utcnow()
     candidate.review_note = review_note
-    await session.commit()
-    await session.refresh(candidate)
+    if commit:
+        await session.commit()
+        await session.refresh(candidate)
     return candidate
 
 
@@ -319,6 +336,7 @@ async def resolve_candidate(
     review_note: str | None = None,
     place_id: int | None = None,
     place_data: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> tuple[ExtractedPlaceCandidate, TravelPlace | None, VideoPlaceMapping | None]:
     """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다."""
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
@@ -359,6 +377,7 @@ async def resolve_candidate(
         )
         session.add(place)
         await session.flush()
+        await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         mapping = await _ensure_candidate_mapping(session, candidate, place)
@@ -368,12 +387,13 @@ async def resolve_candidate(
     candidate.reviewed_by = reviewed_by
     candidate.reviewed_at = utcnow()
     candidate.review_note = review_note
-    await session.commit()
-    await session.refresh(candidate)
-    if place is not None:
-        await session.refresh(place)
-    if mapping is not None:
-        await session.refresh(mapping)
+    if commit:
+        await session.commit()
+        await session.refresh(candidate)
+        if place is not None:
+            await session.refresh(place)
+        if mapping is not None:
+            await session.refresh(mapping)
     return candidate, place, mapping
 
 

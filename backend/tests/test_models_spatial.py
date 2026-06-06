@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from app.models import (
     AssetType,
     CrawlStatus,
@@ -26,11 +29,42 @@ async def test_search_keyword_persist(session):
     assert kw.is_active is True
 
 
+async def test_search_keyword_unique_seed_derived_season(session):
+    first = SearchKeyword(
+        seed_keyword="제주도",
+        derived_keyword="제주도 겨울 맛집",
+        season_context="winter",
+    )
+    duplicate = SearchKeyword(
+        seed_keyword="제주도",
+        derived_keyword="제주도 겨울 맛집",
+        season_context="winter",
+    )
+    session.add_all([first, duplicate])
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
 async def test_source_target_persist(session):
     t = SourceTarget(target_type="channel", source_value="UC123", display_name="여행유튜버")
     session.add(t)
     await session.commit()
     assert t.id is not None
+
+
+async def test_source_target_unique_type_value(session):
+    session.add_all(
+        [
+            SourceTarget(target_type="channel", source_value="UC123"),
+            SourceTarget(target_type="channel", source_value="UC123"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
 
 
 async def test_youtube_video_description_fields_separated(session):
@@ -114,3 +148,22 @@ async def test_video_place_mapping_relations(session):
     session.add(m)
     await session.commit()
     assert m.id is not None
+
+
+async def test_video_place_mapping_unique_video_place(session):
+    v = YoutubeVideo(video_id="vid-unique", title="t", url="u", channel_id="c")
+    p = TravelPlace(name="장소", latitude=37.5, longitude=127.0, is_geocoded=True)
+    session.add_all([v, p])
+    await session.commit()
+    await session.refresh(p)
+
+    session.add_all(
+        [
+            VideoPlaceMapping(video_id=v.video_id, place_id=p.place_id, ai_summary="요약1"),
+            VideoPlaceMapping(video_id=v.video_id, place_id=p.place_id, ai_summary="요약2"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
