@@ -387,7 +387,7 @@ Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack
 
 ## 8. 대규모 전환 후보
 
-다음 조건이 실제로 발생하면 후속 ADR로 전환을 검토한다.
+다음 조건이 실제로 발생하면 후속 ADR로 전환을 검토한다. T-016 검토 결과, 현재 단계에서는 새 저장소·큐 계층을 선제 도입하지 않고 수치 트리거가 관측될 때만 전환한다(ADR-20).
 
 - 동시 사용자나 수집 대상이 늘어 SQLite 동시 쓰기 한계가 반복된다.
 - 멀티 워커가 필요해 scheduler 단일 실행자 모델이 병목이 된다.
@@ -396,7 +396,16 @@ Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack
 
 전환 후보:
 
-- PostgreSQL/PostGIS: SpatiaLite 공간 함수를 PostGIS `ST_DWithin`, GiST 인덱스로 이전
-- PgQueuer: `LISTEN/NOTIFY` + `SKIP LOCKED` 기반 DB 네이티브 큐
-- Celery + Beat: 수십 워커 분산 처리가 필요할 때만 검토
-- Airflow / Dagster: 수백 데이터소스 의존성을 관리해야 할 때만 검토
+| 후보 | 도입 기준 | 전환 범위 |
+| --- | --- | --- |
+| sqlite-vec / SQLite Vec1 | 확정 장소·영상 설명이 수천~수만 건으로 늘고 키워드 검색만으로 탐색 품질이 부족할 때 | `place_embeddings` 별도 테이블과 검색 서비스 함수. 기본 API와 `travel_places` 스키마는 유지 |
+| PostgreSQL/PostGIS | 확정 장소 100,000건 이상, 영상-장소 매핑 1,000,000건 이상, 반경 검색 p95 500ms 초과, SQLite write lock 반복 | `app.core.spatial`, `app.services.place_service`, DB migration. `ST_DWithin` + GiST 인덱스 사용 |
+| PgQueuer | PostgreSQL 전환 이후 backlog가 5분 이상 지속되거나 단일 worker SLA를 못 맞출 때 | `crawl_runs` claim/worker loop를 DB native queue로 이전 |
+| APScheduler + PostgreSQL advisory lock | 여러 scheduler 프로세스 중 단일 leader만 보장하면 충분할 때 | scheduler leader election 보조. 여러 consumer queue 처리에는 사용하지 않음 |
+| Celery + Beat | DB native queue로 부족하고 외부 worker 격리, 분산 retry, 별도 broker 운영이 필요할 때 | 별도 broker와 worker observability를 포함하는 새 ADR 필요 |
+| Airflow / Dagster | 수백 데이터소스와 DAG 의존성, 수동 backfill, 데이터 품질 SLA가 필요할 때 | ETL orchestration 재설계 필요 |
+
+현재 유지 원칙:
+
+- 의미론적 검색과 queue 전환은 optional feature flag 또는 별도 ADR 없이 기본 의존성으로 넣지 않는다.
+- 새 adapter/wrapper 계층을 만들지 않고, 실제 병목이 확인된 모듈의 서비스 함수와 DB SQL 경계만 교체한다.

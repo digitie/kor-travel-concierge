@@ -564,3 +564,57 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 ### 결과 (부정)
 - `python-vworld-api`가 아직 PyPI 배포본으로 확인되지 않아 GitHub archive commit pin 또는 로컬 editable 설치를 관리해야 한다.
 - VWorld 장애나 할당량 문제 시 Kakao/Naver fallback으로 넘어가기 전 오류 처리 정책을 계속 세밀하게 조정해야 한다.
+
+---
+
+## ADR-20: 고도화 후보 도입 보류와 전환 트리거
+
+- 상태: accepted
+- 날짜: 2026-06-05
+- 결정자: AI agent
+
+### 컨텍스트
+T-016은 sqlite-vec 기반 의미론적 검색, PostgreSQL/PostGIS 전환, 멀티 워커 큐 전환을 검토하는 작업이다. 현재 제품은 1~2인 운영의 소형 프로젝트이며, SQLite + SpatiaLite, APScheduler 단일 실행자, REST/MCP 작업 생성 분리 구조가 이미 동작한다. 따라서 새 저장소·큐 계층을 선제 도입하면 운영 비용과 마이그레이션 부담이 이득보다 커질 수 있다.
+
+검토한 기준 자료는 다음과 같다.
+
+- [`sqlite-vec`](https://github.com/asg017/sqlite-vec): SQLite용 vector search extension이며 `vec0` virtual table을 제공하지만 pre-v1로 breaking change 가능성을 명시한다.
+- [SQLite `Vec1`](https://sqlite.org/vec1): SQLite 공식 ANN vector extension 후보로, virtual table 기반 ANN과 cosine/L2 distance를 제공한다.
+- [PostGIS spatial indexes FAQ](https://postgis.net/documentation/faq/spatial-indexes/): GiST spatial index와 `ST_DWithin` 같은 index-aware 함수를 권장한다.
+- [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/current/static/sql-select.html): queue-like table에서 여러 consumer가 lock contention을 피할 수 있는 용도를 명시한다.
+- [PostgreSQL `LISTEN`](https://www.postgresql.org/docs/current/sql-listen.html) / [`NOTIFY`](https://www.postgresql.org/docs/17/sql-notify.html): DB 기반 event notification의 기본 동작과 race 조건을 설명한다.
+- [PostgreSQL advisory locks](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS): application-defined lock이며 사용 규칙은 애플리케이션 책임이다.
+- [APScheduler user guide](https://apscheduler.readthedocs.io/en/3.x/userguide.html): `max_instances`와 `coalesce`로 단일 job 중복 실행을 제한할 수 있다.
+- [PGQueuer architecture](https://pgqueuer.readthedocs.io/en/stable/architecture.html): `LISTEN/NOTIFY`와 `FOR UPDATE SKIP LOCKED` 기반 worker dispatch 구조를 제공한다.
+
+### 결정
+- **sqlite-vec / Vec1은 지금 도입하지 않는다.**
+  - 의미론적 검색이 실제 UX 병목으로 확인되기 전까지는 현재의 이름·주소·카테고리 검색과 Gemini 보강 설명 저장으로 충분하다.
+  - 도입 시에는 `place_embeddings` 같은 별도 테이블을 만들고, 기존 `travel_places` 스키마와 검색 API를 깨지 않는 optional feature flag(`SEMANTIC_SEARCH_ENABLED`)로 시작한다.
+  - 내부 vector repository wrapper를 만들기보다, extension loading과 SQL 쿼리를 검색 서비스 함수 한곳에 좁게 둔다.
+- **PostgreSQL/PostGIS 전환은 수치 트리거가 생길 때만 별도 ADR로 실행한다.**
+  - 전환 후보는 확정 장소 100,000건 이상, 영상-장소 매핑 1,000,000건 이상, 반경 검색 p95 500ms 초과, SQLite write lock 재시도가 운영 중 반복, 또는 백업/복구·관측 요구가 단일 `.db` 파일을 넘어설 때다.
+  - 전환 시 호출부 변경은 `app.services.place_service`와 `app.core.spatial`에 국한한다. 반경 검색은 PostGIS `ST_DWithin`, geometry GiST index, 필요 시 geography cast로 대체한다.
+- **멀티 워커는 PostgreSQL 도입 이후에만 검토한다.**
+  - 현재는 APScheduler 단일 실행자(`max_instances=1`, `coalesce=True`)와 `crawl_runs` claim 방식이 운영 복잡도 대비 충분하다.
+  - PostgreSQL로 넘어가고 작업 backlog가 5분 이상 지속되거나 단일 worker 처리량이 SLA를 못 맞추면 PgQueuer를 1순위로 검토한다.
+  - APScheduler + PostgreSQL advisory lock은 “여러 scheduler 프로세스 중 단일 leader 보장”이 필요할 때만 보조 후보로 둔다. 여러 consumer가 같은 queue를 처리해야 하는 경우에는 `SKIP LOCKED` 기반 큐가 더 직접적이다.
+- **Celery/Redis/RabbitMQ는 이번 단계의 후보에서 제외한다.**
+  - DB native queue로도 부족하고, 외부 분산 worker·고립된 retry·별도 observability가 필요한 시점에 새 ADR로 재검토한다.
+
+### 근거
+- 현재 코드의 확장 지점은 이미 좁다. 공간 함수 호출은 `place_service`, SpatiaLite DDL은 `app.core.spatial`, 작업 실행은 `scheduler.worker`에 모여 있다.
+- sqlite-vec은 Windows와 SQLite 유지 장점이 있지만 pre-v1 extension이므로 검색 품질 요구가 확인되기 전에 기본 의존성으로 넣기에는 이르다. SQLite 공식 Vec1도 새 extension이므로 Windows/Docker 바이너리 검증 비용이 남는다.
+- PostGIS는 대량 공간 검색에는 강하지만 PostgreSQL 서버 운영, migration, backup, Docker/Windows 개발 경로가 추가된다.
+- PgQueuer는 PostgreSQL 전제가 있어 지금의 SQLite 구조와 맞지 않는다. 반대로 PostgreSQL 전환 이후에는 `LISTEN/NOTIFY`와 `SKIP LOCKED`를 직접 구현하는 것보다 전용 라이브러리를 쓰는 편이 코드량과 실패 모드를 줄인다.
+- advisory lock은 leader election에는 좋지만, 모든 작업 row 처리 규칙을 직접 설계해야 하므로 queue abstraction으로 남용하지 않는다.
+
+### 결과 (긍정)
+- 현재 소형 프로젝트 운영 비용을 유지하면서도 확장 기준이 문서화된다.
+- PostGIS나 queue 전환 시 손대야 할 모듈 경계가 명확해진다.
+- adapter/wrapper 최소화 원칙을 유지하고, 새 abstraction을 “검증된 병목” 이후로 미룬다.
+
+### 결과 (부정)
+- 의미론적 검색 UX 개선은 즉시 제공하지 않는다.
+- 규모 증가 시점에는 별도 benchmark, migration rehearsal, 운영 모니터링을 추가해야 한다.
+- PostgreSQL 전환 전까지 SQLite write lock과 단일 worker 처리량은 계속 관측 대상이다.

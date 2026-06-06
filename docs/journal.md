@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-05: T-016 고도화 후보 검토
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **의미론적 검색 검토**: sqlite-vec와 SQLite Vec1의 virtual table 기반 vector search를 검토. 현재 검색 품질 병목이 확인되지 않았고 extension 안정성·Windows/Docker 검증 비용이 남아 있어 기본 의존성 도입은 보류.
+  - **PostgreSQL/PostGIS 전환 기준 수립**: 확정 장소 100,000건, 영상-장소 매핑 1,000,000건, 반경 검색 p95 500ms 초과, SQLite write lock 반복을 전환 검토 트리거로 문서화. 전환 시 변경 범위는 `app.core.spatial`과 `app.services.place_service` 중심으로 제한.
+  - **멀티 워커 후보 정리**: 현재는 APScheduler 단일 실행자를 유지. PostgreSQL 전환 이후 backlog가 5분 이상 지속되거나 단일 worker SLA를 못 맞추면 PgQueuer를 1순위로 검토. APScheduler + PostgreSQL advisory lock은 여러 scheduler 프로세스 중 단일 leader 보장이 필요할 때만 보조 후보로 둠.
+  - **ADR 추가**: `docs/decisions.md`에 ADR-20을 추가하고, `docs/architecture.md`의 대규모 전환 후보 표를 수치 트리거 중심으로 갱신.
+  - **wrapper 최소화 유지**: 의미론적 검색이나 queue 전환도 실제 병목 전까지 optional feature 또는 별도 ADR로만 다루며, 선제 adapter/wrapper 계층은 추가하지 않는 원칙을 명시.
+- **다음 작업**:
+  - T-020: Next.js 메이저 업그레이드 및 npm audit 대응 검토.
+
+---
+
 ## 2026-06-05: T-015 Playwright E2E 검증
 
 - **담당자**: Codex
