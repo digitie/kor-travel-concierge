@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # --- 1. 프론트엔드 (참조용, 백엔드에서는 사용하지 않음) ---
     NEXT_PUBLIC_VWORLD_SERVICE_KEY: str = ""
     NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:8000"
+    CORS_ALLOW_ORIGINS: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:13000,http://127.0.0.1:13000,"
+        "http://localhost:13100,http://127.0.0.1:13100"
+    )
 
     # --- 2. 데이터베이스 (SQLite + SpatiaLite) ---
     DATABASE_URL: str = "sqlite+aiosqlite:///./tripmate.db"
@@ -101,6 +106,18 @@ class Settings(BaseSettings):
             "transcript": self.RUSTFS_BUCKET_SUBTITLES,
             "frame": self.RUSTFS_BUCKET_FRAMES,
         }
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        """쉼표 구분 CORS origin 목록."""
+        origins = [
+            origin.strip()
+            for origin in self.CORS_ALLOW_ORIGINS.split(",")
+            if origin.strip()
+        ]
+        if self.NEXT_PUBLIC_API_BASE_URL.startswith("http"):
+            origins.append(self.NEXT_PUBLIC_API_BASE_URL.rstrip("/"))
+        return sorted(set(origins))
 
 
 @lru_cache

@@ -104,7 +104,7 @@ npx playwright test
 
 ### Playwright E2E 시나리오 생성
 - **위치**: `tests/e2e/` 디렉토리에 `.spec.ts` 파일 추가.
-- **설명**: 프론트엔드 Next.js 개발 서버와 백엔드 FastAPI 서버를 동시에 띄운 뒤 Playwright 테스트를 실행해야 하므로, `tests/playwright.config.ts` 파일의 `webServer` 설정을 적절히 구성한다.
+- **설명**: `tests/playwright.config.ts`의 `webServer`가 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동한다. 테스트 전용 DB는 `tests\.tmp\e2e.db`이며, 시나리오는 REST API와 화면 접근성 이름을 직접 사용하고 E2E 전용 adapter/wrapper를 만들지 않는다.
 
 ## 5. 도메인 어휘
 

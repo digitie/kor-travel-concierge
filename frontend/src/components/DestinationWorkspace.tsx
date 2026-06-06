@@ -124,7 +124,10 @@ function DestinationList({
   isResearching: boolean;
 }) {
   return (
-    <section className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r">
+    <section
+      aria-label="장소 목록"
+      className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r"
+    >
       <PanelHeader title="장소" count={places.length} />
       <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
@@ -217,7 +220,10 @@ function ReviewQueue({
   });
 
   return (
-    <section className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r">
+    <section
+      aria-label="검수 큐"
+      className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r"
+    >
       <PanelHeader title="검수 큐" count={candidates.length} />
       <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
         {candidates.map((candidate) => (
@@ -241,15 +247,21 @@ function ReviewQueue({
       </div>
       {selectedCandidate ? (
         <div className="flex flex-col gap-3 border-t pt-4">
-          <Input value={name} onChange={(event) => setName(event.target.value)} />
+          <Input
+            aria-label="보정 장소명"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
           <div className="grid grid-cols-2 gap-2">
             <Input
+              aria-label="보정 위도"
               inputMode="decimal"
               placeholder="위도"
               value={latitude}
               onChange={(event) => setLatitude(event.target.value)}
             />
             <Input
+              aria-label="보정 경도"
               inputMode="decimal"
               placeholder="경도"
               value={longitude}
@@ -257,6 +269,7 @@ function ReviewQueue({
             />
           </div>
           <Input
+            aria-label="보정 카테고리"
             placeholder="카테고리"
             value={category}
             onChange={(event) => setCategory(event.target.value)}
@@ -298,7 +311,7 @@ function OperationsPanel({
   const totalObjects = rustfs?.assets.reduce((sum, asset) => sum + asset.count, 0) ?? 0;
 
   return (
-    <section className="flex flex-col gap-4 p-4">
+    <section aria-label="운영 패널" className="flex flex-col gap-4 p-4">
       <PanelHeader title="운영" count={runs.length} />
       <div className="grid grid-cols-3 gap-2">
         <Metric label="실패" value={failedRuns.toString()} />

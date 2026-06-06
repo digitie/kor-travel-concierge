@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-06-05: T-015 Playwright E2E 검증
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **자동 E2E 서버 기동**: `tests/playwright.config.ts`가 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 `webServer`로 자동 실행하도록 구성. Windows Node.js에서 `npm.cmd` 직접 spawn이 실패하는 경우를 피하기 위해 frontend 기동은 `cmd.exe` 경유로 처리.
+  - **결정론적 시드 데이터**: `tests/scripts/seed_e2e.py`가 테스트 전용 SQLite DB를 초기화하고 확정 장소, 매칭 실패 후보, MCP 감사 로그, 대표 프레임 `media_assets`를 매 테스트마다 재생성.
+  - **브라우저 시나리오 검증**: 메인 화면의 VWorld 지도 fallback과 장소/검수/운영 패널, 수집 시작 `job_id`와 `pending` 상태 표시, Deep Research 작업 생성, 매칭 실패 후보의 사용자 보정 저장 후 장소 목록 반영, 설정 페이지 Gemini 엔진 저장을 검증.
+  - **프론트 보강**: React Hook Form이 사용하는 ref가 실제 input까지 전달되도록 공용 `Input`을 수정하고, 장소 목록/검수 큐/운영 패널에 접근성 이름을 추가해 UI와 테스트의 탐색 기준을 일치시킴.
+  - **로컬 실행 안정화**: E2E용 CORS 허용 origin(`13100`)을 설정에 추가하고, `tests/.tmp`, `tests/test-results`, `tests/playwright-report` 등 산출물을 ignore 처리.
+  - **wrapper 최소화 유지**: 새 제품 계층이나 adapter는 추가하지 않고, Playwright 검증은 기존 REST API와 화면 접근성 이름을 직접 사용하도록 구성.
+  - **테스트**: Browser plugin은 현재 세션에 없어 일반 Playwright로 검증. `npm test` 4건, frontend `npm run lint`, `npm run type-check`, `npm run build`, backend `compileall`, backend pytest, `docker compose --env-file .env config --quiet` 통과.
+- **다음 작업**:
+  - T-016: sqlite-vec/PostGIS 전환/멀티 워커 후보 검토 또는 T-020: Next.js 메이저 업그레이드 및 npm audit 대응 검토.
+
+---
+
 ## 2026-06-05: T-021 VWorld 우선 지오코딩 및 Kakao 키워드 장소 검색 보강
 
 - **담당자**: Codex

@@ -33,10 +33,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS: 개발 단계에서는 프론트엔드 베이스 URL을 허용한다.
+    # CORS: 개발·E2E에서 사용하는 프론트엔드 origin을 허용한다.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.NEXT_PUBLIC_API_BASE_URL, "http://localhost:3000"],
+        allow_origins=settings.cors_allow_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

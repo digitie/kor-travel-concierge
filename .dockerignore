@@ -23,5 +23,6 @@ frontend/out/
 frontend/tsconfig.tsbuildinfo
 
 tests/node_modules/
+tests/.tmp/
 test-results/
 playwright-report/

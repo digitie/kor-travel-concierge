@@ -27,7 +27,13 @@ htmlcov/
 # Databases & SQLite
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite3
+tests/.tmp/
+tests/test-results/
+tests/playwright-report/
+tests/blob-report/
 
 # Environment Variables
 .env
