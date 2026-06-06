@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-05: T-026 Next.js route type 생성물 안정화
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **생성물 흔들림 제거**: `next typegen`, `next build`, `next dev` 실행 순서에 따라 `frontend/next-env.d.ts`의 route type import가 `.next/dev/types`와 `.next/types` 사이에서 바뀌는 문제를 확인.
+  - **정규화 hook 추가**: `frontend/scripts/normalize-next-env.mjs`를 추가하고 `posttype-check`/`postbuild`에서 실행해 route import를 `.next/dev/types/routes.d.ts`로 되돌리도록 구성.
+  - **타입 포함 경로 유지**: 실제 route type은 `tsconfig.json`의 `.next/types/**/*.ts`, `.next/dev/types/**/*.ts` include를 유지해 사용한다.
+- **다음 작업**:
+  - 후속 PR 머지 후 전체 live test를 재실행한다.
+
+---
+
 ## 2026-06-05: T-025 PR #6~19 프론트엔드·E2E·문서 리뷰 반영
 
 - **담당자**: Codex
