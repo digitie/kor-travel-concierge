@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-07: T-029 Windows live test 후속 보완
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Web 기동 안정화**: Windows PowerShell 세션에서 `npm.cmd` 또는 `.cmd` 내부 `node` PATH 해석이 실패하는 환경을 확인하고, `scripts/start-windows-live.ps1`이 Windows Node.js 설치 경로를 직접 찾아 Next.js CLI를 `node.exe`로 실행하도록 보강.
+  - **Gemini 설정 보정**: live `.env`의 `gemini-flash-latest` 값을 설정 화면에서 그대로 표시·저장할 수 있도록 Gemini 엔진 선택지에 추가.
+  - **Input hydration 경고 제거**: SSR/클라이언트 style 속성이 달라지는 경고를 확인하고, 공용 `Input`을 native `input` 기반으로 단순화한 뒤 브라우저 주입 속성 차이를 hydration 경고에서 제외.
+  - **live test 정리**: API `9041`, Web `9042`, RustFS `9003/9004`, Gemini/YouTube/VWorld/Kakao 키 smoke, Playwright 화면 검증을 clean worktree와 Windows 프로세스 기준으로 재확인.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
 ## 2026-06-07: T-028 장소 언급 소스·중복 정렬·내보내기 구현
 
 - **담당자**: Codex

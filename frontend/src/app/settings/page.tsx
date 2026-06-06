@@ -30,6 +30,7 @@ import {
 
 const settingsSchema = z.object({
   geminiEngineVersion: z.enum([
+    "gemini-flash-latest",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-pro",
@@ -101,6 +102,7 @@ export default function SettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
+                  <SelectItem value="gemini-flash-latest">gemini-flash-latest</SelectItem>
                   <SelectItem value="gemini-2.0-flash">gemini-2.0-flash</SelectItem>
                   <SelectItem value="gemini-1.5-flash">gemini-1.5-flash</SelectItem>
                   <SelectItem value="gemini-1.5-pro">gemini-1.5-pro</SelectItem>
