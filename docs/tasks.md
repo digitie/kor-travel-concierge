@@ -6,16 +6,11 @@
 
 ## 진행 중
 
-- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-015**이다.
+- 현재 진행 중인 구현 작업 없음. 다음 착수 대상은 **T-016** 또는 **T-020**이다.
 
 ---
 
 ## 대기 (우선순위 순)
-
-- **T-015**: Playwright E2E 검증
-  - 수집 시작 → `job_id` 반환 → 상태 폴링 → 완료 결과 표시 시나리오
-  - 지도 렌더링, CRUD, 작업 상태, Deep Research 트리거 검증
-  - MCP 쓰기 도구가 생성한 변경사항이 웹 UI에 반영되는 경로 검증
 
 - **T-016**: 고도화 후보 검토
   - sqlite-vec 기반 의미론적 검색 후보 검토
@@ -31,6 +26,7 @@
 
 ## 완료
 
+- [x] **T-015**: Playwright E2E 검증 — `tests/playwright.config.ts`가 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100` 개발 서버를 자동 기동하도록 구성. `tests/scripts/seed_e2e.py`로 SQLite E2E DB에 장소, 검수 후보, MCP 감사 로그, RustFS 대표 프레임 메타데이터를 매 테스트마다 재시드. 메인 화면의 VWorld 지도 fallback/패널 렌더링, 수집 시작 `job_id`/`pending` 표시, Deep Research 트리거, 매칭 실패 후보 수동 보정 후 장소 목록 반영, 설정 페이지 Gemini 엔진 저장을 브라우저에서 검증. CORS 허용 origin 설정, E2E 산출물 ignore, 공용 `Input` ref 전달 보정, 검수/장소/운영 패널 접근성 이름을 추가. Browser plugin은 현재 세션에 없어 일반 Playwright로 검증. `npm test` 4건, `npm run lint`, `npm run type-check`, `npm run build`, backend `compileall`, backend pytest, `docker compose --env-file .env config --quiet` 통과. (2026-06-05)
 - [x] **T-021**: VWorld 우선 지오코딩 및 Kakao 키워드 장소 검색 보강 — 지오코딩 기본 우선순위를 VWorld → Kakao → Naver로 조정하고, VWorld는 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하도록 `VWorldGeocoder`/`VWorldReverseGeocoder` 내부 wrapper class를 제거. `backend/requirements.txt`에 `python-vworld-api` GitHub archive commit pin 추가, 로컬 검증은 `F:\dev\python-vworld-api` editable 설치로 수행. Kakao Local은 주소 검색 결과가 없을 때 공식 `GET /v2/local/search/keyword.json` 키워드 장소 검색 fallback을 사용해 POI명·도로명 주소·지번 주소·카테고리를 후보로 저장. `.env.example`, README, 아키텍처, 개발 환경, ADR-19, 에이전트 문서를 최신 정책으로 갱신. 지오코딩 단위 테스트 15건, backend 전체 pytest, `compileall`, `docker compose config --quiet`, Python Compose image build, API 컨테이너 `AsyncVworldClient` import, RustFS smoke, `npm run lint`, `npm run type-check`, `npm run build` 통과. (2026-06-05)
 - [x] **T-014**: Windows 및 Docker Compose 통합 검증 — Compose를 `.env` optional 구성과 host port override(`RUSTFS_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT`) 가능 구조로 보강. RustFS는 호스트 `9003/9004`, 컨테이너 내부 `rustfs:9000/9001`로 분리하고, API health 이후 MCP/scheduler/frontend가 시작되도록 `depends_on.condition` 적용. Docker Compose MCP는 `streamable-http` transport(`8010/mcp`)로 실행. `.dockerignore` 추가로 Docker build context를 root 6.47KB, frontend 1.34KB 수준으로 축소. `aiosqlite` SpatiaLite extension loading을 `run_async` 경유로 보정하고 공간 컬럼 검사 버그를 수정. `scripts/verify-docker-compose.ps1`와 `scripts/verify_rustfs.py`로 health, MCP port, RustFS 버킷 생성, 객체 업로드·조회 smoke 검증 자동화. WSL Docker CLI에서 override 포트 `19003/19004`, `18000`, `18010`, `13000`으로 `rustfs/api/mcp/scheduler/frontend` 전체 실행, HTTP health 200, RustFS 3개 버킷 smoke 객체 업로드·조회, SQLite DB 생성 확인. Windows PowerShell은 현재 세션 PATH에서 Docker CLI를 찾지 못해 래퍼 preflight 메시지까지만 확인. backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build`, `docker compose config --quiet` 통과. (2026-06-05)
 - [x] **T-013**: 지도·리스트·운영 패널 구현 — `maplibre-gl` 기반 VWorld WMTS raster style과 장소 marker 표시, 장소 리스트/선택 동기화, Deep Research 트리거, 매칭 실패 후보 검수 큐(신규 장소 생성·제외), 최근 작업/실패 작업/MCP·웹 감사 로그/RustFS 객체·헬스 요약 운영 패널 구현. `/api/runs`, `/api/audit-logs`, `/api/storage/rustfs`, 장소 보정, 후보 해결, Deep Research REST endpoint 추가. 공개 npm 패키지 `maplibre-vworld`/`maplibre-vworld-js`가 없어 T-013 구현은 `maplibre-gl` 직접 WMTS 구성으로 진행. backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build` 통과. dev server `http://127.0.0.1:3001/` 응답 및 패널 렌더링 확인. (2026-06-05)

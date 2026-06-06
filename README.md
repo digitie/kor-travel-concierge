@@ -138,6 +138,8 @@ npx playwright install
 npx playwright test
 ```
 
+Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동하고, `tests\.tmp\e2e.db`를 테스트마다 재시드한다.
+
 ## 참고 문서
 
 - [`AGENTS.md`](./AGENTS.md) — 프로젝트 내 문서화 언어 정책 및 에이전트 개발 규칙

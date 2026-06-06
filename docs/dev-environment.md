@@ -274,7 +274,7 @@ Compose에서 MCP 서버는 로컬 `stdio` 기본값과 달리 `streamable-http`
    npx playwright install
    ```
 
-3. 백엔드(`localhost:8000`)와 프론트엔드(`localhost:3000`) 개발 서버가 모두 구동 중인 상태에서 테스트를 실행합니다:
+3. 테스트를 실행합니다. Playwright 설정이 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100` 개발 서버를 자동으로 기동합니다:
    ```powershell
    npx playwright test
    ```
@@ -282,6 +282,20 @@ Compose에서 MCP 서버는 로컬 `stdio` 기본값과 달리 `streamable-http`
      ```powershell
      npx playwright test --headed
      ```
+   - 포트를 바꾸려면 `E2E_BACKEND_PORT`, `E2E_FRONTEND_PORT`, `E2E_API_BASE_URL`, `E2E_FRONTEND_URL` 환경 변수를 지정합니다.
+   - 테스트 DB는 `tests\.tmp\e2e.db`에 생성되며, 매 테스트 시작 전에 `tests\scripts\seed_e2e.py`가 장소, 검수 후보, MCP 감사 로그, RustFS 대표 프레임 메타데이터를 재시드합니다.
+   - 테스트 산출물(`tests\test-results`, `tests\playwright-report`)은 Git 추적 대상이 아닙니다.
+
+검증 범위는 다음과 같습니다.
+
+| 시나리오 | 확인 내용 |
+| --- | --- |
+| 메인 화면 | VWorld 지도 fallback/렌더링, 장소 목록, 검수 큐, 운영 패널, MCP 감사 로그 |
+| 수집 시작 | `POST /api/harvest` 호출, `job_id`, `pending` 상태 표시 |
+| Deep Research 및 검수 | Deep Research 작업 생성, 매칭 실패 후보 사용자 보정 저장, 장소 목록 반영 |
+| 설정 저장 | Gemini 엔진 설정 저장 및 `/api/settings` 반영 |
+
+Browser plugin이 없는 환경에서는 일반 Playwright CLI로 검증합니다. 제품 코드에는 E2E만을 위한 별도 adapter/wrapper를 추가하지 않고, REST API와 화면의 접근성 이름을 직접 사용합니다.
 
 ---
 
