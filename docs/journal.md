@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-06-05: T-020 Next.js 메이저 업그레이드 및 npm audit 대응
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Next/React 업그레이드**: frontend를 Next.js `16.2.7`, React / React DOM `19.2.7`, `eslint-config-next` `16.2.7`, ESLint `9.39.4`로 업그레이드.
+  - **audit 해소**: Next 14 계열 취약점과 Next 내부 `postcss@8.4.31` transitive 항목을 해소. root `postcss@8.5.15`를 npm `overrides`로 적용해 `npm audit` 0건 확인.
+  - **lint/type-check 전환**: `next lint` 제거에 맞춰 `.eslintrc.json`을 삭제하고 `eslint.config.mjs` flat config를 추가. `npm run type-check`는 clean checkout에서도 route type을 생성하도록 `next typegen && tsc --noEmit`으로 변경.
+  - **Turbopack CSS 호환성 보정**: Next 16 build의 package CSS import 해석에 맞춰 `tw-animate-css` / `shadcn/tailwind.css` import를 제거하고 Tailwind v3 호환 `tailwindcss-animate` plugin으로 select animation utility를 제공. Tailwind v4식 arbitrary class는 v3식으로 정리.
+  - **React 19 lint 보정**: React Compiler lint가 경고한 React Hook Form `form.watch()` 사용을 `useWatch`로 교체.
+  - **ADR 추가**: `docs/decisions.md`에 ADR-21을 추가하고, 개발 환경 문서와 현재 컨텍스트를 Next 16 기준으로 갱신.
+  - **검증**: `npm audit` 0건, frontend `npm run lint`, clean `.next` 기준 `npm run type-check`, `npm run build`, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
 ## 2026-06-05: T-016 고도화 후보 검토
 
 - **담당자**: Codex

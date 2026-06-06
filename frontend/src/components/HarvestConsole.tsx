@@ -9,7 +9,7 @@ import {
   PlayIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import {
@@ -71,7 +71,10 @@ export function HarvestConsole() {
       maxVideos: 10,
     },
   });
-  const targetType = form.watch("targetType");
+  const targetType = useWatch({
+    control: form.control,
+    name: "targetType",
+  });
 
   const mutation = useMutation({
     mutationFn: startHarvest,

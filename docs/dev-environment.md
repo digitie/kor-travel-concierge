@@ -8,7 +8,7 @@
 
 Windows 호스트에 다음 도구들이 설치되어 있어야 합니다.
 
-- **Node.js**: v20 LTS 이상 ([다운로드](https://nodejs.org/))
+- **Node.js**: v20.9 이상. Next.js 16 기준 Node.js 20.9 이상이 필요합니다. ([다운로드](https://nodejs.org/))
 - **Python**: v3.10 이상 (Windows x86-64 executable installer로 설치 시 'Add Python to PATH' 옵션 필수 활성화)
 - **SQLite3 + SpatiaLite**: SQLite3는 Python에 기본 내장되어 있으나, 공간 함수 사용을 위해 SpatiaLite 확장 설치가 필요합니다.
 - **Git**: Windows용 Git 설치 ([다운로드](https://git-scm.com/))
@@ -120,6 +120,9 @@ RustFS health 확인 후 기본 버킷을 만들고 `healthcheck/t014-smoke.txt`
    npm run type-check
    npm run build
    ```
+   - `npm run lint`는 Next.js 16의 `next lint` 제거에 맞춰 ESLint flat config(`eslint.config.mjs`)와 `eslint .`를 사용합니다.
+   - `npm run type-check`는 clean checkout에서도 `.next/dev/types`를 만들 수 있도록 `next typegen && tsc --noEmit`을 실행합니다.
+   - Next.js 16 / React 19 업그레이드 이후 `npm audit`은 0건이어야 합니다. Next 내부 `postcss` transitive 보안 항목은 root `postcss` 버전과 맞추는 npm `overrides`로 관리합니다.
 
 ---
 
