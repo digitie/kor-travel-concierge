@@ -3,7 +3,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownUpIcon,
   DatabaseIcon,
+  DownloadIcon,
   FlaskConicalIcon,
   MapPinIcon,
 } from "lucide-react";
@@ -12,6 +14,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
+  buildDestinationExportUrl,
   getRustfsStatus,
   listAuditLogs,
   listDestinations,
@@ -21,7 +24,10 @@ import {
   triggerDeepResearch,
   type AuditLogSummary,
   type CrawlRunSummary,
+  type DestinationExportFormat,
+  type DestinationSort,
   type DestinationSummary,
+  type PlaceSourceVideo,
   type RustfsStatus,
   type UnmatchedCandidate,
 } from "@/lib/api";
@@ -34,6 +40,14 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { VWorldMap } from "@/components/VWorldMap";
 
 const reviewQueueSchema = z.object({
@@ -65,10 +79,13 @@ export function DestinationWorkspace() {
   const queryClient = useQueryClient();
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
+  const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
+  const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
+  const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
 
   const destinationsQuery = useQuery({
-    queryKey: ["destinations"],
-    queryFn: listDestinations,
+    queryKey: ["destinations", destinationSort],
+    queryFn: () => listDestinations(destinationSort),
     refetchInterval: 10_000,
   });
   const unmatchedQuery = useQuery({
@@ -113,11 +130,47 @@ export function DestinationWorkspace() {
     auditQuery.error?.message ??
     rustfsQuery.error?.message ??
     null;
+  const visiblePlaceIds = useMemo(
+    () => new Set(places.map((place) => place.place_id)),
+    [places],
+  );
+  const selectedVisibleExportIds = useMemo(
+    () => selectedExportIds.filter((placeId) => visiblePlaceIds.has(placeId)),
+    [selectedExportIds, visiblePlaceIds],
+  );
+  const selectedExportIdSet = useMemo(
+    () => new Set(selectedVisibleExportIds),
+    [selectedVisibleExportIds],
+  );
+  const isAllSelected =
+    places.length > 0 && selectedVisibleExportIds.length === places.length;
 
   const deepResearchMutation = useMutation({
     mutationFn: triggerDeepResearch,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runs"] }),
   });
+
+  function toggleExportSelection(placeId: number) {
+    setSelectedExportIds((current) =>
+      current.includes(placeId)
+        ? current.filter((id) => id !== placeId)
+        : [...current, placeId],
+    );
+  }
+
+  function toggleAllExportSelection() {
+    setSelectedExportIds(isAllSelected ? [] : places.map((place) => place.place_id));
+  }
+
+  function exportPlaces() {
+    window.location.assign(
+      buildDestinationExportUrl({
+        format: exportFormat,
+        placeIds: selectedVisibleExportIds,
+        sort: destinationSort,
+      }),
+    );
+  }
 
   return (
     <div className="flex h-full min-h-screen flex-col bg-background">
@@ -137,6 +190,16 @@ export function DestinationWorkspace() {
           onDeepResearch={(placeId) => deepResearchMutation.mutate(placeId)}
           isResearching={deepResearchMutation.isPending}
           researchError={deepResearchMutation.error?.message ?? null}
+          sort={destinationSort}
+          onSortChange={setDestinationSort}
+          exportFormat={exportFormat}
+          onExportFormatChange={setExportFormat}
+          selectedExportIds={selectedExportIdSet}
+          selectedExportCount={selectedVisibleExportIds.length}
+          isAllSelected={isAllSelected}
+          onToggleExportSelection={toggleExportSelection}
+          onToggleAllExportSelection={toggleAllExportSelection}
+          onExport={exportPlaces}
         />
         <ReviewQueue
           candidates={candidates}
@@ -168,6 +231,16 @@ function DestinationList({
   onDeepResearch,
   isResearching,
   researchError,
+  sort,
+  onSortChange,
+  exportFormat,
+  onExportFormatChange,
+  selectedExportIds,
+  selectedExportCount,
+  isAllSelected,
+  onToggleExportSelection,
+  onToggleAllExportSelection,
+  onExport,
 }: {
   places: DestinationSummary[];
   selectedPlace: DestinationSummary | null;
@@ -176,6 +249,16 @@ function DestinationList({
   onDeepResearch: (placeId: number) => void;
   isResearching: boolean;
   researchError: string | null;
+  sort: DestinationSort;
+  onSortChange: (sort: DestinationSort) => void;
+  exportFormat: DestinationExportFormat;
+  onExportFormatChange: (format: DestinationExportFormat) => void;
+  selectedExportIds: Set<number>;
+  selectedExportCount: number;
+  isAllSelected: boolean;
+  onToggleExportSelection: (placeId: number) => void;
+  onToggleAllExportSelection: () => void;
+  onExport: () => void;
 }) {
   return (
     <section
@@ -183,26 +266,85 @@ function DestinationList({
       className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r"
     >
       <PanelHeader title="장소" count={places.length} />
+      <div className="grid grid-cols-2 gap-2">
+        <Select value={sort} onValueChange={(value) => onSortChange(value as DestinationSort)}>
+          <SelectTrigger id="destination-sort-select" className="w-full" aria-label="장소 정렬">
+            <ArrowDownUpIcon className="size-4 text-muted-foreground" />
+            <SelectValue>{sortLabel(sort)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="mention_count">언급 많은 순</SelectItem>
+              <SelectItem value="latest">최신 등록 순</SelectItem>
+              <SelectItem value="name">이름 순</SelectItem>
+              <SelectItem value="category">카테고리 순</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select
+          value={exportFormat}
+          onValueChange={(value) =>
+            onExportFormatChange(value as DestinationExportFormat)
+          }
+        >
+          <SelectTrigger id="destination-export-format" className="w-full" aria-label="내보내기 형식">
+            <SelectValue>{exportFormat.toUpperCase()}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="xlsx">XLSX</SelectItem>
+              <SelectItem value="gpx">GPX</SelectItem>
+              <SelectItem value="kml">KML</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Button type="button" variant="outline" onClick={onToggleAllExportSelection}>
+          {isAllSelected ? "선택 해제" : "전체 선택"}
+        </Button>
+        <Button type="button" onClick={onExport}>
+          <DownloadIcon data-icon="inline-start" />
+          {selectedExportCount > 0 ? `선택 ${selectedExportCount}` : "전체"} 내보내기
+        </Button>
+      </div>
       <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
         {places.map((place) => (
-          <button
+          <div
             key={place.place_id}
-            className="flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition-colors hover:bg-muted data-[selected=true]:border-primary"
+            className="grid grid-cols-[auto_1fr] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary"
             data-selected={place.place_id === selectedPlace?.place_id}
-            onClick={() => onSelect(place.place_id)}
-            type="button"
           >
-            <span className="flex items-center justify-between gap-3">
-              <span className="truncate text-sm font-medium">{place.name}</span>
-              <Badge variant={place.is_geocoded ? "secondary" : "outline"}>
-                {place.category ?? "미분류"}
-              </Badge>
-            </span>
-            <span className="truncate text-xs text-muted-foreground">
-              {place.official_address ?? place.road_address ?? "-"}
-            </span>
-          </button>
+            <input
+              aria-label={`${place.name} 내보내기 선택`}
+              checked={selectedExportIds.has(place.place_id)}
+              className="mt-3 size-4 rounded border"
+              onChange={() => onToggleExportSelection(place.place_id)}
+              type="checkbox"
+            />
+            <button
+              className="flex min-w-0 flex-col gap-1 rounded-md p-1 text-left hover:bg-muted"
+              onClick={() => onSelect(place.place_id)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center justify-between gap-3">
+                <span className="truncate text-sm font-medium">{place.name}</span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <Badge variant={place.is_geocoded ? "secondary" : "outline"}>
+                    {place.category ?? "미분류"}
+                  </Badge>
+                  <Badge variant="outline">{place.mention_count}회</Badge>
+                </span>
+              </span>
+              <span className="truncate text-xs text-muted-foreground">
+                {place.official_address ?? place.road_address ?? "-"}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">
+                {sourceLine(place.source_videos[0])}
+              </span>
+            </button>
+          </div>
         ))}
       </div>
       {selectedPlace ? (
@@ -214,7 +356,31 @@ function DestinationList({
               <p className="text-xs text-muted-foreground">
                 {selectedPlace.latitude.toFixed(5)}, {selectedPlace.longitude.toFixed(5)}
               </p>
+              <p className="text-xs text-muted-foreground">
+                언급 {selectedPlace.mention_count}회 · 유튜버 {selectedPlace.source_channel_count}명
+              </p>
             </div>
+          </div>
+          <div className="flex max-h-36 flex-col gap-2 overflow-y-auto border-t pt-3">
+            <p className="text-xs font-medium">언급 소스</p>
+            {selectedPlace.source_videos.length > 0 ? (
+              selectedPlace.source_videos.slice(0, 5).map((source) => (
+                <a
+                  key={source.mapping_id}
+                  className="flex flex-col gap-0.5 rounded-md border p-2 text-xs hover:bg-muted"
+                  href={source.video_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  <span className="truncate font-medium">{source.video_title}</span>
+                  <span className="truncate text-muted-foreground">
+                    {sourceLine(source)}
+                  </span>
+                </a>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">언급 소스 없음</p>
+            )}
           </div>
           <Button
             variant="outline"
@@ -469,4 +635,33 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span className="text-lg font-semibold">{value}</span>
     </div>
   );
+}
+
+function sortLabel(sort: DestinationSort) {
+  if (sort === "mention_count") {
+    return "언급 많은 순";
+  }
+  if (sort === "name") {
+    return "이름 순";
+  }
+  if (sort === "category") {
+    return "카테고리 순";
+  }
+  return "최신 등록 순";
+}
+
+function sourceLine(source: PlaceSourceVideo | undefined) {
+  if (!source) {
+    return "언급 영상 없음";
+  }
+  return [source.channel_name ?? source.channel_id, source.video_title, timestampLabel(source)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function timestampLabel(source: PlaceSourceVideo) {
+  if (source.timestamp_start && source.timestamp_end) {
+    return `${source.timestamp_start}-${source.timestamp_end}`;
+  }
+  return source.timestamp_start ?? source.timestamp_end ?? "";
 }

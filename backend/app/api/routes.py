@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,7 @@ from app.models import MediaAsset, RunSource
 from app.services import (
     audit_service,
     crawl_run_service,
+    place_export_service,
     place_service,
     settings_service,
 )
@@ -211,25 +212,42 @@ async def list_keywords() -> list[dict[str, Any]]:
 
 @router.get("/destinations")
 async def list_destinations(
+    sort: str = "latest",
+    limit: int = 100,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     """확정 여행지 목록을 반환한다."""
-    places = await place_service.list_places(session)
-    return [
-        {
-            "place_id": p.place_id,
-            "name": p.name,
-            "description": p.description,
-            "gemini_enriched_description": p.gemini_enriched_description,
-            "latitude": p.latitude,
-            "longitude": p.longitude,
-            "category": p.category,
-            "official_address": p.official_address,
-            "road_address": p.road_address,
-            "is_geocoded": p.is_geocoded,
-        }
-        for p in places
-    ]
+    _validate_destination_sort(sort)
+    summaries = await place_service.list_place_summaries(
+        session, sort=sort, limit=max(1, min(limit, 500))
+    )
+    return [_place_summary_payload(summary) for summary in summaries]
+
+
+@router.get("/destinations/export")
+async def export_destinations(
+    format: str = "xlsx",
+    ids: str | None = None,
+    sort: str = "mention_count",
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """선택 또는 전체 장소 목록을 `xlsx`, `gpx`, `kml`로 내보낸다."""
+    _validate_destination_sort(sort)
+    try:
+        place_ids = _parse_place_ids(ids)
+        summaries = await place_service.list_place_summaries(
+            session, sort=sort, place_ids=place_ids, limit=None
+        )
+        body, media_type, filename = place_export_service.build_place_export(
+            summaries, format
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/destinations/unmatched")
@@ -451,3 +469,53 @@ def _place_payload(place) -> dict[str, Any]:
         "api_source": place.api_source,
         "is_geocoded": place.is_geocoded,
     }
+
+
+def _place_summary_payload(summary: place_service.PlaceSummary) -> dict[str, Any]:
+    place = summary.place
+    payload = _place_payload(place)
+    payload.update(
+        {
+            "mention_count": summary.mention_count,
+            "source_channel_count": summary.source_channel_count,
+            "source_videos": [
+                {
+                    "mapping_id": mention.mapping_id,
+                    "video_id": mention.video_id,
+                    "video_title": mention.video_title,
+                    "video_url": mention.video_url,
+                    "channel_id": mention.channel_id,
+                    "channel_name": mention.channel_name,
+                    "timestamp_start": mention.timestamp_start,
+                    "timestamp_end": mention.timestamp_end,
+                    "ai_summary": mention.ai_summary,
+                    "speaker_note": mention.speaker_note,
+                }
+                for mention in summary.source_videos
+            ],
+        }
+    )
+    return payload
+
+
+def _validate_destination_sort(sort: str) -> None:
+    if sort not in {"latest", "mention_count", "name", "category"}:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 정렬 기준: {sort}")
+
+
+def _parse_place_ids(raw_ids: str | None) -> list[int] | None:
+    if not raw_ids:
+        return None
+    place_ids: list[int] = []
+    for raw_id in raw_ids.split(","):
+        value = raw_id.strip()
+        if not value:
+            continue
+        try:
+            place_id = int(value)
+        except ValueError as exc:
+            raise ValueError(f"장소 ID는 숫자여야 한다: {value}") from exc
+        if place_id <= 0:
+            raise ValueError(f"장소 ID는 1 이상이어야 한다: {value}")
+        place_ids.append(place_id)
+    return place_ids or None

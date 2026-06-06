@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-06-07: T-028 장소 언급 소스·중복 정렬·내보내기 구현
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **언급 소스 집계**: `video_place_mappings`와 `youtube_videos`를 묶어 확정 장소별 `mention_count`, `source_channel_count`, `source_videos`를 계산하고 `/api/destinations` 응답에 포함.
+  - **반복 등장 보존**: 같은 영상에서 같은 장소가 여러 구간에 반복 등장해도 각각의 매핑을 저장할 수 있도록 `video_place_mappings`의 영상-장소 unique 제약을 제거.
+  - **웹 UX 보강**: 장소 목록에 언급 횟수, 대표 영상·유튜버, 정렬 Select, export 선택 체크박스, `xlsx`/`gpx`/`kml` 형식 선택, 선택/전체 내보내기 버튼을 추가.
+  - **내보내기 API**: `/api/destinations/export`를 추가해 선택 ID 또는 전체 장소를 같은 집계 기준으로 파일화. `xlsx`는 장소-언급 행 단위로, `gpx`/`kml`은 장소 좌표와 소스 설명을 포함.
+  - **MCP 상세 보강**: `get_place_detail` 결과에 `mention_count`와 `source_channel_count`를 추가해 에이전트도 웹과 같은 집계 기준을 사용.
+  - **카테고리 정책 정리**: Kakao Local 공식 카테고리를 우선 근거로 사용하고, Gemini 후보 카테고리와 VWorld/Naver 주소 맥락을 보조 근거로 삼으며 불확실하면 검수 큐로 남기는 방식으로 문서화.
+  - **검증**: backend pytest 130건, frontend `npm run lint`, `npm run type-check`, `npm run build`, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - Windows Playwright 전체 E2E에서 export 버튼 클릭과 다운로드 응답까지 추가 검증할 수 있다.
+
+---
+
 ## 2026-06-07: T-027 Windows live 포트 고정
 
 - **담당자**: Codex

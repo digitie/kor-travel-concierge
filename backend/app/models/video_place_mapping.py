@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -14,9 +14,6 @@ from app.models.base import Base, TimestampMixin
 
 class VideoPlaceMapping(TimestampMixin, Base):
     __tablename__ = "video_place_mappings"
-    __table_args__ = (
-        UniqueConstraint("video_id", "place_id", name="uq_video_place_mappings_video_place"),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     video_id: Mapped[str] = mapped_column(

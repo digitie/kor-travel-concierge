@@ -321,8 +321,13 @@ class ToolRuntime:
                     if mapping.frame_asset_id is not None
                 ],
             )
+            source_channel_ids = {
+                video.channel_id for video in videos.values() if video.channel_id
+            }
             return {
                 "place": _serialize_place(place),
+                "mention_count": len(mappings),
+                "source_channel_count": len(source_channel_ids),
                 "video_mappings": [
                     _serialize_mapping(mapping, videos.get(mapping.video_id), frame_assets)
                     for mapping in mappings

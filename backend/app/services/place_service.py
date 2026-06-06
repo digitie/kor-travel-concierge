@@ -12,6 +12,7 @@ SpatiaLite/PostGIS 환경에서는 동일 인터페이스를 `ST_DWithin`/`PtDis
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from typing import Any
 
@@ -31,6 +32,32 @@ from app.models import (
 
 EARTH_RADIUS_M = 6_371_000.0
 _DEG_LAT_METERS = 111_320.0  # 위도 1도당 미터(근사)
+
+
+@dataclass(frozen=True)
+class PlaceSourceMention:
+    """확정 장소가 특정 YouTube 영상에서 언급된 근거."""
+
+    mapping_id: int
+    video_id: str
+    video_title: str
+    video_url: str
+    channel_id: str
+    channel_name: str | None
+    timestamp_start: str | None
+    timestamp_end: str | None
+    ai_summary: str
+    speaker_note: str | None
+
+
+@dataclass(frozen=True)
+class PlaceSummary:
+    """장소 목록·내보내기에서 쓰는 집계 단위."""
+
+    place: TravelPlace
+    mention_count: int
+    source_channel_count: int
+    source_videos: list[PlaceSourceMention]
 
 
 def haversine_meters(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -101,6 +128,92 @@ async def list_places(session: AsyncSession, *, limit: int = 100) -> list[Travel
     stmt = select(TravelPlace).order_by(TravelPlace.place_id.desc()).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_place_summaries(
+    session: AsyncSession,
+    *,
+    sort: str = "latest",
+    place_ids: list[int] | None = None,
+    limit: int | None = 100,
+) -> list[PlaceSummary]:
+    """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다."""
+    stmt = select(TravelPlace)
+    if place_ids:
+        stmt = stmt.where(TravelPlace.place_id.in_(place_ids))
+    result = await session.execute(stmt)
+    places = list(result.scalars().all())
+    if not places:
+        return []
+
+    mentions_by_place = await _list_mentions_by_place(
+        session, place_ids=[place.place_id for place in places]
+    )
+    summaries = [
+        PlaceSummary(
+            place=place,
+            mention_count=len(mentions_by_place.get(place.place_id, [])),
+            source_channel_count=len(
+                {
+                    mention.channel_id
+                    for mention in mentions_by_place.get(place.place_id, [])
+                    if mention.channel_id
+                }
+            ),
+            source_videos=mentions_by_place.get(place.place_id, []),
+        )
+        for place in places
+    ]
+    summaries.sort(key=_place_summary_sort_key(sort))
+    if limit is not None:
+        return summaries[:limit]
+    return summaries
+
+
+async def _list_mentions_by_place(
+    session: AsyncSession, *, place_ids: list[int]
+) -> dict[int, list[PlaceSourceMention]]:
+    if not place_ids:
+        return {}
+    stmt = (
+        select(VideoPlaceMapping, YoutubeVideo)
+        .join(YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id)
+        .where(VideoPlaceMapping.place_id.in_(place_ids))
+        .order_by(VideoPlaceMapping.id.desc())
+    )
+    result = await session.execute(stmt)
+    mentions_by_place: dict[int, list[PlaceSourceMention]] = {}
+    for mapping, video in result.all():
+        mentions_by_place.setdefault(mapping.place_id, []).append(
+            PlaceSourceMention(
+                mapping_id=mapping.id,
+                video_id=video.video_id,
+                video_title=video.title,
+                video_url=video.url,
+                channel_id=video.channel_id,
+                channel_name=video.channel_name,
+                timestamp_start=mapping.timestamp_start,
+                timestamp_end=mapping.timestamp_end,
+                ai_summary=mapping.ai_summary,
+                speaker_note=mapping.speaker_note,
+            )
+        )
+    return mentions_by_place
+
+
+def _place_summary_sort_key(sort: str):
+    if sort == "mention_count":
+        return lambda item: (
+            -item.mention_count,
+            -item.source_channel_count,
+            item.place.name,
+            -item.place.place_id,
+        )
+    if sort == "name":
+        return lambda item: (item.place.name, -item.place.place_id)
+    if sort == "category":
+        return lambda item: (item.place.category or "미분류", item.place.name)
+    return lambda item: (-item.place.place_id,)
 
 
 async def search_places(

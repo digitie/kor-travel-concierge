@@ -8,6 +8,8 @@ export const VWORLD_SERVICE_KEY =
   process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY ?? "";
 
 export type HarvestTargetType = "keyword" | "channel" | "playlist";
+export type DestinationSort = "latest" | "mention_count" | "name" | "category";
+export type DestinationExportFormat = "xlsx" | "gpx" | "kml";
 
 export type StartHarvestInput = {
   targetType: HarvestTargetType;
@@ -39,6 +41,22 @@ export type DestinationSummary = {
   official_address: string | null;
   road_address?: string | null;
   is_geocoded: boolean;
+  mention_count: number;
+  source_channel_count: number;
+  source_videos: PlaceSourceVideo[];
+};
+
+export type PlaceSourceVideo = {
+  mapping_id: number;
+  video_id: string;
+  video_title: string;
+  video_url: string;
+  channel_id: string;
+  channel_name: string | null;
+  timestamp_start: string | null;
+  timestamp_end: string | null;
+  ai_summary: string;
+  speaker_note: string | null;
 };
 
 export type UnmatchedCandidate = {
@@ -156,8 +174,26 @@ export async function getHarvestStatus(jobId: string): Promise<HarvestStatus> {
   return requestJson<HarvestStatus>(`/api/harvest/${jobId}`);
 }
 
-export async function listDestinations(): Promise<DestinationSummary[]> {
-  return requestJson<DestinationSummary[]>("/api/destinations");
+export async function listDestinations(
+  sort: DestinationSort = "latest",
+): Promise<DestinationSummary[]> {
+  return requestJson<DestinationSummary[]>(`/api/destinations?sort=${sort}`);
+}
+
+export function buildDestinationExportUrl({
+  format,
+  placeIds,
+  sort = "mention_count",
+}: {
+  format: DestinationExportFormat;
+  placeIds: number[];
+  sort?: DestinationSort;
+}) {
+  const params = new URLSearchParams({ format, sort });
+  if (placeIds.length > 0) {
+    params.set("ids", placeIds.join(","));
+  }
+  return `${API_BASE_URL}/api/destinations/export?${params.toString()}`;
 }
 
 export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
