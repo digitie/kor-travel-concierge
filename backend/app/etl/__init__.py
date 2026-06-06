@@ -16,7 +16,7 @@ scheduler 단일 실행자와 서비스 계층이 import해 사용한다(ADR-13)
     - summarize_service : 자막 저장→POI 추출→설명 보정본·후보 생성
 
 구현 완료(T-008 3단계 지오코딩):
-    - geocoding         : Kakao/Naver/VWorld 어댑터, 좌표 정규화, 429 백오프, 평가
+    - geocoding         : VWorld 직접 client 호출, Kakao/Naver 보조 호출, 좌표 정규화, 429 백오프, 평가
     - geocode_service   : 후보 적용(중복 재사용·주소 보강·needs_review 처리)
 
 구현 완료(T-009 대표 프레임):

@@ -21,6 +21,9 @@ def build_server(*, session_factory: Any = async_session_factory):
             "TripMate 여행 데이터베이스를 조회하고 수집, 보정, 병합, "
             "매칭 검수 작업을 수행하는 MCP 서버입니다."
         ),
+        host=settings.MCP_HOST,
+        port=settings.MCP_PORT,
+        streamable_http_path=settings.MCP_STREAMABLE_HTTP_PATH,
     )
     runtime = ToolRuntime(
         session_factory=session_factory,

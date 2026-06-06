@@ -6,7 +6,7 @@
 ## 1. 정체성
 
 이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
-- **프론트엔드**: Next.js (App Router) + React. `maplibre-vworld-js`를 활용하여 VWorld 지도 시각화를 시뮬레이션 및 구현한다.
+- **프론트엔드**: Next.js (App Router) + React. `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 연결하여 지도 시각화를 구현한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
 - **백엔드**: FastAPI + SQLAlchemy 2.0 + `aiosqlite`. SQLite + SpatiaLite 데이터베이스에 연동하여 비즈니스 데이터, 공간 데이터, 작업 상태를 보관한다.
 - **ETL 모듈**: 공식 YouTube Data API v3 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(`yt-dlp`/FFmpeg) → 원본 동영상·자막·전사 결과·대표 프레임 RustFS 저장 → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
@@ -57,7 +57,7 @@ npx playwright test
    - 한 번 수집된 비디오 정보는 SQLite + SpatiaLite 데이터베이스에 캐싱하여 재수집을 배제한다.
 4. **FastAPI 비동기 세션 leak 방지**: SQLAlchemy 2.0의 `AsyncSession` 또는 동기 `Session`을 사용할 때 Context Manager(`with` 또는 `async with`)를 사용하거나 Depends 주입 방식을 명확히 준수하여 DB 연결 누수를 막는다.
 5. **Windows 비호환 쉘 파일 작성 금지**: 윈도우 환경이므로 `.sh` 파일에 개발 유틸 스크립트를 작성하여 그것으로만 검증하도록 요구하지 않는다. 가급적 Node.js 스크립트(`package.json` scripts)나 Python 스크립트, 혹은 `.ps1` 형태로 크로스 플랫폼을 고려해 작성한다.
-6. **`kraddr-geo` 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 연계는 취소되었다. Geocoding/Reverse Geocoding은 Kakao, Naver, VWorld 공급자 어댑터로 정리한다.
+6. **`kraddr-geo` 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 연계는 취소되었다. Geocoding/Reverse Geocoding은 VWorld를 최우선으로 하며, VWorld 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고 내부 adapter/wrapper 계층은 만들지 않는다.
 7. **RustFS 객체 자동 삭제 금지**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제나 장소 매칭 실패만으로 객체를 삭제하는 로직을 만들지 않는다.
 8. **매칭 실패 장소 자동 확정 금지**: 지오코딩 결과가 없거나 모호하면 `needs_review` 후보로 남기고 웹 UI 또는 MCP 도구를 통한 사용자 판단을 요구한다.
 
@@ -81,6 +81,7 @@ npx playwright test
   - YouTube 영상 설명 원문은 `description_raw`, Gemini 오탈자·문맥 보정 결과는 `description_gemini_corrected`에 분리 저장한다.
   - 장소 설명은 기본 설명과 Gemini 보강 설명(`gemini_enriched_description`)을 분리한다.
   - Gemini POI 추출은 자유 텍스트가 아니라 JSON Schema 기반 결과를 요구한다.
+  - 지오코딩은 VWorld → Kakao → Naver 순서로 시도한다. VWorld는 `AsyncVworldClient` 직접 호출, Kakao는 주소 검색 후 공식 키워드 장소 검색 fallback, Naver는 보조 검증으로 사용한다.
   - 지오코딩 실패 또는 모호한 후보는 `extracted_place_candidates.match_status = needs_review`로 남긴다.
   - 장시간 작업은 `crawl_runs`에 상태, heartbeat, retry_count, last_error를 기록한다.
   - HTTP I/O는 `httpx.AsyncClient`로 작성하고, 블로킹 라이브러리는 executor로 격리한다.
@@ -111,10 +112,10 @@ npx playwright test
 |------|------|
 | **Deep Research** | 사용자가 선택한 특정 여행지에 대해 Gemini API를 활용하여 보다 정밀하고 광범위한 세부 조사를 수행하고 데이터베이스를 업데이트하는 기능. |
 | **YouTube Curation** | 키워드 CRUD 및 유튜버 CRUD를 통해 등록된 탐색 소스를 바탕으로, 효율적으로 신규 업데이트를 수집하고 여행 관련성 정보를 발라내는 로직. |
-| **maplibre-vworld-js** | VWorld 오픈 API 베이스맵 타일을 MapLibre GL JS 위에서 쉽게 다루도록 지원하는 래퍼 컴포넌트. |
+| **maplibre-gl + VWorld WMTS** | 공개 npm 래퍼 의존 없이 VWorld 베이스맵 타일을 MapLibre GL JS raster source로 직접 연결하는 지도 구성. |
 | **MCP 서버 UX** | AI 에이전트가 브라우저 없이도 여행 데이터베이스를 읽고 쓰는 도구 기반 사용자 경험. |
-| **Geocoding API** | YouTube 영상 설명 속 불완전한 텍스트 장소명을 Kakao Local API 또는 Naver API로 표준 주소 및 위경도에 매핑하는 외부 REST 서비스. |
-| **Reverse Geocoding API** | 위경도 좌표를 VWorld API 등으로 행정 주소, 도로명 주소, 지번 주소에 매핑하는 외부 REST 서비스. |
+| **Geocoding API** | YouTube 영상 설명 속 불완전한 텍스트 장소명을 VWorld 우선, Kakao Local 키워드 장소 검색 fallback, Naver 보조 검증으로 표준 주소 및 위경도에 매핑하는 외부 API 경로. |
+| **Reverse Geocoding API** | 위경도 좌표를 `python-vworld-api`의 `AsyncVworldClient`로 행정 주소, 도로명 주소, 지번 주소에 매핑하는 외부 API 경로. |
 | **SpatiaLite** | SQLite에 공간 함수와 R-Tree 인덱스를 더해 반경 검색과 중복 장소 탐지를 지원하는 임베디드 공간 DB 확장. |
 | **RustFS** | 원본 동영상, 자막, 전사 결과, 대표 프레임을 S3 호환 API로 저장하는 별도 로컬 Docker 객체 저장소. |
 | **media_assets** | RustFS 객체의 버킷, 키, URI, 체크섬, 크기, 보존 정책을 DB에 기록하는 메타데이터 테이블. |

@@ -92,8 +92,10 @@ async def test_apply_uses_vworld_for_address_enrichment(session):
     )
 
     class FakeVWorld:
-        async def reverse(self, lat, lng):
-            return {"road_address": "도로명주소", "parcel_address": "지번주소"}
+        async def reverse_geocode_latlon(self, lat, lng, **kwargs):
+            if kwargs["type"] == "road":
+                return {"response": {"result": [{"text": "도로명주소"}]}}
+            return {"response": {"result": [{"text": "지번주소"}]}}
 
     place = await apply_geocode_to_candidate(
         session, candidate, decision, vworld=FakeVWorld()

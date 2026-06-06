@@ -31,11 +31,11 @@
 | 프론트엔드 프레임워크 | Next.js (React 기반) |
 | 백엔드 프레임워크 | FastAPI (Python 기반) |
 | ORM / 데이터베이스 | SQLAlchemy 2.0 / SQLite + SpatiaLite (`aiosqlite`) |
-| 지도 뷰 라이브러리 | `maplibre-vworld-js` |
+| 지도 뷰 라이브러리 | `maplibre-gl + VWorld WMTS` |
 | E2E 테스트 도구 | Playwright (Windows 구동) |
 | LLM API | Gemini API (1.5 / 2.0 / Flash 등 설정 가능) |
 | MCP UX | 읽기/쓰기 모두 가능한 MCP 서버 |
-| Geocoding / Reverse Geocoding | Kakao / Naver / VWorld 공급자 어댑터 (`kraddr-geo` 연계 없음) |
+| Geocoding / Reverse Geocoding | VWorld 최우선(`python-vworld-api`의 `AsyncVworldClient` 직접 사용), Kakao Local 주소·키워드 장소 검색 보조, Naver 보조 검증 (`kraddr-geo` 연계 없음) |
 | YouTube 수집 | 공식 YouTube Data API v3 우선, 비공식 의존은 자막/프레임 구간으로 격리 |
 | 미디어 저장소 | 별도 로컬 Docker RustFS 서비스, 원본 동영상·자막·전사 결과·대표 프레임 무기한 보존 |
 | 스케줄러 | APScheduler 단일 실행자 |
@@ -55,7 +55,7 @@ PC 개발 및 평가는 **Windows 호스트**에서 직접 진행한다.
 1. `CLAUDE.md` — 현재 작업과 잔존 부채
 2. `SKILL.md` — 에이전트 매뉴얼 및 Windows 개발 팁
 3. `docs/architecture.md` — 전체 시스템 아키텍처 및 ETL 데이터 흐름
-4. `docs/decisions.md` — ADR-1 ~ ADR-17
+4. `docs/decisions.md` — ADR-1 ~ ADR-19
 5. `docs/tasks.md` — T-NNN 백로그
 
 ## 지시 우선순위

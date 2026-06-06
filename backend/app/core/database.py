@@ -27,15 +27,26 @@ def _enable_spatialite(dbapi_connection, _connection_record) -> None:
     `connect` 이벤트 안에서만 실행되며, 일반 쿼리 경로는 async를 유지한다.
     """
     settings = get_settings()
-    dbapi_connection.enable_load_extension(True)
-    try:
-        dbapi_connection.load_extension(settings.SPATIALITE_EXTENSION_PATH)
-    except Exception:
-        # 개발 환경에 mod_spatialite가 없을 수 있으므로 스캐폴드 단계에서는 무시한다.
-        # T-005에서 확장 부재를 명시적 오류로 승격한다.
-        pass
-    finally:
-        dbapi_connection.enable_load_extension(False)
+    if hasattr(dbapi_connection, "run_async"):
+        dbapi_connection.run_async(lambda conn: conn.enable_load_extension(True))
+        try:
+            dbapi_connection.run_async(
+                lambda conn: conn.load_extension(settings.SPATIALITE_EXTENSION_PATH)
+            )
+        except Exception:
+            # 개발 환경에 mod_spatialite가 없을 수 있으므로 graceful하게 건너뛴다.
+            pass
+        finally:
+            dbapi_connection.run_async(lambda conn: conn.enable_load_extension(False))
+    else:
+        dbapi_connection.enable_load_extension(True)
+        try:
+            dbapi_connection.load_extension(settings.SPATIALITE_EXTENSION_PATH)
+        except Exception:
+            # 개발 환경에 mod_spatialite가 없을 수 있으므로 graceful하게 건너뛴다.
+            pass
+        finally:
+            dbapi_connection.enable_load_extension(False)
     if settings.SQLITE_WAL_ENABLED:
         dbapi_connection.execute("PRAGMA journal_mode=WAL;")
 
@@ -68,6 +79,14 @@ async def init_spatial_metadata(conn) -> None:
     공간 컬럼/인덱스 구성은 T-005에서 보강한다.
     """
     try:
+        existing = await conn.execute(
+            text(
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'spatial_ref_sys';"
+            )
+        )
+        if existing.scalar_one() > 0:
+            return
         await conn.execute(text("SELECT InitSpatialMetaData(1);"))
     except Exception:
         # 확장 미로드 환경에서는 공간 메타데이터 초기화를 건너뛴다.

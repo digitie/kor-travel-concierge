@@ -1,6 +1,6 @@
 """ETL 3단계 지오코딩 스크립트 (CLI 데모용 placeholder).
 
-실제 Kakao/Naver/VWorld 어댑터, 좌표 정규화, 429 백오프, 매칭 평가 및
+실제 VWorld 우선/Kakao·Naver 보조 호출, 좌표 정규화, 429 백오프, 매칭 평가 및
 needs_review 처리는 `backend/app/etl/` 패키지(`geocoding`/`geocode_service`)에
 구현되어 있다(T-008). 이 파일은 단독 실행 데모 흐름만 유지한다.
 """
@@ -12,10 +12,10 @@ load_dotenv()
 
 def geocode_address(raw_address: str) -> dict:
     """
-    외부 REST API (예: Kakao Local / Naver Maps)를 이용해 불완전한 주소명을
+    외부 API (예: VWorld / Kakao Local / Naver Maps)를 이용해 불완전한 주소명을
     표준 주소와 경위도 좌표로 변환하는 함수
     """
-    provider = os.getenv("GEOLOCATION_PROVIDER", "kakao")
+    provider = os.getenv("GEOLOCATION_PROVIDER", "vworld")
     api_key_by_provider = {
         "kakao": os.getenv("KAKAO_REST_API_KEY"),
         "naver": os.getenv("NAVER_CLIENT_ID"),

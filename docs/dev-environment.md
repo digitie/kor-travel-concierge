@@ -60,6 +60,12 @@ RustFS는 앱 컨테이너에 포함하지 않고 별도의 로컬 Docker 서비
 - S3 API: `http://localhost:9003`
 - 콘솔: `http://localhost:9004`
 
+Docker Compose 내부에서 `api`, `mcp`, `scheduler` 컨테이너가 RustFS에 접근할 때는
+호스트 포트가 아니라 서비스명과 내부 포트인 `http://rustfs:9000`을 사용합니다.
+`docker-compose.yml`은 이 값을 컨테이너 환경 변수로 override하므로, 로컬 `.env`의
+`RUSTFS_ENDPOINT=http://localhost:9003`은 Windows 호스트에서 직접 실행하는 Python
+프로세스 기준으로 유지합니다.
+
 `.env`에는 다음 값을 둡니다.
 
 ```powershell
@@ -77,7 +83,9 @@ MEDIA_RETENTION_POLICY=infinite
 
 초기 버킷은 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`입니다. 객체 저장소 lifecycle 만료 정책은 설정하지 않습니다. DB에서 영상이나 장소가 제외 처리되더라도 RustFS 객체는 자동 삭제하지 않습니다.
 
-상태 확인은 RustFS 이미지가 제공하는 `/health` 또는 `/health/live` 엔드포인트로 수행합니다. 구현 후에는 PowerShell 실행 스크립트나 Docker Compose 파일에 헬스체크를 명시하고, 객체 업로드·조회 검증을 T-014에서 수행합니다.
+상태 확인은 `/health/live` 엔드포인트로 수행합니다. `scripts\verify-docker-compose.ps1`은
+RustFS health 확인 후 기본 버킷을 만들고 `healthcheck/t014-smoke.txt` 객체를 업로드·조회합니다.
+무기한 보존 원칙에 따라 smoke 객체도 자동 삭제하지 않고 같은 key로 덮어씁니다.
 
 ---
 
@@ -119,13 +127,42 @@ MEDIA_RETENTION_POLICY=infinite
 
 ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 Python 명령으로 트리거하거나, 구현 후 APScheduler 실행자가 `crawl_runs`의 pending 작업을 처리합니다. RustFS가 켜져 있으면 자막, 전사 결과, 대표 프레임, 필요 시 원본 동영상 또는 오디오가 RustFS에 저장되어야 합니다.
 
+실제 외부 서비스를 호출하는 통합 검증에는 다음 값이 필요합니다.
+
+| 검증 범위 | 필요한 환경 변수 |
+| --- | --- |
+| Docker/API/UI/MCP/RustFS smoke | 외부 API 키 불필요. RustFS는 개발 기본값 사용 가능 |
+| YouTube 검색·채널·재생목록 수집 | `YOUTUBE_API_KEY` |
+| Gemini POI 추출·설명 보정·Deep Research | `GEMINI_API_KEY`, `GEMINI_ENGINE_VERSION` |
+| VWorld 지오코딩·역지오코딩 | `VWORLD_SERVICE_KEY` |
+| Kakao 키워드 장소 검색·Naver 보조 검증 | `KAKAO_REST_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` |
+| 브라우저 VWorld 지도 타일 | `NEXT_PUBLIC_VWORLD_SERVICE_KEY` |
+| 실제 RustFS 계정값 검증 | `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY` |
+
+VWorld 서버 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용한다. `backend/requirements.txt`는 Docker 이미지에 `git` 바이너리를 요구하지 않도록 GitHub archive commit pin을 사용하며, 로컬 패키지 변경분을 바로 검증할 때만 다음처럼 editable 설치로 덮어쓴다.
+
+```powershell
+cd backend
+.\.venv\Scripts\activate
+pip install -e F:\dev\python-vworld-api
+```
+
+Kakao 보조 경로는 공식 [Local API 개발 가이드](https://developers.kakao.com/docs/ko/local/dev-guide)의 주소 검색 후 결과가 없을 때 `GET /v2/local/search/keyword.json` 키워드 장소 검색을 사용한다. 내부 wrapper 계층은 늘리지 않고, 외부 응답을 내부 후보 모델로 바꾸는 최소 변환만 유지한다.
+
+YouTube E2E 입력은 표시명보다 API에서 바로 처리 가능한 ID를 사용합니다.
+
+- 채널 기준: `UC...` 형식의 YouTube channel id
+- 재생목록 기준: `PL...`, `UU...` 등 playlist id
+
+`@handle`, 채널 URL, 유튜버 표시명은 현재 파이프라인의 1차 입력이 아닙니다. 사람이 보기 좋은 이름만 알고 있다면 먼저 YouTube Studio, 채널 페이지 metadata, 또는 YouTube Data API로 `UC...` channel id를 확인한 뒤 사용합니다. 가장 안정적인 E2E 입력은 재생목록 ID이며, 채널 ID를 주면 `channels.list`로 uploads playlist를 찾아 수집합니다.
+
 1. `.env` 환경 변수가 루트에 선언되어 있거나, `etl/` 폴더 내에 배치되어 있는지 확인합니다.
 2. 가상환경이 활성화된 터미널에서 다음 스크립트를 구동합니다:
    ```powershell
    cd ../etl
    python runner.py
    ```
-   - 스크립트가 돌아가며 공식 YouTube Data API v3, Gemini API, Kakao/Naver 지오코딩, VWorld 역지오코딩을 거쳐 SQLite + SpatiaLite DB에 최종 적재하는 로그를 관측할 수 있습니다.
+   - 스크립트가 돌아가며 공식 YouTube Data API v3, Gemini API, VWorld 지오코딩·역지오코딩, Kakao 키워드 장소 검색, Naver 보조 검증을 거쳐 SQLite + SpatiaLite DB에 최종 적재하는 로그를 관측할 수 있습니다.
    - RustFS 저장이 활성화된 경우 `media_assets`에 객체 URI, 체크섬, 크기, `retention_policy = infinite`가 기록되는지 확인합니다.
 
 ---
@@ -180,7 +217,49 @@ SCHEDULER_MAX_RETRIES=3
 
 ---
 
-## 8. E2E 통합 테스트 (Playwright)
+## 8. Docker Compose 통합 검증
+
+Docker Desktop이 실행 중인 Windows PowerShell에서 다음을 실행합니다.
+
+```powershell
+Copy-Item .env.example .env
+# 실제 API 키가 필요한 경로를 검증할 때만 .env 값을 수정합니다.
+.\scripts\verify-docker-compose.ps1
+```
+
+검증 스크립트가 수행하는 일:
+
+1. `docker compose config --quiet`로 Compose 문법과 환경 변수 해석을 확인합니다.
+2. `api`, `mcp`, `scheduler`, `frontend` 이미지를 빌드합니다.
+3. `rustfs`, `api`, `mcp`, `scheduler`, `frontend`를 단일 프로젝트로 실행합니다.
+4. `http://localhost:9003/health/live`, `http://localhost:8000/health`, `http://localhost:3000` 응답을 확인합니다.
+5. MCP `streamable-http` 포트(`8010`)가 리스닝 중인지 확인합니다. MCP endpoint는 일반 브라우저 GET이 아니라 MCP client protocol로 접근해야 합니다.
+6. `api` 컨테이너 안에서 `scripts/verify_rustfs.py`를 실행해 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames` 버킷 생성과 객체 업로드·조회를 확인합니다.
+7. 기본적으로 `docker compose down`으로 컨테이너를 정리합니다.
+
+컨테이너를 계속 띄워 화면을 확인하려면 다음처럼 실행합니다.
+
+```powershell
+.\scripts\verify-docker-compose.ps1 -KeepRunning
+```
+
+이미 다른 로컬 프로젝트가 기본 포트를 사용 중이면 host port만 바꿔 검증합니다.
+
+```powershell
+.\scripts\verify-docker-compose.ps1 `
+  -RustfsHostPort 19003 `
+  -RustfsConsoleHostPort 19004 `
+  -ApiHostPort 18000 `
+  -McpHostPort 18010 `
+  -FrontendHostPort 13000
+```
+
+Compose에서 MCP 서버는 로컬 `stdio` 기본값과 달리 `streamable-http` transport로 실행하며,
+기본 포트 기준 Windows 호스트에서는 `http://localhost:8010/mcp`로 접근합니다.
+
+---
+
+## 9. E2E 통합 테스트 (Playwright)
 
 본 프로젝트는 프론트엔드와 백엔드가 정상적으로 메시지를 교환하고 SQLite + SpatiaLite DB 적재 및 VWorld 지도 로딩이 깨지지 않는지 Playwright E2E로 검증합니다.
 
@@ -206,7 +285,7 @@ SCHEDULER_MAX_RETRIES=3
 
 ---
 
-## 9. Windows 트러블슈팅
+## 10. Windows 트러블슈팅
 
 ### 1. SQLite3 DB Locked Error
 ETL 스크립트가 대량의 쓰기(Write) 연산을 수행하는 중에 사용자가 웹에서 API를 조회/변경하면 데이터베이스 락이 발생할 수 있습니다.

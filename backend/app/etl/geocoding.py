@@ -1,10 +1,10 @@
-"""Kakao / Naver / VWorld 지오코딩·역지오코딩 어댑터.
+"""VWorld / Kakao / Naver 지오코딩·역지오코딩 호출 유틸리티.
 
 공식 공급자 API만 사용하며 `kraddr-geo`는 연계하지 않는다(ADR-8).
 
-- Kakao Local API: 1차 주소 검색·좌표 변환·카테고리 식별
+- VWorld API: `python-vworld-api`의 `AsyncVworldClient` 직접 호출
+- Kakao Local API: VWorld 미매칭 시 주소 검색 후 키워드 장소 검색 보조
 - Naver API: 모호한 결과 보조 검증
-- VWorld API: 좌표 기반 행정/도로명 주소 보강(역지오코딩)
 - 좌표는 `pyproj` `always_xy=True`로 WGS84(EPSG:4326) 경도/위도 순서 정규화
 - 429 응답은 지수 백오프 + 지터로 재시도, 동시성은 Semaphore로 상한
 
@@ -20,8 +20,10 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+from vworld import AsyncVworldClient, VworldNoDataError
 
 # 모호 후보 좌표 일치 판정 반경(미터)과 최소 매칭 신뢰도
 DISAMBIGUATION_RADIUS_M = 150.0
@@ -96,21 +98,30 @@ async def request_with_backoff(
         attempt += 1
 
 
-# --- 공급자 어댑터 ---
+# --- 외부 공급자 호출 ---
 
 
 class KakaoGeocoder:
-    URL = "https://dapi.kakao.com/v2/local/search/address.json"
+    ADDRESS_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+    KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 
     def __init__(self, api_key: str, http_client: httpx.AsyncClient, **backoff):
         self._key = api_key
         self._client = http_client
         self._backoff = backoff
 
-    async def geocode(self, address: str) -> list[GeocodeCandidate]:
+    async def geocode(self, query: str) -> list[GeocodeCandidate]:
+        """주소 검색 결과가 없으면 Kakao 키워드 장소 검색을 보조로 사용한다."""
+
+        address_results = await self.search_address(query)
+        if address_results:
+            return address_results
+        return await self.search_keyword(query)
+
+    async def search_address(self, address: str) -> list[GeocodeCandidate]:
         async def send() -> httpx.Response:
             return await self._client.get(
-                self.URL,
+                self.ADDRESS_URL,
                 params={"query": address},
                 headers={"Authorization": f"KakaoAK {self._key}"},
             )
@@ -131,6 +142,64 @@ class KakaoGeocoder:
                     road_address=road,
                     official_address=jibun,
                     source="kakao",
+                )
+            )
+        return out
+
+    async def search_keyword(
+        self,
+        query: str,
+        *,
+        category_group_code: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        radius: int | None = None,
+        rect: str | None = None,
+        page: int = 1,
+        size: int = 10,
+        sort: str = "accuracy",
+    ) -> list[GeocodeCandidate]:
+        """Kakao Local의 키워드 장소 검색 결과를 내부 후보로 변환한다."""
+
+        params: dict[str, str | int | float] = {
+            "query": query,
+            "page": page,
+            "size": size,
+            "sort": sort,
+        }
+        if category_group_code:
+            params["category_group_code"] = category_group_code
+        if x is not None:
+            params["x"] = x
+        if y is not None:
+            params["y"] = y
+        if radius is not None:
+            params["radius"] = radius
+        if rect:
+            params["rect"] = rect
+
+        async def send() -> httpx.Response:
+            return await self._client.get(
+                self.KEYWORD_URL,
+                params=params,
+                headers={"Authorization": f"KakaoAK {self._key}"},
+            )
+
+        resp = await request_with_backoff(send, **self._backoff)
+        resp.raise_for_status()
+        docs = resp.json().get("documents", [])
+        out: list[GeocodeCandidate] = []
+        for d in docs:
+            lng, lat = normalize_to_wgs84(float(d["x"]), float(d["y"]))
+            out.append(
+                GeocodeCandidate(
+                    latitude=lat,
+                    longitude=lng,
+                    place_name=d.get("place_name"),
+                    road_address=d.get("road_address_name") or None,
+                    official_address=d.get("address_name") or None,
+                    category=d.get("category_name") or d.get("category_group_name"),
+                    source="kakao_keyword",
                 )
             )
         return out
@@ -176,68 +245,168 @@ class NaverGeocoder:
         return out
 
 
-class VWorldReverseGeocoder:
-    URL = "https://api.vworld.kr/req/address"
+async def geocode_with_vworld(
+    client: AsyncVworldClient,
+    address: str,
+) -> list[GeocodeCandidate]:
+    """`AsyncVworldClient`를 직접 호출해 VWorld 좌표 후보를 만든다."""
 
-    def __init__(self, service_key: str, http_client: httpx.AsyncClient, **backoff):
-        self._key = service_key
-        self._client = http_client
-        self._backoff = backoff
+    out: list[GeocodeCandidate] = []
+    seen: set[tuple[float, float, str | None, str | None]] = set()
+    for addr_type in ("road", "parcel"):
+        try:
+            payload = await client.get_coord(
+                address,
+                addr_type,
+                refine=True,
+                simple=False,
+                crs="EPSG:4326",
+            )
+        except VworldNoDataError:
+            continue
 
-    async def reverse(self, lat: float, lng: float) -> dict[str, str | None]:
-        """좌표 → 도로명/지번 주소 보강."""
+        candidate = _candidate_from_vworld_get_coord(payload, addr_type, address)
+        if candidate is None:
+            continue
+        key = (
+            round(candidate.latitude, 7),
+            round(candidate.longitude, 7),
+            candidate.road_address,
+            candidate.official_address,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return out
 
-        async def fetch(addr_type: str) -> str | None:
-            async def send() -> httpx.Response:
-                return await self._client.get(
-                    self.URL,
-                    params={
-                        "service": "address",
-                        "request": "getAddress",
-                        "point": f"{lng},{lat}",
-                        "type": addr_type,
-                        "key": self._key,
-                    },
-                )
 
-            resp = await request_with_backoff(send, **self._backoff)
-            if resp.status_code != 200:
-                return None
-            results = resp.json().get("response", {}).get("result", [])
-            return results[0].get("text") if results else None
+async def reverse_with_vworld(
+    client: AsyncVworldClient,
+    lat: float,
+    lng: float,
+) -> dict[str, str | None]:
+    """`AsyncVworldClient`를 직접 호출해 좌표의 도로명/지번 주소를 조회한다."""
 
-        return {
-            "road_address": await fetch("road"),
-            "parcel_address": await fetch("parcel"),
-        }
+    return {
+        "road_address": await _reverse_vworld_text(client, lat, lng, "road"),
+        "parcel_address": await _reverse_vworld_text(client, lat, lng, "parcel"),
+    }
+
+
+def _candidate_from_vworld_get_coord(
+    payload: dict[str, Any],
+    addr_type: str,
+    original_address: str,
+) -> GeocodeCandidate | None:
+    body = payload.get("response", {})
+    if not isinstance(body, dict) or body.get("status") != "OK":
+        return None
+    result = body.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+    point = result.get("point") or {}
+    if not isinstance(point, dict) or "x" not in point or "y" not in point:
+        return None
+    lng, lat = normalize_to_wgs84(float(point["x"]), float(point["y"]))
+    text = _vworld_result_text(result) or original_address
+    return GeocodeCandidate(
+        latitude=lat,
+        longitude=lng,
+        place_name=text,
+        road_address=text if addr_type == "road" else None,
+        official_address=text if addr_type == "parcel" else None,
+        source="vworld",
+    )
+
+
+async def _reverse_vworld_text(
+    client: AsyncVworldClient,
+    lat: float,
+    lng: float,
+    addr_type: str,
+) -> str | None:
+    try:
+        payload = await client.reverse_geocode_latlon(
+            lat,
+            lng,
+            type=addr_type,
+            zipcode=True,
+            simple=False,
+            crs="EPSG:4326",
+        )
+    except VworldNoDataError:
+        return None
+
+    results = payload.get("response", {}).get("result", [])
+    if isinstance(results, dict):
+        results = [results]
+    if not isinstance(results, list) or not results:
+        return None
+    first = results[0]
+    if not isinstance(first, dict):
+        return None
+    text = first.get("text")
+    return str(text) if text else None
 
 
 # --- 결과 평가 ---
 
 
 def evaluate_geocode(
-    kakao: list[GeocodeCandidate], naver: list[GeocodeCandidate] | None = None
+    primary: list[GeocodeCandidate],
+    secondary: list[GeocodeCandidate] | None = None,
+    *,
+    secondary_name: str = "naver",
 ) -> GeocodeDecision:
-    """Kakao 결과를 1차로, Naver를 보조 검증으로 사용해 매칭 여부를 판정한다."""
+    """1차 공급자 결과와 보조 공급자 좌표 근접도로 매칭 여부를 판정한다."""
     from app.services.place_service import haversine_meters
 
-    naver = naver or []
-    count = len(kakao)
+    secondary = secondary or []
+    count = len(primary)
 
     if count == 0:
         return GeocodeDecision("needs_review", None, 0.0, "no_result", 0)
 
     if count == 1:
-        return GeocodeDecision("matched", kakao[0], 1.0, "single_result", 1)
+        return GeocodeDecision("matched", primary[0], 1.0, "single_result", 1)
 
-    # 후보 과다: Naver 최상위와 좌표가 근접하면 확정, 아니면 검수 대기
-    top = kakao[0]
-    if naver:
+    # 후보 과다: 보조 공급자 최상위와 좌표가 근접하면 확정, 아니면 검수 대기
+    top = primary[0]
+    if secondary:
         dist = haversine_meters(
-            top.latitude, top.longitude, naver[0].latitude, naver[0].longitude
+            top.latitude, top.longitude, secondary[0].latitude, secondary[0].longitude
         )
         if dist <= DISAMBIGUATION_RADIUS_M:
-            return GeocodeDecision("matched", top, 0.7, "disambiguated_by_naver", count)
+            return GeocodeDecision(
+                "matched", top, 0.7, f"disambiguated_by_{secondary_name}", count
+            )
 
     confidence = 1.0 / count
     return GeocodeDecision("needs_review", None, confidence, "ambiguous", count)
+
+
+def _vworld_result_text(result: dict) -> str | None:
+    refined = result.get("refined")
+    if isinstance(refined, dict) and refined.get("text"):
+        return refined["text"]
+    if result.get("text"):
+        return result["text"]
+    structure = result.get("structure")
+    if isinstance(structure, dict):
+        parts = [
+            structure.get(name)
+            for name in (
+                "level1",
+                "level2",
+                "level3",
+                "level4L",
+                "level4LC",
+                "level4A",
+                "level4AC",
+                "level5",
+            )
+            if structure.get(name)
+        ]
+        return " ".join(parts) if parts else None
+    return None

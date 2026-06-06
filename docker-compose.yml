@@ -1,20 +1,48 @@
-# TripMate Agent 단일 호스트 Docker Compose 초안 (T-003)
+# TripMate Agent 단일 호스트 Docker Compose 구성
 # 서비스: rustfs(미디어 저장) / api(FastAPI) / mcp / scheduler / frontend(Next.js)
 # api·mcp·scheduler는 같은 SQLite + SpatiaLite 데이터 볼륨을 공유한다.
 # RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 서비스로 구동한다(ADR-15).
+
+x-app-env-file: &app-env-file
+  - path: .env
+    required: false
+
+x-python-env: &python-env
+  DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+  SPATIALITE_EXTENSION_PATH: mod_spatialite
+  RUSTFS_ENABLED: "true"
+  # 컨테이너 간 통신은 Compose 서비스명과 RustFS 기본 내부 포트(9000)를 사용한다.
+  RUSTFS_ENDPOINT: http://rustfs:9000
+  # 콘솔은 사용자가 Windows 호스트 브라우저에서 여는 공개 URL이다.
+  RUSTFS_CONSOLE_URL: http://localhost:9004
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+  RUSTFS_BUCKET_RAW_VIDEOS: ${RUSTFS_BUCKET_RAW_VIDEOS:-tripmate-raw-videos}
+  RUSTFS_BUCKET_SUBTITLES: ${RUSTFS_BUCKET_SUBTITLES:-tripmate-subtitles}
+  RUSTFS_BUCKET_FRAMES: ${RUSTFS_BUCKET_FRAMES:-tripmate-frames}
+  RUSTFS_HEALTH_PATH: /health/live
+  MEDIA_RETENTION_POLICY: infinite
 
 services:
   rustfs:
     # 별도 로컬 Docker RustFS 서비스. S3 API 9003, 콘솔 9004.
     image: rustfs/rustfs:latest
     ports:
-      - "9003:9003"
-      - "9004:9004"
+      - "${RUSTFS_HOST_PORT:-9003}:9000"
+      - "${RUSTFS_CONSOLE_HOST_PORT:-9004}:9001"
     environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_CONSOLE_ENABLE: "true"
     volumes:
       - rustfs-data:/data
+    command:
+      - --console-enable
+      - --access-key
+      - ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      - --secret-key
+      - ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      - /data
     # 무기한 보존: lifecycle 만료 정책을 두지 않는다.
 
   api:
@@ -22,51 +50,75 @@ services:
       context: .
       dockerfile: Dockerfile.python
     command: uvicorn main:app --host 0.0.0.0 --port 8000
-    env_file: .env
+    env_file: *app-env-file
     ports:
-      - "8000:8000"
+      - "${API_HOST_PORT:-8000}:8000"
     volumes:
       - sqlite-data:/data
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+      <<: *python-env
     depends_on:
-      - rustfs
+      rustfs:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   mcp:
     build:
       context: .
       dockerfile: Dockerfile.python
     command: python /app/mcp/server.py
-    env_file: .env
+    env_file: *app-env-file
+    ports:
+      - "${MCP_HOST_PORT:-8010}:8010"
     volumes:
       - sqlite-data:/data
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+      <<: *python-env
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8010"
+      MCP_STREAMABLE_HTTP_PATH: /mcp
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   scheduler:
     build:
       context: .
       dockerfile: Dockerfile.python
     command: python /app/scheduler/worker.py
-    env_file: .env
+    env_file: *app-env-file
     volumes:
       - sqlite-data:/data
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
+      <<: *python-env
     depends_on:
-      - api
-      - rustfs
+      api:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
 
   frontend:
     build:
       context: ./frontend
-    env_file: .env
+    env_file: *app-env-file
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_VWORLD_SERVICE_KEY: ${NEXT_PUBLIC_VWORLD_SERVICE_KEY:-}
     ports:
-      - "3000:3000"
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   # SQLite + SpatiaLite 데이터 볼륨 (api/mcp/scheduler 공유)

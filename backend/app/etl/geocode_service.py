@@ -12,22 +12,49 @@ from app.etl.geocoding import (
     GeocodeDecision,
     KakaoGeocoder,
     NaverGeocoder,
-    VWorldReverseGeocoder,
     evaluate_geocode,
+    geocode_with_vworld,
+    reverse_with_vworld,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from vworld import AsyncVworldClient
 
 from app.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, utcnow
 from app.services import place_service
 
 
 async def geocode_query(
-    query: str, *, kakao: KakaoGeocoder, naver: NaverGeocoder | None = None
+    query: str,
+    *,
+    vworld: AsyncVworldClient | None = None,
+    kakao: KakaoGeocoder | None = None,
+    naver: NaverGeocoder | None = None,
 ) -> GeocodeDecision:
     """주소/장소명 문자열을 지오코딩하고 평가 결과를 반환한다."""
-    kakao_results = await kakao.geocode(query)
-    naver_results = await naver.geocode(query) if naver else []
-    return evaluate_geocode(kakao_results, naver_results)
+    if vworld is not None:
+        vworld_results = await geocode_with_vworld(vworld, query)
+        if vworld_results:
+            kakao_results = (
+                await kakao.geocode(query)
+                if kakao is not None and len(vworld_results) > 1
+                else []
+            )
+            return evaluate_geocode(
+                vworld_results,
+                kakao_results,
+                secondary_name="kakao",
+            )
+
+    if kakao is not None:
+        kakao_results = await kakao.geocode(query)
+        naver_results = await naver.geocode(query) if naver else []
+        return evaluate_geocode(kakao_results, naver_results, secondary_name="naver")
+
+    if naver is not None:
+        naver_results = await naver.geocode(query)
+        return evaluate_geocode(naver_results)
+
+    return evaluate_geocode([])
 
 
 async def apply_geocode_to_candidate(
@@ -35,7 +62,7 @@ async def apply_geocode_to_candidate(
     candidate: ExtractedPlaceCandidate,
     decision: GeocodeDecision,
     *,
-    vworld: VWorldReverseGeocoder | None = None,
+    vworld: AsyncVworldClient | None = None,
     reviewer: str = "system",
 ) -> TravelPlace | None:
     """평가 결과를 후보에 적용한다.
@@ -62,7 +89,7 @@ async def apply_geocode_to_candidate(
     else:
         road, official = c.road_address, c.official_address
         if vworld is not None:
-            rev = await vworld.reverse(c.latitude, c.longitude)
+            rev = await reverse_with_vworld(vworld, c.latitude, c.longitude)
             road = road or rev.get("road_address")
             official = official or rev.get("parcel_address")
         place = TravelPlace(
