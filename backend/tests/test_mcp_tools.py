@@ -94,12 +94,17 @@ async def test_get_harvest_status_returns_result_payload(session_factory):
             target_type="playlist",
             target_id="PL123",
         )
+        await crawl_run_service.append_status_log(
+            session, run.id, "YouTube 재생목록을 확인 중입니다.", progress=0.4
+        )
         await crawl_run_service.mark_done(session, run.id, result={"created": 2})
 
     status = await _runtime(session_factory).get_harvest_status(job_id=run.id)
 
     assert status["state"] == "done"
     assert status["result"] == {"created": 2}
+    assert status["current_message"] == "작업을 완료했습니다."
+    assert any("YouTube 재생목록" in log["message"] for log in status["status_logs"])
 
 
 async def test_search_existing_places_supports_query_category_and_radius(session_factory):

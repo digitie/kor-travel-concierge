@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.etl import media_store, summarize_service
 from app.etl.media_store import InMemoryMediaStore, store_and_record
 from app.etl.transcript import TranscriptResult, TranscriptSegment
@@ -17,6 +19,19 @@ from app.models import (
     MediaAsset,
     YoutubeVideo,
 )
+
+
+@pytest.fixture(autouse=True)
+def rustfs_test_settings(monkeypatch):
+    monkeypatch.setenv("RUSTFS_BUCKET_RAW_VIDEOS", "tripmate-raw-videos")
+    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "tripmate-subtitles")
+    monkeypatch.setenv("RUSTFS_BUCKET_FRAMES", "tripmate-frames")
+    monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "")
+    monkeypatch.setenv("RUSTFS_PUBLIC_BASE_URL", "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
 
 _LLM_JSON = json.dumps(
     {
@@ -68,6 +83,27 @@ async def test_store_and_record(session):
     assert reused.id == asset.id
 
 
+async def test_store_and_record_applies_configured_prefix(session, monkeypatch):
+    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "krtour-map")
+    monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "features")
+    get_settings.cache_clear()
+
+    store = InMemoryMediaStore()
+    asset = await store_and_record(
+        session,
+        store,
+        asset_type=AssetType.TRANSCRIPT,
+        object_key="v1/transcript.txt",
+        data=b"hello",
+        content_type="text/plain",
+        video_id="v1",
+    )
+
+    assert asset.bucket == "krtour-map"
+    assert asset.object_key == "features/v1/transcript.txt"
+    assert ("krtour-map", "features/v1/transcript.txt") in store.objects
+
+
 async def _make_video(session):
     v = YoutubeVideo(
         video_id="v1", title="제주", url="u", channel_id="c", description_raw="원문 설명"
@@ -81,6 +117,11 @@ async def _make_video(session):
 async def test_summarize_video_full_flow(session):
     video = await _make_video(session)
     store = InMemoryMediaStore()
+    reported: list[str] = []
+
+    async def reporter(message: str, progress: float | None = None) -> None:
+        reported.append(message)
+
     transcript = TranscriptResult(
         video_id="v1",
         source="transcript_api",
@@ -88,7 +129,12 @@ async def test_summarize_video_full_flow(session):
     )
 
     summary = await summarize_service.summarize_video(
-        session, store, video=video, transcript=transcript, llm=lambda _: _LLM_JSON
+        session,
+        store,
+        video=video,
+        transcript=transcript,
+        llm=lambda _: _LLM_JSON,
+        status_reporter=reporter,
     )
     assert summary["status"] == "summarized"
     assert summary["candidates"] == 2
@@ -109,6 +155,8 @@ async def test_summarize_video_full_flow(session):
     assets = (await session.execute(select(MediaAsset))).scalars().all()
     assert len(assets) == 1
     assert assets[0].asset_type == AssetType.TRANSCRIPT
+    assert any("자막을 RustFS에 저장했습니다" in message for message in reported)
+    assert any("Gemini에서 영상 설명을 보정했습니다" in message for message in reported)
 
 
 async def test_summarize_video_no_transcript(session):

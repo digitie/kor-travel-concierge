@@ -777,6 +777,8 @@ def _serialize_run(run: Any) -> dict[str, Any]:
         "target_id": run.target_id,
         "state": run.state,
         "progress": run.progress,
+        "current_message": run.current_message,
+        "status_logs": crawl_run_service.load_status_logs(run),
         "retry_count": run.retry_count,
         "last_error": run.last_error,
         "payload": _json_or_none(run.payload_json),

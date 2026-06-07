@@ -26,8 +26,17 @@ export type HarvestStatus = {
   job_id: string;
   state: "pending" | "running" | "done" | "failed" | string;
   progress: number;
+  current_message: string | null;
+  status_logs: RunStatusLog[];
   last_error: string | null;
   result: Record<string, unknown> | null;
+};
+
+export type RunStatusLog = {
+  timestamp: string;
+  level: "info" | "success" | "warning" | "error" | string;
+  message: string;
+  progress: number | null;
 };
 
 export type DestinationSummary = {
@@ -77,6 +86,8 @@ export type CrawlRunSummary = {
   target_id: string | null;
   state: string;
   progress: number;
+  current_message: string | null;
+  status_logs: RunStatusLog[];
   retry_count: number;
   last_error: string | null;
   result: Record<string, unknown> | null;
@@ -200,8 +211,33 @@ export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
   return requestJson<UnmatchedCandidate[]>("/api/destinations/unmatched");
 }
 
-export async function listRuns(): Promise<CrawlRunSummary[]> {
-  return requestJson<CrawlRunSummary[]>("/api/runs?limit=12");
+export async function listRuns({
+  state,
+  limit = 12,
+}: {
+  state?: "pending" | "running" | "done" | "failed" | string;
+  limit?: number;
+} = {}): Promise<CrawlRunSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (state) {
+    params.set("state", state);
+  }
+  return requestJson<CrawlRunSummary[]>(`/api/runs?${params.toString()}`);
+}
+
+export async function listRunQueue(): Promise<CrawlRunSummary[]> {
+  const [running, pending] = await Promise.all([
+    listRuns({ state: "running", limit: 50 }),
+    listRuns({ state: "pending", limit: 50 }),
+  ]);
+  return [
+    ...running.sort(compareRunIdAsc),
+    ...pending.sort(compareRunIdAsc),
+  ];
+}
+
+function compareRunIdAsc(a: CrawlRunSummary, b: CrawlRunSummary) {
+  return Number(a.job_id) - Number(b.job_id);
 }
 
 export async function listAuditLogs(): Promise<AuditLogSummary[]> {

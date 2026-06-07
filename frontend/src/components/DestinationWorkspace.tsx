@@ -18,6 +18,7 @@ import {
   getRustfsStatus,
   listAuditLogs,
   listDestinations,
+  listRunQueue,
   listRuns,
   listUnmatchedCandidates,
   resolveCandidate,
@@ -95,8 +96,13 @@ export function DestinationWorkspace() {
   });
   const runsQuery = useQuery({
     queryKey: ["runs"],
-    queryFn: listRuns,
+    queryFn: () => listRuns(),
     refetchInterval: 5_000,
+  });
+  const runQueueQuery = useQuery({
+    queryKey: ["run-queue"],
+    queryFn: listRunQueue,
+    refetchInterval: 2_000,
   });
   const auditQuery = useQuery({
     queryKey: ["audit-logs"],
@@ -127,6 +133,7 @@ export function DestinationWorkspace() {
   );
   const operationError =
     runsQuery.error?.message ??
+    runQueueQuery.error?.message ??
     auditQuery.error?.message ??
     rustfsQuery.error?.message ??
     null;
@@ -214,6 +221,7 @@ export function DestinationWorkspace() {
         />
         <OperationsPanel
           runs={runsQuery.data ?? []}
+          queueRuns={runQueueQuery.data ?? []}
           audits={auditQuery.data ?? []}
           rustfs={rustfsQuery.data}
           errorMessage={operationError}
@@ -568,11 +576,13 @@ function ReviewQueue({
 
 function OperationsPanel({
   runs,
+  queueRuns,
   audits,
   rustfs,
   errorMessage,
 }: {
   runs: CrawlRunSummary[];
+  queueRuns: CrawlRunSummary[];
   audits: AuditLogSummary[];
   rustfs: RustfsStatus | undefined;
   errorMessage: string | null;
@@ -593,15 +603,22 @@ function OperationsPanel({
         <Metric label="객체" value={totalObjects.toString()} />
         <Metric label="RustFS" value={rustfs?.health.ok ? "OK" : "확인"} />
       </div>
+      <div className="flex flex-col gap-2 border-t pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-medium">실행 큐</p>
+          <Badge variant="outline">{queueRuns.length}</Badge>
+        </div>
+        {queueRuns.length > 0 ? (
+          queueRuns.map((run) => <RunStatusCard key={run.job_id} run={run} />)
+        ) : (
+          <p className="rounded-lg border p-3 text-xs text-muted-foreground">
+            실행 중이거나 대기 중인 작업이 없습니다.
+          </p>
+        )}
+      </div>
       <div className="flex flex-col gap-2">
-        {runs.slice(0, 5).map((run) => (
-          <div key={run.job_id} className="flex items-center justify-between gap-3 text-sm">
-            <span className="truncate">{run.job_type}</span>
-            <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
-              {run.state}
-            </Badge>
-          </div>
-        ))}
+        <p className="text-sm font-medium">최근 작업</p>
+        {runs.slice(0, 5).map((run) => <RunStatusCard key={run.job_id} run={run} />)}
       </div>
       <div className="flex flex-col gap-2 border-t pt-4">
         <div className="flex items-center gap-2 text-sm font-medium">
@@ -617,6 +634,46 @@ function OperationsPanel({
       </div>
     </section>
   );
+}
+
+function RunStatusCard({ run }: { run: CrawlRunSummary }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <span className="truncate font-medium">{runLabel(run)}</span>
+        <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
+          {run.state}
+        </Badge>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className={progressBarClass(run.state)}
+          style={{ width: `${Math.round(run.progress * 100)}%` }}
+        />
+      </div>
+      <p className="line-clamp-2 text-xs text-muted-foreground">
+        {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
+      </p>
+    </div>
+  );
+}
+
+function runLabel(run: CrawlRunSummary) {
+  return [run.job_type, run.target_id].filter(Boolean).join(" · ");
+}
+
+function latestRunLog(run: CrawlRunSummary) {
+  return run.status_logs.at(-1)?.message ?? null;
+}
+
+function progressBarClass(state: string) {
+  if (state === "failed") {
+    return "h-full rounded-full bg-destructive";
+  }
+  if (state === "done") {
+    return "h-full rounded-full bg-emerald-600";
+  }
+  return "h-full rounded-full bg-primary";
 }
 
 function PanelHeader({ title, count }: { title: string; count: number }) {

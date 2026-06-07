@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.database import async_session_factory, init_db
 from app.etl.pipeline import run_harvest
+from app.etl.postprocess_service import process_harvest_videos
 from app.etl.youtube_client import YouTubeClient
 from app.models import CrawlRun
 from app.services import crawl_run_service
@@ -89,14 +90,32 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             http_client=http_client,
             quota_budget_units=settings.YOUTUBE_SEARCH_DAILY_BUDGET_UNITS,
         )
-        return await run_harvest(
+
+        async def report_status(message: str, progress: float | None = None) -> None:
+            await crawl_run_service.append_status_log(
+                session,
+                run.id,
+                message,
+                progress=progress,
+            )
+
+        await report_status("수집 작업 입력값을 검증했습니다.", 0.12)
+        harvest_summary = await run_harvest(
             session,
             client,
             seed_keyword=str(query) if query else None,
             channel_id=str(channel_id) if channel_id else None,
             playlist_id=str(playlist_id) if playlist_id else None,
             max_videos=_max_videos_from_payload(payload),
+            status_reporter=report_status,
         )
+        postprocess_summary = await process_harvest_videos(
+            session,
+            video_ids=harvest_summary.get("video_ids") or [],
+            limit=_max_videos_from_payload(payload),
+            status_reporter=report_status,
+        )
+        return {**harvest_summary, "postprocess": postprocess_summary}
 
 
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
@@ -147,12 +166,16 @@ async def execute_run(
     )
     try:
         async with session_factory() as session:
-            await crawl_run_service.heartbeat(session, run.id, progress=0.1)
+            await crawl_run_service.append_status_log(
+                session, run.id, "작업 실행 환경을 준비 중입니다.", progress=0.1
+            )
             fresh_run = await crawl_run_service.get_run(session, run.id)
             if fresh_run is None:
                 raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
             result = await handler(session, fresh_run)
-            await crawl_run_service.heartbeat(session, run.id, progress=0.9)
+            await crawl_run_service.append_status_log(
+                session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
+            )
             await crawl_run_service.mark_done(session, run.id, result=result)
     except Exception as exc:
         async with session_factory() as session:

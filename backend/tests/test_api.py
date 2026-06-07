@@ -41,6 +41,8 @@ async def test_harvest_create_and_status(client):
     assert sbody["job_id"] == job_id
     assert sbody["state"] == "pending"
     assert sbody["progress"] == 0.0
+    assert sbody["current_message"] == "작업이 대기열에 등록되었습니다."
+    assert sbody["status_logs"][0]["message"] == "작업이 대기열에 등록되었습니다."
 
 
 async def test_harvest_status_404(client):
@@ -192,6 +194,9 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
         run = await crawl_run_service.create_run(
             s, job_type="harvest", source="web", target_type="keyword", target_id="부산"
         )
+        await crawl_run_service.append_status_log(
+            s, run.id, "YouTube를 검색 중입니다.", progress=0.5
+        )
         await crawl_run_service.mark_failed(s, run.id, error="boom")
         await audit_service.record(
             s,
@@ -216,6 +221,8 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
     runs = await client.get("/api/runs")
     assert runs.status_code == 200
     assert runs.json()[0]["state"] == "failed"
+    assert "작업이 실패했습니다" in runs.json()[0]["current_message"]
+    assert runs.json()[0]["status_logs"][-1]["level"] == "error"
 
     audits = await client.get("/api/audit-logs")
     assert audits.status_code == 200

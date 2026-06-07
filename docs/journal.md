@@ -4,6 +4,50 @@
 
 ---
 
+## 2026-06-08: T-033 RustFS 로컬 설정 워크트리 동기화
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **기준값 확인**: `python-kraddr-geo-codex`의 RustFS 운영 기준이 S3 API `9003`, console `9004`, 기본 credential `rustfsadmin`, 로컬 운영 주체 `kraddr-geo-rustfs`임을 확인.
+  - **로컬 credential 통일**: 현재 워크트리와 `tripmate-agent-live-test`의 `.env` RustFS credential을 `python-kraddr-geo` 기본값과 맞추고, 두 워크트리의 RustFS 블록이 동일한지 마스킹 diff로 확인.
+  - **설정 표면 정리**: `.env.example`, README, `SKILL.md`, Docker Compose, `Settings`, RustFS init/verify 스크립트, scaffold `etl/media.py`가 호스트 `http://127.0.0.1:9003`, Docker 내부 `http://rustfs:9000`, 단일 `krtour-map` 버킷, `features/` prefix, public base URL `http://127.0.0.1:9003/krtour-map`을 쓰도록 정리.
+  - **live-test 보강**: `tripmate-agent-live-test`에 빠져 있던 `RUSTFS_PUBLIC_BASE_URL`, `RUSTFS_DOCKER_ENDPOINT`, `RUSTFS_OBJECT_PREFIX`, `RUSTFS_REGION`과 관련 테스트 기대값을 반영.
+  - **런타임 반영**: 실행 중이던 `tripmate-agent-rustfs-1`을 새 `.env` 기준으로 재생성해 컨테이너 credential도 `rustfsadmin`으로 맞춤.
+  - **검증**: `docker compose --env-file .env config --quiet`, backend `.venv/bin/pytest --capture=no -q` 137건, `python3 -m compileall`, frontend `npm run lint`, `npm run type-check`, `npm run build`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` 객체 smoke, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
+
+---
+
+## 2026-06-08: T-032 harvest 후처리 장소 생성 연결 및 RustFS 설정 반영
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **장소 생성 본수정**: `pipeline.run_harvest`가 적재한 `video_ids`를 반환하고, scheduler `harvest` handler가 신규 영상의 자막 추출, Gemini POI 요약, 지오코딩 적용 후처리를 이어 실행하도록 `postprocess_service`를 추가.
+  - **장소 목록 반영 보장**: 후처리에서 확정 가능한 후보는 `travel_places`와 `video_place_mappings`까지 생성하고, 모호하거나 공급자 키가 없는 후보는 `needs_review`로 남기도록 구성.
+  - **상세 상태 로그 연결**: 자막 추출, RustFS 저장, Gemini 보정, 후보 생성, 위치 보정, 확정 장소/검수 대기 집계를 scheduler reporter로 기록해 작업 상태 타임라인에 남기도록 연결.
+  - **RustFS 개발 설정 반영**: 로컬 venv/브라우저 기준 endpoint를 `http://127.0.0.1:9003`, Docker 내부 endpoint를 `http://rustfs:9000`, 단일 버킷을 `krtour-map`, object prefix를 `features`, 공개 URL 기준을 `http://127.0.0.1:9003/krtour-map`으로 정리. 로컬 `.env`에는 제공된 개발 접속값을 반영하고, 추적 문서에는 secret placeholder만 유지.
+  - **검증**: 관련 ETL/스케줄러 테스트 30건, backend pytest 137건, `compileall`, `docker compose --env-file .env config --quiet`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` smoke, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
+
+---
+
+## 2026-06-08: T-031 작업 상태 상세 로그·실행 큐 표시 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **작업 상태 저장 확장**: `crawl_runs`에 `current_message`, `status_log_json`을 추가하고 기존 SQLite DB에는 `init_db`에서 누락 컬럼을 보강하도록 구성.
+  - **상세 로그 누적**: scheduler와 harvest 파이프라인이 Gemini 검색어 보정, YouTube 검색, 동영상 상세 조회, DB 적재, 완료·실패·stale 재시도 흐름을 한국어 메시지로 남기도록 연결.
+  - **후속 ETL 로그 계약**: 자막/Gemini POI 요약 서비스도 자막 추출, RustFS 저장, Gemini 설명 보정, 장소 후보 생성 과정을 reporter 콜백으로 기록할 수 있게 확장.
+  - **웹 표시 보강**: 수집 패널의 작업 상태 영역에 현재 메시지와 상세 로그 타임라인을 추가하고, 운영 패널에는 `running`/`pending`을 별도 조회하는 실행 큐 목록과 진행률을 표시.
+  - **API/MCP 응답 보강**: `/api/harvest/{job_id}`, `/api/runs`, MCP `get_harvest_status`가 현재 메시지와 상세 로그를 함께 반환하도록 갱신.
+  - **검증**: backend pytest 137건, frontend `npm run lint`, `npm run type-check`, `npm run build`, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
+
+---
+
 ## 2026-06-07: T-030 Windows FFmpeg 자동 준비 및 VWorld 지도 축소 안정화
 
 - **담당자**: Codex

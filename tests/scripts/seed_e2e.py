@@ -82,6 +82,34 @@ async def main() -> None:
             result_json=json.dumps({"inserted": 1}, ensure_ascii=False),
             finished_at=datetime.now(timezone.utc),
         )
+        queue_run = CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            target_type="keyword",
+            target_id="부산 맛집",
+            state=RunState.RUNNING,
+            progress=0.42,
+            current_message='YouTube에서 "부산 맛집" 검색을 실행 중입니다.',
+            status_log_json=json.dumps(
+                [
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "level": "info",
+                        "message": "작업 실행자가 작업을 시작했습니다.",
+                        "progress": 0.05,
+                    },
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "level": "info",
+                        "message": 'YouTube에서 "부산 맛집" 검색을 실행 중입니다.',
+                        "progress": 0.42,
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            started_at=datetime.now(timezone.utc),
+            heartbeat_at=datetime.now(timezone.utc),
+        )
         audit = AuditLog(
             actor_type="mcp",
             action="place.correct",
@@ -93,9 +121,9 @@ async def main() -> None:
             asset_type="frame",
             video_id="e2e-video-1",
             storage_provider="rustfs",
-            bucket="tripmate-frames",
-            object_key="e2e-video-1/frame.jpg",
-            object_uri="s3://tripmate-frames/e2e-video-1/frame.jpg",
+            bucket="krtour-map",
+            object_key="features/e2e-video-1/frame.jpg",
+            object_uri="http://127.0.0.1:9003/krtour-map/features/e2e-video-1/frame.jpg",
             content_type="image/jpeg",
             size_bytes=1024,
             retention_policy="infinite",
@@ -108,7 +136,7 @@ async def main() -> None:
             timestamp_end="00:01:20",
         )
 
-        session.add_all([candidate, run, audit, asset, mapping])
+        session.add_all([candidate, run, queue_run, audit, asset, mapping])
         await session.commit()
 
 

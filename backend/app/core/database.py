@@ -98,6 +98,18 @@ async def init_spatial_metadata(conn) -> None:
         logger.debug("SpatiaLite 메타데이터 초기화를 건너뜁니다: %s", exc)
 
 
+async def ensure_crawl_run_status_columns(conn) -> None:
+    """기존 SQLite DB에 작업 상태 메시지·로그 컬럼을 보강한다."""
+    result = await conn.execute(text("PRAGMA table_info(crawl_runs);"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if not existing_columns:
+        return
+    if "current_message" not in existing_columns:
+        await conn.execute(text("ALTER TABLE crawl_runs ADD COLUMN current_message TEXT;"))
+    if "status_log_json" not in existing_columns:
+        await conn.execute(text("ALTER TABLE crawl_runs ADD COLUMN status_log_json TEXT;"))
+
+
 async def init_db() -> None:
     """모든 ORM 테이블을 생성한다 (없을 때만).
 
@@ -111,5 +123,6 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await init_spatial_metadata(conn)
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_crawl_run_status_columns(conn)
         # travel_places.geom Point(4326)와 R-Tree 인덱스 구성 (SpatiaLite 가용 시)
         await ensure_geometry_columns(conn)

@@ -46,12 +46,23 @@ class HarvestJob(BaseModel):
     state: str
 
 
+class RunStatusLog(BaseModel):
+    """작업 상태 상세 로그 1건."""
+
+    timestamp: str
+    level: str = "info"
+    message: str
+    progress: float | None = None
+
+
 class HarvestStatus(BaseModel):
     """수집 작업 상태 응답."""
 
     job_id: str
     state: str
     progress: float
+    current_message: str | None = None
+    status_logs: list[RunStatusLog] = Field(default_factory=list)
     last_error: str | None = None
     result: dict[str, Any] | None = None
 
@@ -145,6 +156,11 @@ async def get_harvest_status(
         job_id=str(run.id),
         state=run.state,
         progress=run.progress,
+        current_message=run.current_message,
+        status_logs=[
+            RunStatusLog.model_validate(log)
+            for log in crawl_run_service.load_status_logs(run)
+        ],
         last_error=run.last_error,
         result=json.loads(run.result_json) if run.result_json else None,
     )
@@ -169,6 +185,8 @@ async def list_runs(
             "target_id": run.target_id,
             "state": run.state,
             "progress": run.progress,
+            "current_message": run.current_message,
+            "status_logs": crawl_run_service.load_status_logs(run),
             "retry_count": run.retry_count,
             "last_error": run.last_error,
             "result": json.loads(run.result_json) if run.result_json else None,
@@ -419,7 +437,9 @@ async def get_rustfs_status(
     return {
         "enabled": settings.RUSTFS_ENABLED,
         "endpoint": settings.RUSTFS_ENDPOINT,
+        "public_base_url": settings.RUSTFS_PUBLIC_BASE_URL,
         "console_url": settings.RUSTFS_CONSOLE_URL,
+        "object_prefix": settings.RUSTFS_OBJECT_PREFIX,
         "retention_policy": settings.MEDIA_RETENTION_POLICY,
         "health": health,
         "assets": assets,
