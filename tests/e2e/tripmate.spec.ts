@@ -22,6 +22,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     const placesRegion = page.getByRole('region', { name: '장소 목록' });
     const reviewRegion = page.getByRole('region', { name: '검수 큐' });
     const operationsRegion = page.getByRole('region', { name: '운영 패널' });
+    const sidebar = page.locator('#destination-list');
 
     await expect(page).toHaveTitle(/TripMate Agent/);
     await expect(page.locator('#destination-list')).toBeVisible();
@@ -30,11 +31,16 @@ test.describe('TripMate Agent E2E 검증', () => {
       'data-status',
       'fallback',
     );
+    await expect(sidebar.getByText('실행 큐')).toBeVisible();
+    await expect(sidebar.getByText('harvest · 부산 맛집')).toBeVisible();
     await expect(placesRegion.getByRole('heading', { name: '장소' })).toBeVisible();
     await expect(placesRegion.getByRole('button', { name: /월정리 해변/ })).toBeVisible();
     await expect(reviewRegion.getByRole('heading', { name: '검수 큐' })).toBeVisible();
     await expect(reviewRegion.getByRole('button', { name: /성산 일출봉 카페/ })).toBeVisible();
     await expect(operationsRegion.getByRole('heading', { name: '운영' })).toBeVisible();
+    await expect(operationsRegion.getByText('실행 큐')).toBeVisible();
+    await expect(operationsRegion.getByText('harvest · 부산 맛집').first()).toBeVisible();
+    await expect(operationsRegion.getByText(/검색을 실행 중/).first()).toBeVisible();
     await expect(operationsRegion.getByText('MCP/웹 쓰기 로그')).toBeVisible();
     await expect(operationsRegion.getByText('place.correct')).toBeVisible();
 

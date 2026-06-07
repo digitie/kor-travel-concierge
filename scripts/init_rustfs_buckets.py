@@ -1,9 +1,7 @@
 """RustFS 초기 버킷 생성 스크립트 (T-003).
 
-`.env`의 RustFS 설정을 읽어 다음 버킷을 멱등하게 생성한다.
-    - tripmate-raw-videos : 원본 동영상/오디오
-    - tripmate-subtitles  : 자막·자동자막·전사 결과
-    - tripmate-frames     : 대표 프레임 JPEG
+`.env`의 RustFS 설정을 읽어 미디어 버킷을 멱등하게 생성한다.
+기본 개발 구성은 단일 `krtour-map` 버킷과 `features/` prefix를 사용한다.
 
 버킷은 무기한 보존이며 lifecycle 만료 정책을 설정하지 않는다(ADR-15).
 
@@ -22,14 +20,14 @@ load_dotenv()
 
 
 def main() -> int:
-    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://localhost:9003")
+    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:9003")
     access_key = os.getenv("RUSTFS_ACCESS_KEY", "")
     secret_key = os.getenv("RUSTFS_SECRET_KEY", "")
-    buckets = [
-        os.getenv("RUSTFS_BUCKET_RAW_VIDEOS", "tripmate-raw-videos"),
-        os.getenv("RUSTFS_BUCKET_SUBTITLES", "tripmate-subtitles"),
-        os.getenv("RUSTFS_BUCKET_FRAMES", "tripmate-frames"),
-    ]
+    buckets = list(dict.fromkeys([
+        os.getenv("RUSTFS_BUCKET_RAW_VIDEOS", "krtour-map"),
+        os.getenv("RUSTFS_BUCKET_SUBTITLES", "krtour-map"),
+        os.getenv("RUSTFS_BUCKET_FRAMES", "krtour-map"),
+    ]))
 
     if not access_key or not secret_key:
         print("[init] RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY 미설정. .env를 확인하라.")
@@ -46,6 +44,7 @@ def main() -> int:
         endpoint_url=endpoint,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
+        region_name=os.getenv("RUSTFS_REGION", "us-east-1"),
     )
 
     existing = {b["Name"] for b in s3.list_buckets().get("Buckets", [])}

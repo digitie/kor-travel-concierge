@@ -38,6 +38,17 @@ def bucket_for(asset_type: str) -> str:
     return getattr(settings, key)
 
 
+def object_key_with_prefix(object_key: str) -> str:
+    """전역 RustFS prefix를 객체 키 앞에 멱등하게 붙인다."""
+    prefix = get_settings().RUSTFS_OBJECT_PREFIX.strip("/")
+    clean_key = object_key.strip("/")
+    if not prefix:
+        return clean_key
+    if clean_key == prefix or clean_key.startswith(f"{prefix}/"):
+        return clean_key
+    return f"{prefix}/{clean_key}"
+
+
 @runtime_checkable
 class MediaStore(Protocol):
     """객체 저장 백엔드 추상화."""
@@ -71,11 +82,13 @@ class RustFSMediaStore:
         import boto3  # type: ignore
 
         self._endpoint = settings.RUSTFS_ENDPOINT
+        self._public_base_url = settings.RUSTFS_PUBLIC_BASE_URL.rstrip("/")
         self._client = boto3.client(
             "s3",
             endpoint_url=settings.RUSTFS_ENDPOINT,
             aws_access_key_id=settings.RUSTFS_ACCESS_KEY,
             aws_secret_access_key=settings.RUSTFS_SECRET_KEY,
+            region_name=settings.RUSTFS_REGION,
         )
 
     def put_object(
@@ -83,6 +96,8 @@ class RustFSMediaStore:
     ) -> str:
         extra = {"ContentType": content_type} if content_type else {}
         self._client.put_object(Bucket=bucket, Key=key, Body=data, **extra)
+        if self._public_base_url:
+            return f"{self._public_base_url}/{key}"
         return f"{self._endpoint}/{bucket}/{key}"
 
 
@@ -103,24 +118,27 @@ async def store_and_record(
 ) -> MediaAsset:
     """객체를 업로드하고 `media_assets` 행을 기록한다."""
     bucket = bucket_for(asset_type)
+    stored_object_key = object_key_with_prefix(object_key)
     existing_result = await session.execute(
         select(MediaAsset).where(
             MediaAsset.bucket == bucket,
-            MediaAsset.object_key == object_key,
+            MediaAsset.object_key == stored_object_key,
         )
     )
     existing = existing_result.scalars().first()
     if existing is not None:
         return existing
 
-    uri = await asyncio.to_thread(store.put_object, bucket, object_key, data, content_type)
+    uri = await asyncio.to_thread(
+        store.put_object, bucket, stored_object_key, data, content_type
+    )
     asset = MediaAsset(
         asset_type=asset_type,
         video_id=video_id,
         place_id=place_id,
         storage_provider="rustfs",
         bucket=bucket,
-        object_key=object_key,
+        object_key=stored_object_key,
         object_uri=uri,
         content_type=content_type,
         size_bytes=len(data),

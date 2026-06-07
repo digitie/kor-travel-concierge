@@ -14,6 +14,7 @@ scheduler 단일 실행자와 서비스 계층이 import해 사용한다(ADR-13)
     - poi_extraction    : Gemini JSON Schema POI 추출·재시도(주입형 llm)
     - media_store       : RustFS 저장 추상화 + media_assets 기록
     - summarize_service : 자막 저장→POI 추출→설명 보정본·후보 생성
+    - postprocess_service: 수집 영상→자막→POI→지오코딩 후처리 오케스트레이션
 
 구현 완료(T-008 3단계 지오코딩):
     - geocoding         : VWorld 직접 client 호출, Kakao/Naver 보조 호출, 좌표 정규화, 429 백오프, 평가
@@ -32,6 +33,7 @@ from app.etl import (
     media_store,
     pipeline,
     poi_extraction,
+    postprocess_service,
     ranking,
     summarize_service,
     transcript,
@@ -48,6 +50,7 @@ __all__ = [
     "poi_extraction",
     "media_store",
     "summarize_service",
+    "postprocess_service",
     "geocoding",
     "geocode_service",
     "frame_extraction",

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +16,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.etl import ingest_service, ranking
 from app.etl.keyword_expansion import KeywordGenerator, generate_derived_keywords
 from app.etl.youtube_client import YouTubeClient
+
+StatusReporter = Callable[[str, float | None], Awaitable[None]]
+
+
+async def _report(
+    status_reporter: StatusReporter | None,
+    message: str,
+    progress: float | None = None,
+) -> None:
+    if status_reporter is not None:
+        await status_reporter(message, progress)
+
+
+def _quoted_list(values: list[str], *, limit: int = 3) -> str:
+    visible = values[:limit]
+    quoted = ", ".join(f'"{value}"' for value in visible)
+    if len(values) > limit:
+        return f"{quoted} 외 {len(values) - limit}개"
+    return quoted or "-"
 
 
 def _to_int(value: Any) -> int | None:
@@ -57,20 +77,42 @@ def build_candidate(item: dict[str, Any], *, seed: str, now: datetime) -> dict[s
 
 
 async def _collect_keyword_video_ids(
-    client: YouTubeClient, queries: list[str], *, max_videos: int
+    client: YouTubeClient,
+    queries: list[str],
+    *,
+    max_videos: int,
+    status_reporter: StatusReporter | None = None,
 ) -> list[str]:
     """여러 검색어로 검색해 중복 없는 video_id를 모은다."""
     ids: list[str] = []
     seen: set[str] = set()
-    for query in queries:
+    total = max(1, len(queries))
+    for index, query in enumerate(queries):
         if len(ids) >= max_videos:
             break
+        await _report(
+            status_reporter,
+            f'YouTube에서 "{query}" 검색을 실행 중입니다.',
+            0.28 + (0.22 * index / total),
+        )
         data = await client.search_list(query=query, max_results=max_videos)
+        found_in_query = 0
         for item in data.get("items", []):
             vid = item.get("id", {}).get("videoId")
             if vid and vid not in seen:
                 seen.add(vid)
                 ids.append(vid)
+                found_in_query += 1
+        await _report(
+            status_reporter,
+            f'YouTube에서 검색어 "{query}"의 새 동영상 후보 {found_in_query}개를 찾았습니다.',
+            0.32 + (0.22 * (index + 1) / total),
+        )
+    await _report(
+        status_reporter,
+        f"YouTube에서 총 {len(ids[:max_videos])}개의 중복 없는 동영상을 찾았습니다.",
+        0.55,
+    )
     return ids[:max_videos]
 
 
@@ -105,12 +147,18 @@ async def _collect_playlist_video_ids(
     *,
     max_videos: int,
     stop_at_or_before: datetime | None = None,
+    status_reporter: StatusReporter | None = None,
 ) -> list[str]:
     """재생목록 항목에서 중복 없는 video_id를 모은다."""
     ids: list[str] = []
     seen: set[str] = set()
     page_token: str | None = None
     stop_pagination = False
+    await _report(
+        status_reporter,
+        f"YouTube 재생목록 {playlist_id}에서 동영상을 찾는 중입니다.",
+        0.25,
+    )
     while len(ids) < max_videos and not stop_pagination:
         data = await client.playlist_items_list(
             playlist_id,
@@ -135,6 +183,11 @@ async def _collect_playlist_video_ids(
         page_token = data.get("nextPageToken")
         if not page_token:
             break
+    await _report(
+        status_reporter,
+        f"YouTube 재생목록 {playlist_id}에서 {len(ids[:max_videos])}개의 동영상을 찾았습니다.",
+        0.55,
+    )
     return ids[:max_videos]
 
 
@@ -144,16 +197,28 @@ async def _collect_channel_video_ids(
     *,
     max_videos: int,
     stop_at_or_before: datetime | None = None,
+    status_reporter: StatusReporter | None = None,
 ) -> tuple[list[str], str | None]:
     """채널 업로드 재생목록을 찾아 video_id를 모은다."""
+    await _report(
+        status_reporter,
+        f"YouTube 채널 {channel_id}의 업로드 재생목록을 확인 중입니다.",
+        0.2,
+    )
     uploads_playlist_id = await client.uploads_playlist_id(channel_id)
     if not uploads_playlist_id:
+        await _report(
+            status_reporter,
+            f"YouTube 채널 {channel_id}에서 업로드 재생목록을 찾지 못했습니다.",
+            0.4,
+        )
         return [], None
     ids = await _collect_playlist_video_ids(
         client,
         uploads_playlist_id,
         max_videos=max_videos,
         stop_at_or_before=stop_at_or_before,
+        status_reporter=status_reporter,
     )
     return ids, uploads_playlist_id
 
@@ -168,10 +233,12 @@ async def run_harvest(
     max_videos: int = 20,
     now: datetime | None = None,
     generator: KeywordGenerator | None = None,
+    status_reporter: StatusReporter | None = None,
 ) -> dict[str, Any]:
     """키워드·채널·재생목록 기준 수집을 실행하고 요약을 반환한다."""
     now = now or ingest_service.utcnow()
     season = ranking.current_season(now.date())
+    await _report(status_reporter, "수집 대상과 계절 맥락을 확인 중입니다.", 0.12)
 
     target_type = "keyword"
     target_id = seed_keyword
@@ -182,7 +249,10 @@ async def run_harvest(
         target_type = "playlist"
         target_id = playlist_id
         video_ids = await _collect_playlist_video_ids(
-            client, playlist_id, max_videos=max_videos
+            client,
+            playlist_id,
+            max_videos=max_videos,
+            status_reporter=status_reporter,
         )
     elif channel_id:
         target_type = "channel"
@@ -193,21 +263,40 @@ async def run_harvest(
             channel_id,
             max_videos=max_videos,
             stop_at_or_before=watermark,
+            status_reporter=status_reporter,
         )
     else:
         if not seed_keyword:
             raise ValueError("run_harvest에는 seed_keyword, channel_id, playlist_id 중 하나가 필요하다")
+        await _report(
+            status_reporter,
+            f'Gemini에서 검색어 "{seed_keyword}"를 보정 중입니다.',
+            0.18,
+        )
         derived = generate_derived_keywords(seed_keyword, season, generator=generator)
         await ingest_service.persist_derived_keywords(
             session, seed=seed_keyword, derived=derived, season=season
         )
+        await _report(
+            status_reporter,
+            f"Gemini에서 검색어를 보정했습니다. 보정 결과는 {_quoted_list(derived)} 입니다.",
+            0.24,
+        )
         queries = [seed_keyword, *derived]
         video_ids = await _collect_keyword_video_ids(
-            client, queries, max_videos=max_videos
+            client,
+            queries,
+            max_videos=max_videos,
+            status_reporter=status_reporter,
         )
 
     candidates: list[dict[str, Any]] = []
     if video_ids:
+        await _report(
+            status_reporter,
+            f"YouTube 동영상 {len(video_ids)}개의 상세 정보를 조회 중입니다.",
+            0.62,
+        )
         details = await client.videos_list(video_ids)
         candidates = [
             build_candidate(item, seed=seed_keyword or "", now=now)
@@ -216,10 +305,29 @@ async def run_harvest(
         # 우선순위 점수 내림차순 정렬 후 상한 적용
         candidates.sort(key=lambda c: c["priority_score"], reverse=True)
         candidates = candidates[:max_videos]
+        titles = [str(candidate.get("title") or candidate["video_id"]) for candidate in candidates]
+        await _report(
+            status_reporter,
+            f"YouTube 동영상 상세 정보를 조회했습니다. 후보는 {_quoted_list(titles)} 입니다.",
+            0.72,
+        )
+    else:
+        await _report(status_reporter, "YouTube에서 처리할 새 동영상을 찾지 못했습니다.", 0.72)
 
+    await _report(
+        status_reporter,
+        f"동영상 후보 {len(candidates)}개를 데이터베이스에 저장 중입니다.",
+        0.78,
+    )
     summary = await ingest_service.ingest_candidates(session, candidates)
+    await _report(
+        status_reporter,
+        f"동영상 적재를 완료했습니다. 신규 {summary['inserted']}개, 갱신 {summary['updated']}개입니다.",
+        0.86,
+    )
     summary.update(
         {
+            "video_ids": [str(candidate["video_id"]) for candidate in candidates],
             "target_type": target_type,
             "target_id": target_id,
             "seed_keyword": seed_keyword,

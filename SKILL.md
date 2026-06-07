@@ -95,7 +95,7 @@ npx playwright test
 - **위치**: `etl/` 저장소 계층 또는 `backend/app/services/storage/` 계층.
 - **설명**:
   - RustFS 접속 정보는 `RUSTFS_ENDPOINT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`로 주입한다.
-  - 기본 버킷은 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`다.
+  - 기본 버킷은 단일 `krtour-map`이고, 객체 키는 `features/` prefix 아래에 저장한다.
   - 저장 후 `media_assets`에 `storage_provider`, `bucket`, `object_key`, `object_uri`, `sha256`, `size_bytes`, `retention_policy = infinite`를 기록한다.
   - RustFS는 별도 로컬 Docker 서비스로 실행하며 상태 확인은 `/health` 또는 `/health/live`를 사용한다.
 

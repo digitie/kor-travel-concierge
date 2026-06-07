@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,6 +29,24 @@ from app.models import (
     YoutubeVideo,
 )
 
+StatusReporter = Callable[[str, float | None], Awaitable[None]]
+
+
+async def _report(
+    status_reporter: StatusReporter | None,
+    message: str,
+    progress: float | None = None,
+) -> None:
+    if status_reporter is not None:
+        await status_reporter(message, progress)
+
+
+def _short_text(value: str, *, limit: int = 80) -> str:
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}..."
+
 
 async def summarize_video(
     session: AsyncSession,
@@ -37,9 +56,16 @@ async def summarize_video(
     transcript: TranscriptResult | None,
     llm: LlmCallable,
     max_retries: int = 2,
+    status_reporter: StatusReporter | None = None,
 ) -> dict[str, Any]:
     """단일 영상에 대해 자막 저장·POI 추출·후보 생성을 수행한다."""
+    video_label = video.title or video.video_id
     if transcript is None or not transcript.segments:
+        await _report(
+            status_reporter,
+            f"{video_label}의 자막을 찾지 못해 영상 처리를 중단했습니다.",
+            None,
+        )
         video.crawl_status = CrawlStatus.FAILED
         await session.commit()
         return {"video_id": video.video_id, "status": "no_transcript", "candidates": 0}
@@ -47,6 +73,12 @@ async def summarize_video(
     transcript_text = transcript.to_timestamped_text()
 
     # 1) 자막/전사 결과를 RustFS에 저장하고 media_assets에 기록
+    await _report(
+        status_reporter,
+        f"{video_label}의 자막을 추출했습니다. 추출 경로는 {transcript.source}입니다.",
+        None,
+    )
+    await _report(status_reporter, f"{video_label}의 자막을 RustFS에 저장 중입니다.", None)
     asset = await media_store.store_and_record(
         session,
         store,
@@ -56,9 +88,11 @@ async def summarize_video(
         content_type="text/plain; charset=utf-8",
         video_id=video.video_id,
     )
+    await _report(status_reporter, f"{video_label}의 자막을 RustFS에 저장했습니다.", None)
 
     # 2) Gemini POI 추출 (파싱 실패 시 재시도)
     try:
+        await _report(status_reporter, f"Gemini에서 {video_label}의 장소 후보를 추출 중입니다.", None)
         result = await asyncio.to_thread(
             poi_extraction.extract_pois,
             timestamped_transcript=transcript_text,
@@ -67,6 +101,11 @@ async def summarize_video(
             max_retries=max_retries,
         )
     except poi_extraction.POIExtractionError as exc:
+        await _report(
+            status_reporter,
+            f"Gemini에서 {video_label}의 장소 후보 추출에 실패했습니다: {exc}",
+            None,
+        )
         video.crawl_status = CrawlStatus.FAILED
         await session.commit()
         return {
@@ -82,6 +121,11 @@ async def summarize_video(
         video.description_gemini_corrected = result.description_gemini_corrected
         video.description_gemini_corrected_at = datetime.now(timezone.utc)
         video.description_gemini_model = get_settings().GEMINI_ENGINE_VERSION
+        await _report(
+            status_reporter,
+            f"Gemini에서 영상 설명을 보정했습니다. 보정 결과는 \"{_short_text(result.description_gemini_corrected)}\" 입니다.",
+            None,
+        )
 
     # 4) 추출 장소를 needs_review 후보로 생성 (자동 확정 금지)
     created = 0
@@ -102,6 +146,11 @@ async def summarize_video(
 
     video.crawl_status = CrawlStatus.SUMMARIZED
     await session.commit()
+    await _report(
+        status_reporter,
+        f"{video_label}에서 장소 후보 {created}개를 추출해 검수 큐에 저장했습니다.",
+        None,
+    )
 
     return {
         "video_id": video.video_id,

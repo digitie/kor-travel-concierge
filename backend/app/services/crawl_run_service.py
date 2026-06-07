@@ -20,6 +20,67 @@ from app.models import CrawlRun, RunState, utcnow
 DEFAULT_STALE_THRESHOLD_SECONDS = 300
 # 최대 재시도 횟수. 초과 시 failed로 격리한다.
 DEFAULT_MAX_RETRIES = 3
+# 작업별 상세 로그는 UI 표시용이므로 최근 항목만 보존한다.
+MAX_STATUS_LOGS = 80
+
+
+def _clamp_progress(progress: float) -> float:
+    return max(0.0, min(1.0, progress))
+
+
+def load_status_logs(run: CrawlRun) -> list[dict[str, Any]]:
+    """작업 상태 로그 JSON을 UI가 쓰기 쉬운 list로 파싱한다."""
+    if not run.status_log_json:
+        return []
+    try:
+        parsed = json.loads(run.status_log_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    logs: list[dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict) or not isinstance(item.get("message"), str):
+            continue
+        progress = item.get("progress")
+        logs.append(
+            {
+                "timestamp": item.get("timestamp")
+                if isinstance(item.get("timestamp"), str)
+                else "",
+                "level": item.get("level") if isinstance(item.get("level"), str) else "info",
+                "message": item["message"],
+                "progress": progress if isinstance(progress, (int, float)) else None,
+            }
+        )
+    return logs
+
+
+def _append_log_to_run(
+    run: CrawlRun,
+    message: str,
+    *,
+    progress: float | None = None,
+    level: str = "info",
+    touch_heartbeat: bool = True,
+) -> None:
+    now = utcnow()
+    if progress is not None:
+        run.progress = _clamp_progress(progress)
+    if touch_heartbeat:
+        run.heartbeat_at = now
+    run.current_message = message
+    logs = load_status_logs(run)
+    logs.append(
+        {
+            "timestamp": now.isoformat(),
+            "level": level,
+            "message": message,
+            "progress": run.progress,
+        }
+    )
+    run.status_log_json = json.dumps(logs[-MAX_STATUS_LOGS:], ensure_ascii=False)
 
 
 async def create_run(
@@ -33,6 +94,7 @@ async def create_run(
     commit: bool = True,
 ) -> CrawlRun:
     """새 작업을 `pending` 상태로 생성한다."""
+    initial_message = "작업이 대기열에 등록되었습니다."
     run = CrawlRun(
         job_type=job_type,
         source=source,
@@ -42,6 +104,7 @@ async def create_run(
         progress=0.0,
         payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     )
+    _append_log_to_run(run, initial_message, progress=0.0, touch_heartbeat=False)
     session.add(run)
     await session.flush()
     if commit:
@@ -87,21 +150,44 @@ async def claim_next_pending(session: AsyncSession) -> CrawlRun | None:
     run.state = RunState.RUNNING
     run.started_at = run.started_at or now
     run.heartbeat_at = now
+    _append_log_to_run(run, "작업 실행자가 작업을 시작했습니다.", progress=0.05)
     await session.commit()
     await session.refresh(run)
     return run
 
 
 async def heartbeat(
-    session: AsyncSession, run_id: int, *, progress: float | None = None
+    session: AsyncSession,
+    run_id: int,
+    *,
+    progress: float | None = None,
+    current_message: str | None = None,
 ) -> None:
     """실행 중 작업의 heartbeat와 진행률을 갱신한다."""
     values: dict[str, Any] = {"heartbeat_at": utcnow()}
     if progress is not None:
-        values["progress"] = max(0.0, min(1.0, progress))
+        values["progress"] = _clamp_progress(progress)
+    if current_message is not None:
+        values["current_message"] = current_message
     await session.execute(
         update(CrawlRun).where(CrawlRun.id == run_id).values(**values)
     )
+    await session.commit()
+
+
+async def append_status_log(
+    session: AsyncSession,
+    run_id: int,
+    message: str,
+    *,
+    progress: float | None = None,
+    level: str = "info",
+) -> None:
+    """작업의 현재 문구와 상세 로그를 갱신한다."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return
+    _append_log_to_run(run, message, progress=progress, level=level)
     await session.commit()
 
 
@@ -116,6 +202,7 @@ async def mark_done(
     run.progress = 1.0
     run.finished_at = utcnow()
     run.result_json = json.dumps(result, ensure_ascii=False) if result else None
+    _append_log_to_run(run, "작업을 완료했습니다.", progress=1.0, level="success")
     await session.commit()
 
 
@@ -127,6 +214,7 @@ async def mark_failed(session: AsyncSession, run_id: int, *, error: str) -> None
     run.state = RunState.FAILED
     run.finished_at = utcnow()
     run.last_error = error
+    _append_log_to_run(run, f"작업이 실패했습니다: {error}", level="error")
     await session.commit()
 
 
@@ -155,11 +243,22 @@ async def requeue_stale(
             run.state = RunState.FAILED
             run.finished_at = utcnow()
             run.last_error = "max retries exceeded (stale)"
+            _append_log_to_run(
+                run,
+                "heartbeat가 만료되어 최대 재시도 횟수를 초과했습니다.",
+                level="error",
+            )
         else:
             run.retry_count += 1
             run.state = RunState.PENDING
             run.started_at = None
             run.heartbeat_at = None
+            _append_log_to_run(
+                run,
+                "heartbeat가 만료되어 작업을 재시도 대기열로 되돌렸습니다.",
+                level="warning",
+                touch_heartbeat=False,
+            )
 
     if stale_runs:
         await session.commit()

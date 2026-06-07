@@ -45,6 +45,8 @@ class CrawlRun(TimestampMixin, Base):
         String(16), nullable=False, default=RunState.PENDING, index=True
     )
     progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    current_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_log_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 작업 입력 파라미터(query/channel_id/playlist_id/max_videos 등) 직렬화
     payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 완료 요약 직렬화

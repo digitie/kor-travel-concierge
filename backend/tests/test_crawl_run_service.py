@@ -20,6 +20,9 @@ async def test_create_and_get_run(session):
     assert run.id is not None
     assert run.state == RunState.PENDING
     assert run.progress == 0.0
+    assert run.current_message == "작업이 대기열에 등록되었습니다."
+    assert run.heartbeat_at is None
+    assert svc.load_status_logs(run)[0]["message"] == "작업이 대기열에 등록되었습니다."
 
     fetched = await svc.get_run(session, run.id)
     assert fetched is not None
@@ -36,6 +39,7 @@ async def test_claim_next_pending_fifo(session):
     assert claimed.state == RunState.RUNNING
     assert claimed.started_at is not None
     assert claimed.heartbeat_at is not None
+    assert claimed.current_message == "작업 실행자가 작업을 시작했습니다."
 
     # 두 번째 claim은 아직 pending인 second를 가져온다.
     claimed2 = await svc.claim_next_pending(session)
@@ -55,12 +59,18 @@ async def test_heartbeat_and_done(session):
     refreshed = await svc.get_run(session, run.id)
     assert refreshed.progress == 0.5
 
+    await svc.append_status_log(session, run.id, "YouTube를 검색 중입니다.", progress=0.6)
+    refreshed = await svc.get_run(session, run.id)
+    assert refreshed.current_message == "YouTube를 검색 중입니다."
+    assert svc.load_status_logs(refreshed)[-1]["progress"] == 0.6
+
     await svc.mark_done(session, run.id, result={"videos": 3})
     done = await svc.get_run(session, run.id)
     assert done.state == RunState.DONE
     assert done.progress == 1.0
     assert done.finished_at is not None
     assert '"videos": 3' in done.result_json
+    assert svc.load_status_logs(done)[-1]["level"] == "success"
 
 
 async def test_heartbeat_progress_clamped(session):
@@ -76,6 +86,7 @@ async def test_mark_failed(session):
     failed = await svc.get_run(session, run.id)
     assert failed.state == RunState.FAILED
     assert failed.last_error == "boom"
+    assert "작업이 실패했습니다" in failed.current_message
 
 
 async def test_requeue_stale_requeues_when_retries_left(session):
@@ -92,6 +103,8 @@ async def test_requeue_stale_requeues_when_retries_left(session):
     assert requeued.state == RunState.PENDING
     assert requeued.retry_count == 1
     assert requeued.started_at is None
+    assert requeued.heartbeat_at is None
+    assert "재시도 대기열" in requeued.current_message
 
 
 async def test_requeue_stale_isolates_when_retries_exhausted(session):

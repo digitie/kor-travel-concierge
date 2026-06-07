@@ -14,7 +14,9 @@ import { z } from "zod";
 
 import {
   getHarvestStatus,
+  listRunQueue,
   startHarvest,
+  type CrawlRunSummary,
   type HarvestStatus,
   type HarvestTargetType,
 } from "@/lib/api";
@@ -92,9 +94,16 @@ export function HarvestConsole() {
       return data?.state === "pending" || data?.state === "running" ? 1_500 : false;
     },
   });
+  const runQueueQuery = useQuery({
+    queryKey: ["harvest-console-run-queue"],
+    queryFn: listRunQueue,
+    refetchInterval: 2_000,
+  });
 
   const status = statusQuery.data;
   const statusTone = useMemo(() => statusBadgeVariant(status?.state), [status?.state]);
+  const statusLogs = status?.status_logs ?? [];
+  const queueRuns = runQueueQuery.data ?? [];
 
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
@@ -176,6 +185,27 @@ export function HarvestConsole() {
         </Button>
       </form>
 
+      <section className="flex flex-col gap-3 border-t pt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">실행 큐</h2>
+          <Badge variant="outline">{queueRuns.length}</Badge>
+        </div>
+        {queueRuns.length > 0 ? (
+          <div className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            {queueRuns.map((run) => (
+              <QueueRunItem key={run.job_id} run={run} />
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+            실행 중이거나 대기 중인 작업이 없습니다.
+          </p>
+        )}
+        {runQueueQuery.error ? (
+          <p className="text-sm text-destructive">{runQueueQuery.error.message}</p>
+        ) : null}
+      </section>
+
       <section className="flex flex-col gap-3 border-t pt-5" aria-live="polite">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-medium">작업 상태</h2>
@@ -195,7 +225,41 @@ export function HarvestConsole() {
             label="progress"
             value={status ? `${Math.round(status.progress * 100)}%` : "-"}
           />
+          <StatusRow
+            label="현재"
+            value={status?.current_message ?? "작업이 아직 시작되지 않았습니다."}
+            wrap
+          />
           <StatusRow label="error" value={status?.last_error ?? "-"} />
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium">상세 로그</p>
+            <span className="text-xs text-muted-foreground">{statusLogs.length}건</span>
+          </div>
+          {statusLogs.length > 0 ? (
+            <ol className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+              {statusLogs.map((log, index) => (
+                <li
+                  key={`${log.timestamp}-${index}`}
+                  className="grid grid-cols-[4.5rem_1fr_auto] gap-2 text-xs"
+                >
+                  <span className="text-muted-foreground">
+                    {formatLogTime(log.timestamp)}
+                  </span>
+                  <span className={`${logToneClass(log.level)} min-w-0 break-words`}>
+                    {log.message}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {log.progress === null ? "" : `${Math.round(log.progress * 100)}%`}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-xs text-muted-foreground">아직 상세 로그가 없습니다.</p>
+          )}
         </div>
 
         {mutation.error ? (
@@ -209,13 +273,89 @@ export function HarvestConsole() {
   );
 }
 
-function StatusRow({ label, value }: { label: string; value: string }) {
+function QueueRunItem({ run }: { run: CrawlRunSummary }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="max-w-[12rem] truncate text-right font-medium">{value}</span>
+    <div className="flex flex-col gap-2 rounded-md border p-3 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-medium">{runLabel(run)}</span>
+        <Badge variant={run.state === "running" ? "default" : "outline"}>
+          {run.state}
+        </Badge>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-primary"
+          style={{ width: `${Math.round(run.progress * 100)}%` }}
+        />
+      </div>
+      <div className="flex items-start justify-between gap-2">
+        <span className="min-w-0 break-words text-muted-foreground">
+          {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
+        </span>
+        <span className="shrink-0 text-muted-foreground">
+          {Math.round(run.progress * 100)}%
+        </span>
+      </div>
     </div>
   );
+}
+
+function runLabel(run: CrawlRunSummary) {
+  return [run.job_type, run.target_id].filter(Boolean).join(" · ");
+}
+
+function latestRunLog(run: CrawlRunSummary) {
+  return run.status_logs.at(-1)?.message ?? null;
+}
+
+function StatusRow({
+  label,
+  value,
+  wrap = false,
+}: {
+  label: string;
+  value: string;
+  wrap?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span
+        className={
+          wrap
+            ? "max-w-[13rem] text-right font-medium leading-5"
+            : "max-w-[12rem] truncate text-right font-medium"
+        }
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function formatLogTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function logToneClass(level: string) {
+  if (level === "success") {
+    return "text-emerald-700";
+  }
+  if (level === "warning") {
+    return "text-amber-700";
+  }
+  if (level === "error") {
+    return "text-destructive";
+  }
+  return "text-foreground";
 }
 
 function statusBadgeVariant(state: string | undefined): {

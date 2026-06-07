@@ -143,6 +143,27 @@ async def test_run_harvest_persists_and_scores(session, yt_client):
     assert all(k.season_context == "summer" for k in kws)
 
 
+async def test_run_harvest_reports_detailed_status(session, yt_client):
+    reported: list[tuple[str, float | None]] = []
+
+    async def reporter(message: str, progress: float | None = None) -> None:
+        reported.append((message, progress))
+
+    await pipeline.run_harvest(
+        session,
+        yt_client,
+        seed_keyword="제주도 맛집",
+        max_videos=2,
+        now=NOW,
+        status_reporter=reporter,
+    )
+
+    messages = [message for message, _ in reported]
+    assert any("Gemini에서 검색어" in message for message in messages)
+    assert any("YouTube에서" in message and "검색을 실행 중" in message for message in messages)
+    assert any("동영상 적재를 완료했습니다" in message for message in messages)
+
+
 async def test_run_harvest_idempotent_rerun(session, yt_client):
     await pipeline.run_harvest(session, yt_client, seed_keyword="제주도 맛집", now=NOW)
     summary2 = await pipeline.run_harvest(

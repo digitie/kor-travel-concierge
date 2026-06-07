@@ -183,10 +183,11 @@ async def test_extract_and_store_frame_records_asset_and_mapping(session):
     assert result.timestamp_seconds == 65
     assert result.object_key == "v1/frames/frame_00_01_05_000.jpg"
     assert result.asset.asset_type == AssetType.FRAME
-    assert result.asset.bucket == "tripmate-frames"
+    assert result.asset.bucket == "krtour-map"
+    assert result.asset.object_key == "features/v1/frames/frame_00_01_05_000.jpg"
     assert result.asset.video_id == video.video_id
     assert result.asset.place_id == place.place_id
-    assert ("tripmate-frames", result.object_key) in store.objects
+    assert ("krtour-map", result.asset.object_key) in store.objects
 
     refreshed_mapping = await session.get(VideoPlaceMapping, mapping.id)
     assert refreshed_mapping.frame_asset_id == result.asset.id
@@ -224,6 +225,7 @@ async def test_store_raw_media_records_raw_video_asset(session):
     )
 
     assert asset.asset_type == AssetType.RAW_VIDEO
-    assert asset.bucket == "tripmate-raw-videos"
-    assert asset.object_key == "vraw/raw/source.mp4"
+    assert asset.bucket == "krtour-map"
+    assert asset.object_key == "features/vraw/raw/source.mp4"
+    assert ("krtour-map", asset.object_key) in store.objects
     assert isinstance(asset, MediaAsset)

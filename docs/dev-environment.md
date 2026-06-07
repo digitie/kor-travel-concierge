@@ -57,36 +57,41 @@ RustFS는 앱 컨테이너에 포함하지 않고 별도의 로컬 Docker 서비
 
 권장 로컬 포트:
 
-- S3 API: `http://localhost:9003`
-- 콘솔: `http://localhost:9004`
+- S3 API: `http://127.0.0.1:9003`
+- 콘솔: `http://127.0.0.1:9004`
+- 공개 객체 URL 기준: `http://127.0.0.1:9003/krtour-map`
 
 Docker Compose 내부에서 `api`, `mcp`, `scheduler` 컨테이너가 RustFS에 접근할 때는
 호스트 포트가 아니라 서비스명과 내부 포트인 `http://rustfs:9000`을 사용합니다.
 `docker-compose.yml`은 이 값을 컨테이너 환경 변수로 override하므로, 로컬 `.env`의
-`RUSTFS_ENDPOINT=http://localhost:9003`은 Windows 호스트에서 직접 실행하는 Python
+`RUSTFS_ENDPOINT=http://127.0.0.1:9003`은 Windows 호스트에서 직접 실행하는 Python
 프로세스 기준으로 유지합니다.
 
 `.env`에는 다음 값을 둡니다.
 
 ```dotenv
 RUSTFS_ENABLED=true
-RUSTFS_ENDPOINT=http://localhost:9003
-RUSTFS_CONSOLE_URL=http://localhost:9004
+RUSTFS_ENDPOINT=http://127.0.0.1:9003
+RUSTFS_PUBLIC_BASE_URL=http://127.0.0.1:9003/krtour-map
+RUSTFS_DOCKER_ENDPOINT=http://rustfs:9000
+RUSTFS_CONSOLE_URL=http://127.0.0.1:9004
 RUSTFS_ACCESS_KEY=your_rustfs_access_key_here
 RUSTFS_SECRET_KEY=your_rustfs_secret_key_here
-RUSTFS_BUCKET_RAW_VIDEOS=tripmate-raw-videos
-RUSTFS_BUCKET_SUBTITLES=tripmate-subtitles
-RUSTFS_BUCKET_FRAMES=tripmate-frames
+RUSTFS_BUCKET_RAW_VIDEOS=krtour-map
+RUSTFS_BUCKET_SUBTITLES=krtour-map
+RUSTFS_BUCKET_FRAMES=krtour-map
+RUSTFS_OBJECT_PREFIX=features
+RUSTFS_REGION=us-east-1
 RUSTFS_HEALTH_PATH=/health/live
 MEDIA_RETENTION_POLICY=infinite
 ```
 
-초기 버킷은 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames`입니다. 객체 저장소 lifecycle 만료 정책은 설정하지 않습니다. DB에서 영상이나 장소가 제외 처리되더라도 RustFS 객체는 자동 삭제하지 않습니다.
+초기 버킷은 단일 `krtour-map` 버킷입니다. 원본 동영상, 자막, 전사 결과, 대표 프레임 객체는 모두 `features/` prefix 아래에 저장합니다. 객체 저장소 lifecycle 만료 정책은 설정하지 않습니다. DB에서 영상이나 장소가 제외 처리되더라도 RustFS 객체는 자동 삭제하지 않습니다.
 
-`subtitle`과 `transcript` 자산은 모두 `tripmate-subtitles` 버킷에 저장합니다. `MEDIA_RETENTION_POLICY`는 새 `media_assets.retention_policy`의 전역 기본값이며, 현재 정책에서는 행 단위 값도 `infinite`로 고정해 RustFS lifecycle 만료보다 항상 우선합니다.
+`raw_video`, `subtitle`, `transcript`, `frame` 자산은 모두 `krtour-map` 버킷을 사용하고 객체 키 prefix로만 구분합니다. `MEDIA_RETENTION_POLICY`는 새 `media_assets.retention_policy`의 전역 기본값이며, 현재 정책에서는 행 단위 값도 `infinite`로 고정해 RustFS lifecycle 만료보다 항상 우선합니다.
 
 상태 확인은 `/health/live` 엔드포인트로 수행합니다. `scripts\verify-docker-compose.ps1`은
-RustFS health 확인 후 기본 버킷을 만들고 `healthcheck/t014-smoke.txt` 객체를 업로드·조회합니다.
+RustFS health 확인 후 기본 버킷을 만들고 `features/healthcheck/t014-smoke.txt` 객체를 업로드·조회합니다.
 무기한 보존 원칙에 따라 smoke 객체도 자동 삭제하지 않고 같은 key로 덮어씁니다.
 
 ---
@@ -248,9 +253,9 @@ Copy-Item .env.example .env
 1. `docker compose config --quiet`로 Compose 문법과 환경 변수 해석을 확인합니다.
 2. `api`, `mcp`, `scheduler`, `frontend` 이미지를 빌드합니다.
 3. `rustfs`, `api`, `mcp`, `scheduler`, `frontend`를 단일 프로젝트로 실행합니다.
-4. `http://localhost:9003/health/live`, `http://localhost:9041/health`, `http://localhost:9042` 응답을 확인합니다.
+4. `http://127.0.0.1:9003/health/live`, `http://localhost:9041/health`, `http://localhost:9042` 응답을 확인합니다.
 5. MCP `streamable-http` 포트(`8010`)가 리스닝 중인지 확인합니다. MCP endpoint는 일반 브라우저 GET이 아니라 MCP client protocol로 접근해야 합니다.
-6. `api` 컨테이너 안에서 `scripts/verify_rustfs.py`를 실행해 `tripmate-raw-videos`, `tripmate-subtitles`, `tripmate-frames` 버킷 생성과 객체 업로드·조회를 확인합니다.
+6. `api` 컨테이너 안에서 `scripts/verify_rustfs.py`를 실행해 `krtour-map` 버킷 생성과 `features/healthcheck/t014-smoke.txt` 객체 업로드·조회를 확인합니다.
 7. 기본적으로 `docker compose down`으로 컨테이너를 정리합니다.
 
 컨테이너를 계속 띄워 화면을 확인하려면 다음처럼 실행합니다.

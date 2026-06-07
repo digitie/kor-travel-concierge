@@ -14,14 +14,17 @@ x-python-env: &python-env
   CORS_ALLOW_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-9042},http://127.0.0.1:${FRONTEND_HOST_PORT:-9042},http://localhost:13100,http://127.0.0.1:13100
   RUSTFS_ENABLED: "true"
   # 컨테이너 간 통신은 Compose 서비스명과 RustFS 기본 내부 포트(9000)를 사용한다.
-  RUSTFS_ENDPOINT: http://rustfs:9000
+  RUSTFS_ENDPOINT: ${RUSTFS_DOCKER_ENDPOINT:-http://rustfs:9000}
+  RUSTFS_PUBLIC_BASE_URL: ${RUSTFS_PUBLIC_BASE_URL:-http://127.0.0.1:9003/krtour-map}
   # 콘솔은 사용자가 Windows 호스트 브라우저에서 여는 공개 URL이다.
-  RUSTFS_CONSOLE_URL: http://localhost:9004
+  RUSTFS_CONSOLE_URL: http://127.0.0.1:9004
   RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
   RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
-  RUSTFS_BUCKET_RAW_VIDEOS: ${RUSTFS_BUCKET_RAW_VIDEOS:-tripmate-raw-videos}
-  RUSTFS_BUCKET_SUBTITLES: ${RUSTFS_BUCKET_SUBTITLES:-tripmate-subtitles}
-  RUSTFS_BUCKET_FRAMES: ${RUSTFS_BUCKET_FRAMES:-tripmate-frames}
+  RUSTFS_BUCKET_RAW_VIDEOS: ${RUSTFS_BUCKET_RAW_VIDEOS:-krtour-map}
+  RUSTFS_BUCKET_SUBTITLES: ${RUSTFS_BUCKET_SUBTITLES:-krtour-map}
+  RUSTFS_BUCKET_FRAMES: ${RUSTFS_BUCKET_FRAMES:-krtour-map}
+  RUSTFS_OBJECT_PREFIX: ${RUSTFS_OBJECT_PREFIX:-features}
+  RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
   RUSTFS_HEALTH_PATH: /health/live
   MEDIA_RETENTION_POLICY: infinite
   FFMPEG_PATH: ${DOCKER_FFMPEG_PATH:-/usr/bin/ffmpeg}

@@ -61,13 +61,17 @@ class Settings(BaseSettings):
 
     # --- RustFS 미디어 저장소 ---
     RUSTFS_ENABLED: bool = True
-    RUSTFS_ENDPOINT: str = "http://localhost:9003"
-    RUSTFS_CONSOLE_URL: str = "http://localhost:9004"
+    RUSTFS_ENDPOINT: str = "http://127.0.0.1:9003"
+    RUSTFS_PUBLIC_BASE_URL: str = "http://127.0.0.1:9003/krtour-map"
+    RUSTFS_DOCKER_ENDPOINT: str = "http://rustfs:9000"
+    RUSTFS_CONSOLE_URL: str = "http://127.0.0.1:9004"
     RUSTFS_ACCESS_KEY: str = ""
     RUSTFS_SECRET_KEY: str = ""
-    RUSTFS_BUCKET_RAW_VIDEOS: str = "tripmate-raw-videos"
-    RUSTFS_BUCKET_SUBTITLES: str = "tripmate-subtitles"
-    RUSTFS_BUCKET_FRAMES: str = "tripmate-frames"
+    RUSTFS_BUCKET_RAW_VIDEOS: str = "krtour-map"
+    RUSTFS_BUCKET_SUBTITLES: str = "krtour-map"
+    RUSTFS_BUCKET_FRAMES: str = "krtour-map"
+    RUSTFS_OBJECT_PREFIX: str = "features"
+    RUSTFS_REGION: str = "us-east-1"
     RUSTFS_HEALTH_PATH: str = "/health/live"
     MEDIA_RETENTION_POLICY: str = "infinite"
 

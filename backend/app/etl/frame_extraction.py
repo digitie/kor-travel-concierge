@@ -2,7 +2,7 @@
 
 Gemini가 식별한 POI 시작 시각에 5~10초 오프셋을 더한 뒤, `yt-dlp`로 직접
 스트림 URL을 확보하고 FFmpeg Input Seeking(`-ss`를 `-i` 앞에 배치)으로 JPEG 한
-장을 추출한다. 추출한 JPEG는 RustFS `tripmate-frames` 버킷에 저장하고
+장을 추출한다. 추출한 JPEG는 RustFS 미디어 버킷에 저장하고
 `media_assets`에 기록한다.
 
 외부 도구(`yt-dlp`, FFmpeg)는 지연 import·주입형 함수로 감싸 테스트가 로컬
