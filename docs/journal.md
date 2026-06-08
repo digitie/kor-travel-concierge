@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-042 docker-compose CORS override와 Windows live 포트 종료 안전장치 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Compose CORS override 복구**: `docker-compose.yml`의 `CORS_ALLOW_ORIGINS`가 `.env` 값을 우선하도록 바꾸고, 기본값에 Windows live Web 포트(`9042` 또는 `FRONTEND_HOST_PORT` override), 로컬 개발 `3000`, Compose smoke `13000`, Playwright E2E `13100` origin을 포함.
+  - **Windows live CORS 우선순위 정리**: `scripts\start-windows-live.ps1`도 현재 PowerShell 환경변수, `.env`, 기본값 순서로 `CORS_ALLOW_ORIGINS`를 적용하도록 변경.
+  - **포트 종료 안전장치**: `Stop-PortOwner`가 포트 점유 프로세스의 command line 또는 executable path에서 현재 TripMate 워크트리 경로가 확인되는 경우에만 자동 종료하도록 보강.
+  - **명시 강제 옵션 추가**: 다른 프로세스가 `9041` 또는 `9042`를 점유하면 중단하고, 의도한 종료일 때만 `-ForcePortKill`을 명시하도록 안내.
+  - **문서 갱신**: README, 개발 환경, 아키텍처, ADR 실행 계약, PR #30 추적 문서를 새 정책에 맞춤.
+  - **검증**: Windows PowerShell parser 검증 통과. `docker compose --env-file .env config --quiet`, `CORS_ALLOW_ORIGINS='http://example.test' docker compose --env-file .env config`, 기본 compose config의 CORS origin 목록 확인 통과.
+- **다음 작업**:
+  - PR #30 P2-1 export 직렬화 executor 격리, limit 상한, XML 제어문자 정제를 T-043으로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-041 FFmpeg 자동 다운로드 무결성 검증과 안정 URL 보강
 
 - **담당자**: Codex

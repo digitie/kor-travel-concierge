@@ -73,7 +73,7 @@
            └────────────────────┘ └────────────────┘ └──────────────────────┘
 ```
 
-Docker Compose 배포 시에는 `frontend`, `api`, `mcp`, `scheduler` 컨테이너가 같은 SQLite/SpatiaLite 데이터 볼륨을 공유한다. RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다. Windows 호스트에서는 API를 `http://localhost:9041`, Web을 `http://localhost:9042`, RustFS S3 API를 `http://127.0.0.1:9003`, 콘솔을 `http://127.0.0.1:9004`로 고정해서 열고, 앱 컨테이너 내부에서는 Compose 서비스명 `http://rustfs:9000`으로 접근한다. 실제 무거운 작업 실행은 `scheduler`가 단일 claim 방식으로 담당하여 API 서버와 MCP 서버가 직접 장시간 작업을 수행하지 않게 한다.
+Docker Compose 배포 시에는 `frontend`, `api`, `mcp`, `scheduler` 컨테이너가 같은 SQLite/SpatiaLite 데이터 볼륨을 공유한다. RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다. Windows 호스트에서는 API를 `http://localhost:9041`, Web을 `http://localhost:9042`, RustFS S3 API를 `http://127.0.0.1:9003`, 콘솔을 `http://127.0.0.1:9004`로 고정해서 열고, 앱 컨테이너 내부에서는 Compose 서비스명 `http://rustfs:9000`으로 접근한다. Compose CORS 허용 origin은 `.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 Web host port(`9042` 또는 `FRONTEND_HOST_PORT` override), `3000`, `13000`, `13100`의 local origin을 포함한다. Windows live 재시작 스크립트는 고정 포트 점유자가 현재 TripMate 워크트리 프로세스로 확인될 때만 자동 종료한다. 실제 무거운 작업 실행은 `scheduler`가 단일 claim 방식으로 담당하여 API 서버와 MCP 서버가 직접 장시간 작업을 수행하지 않게 한다.
 
 ---
 

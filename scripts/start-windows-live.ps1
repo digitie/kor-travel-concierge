@@ -1,7 +1,8 @@
 param(
     [int]$ApiPort = 9041,
     [int]$WebPort = 9042,
-    [switch]$SkipRustfs
+    [switch]$SkipRustfs,
+    [switch]$ForcePortKill
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,11 +19,47 @@ function Stop-PortOwner {
             continue
         }
 
-        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-        $name = if ($process) { $process.ProcessName } else { "unknown" }
-        Write-Host "포트 $Port 점유 프로세스 종료: PID=$processId NAME=$name"
+        $processInfo = Get-ProcessInfo -ProcessId $processId
+        $name = if ($processInfo.Name) { $processInfo.Name } else { "unknown" }
+        if (-not $ForcePortKill -and -not (Test-TripMateProcess -ProcessInfo $processInfo)) {
+            throw "포트 $Port 점유 프로세스가 현재 워크트리 프로세스로 확인되지 않아 종료하지 않았습니다. PID=$processId NAME=$name. 직접 종료하거나 -ForcePortKill 옵션을 명시하세요."
+        }
+
+        $reason = if ($ForcePortKill) { "강제 옵션" } else { "현재 워크트리 프로세스" }
+        Write-Host "포트 $Port 점유 프로세스 종료($reason): PID=$processId NAME=$name"
         Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-ProcessInfo {
+    param([int]$ProcessId)
+
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    $cimProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+
+    return [pscustomobject]@{
+        Id = $ProcessId
+        Name = if ($process) { $process.ProcessName } else { $null }
+        Path = if ($process) { $process.Path } else { $null }
+        CommandLine = if ($cimProcess) { $cimProcess.CommandLine } else { $null }
+    }
+}
+
+function Test-TripMateProcess {
+    param([pscustomobject]$ProcessInfo)
+
+    $rootNeedle = $Root.ToLowerInvariant()
+    $values = @($ProcessInfo.Path, $ProcessInfo.CommandLine) |
+        Where-Object { $_ } |
+        ForEach-Object { $_.ToLowerInvariant() }
+
+    foreach ($value in $values) {
+        if ($value.Contains($rootNeedle)) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Read-DotEnvValue {
@@ -95,6 +132,30 @@ function Test-NativeCommand {
     }
 }
 
+function Resolve-CorsAllowOrigins {
+    param([int]$Port)
+
+    if ($env:CORS_ALLOW_ORIGINS) {
+        return $env:CORS_ALLOW_ORIGINS
+    }
+
+    $configured = Read-DotEnvValue -Name "CORS_ALLOW_ORIGINS"
+    if ($configured) {
+        return $configured
+    }
+
+    return @(
+        "http://localhost:$Port",
+        "http://127.0.0.1:$Port",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:13000",
+        "http://127.0.0.1:13000",
+        "http://localhost:13100",
+        "http://127.0.0.1:13100"
+    ) -join ","
+}
+
 Stop-PortOwner -Port $ApiPort
 Stop-PortOwner -Port $WebPort
 
@@ -118,6 +179,7 @@ else {
 $apiUrl = "http://127.0.0.1:$ApiPort"
 $webUrl = "http://127.0.0.1:$WebPort"
 $vworldKey = Read-DotEnvValue -Name "NEXT_PUBLIC_VWORLD_SERVICE_KEY"
+$corsAllowOrigins = Resolve-CorsAllowOrigins -Port $WebPort
 $ffmpegInfoJson = & (Join-Path $Root "scripts\ensure-windows-ffmpeg.ps1") -UpdateEnvFile
 $ffmpegInfo = $ffmpegInfoJson | ConvertFrom-Json
 $ffmpegPath = [string]$ffmpegInfo.FFMPEG_PATH
@@ -129,7 +191,7 @@ if (-not (Test-Path $nextCliPath)) {
 }
 
 $env:NEXT_PUBLIC_API_BASE_URL = $apiUrl
-$env:CORS_ALLOW_ORIGINS = "http://localhost:$WebPort,http://127.0.0.1:$WebPort"
+$env:CORS_ALLOW_ORIGINS = $corsAllowOrigins
 $env:FFMPEG_PATH = $ffmpegPath
 $env:FFPROBE_PATH = $ffprobePath
 if ($vworldKey) {
@@ -149,6 +211,7 @@ if ($vworldKey) {
 $frontendEnvBlock = $frontendEnv -join "`r`n"
 
 $backendEnv = @(
+    "`$env:CORS_ALLOW_ORIGINS = '$(Escape-PowerShellSingleQuotedValue -Value $corsAllowOrigins)'",
     "`$env:FFMPEG_PATH = '$(Escape-PowerShellSingleQuotedValue -Value $ffmpegPath)'",
     "`$env:FFPROBE_PATH = '$(Escape-PowerShellSingleQuotedValue -Value $ffprobePath)'"
 )
