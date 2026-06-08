@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-037 원본 미디어 스트리밍 업로드 경로 추가
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **저장소 인터페이스 확장**: `MediaStore`에 `put_object_stream`을 추가하고, RustFS 구현은 boto3 `upload_fileobj`를 사용해 file-like 객체를 전송하도록 보강.
+  - **메타데이터 계산**: `HashingReader`를 추가해 업로드 중 읽은 chunk로 SHA256과 byte 수를 계산하고 `media_assets.sha256`, `size_bytes`에 기록.
+  - **원본 저장 API 확장**: `store_raw_media`가 기존 `bytes` 입력과 새 `fileobj` 입력 중 하나만 받도록 변경해, 대용량 원본 동영상은 전체 메모리 적재 없이 저장할 수 있게 구성.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P1-1 항목을 T-037 후속 해소로 표시.
+  - **검증**: 원본 동영상 streaming 저장 테스트를 추가하고 frame extraction/media store 관련 테스트를 통과.
+- **다음 작업**:
+  - PR #30 P1-2 `claim_next_pending` 원자적 claim 보강을 T-038로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-036 video_place_mappings stale unique 제약 제거
 
 - **담당자**: Codex

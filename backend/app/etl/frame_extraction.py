@@ -15,7 +15,7 @@ import asyncio
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, BinaryIO, Callable, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -214,19 +214,29 @@ async def store_raw_media(
     *,
     video_id: str,
     filename: str,
-    data: bytes,
+    data: bytes | None = None,
+    fileobj: BinaryIO | None = None,
     content_type: str | None = None,
 ) -> MediaAsset:
-    """이미 확보한 소용량 원본 동영상 또는 오디오 bytes를 RustFS에 무기한 보존한다.
-
-    대용량 원본 동영상 다운로드 경로는 메모리에 전체 파일을 올리지 않는 스트리밍
-    업로드 API로 별도 연결해야 한다.
-    """
+    """원본 동영상 또는 오디오를 RustFS에 무기한 보존한다."""
+    if (data is None) == (fileobj is None):
+        raise ValueError("data 또는 fileobj 중 하나만 전달해야 한다")
+    object_key = build_raw_media_object_key(video_id, filename)
+    if fileobj is not None:
+        return await media_store.store_stream_and_record(
+            session,
+            store,
+            asset_type=AssetType.RAW_VIDEO,
+            object_key=object_key,
+            fileobj=fileobj,
+            content_type=content_type,
+            video_id=video_id,
+        )
     return await media_store.store_and_record(
         session,
         store,
         asset_type=AssetType.RAW_VIDEO,
-        object_key=build_raw_media_object_key(video_id, filename),
+        object_key=object_key,
         data=data,
         content_type=content_type,
         video_id=video_id,

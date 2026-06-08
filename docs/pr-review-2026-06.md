@@ -48,8 +48,9 @@
 
 ### 🟠 P1 — Major (데이터 정합성 / 보안 강화 / 운영 안정성)
 
-- [ ] **P1-1. `store_raw_media` 전체 동영상 메모리 적재(OOM)** (`#11`, #23에서 docstring만 추가)
+- [x] **P1-1. `store_raw_media` 전체 동영상 메모리 적재(OOM)** (`#11`, #23에서 docstring만 추가, T-037에서 후속 해소)
   - 무기한 보존 대상 원본 동영상(수백 MB+)을 `bytes`로 통째 메모리 적재 후 업로드. 멀티파트/스트리밍 업로드 경로 필요.
+  - 후속 처리: T-037에서 `store_raw_media`에 file-like streaming 경로를 추가하고, RustFS 업로드는 `upload_fileobj`로 전송하도록 보강했다. 업로드 중 SHA256과 크기를 계산해 `media_assets`에 기록하는 테스트를 추가했다.
 
 - [ ] **P1-2. `claim_next_pending` 비원자적 claim** (`#12`, #22에서 부분 해소)
   - `busy_timeout=5000`은 추가됐으나 여전히 SELECT-후-mutate 구조이고 쓰기 시 `WHERE state='pending'` 가드가 없음. 단일 실행자 불변식에만 의존. 가드 있는 UPDATE로 진짜 원자적 claim 권장.

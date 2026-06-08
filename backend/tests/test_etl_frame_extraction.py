@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import subprocess
 
 import pytest
@@ -229,3 +230,30 @@ async def test_store_raw_media_records_raw_video_asset(session):
     assert asset.object_key == "features/vraw/raw/source.mp4"
     assert ("krtour-map", asset.object_key) in store.objects
     assert isinstance(asset, MediaAsset)
+
+
+async def test_store_raw_media_stream_records_raw_video_asset(session):
+    video = YoutubeVideo(
+        video_id="vstream",
+        title="원본",
+        url="https://youtu.be/v",
+        channel_id="c",
+    )
+    session.add(video)
+    await session.commit()
+
+    store = InMemoryMediaStore()
+    asset = await store_raw_media(
+        session,
+        store,
+        video_id=video.video_id,
+        filename="source.mp4",
+        fileobj=io.BytesIO(b"streamed-video-bytes"),
+        content_type="video/mp4",
+    )
+
+    assert asset.asset_type == AssetType.RAW_VIDEO
+    assert asset.object_key == "features/vstream/raw/source.mp4"
+    assert asset.size_bytes == len(b"streamed-video-bytes")
+    assert asset.sha256 == frame_extraction.media_store.sha256_hex(b"streamed-video-bytes")
+    assert store.objects[("krtour-map", asset.object_key)] == b"streamed-video-bytes"

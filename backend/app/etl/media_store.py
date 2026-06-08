@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Protocol, runtime_checkable
+from typing import BinaryIO, Protocol, runtime_checkable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,6 +59,12 @@ class MediaStore(Protocol):
         """객체를 업로드하고 접근 URI를 반환한다."""
         ...
 
+    def put_object_stream(
+        self, bucket: str, key: str, fileobj: BinaryIO, content_type: str | None
+    ) -> str:
+        """file-like 객체를 업로드하고 접근 URI를 반환한다."""
+        ...
+
 
 class InMemoryMediaStore:
     """테스트·드라이런용 in-memory 저장소."""
@@ -71,6 +77,12 @@ class InMemoryMediaStore:
         self, bucket: str, key: str, data: bytes, content_type: str | None
     ) -> str:
         self.objects[(bucket, key)] = data
+        return f"{self.endpoint}/{bucket}/{key}"
+
+    def put_object_stream(
+        self, bucket: str, key: str, fileobj: BinaryIO, content_type: str | None
+    ) -> str:
+        self.objects[(bucket, key)] = fileobj.read()
         return f"{self.endpoint}/{bucket}/{key}"
 
 
@@ -99,6 +111,46 @@ class RustFSMediaStore:
         if self._public_base_url:
             return f"{self._public_base_url}/{key}"
         return f"{self._endpoint}/{bucket}/{key}"
+
+    def put_object_stream(
+        self, bucket: str, key: str, fileobj: BinaryIO, content_type: str | None
+    ) -> str:
+        from boto3.s3.transfer import TransferConfig  # type: ignore
+
+        upload_kwargs = (
+            {"ExtraArgs": {"ContentType": content_type}} if content_type else {}
+        )
+        self._client.upload_fileobj(
+            fileobj,
+            bucket,
+            key,
+            Config=TransferConfig(use_threads=False),
+            **upload_kwargs,
+        )
+        if self._public_base_url:
+            return f"{self._public_base_url}/{key}"
+        return f"{self._endpoint}/{bucket}/{key}"
+
+
+class HashingReader:
+    """업로드 스트림을 읽으면서 SHA256과 byte 수를 계산한다."""
+
+    def __init__(self, fileobj: BinaryIO):
+        self._fileobj = fileobj
+        self._hash = hashlib.sha256()
+        self.bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._fileobj.read(size)
+        if not chunk:
+            return b""
+        self._hash.update(chunk)
+        self.bytes_read += len(chunk)
+        return chunk
+
+    @property
+    def sha256(self) -> str:
+        return self._hash.hexdigest()
 
 
 def sha256_hex(data: bytes) -> str:
@@ -143,6 +195,62 @@ async def store_and_record(
         content_type=content_type,
         size_bytes=len(data),
         sha256=sha256_hex(data),
+        retention_policy=get_settings().MEDIA_RETENTION_POLICY,
+    )
+    session.add(asset)
+    await session.commit()
+    await session.refresh(asset)
+    return asset
+
+
+async def store_stream_and_record(
+    session: AsyncSession,
+    store: MediaStore,
+    *,
+    asset_type: str,
+    object_key: str,
+    fileobj: BinaryIO,
+    content_type: str | None = None,
+    video_id: str | None = None,
+    place_id: int | None = None,
+) -> MediaAsset:
+    """file-like 객체를 업로드하고 `media_assets` 행을 기록한다.
+
+    원본 동영상처럼 큰 객체는 이 경로를 사용해 전체 파일을 `bytes`로 만들지 않고
+    RustFS multipart 업로드에 넘긴다. 업로드 중 읽은 chunk로 checksum과 크기를
+    계산한다.
+    """
+    bucket = bucket_for(asset_type)
+    stored_object_key = object_key_with_prefix(object_key)
+    existing_result = await session.execute(
+        select(MediaAsset).where(
+            MediaAsset.bucket == bucket,
+            MediaAsset.object_key == stored_object_key,
+        )
+    )
+    existing = existing_result.scalars().first()
+    if existing is not None:
+        return existing
+
+    hashing_reader = HashingReader(fileobj)
+    uri = await asyncio.to_thread(
+        store.put_object_stream,
+        bucket,
+        stored_object_key,
+        hashing_reader,
+        content_type,
+    )
+    asset = MediaAsset(
+        asset_type=asset_type,
+        video_id=video_id,
+        place_id=place_id,
+        storage_provider="rustfs",
+        bucket=bucket,
+        object_key=stored_object_key,
+        object_uri=uri,
+        content_type=content_type,
+        size_bytes=hashing_reader.bytes_read,
+        sha256=hashing_reader.sha256,
         retention_policy=get_settings().MEDIA_RETENTION_POLICY,
     )
     session.add(asset)
