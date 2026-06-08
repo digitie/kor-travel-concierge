@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-049 Gemini engine 설정 단일 출처 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **backend 단일 출처 추가**: `backend/app/core/config.py`에 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 정의하고 `Settings.GEMINI_ENGINE_VERSION` 기본값도 이를 사용하도록 정리.
+  - **settings 검증 강화**: `settings_service`가 `gemini_engine_version` 값을 허용 모델 목록으로 검증하고, `/api/settings` 응답에 `gemini_engine_options`와 `gemini_engine_default`를 포함하도록 확장.
+  - **frontend 하드코딩 제거**: 설정 화면의 Zod enum과 `SelectItem` 하드코딩을 제거하고 API가 내려주는 모델 옵션으로 select를 렌더링.
+  - **실제 호출 연결**: POI 후처리와 Deep Research가 DB runtime 설정의 Gemini engine 값을 `make_gemini_llm(model=...)`에 전달하도록 연결.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-7 항목을 T-049 후속 해소로 표시.
+  - **검증**: backend 설정/API/scheduler 테스트, backend `compileall`, frontend `npm run lint`, `npm run type-check`, `npm run build`, Playwright 설정 E2E, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-8 `_names_compatible` 부분일치 관대함 축소를 T-050으로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-048 heartbeat task 예외 처리 범위 축소
 
 - **담당자**: Codex

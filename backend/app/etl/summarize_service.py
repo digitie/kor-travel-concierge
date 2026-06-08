@@ -55,6 +55,7 @@ async def summarize_video(
     video: YoutubeVideo,
     transcript: TranscriptResult | None,
     llm: LlmCallable,
+    gemini_model: str | None = None,
     max_retries: int = 2,
     status_reporter: StatusReporter | None = None,
 ) -> dict[str, Any]:
@@ -120,7 +121,7 @@ async def summarize_video(
     if result.description_gemini_corrected:
         video.description_gemini_corrected = result.description_gemini_corrected
         video.description_gemini_corrected_at = datetime.now(timezone.utc)
-        video.description_gemini_model = get_settings().GEMINI_ENGINE_VERSION
+        video.description_gemini_model = gemini_model or get_settings().GEMINI_ENGINE_VERSION
         await _report(
             status_reporter,
             f"Gemini에서 영상 설명을 보정했습니다. 보정 결과는 \"{_short_text(result.description_gemini_corrected)}\" 입니다.",

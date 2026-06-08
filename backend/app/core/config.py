@@ -14,6 +14,14 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+GEMINI_ENGINE_VERSION_DEFAULT = "gemini-2.0-flash"
+GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
+    GEMINI_ENGINE_VERSION_DEFAULT,
+    "gemini-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+)
+
 
 class Settings(BaseSettings):
     """`.env` 주입 기반 전역 설정.
@@ -46,7 +54,7 @@ class Settings(BaseSettings):
 
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""
-    GEMINI_ENGINE_VERSION: str = "gemini-2.0-flash"
+    GEMINI_ENGINE_VERSION: str = GEMINI_ENGINE_VERSION_DEFAULT
 
     # --- YouTube Data API v3 ---
     YOUTUBE_API_KEY: str = ""

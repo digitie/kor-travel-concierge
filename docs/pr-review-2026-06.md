@@ -86,7 +86,8 @@
   - 후속 처리: T-047에서 공유 `Input`의 전역 `suppressHydrationWarning`을 제거했다. Windows live 스크립트는 `.env`에서 읽은 VWorld 키를 부모 PowerShell 환경에만 설정하고 frontend child 명령 블록에는 재주입하지 않도록 정리했다. E2E frontend 시작 스크립트도 VWorld 키 fallback 기본값을 부모 프로세스에만 설정한 뒤 child는 상속 환경을 사용한다.
 - [x] **P2-6. heartbeat의 `contextlib.suppress(...Exception)`** (`#22`, T-048에서 후속 해소) — 하트비트 await의 모든 예외 삼킴. 좁히기.
   - 후속 처리: T-048에서 heartbeat task 취소 대기 경로를 `CancelledError`만 정상 종료로 처리하도록 바꾸고, 이미 실패한 heartbeat task의 예상 밖 예외는 `logger.exception`으로 남기도록 보강했다. 회귀 테스트로 heartbeat task 예외가 job 완료를 막지 않되 로그에 남는지 검증한다.
-- [ ] **P2-7. engine 모델 설정의 단일 출처 부재** (`#28`) — frontend zod enum / backend `set_setting`(키만 검증) / `.env.example`·`config.py` 기본값이 제각각.
+- [x] **P2-7. engine 모델 설정의 단일 출처 부재** (`#28`, T-049에서 후속 해소) — frontend zod enum / backend `set_setting`(키만 검증) / `.env.example`·`config.py` 기본값이 제각각.
+  - 후속 처리: T-049에서 `backend/app/core/config.py`의 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 코드 단일 출처로 두고, settings API가 `gemini_engine_options`와 `gemini_engine_default`를 반환하도록 확장했다. `settings_service`는 모델 값을 검증하고, frontend 설정 화면은 API 옵션으로 select를 렌더링한다. POI 후처리와 Deep Research는 DB runtime 설정의 engine 값을 실제 Gemini 호출에 전달한다.
 - [ ] **P2-8. `_names_compatible` 부분일치 관대함** (`#23`) — 짧은 이름에서 false-positive 재사용 가능.
 
 ### 🔵 P3 — Nit / 제안

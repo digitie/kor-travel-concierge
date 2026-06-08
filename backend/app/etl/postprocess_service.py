@@ -27,6 +27,7 @@ from app.models import (
     TravelPlace,
     YoutubeVideo,
 )
+from app.services import settings_service
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 TranscriptFetcher = Callable[[str], Awaitable[TranscriptResult | None]]
@@ -73,7 +74,8 @@ async def process_harvest_videos(
         await _report(status_reporter, "장소 추출 대상 신규 동영상이 없습니다.", None)
         return summary
 
-    resolved_llm = llm or poi_extraction.make_gemini_llm()
+    gemini_model = await settings_service.get_gemini_engine_version(session)
+    resolved_llm = llm or poi_extraction.make_gemini_llm(model=gemini_model)
     resolved_transcript_fetcher = transcript_fetcher or _default_transcript_fetcher
     async with httpx.AsyncClient(timeout=30.0) as http_client:
         owned_geocode_context = await _make_geocode_context(
@@ -111,6 +113,7 @@ async def process_harvest_videos(
                     video=video,
                     transcript=transcript,
                     llm=resolved_llm,
+                    gemini_model=gemini_model,
                     max_retries=max_retries,
                     status_reporter=status_reporter,
                 )

@@ -128,6 +128,12 @@ export type RustfsStatus = {
 
 export type RuntimeSettings = {
   gemini_engine_version: string;
+  gemini_engine_default: string;
+  gemini_engine_options: string[];
+};
+
+export type RuntimeSettingsUpdate = {
+  gemini_engine_version: string;
 };
 
 export type ResolveCandidateInput = {
@@ -253,7 +259,7 @@ export async function getRuntimeSettings(): Promise<RuntimeSettings> {
 }
 
 export async function updateRuntimeSettings(
-  input: RuntimeSettings,
+  input: RuntimeSettingsUpdate,
 ): Promise<{ status: string; settings: RuntimeSettings }> {
   return requestJson<{ status: string; settings: RuntimeSettings }>("/api/settings", {
     method: "POST",

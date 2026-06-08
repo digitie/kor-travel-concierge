@@ -10,7 +10,7 @@ from datetime import timedelta
 import pytest
 
 from app.models import RunState, TravelPlace, utcnow
-from app.services import crawl_run_service
+from app.services import crawl_run_service, settings_service
 from scheduler import worker
 
 
@@ -298,7 +298,13 @@ async def test_run_once_executes_deep_research_default_handler(
             ensure_ascii=False,
         )
 
-    monkeypatch.setattr(worker.deep_research_service, "make_gemini_llm", lambda: fake_llm)
+    captured_model = {}
+
+    def fake_make_gemini_llm(*, model=None, **kwargs):
+        captured_model["model"] = model
+        return fake_llm
+
+    monkeypatch.setattr(worker.deep_research_service, "make_gemini_llm", fake_make_gemini_llm)
     place = TravelPlace(
         name="감천문화마을",
         description="부산 사하구의 골목 여행지",
@@ -308,6 +314,7 @@ async def test_run_once_executes_deep_research_default_handler(
     session.add(place)
     await session.commit()
     await session.refresh(place)
+    await settings_service.set_setting(session, "gemini_engine_version", "gemini-1.5-pro")
     run = await crawl_run_service.create_run(
         session,
         job_type="deep_research",
@@ -324,6 +331,7 @@ async def test_run_once_executes_deep_research_default_handler(
 
     assert executed_id == run.id
     assert "역사와 포토존 중심" in captured["prompt"]
+    assert captured_model["model"] == "gemini-1.5-pro"
     refreshed = await _fresh_run(session_factory, run.id)
     assert refreshed.state == RunState.DONE
     assert refreshed.progress == 1.0

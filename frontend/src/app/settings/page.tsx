@@ -3,14 +3,14 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2Icon, SaveIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import {
   getRuntimeSettings,
   updateRuntimeSettings,
-  type RuntimeSettings,
+  type RuntimeSettingsUpdate,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,12 +29,7 @@ import {
 } from "@/components/ui/select";
 
 const settingsSchema = z.object({
-  geminiEngineVersion: z.enum([
-    "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-  ]),
+  geminiEngineVersion: z.string().min(1, "Gemini 엔진 버전을 선택하세요."),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
@@ -43,7 +38,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: { geminiEngineVersion: "gemini-2.0-flash" },
+    defaultValues: { geminiEngineVersion: "" },
   });
   const selectedEngine = useWatch({
     control: form.control,
@@ -56,11 +51,25 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-    const engine = settingsQuery.data?.gemini_engine_version;
-    if (engine && settingsSchema.shape.geminiEngineVersion.safeParse(engine).success) {
-      form.setValue("geminiEngineVersion", engine as SettingsFormValues["geminiEngineVersion"]);
+    const engine =
+      settingsQuery.data?.gemini_engine_version ??
+      settingsQuery.data?.gemini_engine_default;
+    if (engine) {
+      form.setValue("geminiEngineVersion", engine);
     }
-  }, [form, settingsQuery.data?.gemini_engine_version]);
+  }, [
+    form,
+    settingsQuery.data?.gemini_engine_default,
+    settingsQuery.data?.gemini_engine_version,
+  ]);
+
+  const engineOptions = useMemo(() => {
+    const options = settingsQuery.data?.gemini_engine_options ?? [];
+    if (selectedEngine && !options.includes(selectedEngine)) {
+      return [selectedEngine, ...options];
+    }
+    return options;
+  }, [selectedEngine, settingsQuery.data?.gemini_engine_options]);
 
   const mutation = useMutation({
     mutationFn: (values: SettingsFormValues) =>
@@ -84,14 +93,18 @@ export default function SettingsPage() {
           <Field data-invalid={Boolean(form.formState.errors.geminiEngineVersion)}>
             <FieldLabel>Gemini 엔진 버전</FieldLabel>
             <Select
+              disabled={settingsQuery.isLoading || engineOptions.length === 0}
               value={selectedEngine}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
+                if (value === null) {
+                  return;
+                }
                 form.setValue(
                   "geminiEngineVersion",
-                  value as SettingsFormValues["geminiEngineVersion"],
+                  value,
                   { shouldDirty: true, shouldValidate: true },
-                )
-              }
+                );
+              }}
             >
               <SelectTrigger
                 id="gemini-engine-select"
@@ -102,10 +115,11 @@ export default function SettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value="gemini-flash-latest">gemini-flash-latest</SelectItem>
-                  <SelectItem value="gemini-2.0-flash">gemini-2.0-flash</SelectItem>
-                  <SelectItem value="gemini-1.5-flash">gemini-1.5-flash</SelectItem>
-                  <SelectItem value="gemini-1.5-pro">gemini-1.5-pro</SelectItem>
+                  {engineOptions.map((engine) => (
+                    <SelectItem key={engine} value={engine}>
+                      {engine}
+                    </SelectItem>
+                  ))}
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -113,7 +127,11 @@ export default function SettingsPage() {
           </Field>
         </FieldGroup>
 
-        <Button id="settings-save-button" type="submit" disabled={mutation.isPending}>
+        <Button
+          id="settings-save-button"
+          type="submit"
+          disabled={mutation.isPending || !selectedEngine}
+        >
           {mutation.isPending ? (
             <Loader2Icon data-icon="inline-start" className="animate-spin" />
           ) : (
@@ -142,6 +160,6 @@ export default function SettingsPage() {
   );
 }
 
-function toRuntimeSettings(values: SettingsFormValues): RuntimeSettings {
+function toRuntimeSettings(values: SettingsFormValues): RuntimeSettingsUpdate {
   return { gemini_engine_version: values.geminiEngineVersion };
 }

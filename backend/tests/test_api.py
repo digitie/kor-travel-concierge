@@ -55,15 +55,27 @@ async def test_settings_roundtrip(client):
     resp = await client.post("/api/settings", json={"gemini_engine_version": "gemini-1.5-pro"})
     assert resp.status_code == 200
     assert resp.json()["settings"]["gemini_engine_version"] == "gemini-1.5-pro"
+    assert "gemini-1.5-pro" in resp.json()["settings"]["gemini_engine_options"]
 
     get_resp = await client.get("/api/settings")
     assert get_resp.json()["gemini_engine_version"] == "gemini-1.5-pro"
+    assert get_resp.json()["gemini_engine_default"] == "gemini-2.0-flash"
+    assert "gemini-2.0-flash" in get_resp.json()["gemini_engine_options"]
 
 
 async def test_settings_rejects_unknown_keys(client):
     resp = await client.post("/api/settings", json={"GEMINI_API_KEY": "plain-secret"})
     assert resp.status_code == 400
     assert "지원하지 않는 설정 키" in resp.json()["detail"]
+
+
+async def test_settings_rejects_unknown_gemini_engine(client):
+    resp = await client.post(
+        "/api/settings",
+        json={"gemini_engine_version": "gemini-unknown-model"},
+    )
+    assert resp.status_code == 400
+    assert "지원하지 않는 Gemini 엔진 버전" in resp.json()["detail"]
 
 
 async def test_health(client):

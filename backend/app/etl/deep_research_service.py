@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import TravelPlace
+from app.services import settings_service
 
 LlmCallable = Callable[[str], str]
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
@@ -178,7 +179,8 @@ async def research_place(
         f"{place.name} Deep Research 프롬프트를 구성했습니다.",
         0.25,
     )
-    resolved_llm = llm or make_gemini_llm()
+    gemini_model = await settings_service.get_gemini_engine_version(session)
+    resolved_llm = llm or make_gemini_llm(model=gemini_model)
     request_prompt = build_prompt(place, prompt=prompt, max_sources=max_sources)
 
     await _report(

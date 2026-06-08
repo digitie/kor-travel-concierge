@@ -17,6 +17,15 @@ async def test_settings_upsert_and_get(session):
     assert await settings_service.get_setting(session, "gemini_engine_version") == "gemini-2.0-flash"
 
 
+async def test_settings_rejects_unknown_gemini_engine(session):
+    with pytest.raises(ValueError, match="지원하지 않는 Gemini 엔진 버전"):
+        await settings_service.set_setting(
+            session,
+            "gemini_engine_version",
+            "gemini-unknown-model",
+        )
+
+
 async def test_settings_get_default(session):
     assert await settings_service.get_setting(session, "missing", default="x") == "x"
 
@@ -25,6 +34,9 @@ async def test_get_all_merges_env_default(session):
     merged = await settings_service.get_all(session)
     # DB에 값이 없어도 .env 기반 기본값이 들어온다.
     assert "gemini_engine_version" in merged
+    assert merged["gemini_engine_default"] == "gemini-2.0-flash"
+    assert merged["gemini_engine_version"] in merged["gemini_engine_options"]
+    assert "gemini-1.5-pro" in merged["gemini_engine_options"]
 
     with pytest.raises(ValueError, match="지원하지 않는 설정 키"):
         await settings_service.set_setting(session, "custom_key", "custom_value")
