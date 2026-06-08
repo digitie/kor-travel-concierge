@@ -192,7 +192,7 @@ ffmpeg -ss 00:03:25 -i "<STREAM_URL>" -frames:v 1 -q:v 2 -f image2 pipe:1
 
 `-ss`는 반드시 `-i` 앞에 둔다. 뒤에 두면 FFmpeg이 시작부터 목표 시점까지 디코딩하여 비용이 커진다.
 
-실행 파일 경로는 코드에 하드코딩하지 않고 `FFMPEG_PATH` 환경변수를 사용한다. Windows live 실행은 `scripts\ensure-windows-ffmpeg.ps1`이 gyan.dev 안정 FFmpeg 아카이브와 `.sha256` sidecar를 내려받아 `Get-FileHash` 검증 후 프로젝트 로컬 `.local\ffmpeg`에 압축을 풀고 `.env`에 기록한다. Docker 환경은 컨테이너 내부 경로를 `DOCKER_FFMPEG_PATH`/`DOCKER_FFPROBE_PATH`로 주입한다.
+실행 파일 경로는 코드에 하드코딩하지 않고 `FFMPEG_PATH` 환경변수를 사용한다. Windows live 실행은 `scripts\ensure-windows-ffmpeg.ps1`이 gyan.dev 안정 FFmpeg 아카이브와 `.sha256` sidecar를 내려받아 `Get-FileHash` 검증 후 프로젝트 로컬 `.local\ffmpeg`에 압축을 풀고 `.env`에 기록한다. `FFPROBE_PATH`는 Windows live 사전 검증에서 `ffprobe -version`을 확인하기 위한 스크립트 관리 값이며, 애플리케이션 runtime 설정은 아니다. Docker 환경은 컨테이너 내부 경로를 `DOCKER_FFMPEG_PATH`로 `FFMPEG_PATH`에만 주입한다.
 
 대표 프레임 JPEG도 RustFS에 저장한다. 추후 원본 동영상을 다운로드해야 하는 시나리오에서는 동일한 RustFS 저장 계층을 사용하며, 원본 동영상·자막·전사 결과·프레임 모두 무기한 보존한다.
 

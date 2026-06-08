@@ -28,7 +28,6 @@ x-python-env: &python-env
   RUSTFS_HEALTH_PATH: /health/live
   MEDIA_RETENTION_POLICY: infinite
   FFMPEG_PATH: ${DOCKER_FFMPEG_PATH:-/usr/bin/ffmpeg}
-  FFPROBE_PATH: ${DOCKER_FFPROBE_PATH:-/usr/bin/ffprobe}
 
 services:
   rustfs:
@@ -121,8 +120,6 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-9041}
       NEXT_PUBLIC_VWORLD_SERVICE_KEY: ${NEXT_PUBLIC_VWORLD_SERVICE_KEY:-}
-      FFMPEG_PATH: ${DOCKER_FFMPEG_PATH:-/usr/bin/ffmpeg}
-      FFPROBE_PATH: ${DOCKER_FFPROBE_PATH:-/usr/bin/ffprobe}
     ports:
       - "${FRONTEND_HOST_PORT:-9042}:3000"
     depends_on:

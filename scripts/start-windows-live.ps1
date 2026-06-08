@@ -193,7 +193,6 @@ if (-not (Test-Path $nextCliPath)) {
 $env:NEXT_PUBLIC_API_BASE_URL = $apiUrl
 $env:CORS_ALLOW_ORIGINS = $corsAllowOrigins
 $env:FFMPEG_PATH = $ffmpegPath
-$env:FFPROBE_PATH = $ffprobePath
 if ($vworldKey) {
     $env:NEXT_PUBLIC_VWORLD_SERVICE_KEY = $vworldKey
 }
@@ -208,8 +207,7 @@ $frontendEnvBlock = $frontendEnv -join "`r`n"
 
 $backendEnv = @(
     "`$env:CORS_ALLOW_ORIGINS = '$(Escape-PowerShellSingleQuotedValue -Value $corsAllowOrigins)'",
-    "`$env:FFMPEG_PATH = '$(Escape-PowerShellSingleQuotedValue -Value $ffmpegPath)'",
-    "`$env:FFPROBE_PATH = '$(Escape-PowerShellSingleQuotedValue -Value $ffprobePath)'"
+    "`$env:FFMPEG_PATH = '$(Escape-PowerShellSingleQuotedValue -Value $ffmpegPath)'"
 )
 $backendEnvBlock = $backendEnv -join "`r`n"
 

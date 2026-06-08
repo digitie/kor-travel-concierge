@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-052 FFprobe/FFmpeg 환경변수 범위 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **runtime 설정 축소**: backend `Settings`와 Docker Compose Python 공통 환경에서 실제 코드가 사용하는 `FFMPEG_PATH`만 유지하고 `FFPROBE_PATH` runtime 주입을 제거.
+  - **frontend env 제거**: Next.js frontend compose 서비스에 불필요하게 들어가던 `FFMPEG_PATH`/`FFPROBE_PATH` 환경변수 주입 제거.
+  - **Windows live 범위 명확화**: `FFPROBE_PATH`는 `scripts\ensure-windows-ffmpeg.ps1`이 `.env`에 기록하고 `start-windows-live.ps1`이 `ffprobe -version`을 확인하는 사전 검증용 값으로만 문서화.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P3-2 항목을 T-052 후속 해소로 표시.
+  - **검증**: Docker Compose config, Windows PowerShell parser, frame extraction pytest 15건, backend `compileall`, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P3-3 export 파일명 개선을 T-053으로 처리한다.
+
+---
+
 ## 2026-06-08: T-051 PR #30 문서 상태 불일치 정리
 
 - **담당자**: Codex

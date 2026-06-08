@@ -65,7 +65,6 @@ class Settings(BaseSettings):
     # --- 자막/전사 폴백 순서 ---
     TRANSCRIPT_PROVIDER_ORDER: str = "youtube-transcript-api,yt-dlp,faster-whisper"
     FFMPEG_PATH: str = "ffmpeg"
-    FFPROBE_PATH: str = "ffprobe"
 
     # --- RustFS 미디어 저장소 ---
     RUSTFS_ENABLED: bool = True

@@ -156,7 +156,7 @@ ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 P
 | Kakao 키워드 장소 검색·Naver 보조 검증 | `KAKAO_REST_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` |
 | 브라우저 VWorld 지도 타일 | `NEXT_PUBLIC_VWORLD_SERVICE_KEY` |
 | 실제 RustFS 계정값 검증 | `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY` |
-| 대표 프레임 추출 | `FFMPEG_PATH`, `FFPROBE_PATH` |
+| 대표 프레임 추출 | `FFMPEG_PATH` |
 
 VWorld 서버 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용한다. `backend/requirements.txt`는 Docker 이미지에 `git` 바이너리를 요구하지 않도록 GitHub archive commit pin을 사용하며, 로컬 패키지 변경분을 바로 검증할 때만 다음처럼 editable 설치로 덮어쓴다.
 
@@ -168,7 +168,7 @@ pip install -e F:\dev\python-vworld-api
 
 Kakao 보조 경로는 공식 [Local API 개발 가이드](https://developers.kakao.com/docs/ko/local/dev-guide)의 주소 검색 후 결과가 없을 때 `GET /v2/local/search/keyword.json` 키워드 장소 검색을 사용한다. 내부 wrapper 계층은 늘리지 않고, 외부 응답을 내부 후보 모델로 바꾸는 최소 변환만 유지한다.
 
-대표 프레임 추출은 `FFMPEG_PATH` 환경변수에 지정된 실행 파일을 직접 사용합니다. Windows live에서는 `.local\ffmpeg` 아래의 프로젝트 로컬 바이너리를 사용하고, 해당 바이너리는 gyan.dev `.sha256` sidecar 검증을 통과한 아카이브에서만 준비합니다. Docker Compose에서는 Windows 경로가 컨테이너에 새지 않도록 `DOCKER_FFMPEG_PATH`, `DOCKER_FFPROBE_PATH`를 통해 컨테이너 내부 경로(`/usr/bin/ffmpeg`, `/usr/bin/ffprobe`)를 `FFMPEG_PATH`, `FFPROBE_PATH`로 주입합니다.
+대표 프레임 추출 runtime은 `FFMPEG_PATH` 환경변수에 지정된 실행 파일만 직접 사용합니다. Windows live에서는 `.local\ffmpeg` 아래의 프로젝트 로컬 바이너리를 사용하고, 해당 바이너리는 gyan.dev `.sha256` sidecar 검증을 통과한 아카이브에서만 준비합니다. `FFPROBE_PATH`는 Windows live 사전 검증에서 `ffprobe -version`을 확인하기 위한 스크립트 관리 값이며, API·scheduler·frontend runtime에는 주입하지 않습니다. Docker Compose에서는 Windows 경로가 컨테이너에 새지 않도록 `DOCKER_FFMPEG_PATH`를 컨테이너 내부 `FFMPEG_PATH`(`/usr/bin/ffmpeg`)로만 주입합니다.
 
 YouTube E2E 입력은 표시명보다 API에서 바로 처리 가능한 ID를 사용합니다.
 
