@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-041 FFmpeg 자동 다운로드 무결성 검증과 안정 URL 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **안정 URL 전환**: `scripts\ensure-windows-ffmpeg.ps1`의 기본 FFmpeg 아카이브를 날짜 고정 URL에서 gyan.dev 안정 링크 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`로 변경.
+  - **hash 검증 강제**: FFmpeg 아카이브는 `.sha256` sidecar 또는 명시 `-ArchiveSha256` 값을 `Get-FileHash` 결과와 비교한 뒤에만 압축 해제하도록 보강.
+  - **portable 7-Zip 검증**: 로컬 7-Zip이 없을 때 내려받는 `7zr.exe`를 버전 고정 GitHub asset과 고정 SHA256으로 검증한 뒤 사용하도록 변경.
+  - **압축 해제 안정화**: Windows PowerShell 5.1에서 portable 실행 파일을 pipeline 중간에 직접 실행할 때 발생하는 오류를 피하기 위해 `Start-Process` 기반 압축 해제와 종료 코드 검증으로 전환.
+  - **문서 갱신**: README, 개발 환경, 아키텍처, ADR 실행 계약, PR #30 추적 문서를 새 검증 흐름에 맞춤.
+  - **검증**: Windows PowerShell parser 검증 통과. `ffmpeg-release-essentials.7z`와 `.sha256` sidecar를 사용한 smoke에서 archive hash 검증, portable `7zr.exe` hash 검증, 압축 해제, `ffmpeg.exe`/`ffprobe.exe` 경로 반환까지 확인.
+- **다음 작업**:
+  - PR #30 P1-6 docker-compose CORS 하드코딩과 포트 점유 프로세스 강제 종료 보강을 T-042로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-040 지도 marker diff 기반 캐싱과 선택 재중심 보강
 
 - **담당자**: Codex

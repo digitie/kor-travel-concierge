@@ -513,7 +513,7 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 - 앱 컨테이너의 `RUSTFS_ENDPOINT`는 `http://rustfs:9000`으로 override하고, Windows 호스트에서 직접 실행하는 `.env` 기본값은 `http://127.0.0.1:9003`으로 둔다.
 - 미디어 자산은 단일 `krtour-map` 버킷과 `features/` prefix를 사용한다. 공개 객체 URL은 `http://127.0.0.1:9003/krtour-map` 기준으로 조립한다.
 - API와 Web의 Windows live 고정 포트는 각각 `9041`, `9042`다. Compose 내부 포트는 API `8000`, Web `3000`을 유지하되 host port 기본값을 `9041`, `9042`로 매핑한다.
-- Windows live 시작 전 프로젝트 로컬 `.local\ffmpeg`에 FFmpeg Windows 빌드가 없으면 `scripts\ensure-windows-ffmpeg.ps1`이 지정된 gyan.dev 아카이브를 내려받고, `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신한다. Docker Compose는 Windows 호스트 경로 대신 컨테이너 내부 `DOCKER_FFMPEG_PATH`, `DOCKER_FFPROBE_PATH`를 `FFMPEG_PATH`, `FFPROBE_PATH`로 주입한다.
+- Windows live 시작 전 프로젝트 로컬 `.local\ffmpeg`에 FFmpeg Windows 빌드가 없으면 `scripts\ensure-windows-ffmpeg.ps1`이 gyan.dev 안정 아카이브 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증한 뒤 압축을 풀고, `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신한다. 로컬 7-Zip이 없을 때 내려받는 portable `7zr.exe`도 버전 고정 URL과 고정 SHA256으로 검증한다. Docker Compose는 Windows 호스트 경로 대신 컨테이너 내부 `DOCKER_FFMPEG_PATH`, `DOCKER_FFPROBE_PATH`를 `FFMPEG_PATH`, `FFPROBE_PATH`로 주입한다.
 - `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT`로 host port override를 허용한다.
 - Compose의 MCP 서버는 `streamable-http` transport를 사용하고 `0.0.0.0:8010/mcp`로 실행한다. 로컬 개발 기본값은 기존처럼 `stdio`로 유지한다.
 - API 서비스에 `/health` healthcheck를 두고, MCP/scheduler/frontend는 API healthy 이후 시작한다.

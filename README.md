@@ -137,7 +137,7 @@ npm run dev:live
 .\scripts\start-windows-live.ps1
 ```
 
-Windows live 시작 전 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `scripts\ensure-windows-ffmpeg.ps1`이 지정된 gyan.dev 아카이브를 내려받아 압축을 풀고 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신합니다. 이 디렉토리는 Git 추적 대상이 아니며, API 프로세스는 해당 환경변수 경로로 대표 프레임 추출을 수행합니다.
+Windows live 시작 전 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `scripts\ensure-windows-ffmpeg.ps1`이 gyan.dev 안정 링크 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증한 뒤 압축을 풉니다. 로컬 7-Zip이 없을 때만 portable `7zr.exe`를 버전 고정 GitHub asset과 고정 SHA256으로 검증해 사용합니다. 이 디렉토리는 Git 추적 대상이 아니며, 스크립트는 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신하고 API 프로세스는 해당 환경변수 경로로 대표 프레임 추출을 수행합니다.
 
 ### ETL 실행
 

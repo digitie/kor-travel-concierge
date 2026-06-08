@@ -64,8 +64,9 @@
   - `easeTo`는 별도 effect로 분리됐으나, 선택 변경 시 marker를 여전히 전량 teardown·재생성하고 실제 데이터 변경 시 사용자가 패닝한 지도를 재중심. diff 기반 marker 캐싱 + 선택 클릭에서만 `easeTo` 권장.
   - 후속 처리: T-040에서 marker를 `place_id` 기준 cache로 관리해 기존 marker를 갱신·추가·삭제하고, 선택 스타일 동기화와 선택 장소 재중심을 분리했다. 장소 데이터 refresh는 marker 위치와 popup만 갱신하고 지도 재중심을 유발하지 않는다.
 
-- [ ] **P1-5. FFmpeg 자동 다운로드 무결성 미검증 + 취약한 고정 URL** (`#29`)
+- [x] **P1-5. FFmpeg 자동 다운로드 무결성 미검증 + 취약한 고정 URL** (`#29`, T-041에서 후속 해소)
   - `ensure-windows-ffmpeg.ps1`이 `.7z`/`7zr.exe`를 SHA256 검증 없이 받아 실행(공급망 갭). 또한 날짜 고정 gyan.dev URL은 추후 404 → `start-windows-live.ps1` 시작이 throw. `Get-FileHash` 검증 + `release/ffmpeg-release-full.7z` 안정 URL(또는 갱신 주기 명문화) 권장.
+  - 후속 처리: T-041에서 기본 FFmpeg URL을 gyan.dev 안정 링크 `ffmpeg-release-full.7z`로 전환하고 `.sha256` sidecar 또는 명시 hash 검증을 통과한 아카이브만 압축 해제하도록 보강했다. portable `7zr.exe`도 버전 고정 GitHub asset과 고정 SHA256으로 검증한다.
 
 - [ ] **P1-6. docker-compose CORS 하드코딩 / 포트 점유 프로세스 무확인 강제 종료** (`#26`)
   - `docker-compose.yml`이 CORS를 하드코딩해 `.env`의 `CORS_ALLOW_ORIGINS` override가 단절되고 `3000`/`13000` origin 누락. `Stop-PortOwner`가 9041/9042 점유 임의 프로세스를 경고 없이 `Stop-Process -Force` → 확인 절차 추가 권장.
