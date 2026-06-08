@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from datetime import timedelta
 
 import pytest
@@ -24,6 +26,11 @@ async def _ok_handler(session, run):
 
 async def _boom_handler(session, run):
     raise RuntimeError("handler boom")
+
+
+async def _yielding_ok_handler(session, run):
+    await asyncio.sleep(0)
+    return {"handled_run_id": run.id}
 
 
 async def test_run_once_claims_executes_and_marks_done(session, session_factory):
@@ -75,6 +82,31 @@ async def test_run_once_marks_failed_when_handler_raises(session, session_factor
     assert refreshed.state == RunState.FAILED
     assert "handler boom" in refreshed.last_error
     assert "작업이 실패했습니다" in refreshed.current_message
+
+
+async def test_execute_run_logs_heartbeat_task_exception(
+    session, session_factory, monkeypatch, caplog
+):
+    async def broken_heartbeat_loop(*args, **kwargs):
+        raise RuntimeError("heartbeat task boom")
+
+    monkeypatch.setattr(worker, "_heartbeat_loop", broken_heartbeat_loop)
+    caplog.set_level(logging.ERROR, logger=worker.logger.name)
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="web", target_type="keyword", target_id="부산"
+    )
+
+    executed_id = await worker.run_once(
+        session_factory,
+        handlers={"harvest": _yielding_ok_handler},
+        heartbeat_interval_seconds=999,
+    )
+
+    assert executed_id == run.id
+    refreshed = await _fresh_run(session_factory, run.id)
+    assert refreshed.state == RunState.DONE
+    assert "crawl_run heartbeat task 종료 중 예외" in caplog.text
+    assert "heartbeat task boom" in caplog.text
 
 
 async def test_run_once_marks_failed_for_unknown_job_type(session, session_factory):

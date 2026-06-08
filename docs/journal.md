@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-048 heartbeat task 예외 처리 범위 축소
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **취소 처리 범위 축소**: scheduler `execute_run()`의 heartbeat task 종료 대기에서 `Exception` suppress를 제거하고 `CancelledError`만 정상 취소로 처리.
+  - **예상 밖 예외 가시화**: heartbeat task가 이미 실패한 상태라면 `logger.exception`으로 run id와 traceback을 남겨 조용히 사라지지 않도록 보강.
+  - **회귀 테스트 추가**: heartbeat task 예외가 job 완료를 막지 않되 로그에는 남는지 검증하는 scheduler worker 테스트 추가.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-6 항목을 T-048 후속 해소로 표시.
+  - **검증**: scheduler worker pytest, backend 전체 pytest 147건, backend `compileall`, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-7 engine 모델 설정 단일 출처 정리를 T-049로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-047 hydration suppress와 VWorld 키 주입 정리
 
 - **담당자**: Codex

@@ -13,7 +13,6 @@ Celery / Redis / RabbitMQ / PostgreSQL Advisory Lock은 초기 범위에서 제�
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
@@ -226,8 +225,12 @@ async def execute_run(
             await crawl_run_service.mark_failed(session, run.id, error=str(exc))
     finally:
         heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
+        try:
             await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("crawl_run heartbeat task 종료 중 예외(run_id=%s)", run.id)
 
 
 async def run_once(
