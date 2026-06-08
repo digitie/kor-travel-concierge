@@ -28,10 +28,12 @@ class MediaAsset(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     asset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     video_id: Mapped[str | None] = mapped_column(
-        ForeignKey("youtube_videos.video_id"), nullable=True, index=True
+        ForeignKey("youtube_videos.video_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
     )
     place_id: Mapped[int | None] = mapped_column(
-        ForeignKey("travel_places.place_id"), nullable=True
+        ForeignKey("travel_places.place_id", ondelete="NO ACTION"), nullable=True
     )
     storage_provider: Mapped[str] = mapped_column(
         String(16), nullable=False, default="rustfs"

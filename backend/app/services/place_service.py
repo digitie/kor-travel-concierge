@@ -12,8 +12,8 @@ SpatiaLite/PostGIS 환경에서는 동일 인터페이스를 `ST_DWithin`/`PtDis
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.spatial import sync_place_geometry
 from app.models import (
-    MatchStatus,
     ExtractedPlaceCandidate,
+    MatchStatus,
     MediaAsset,
     TravelPlace,
     VideoPlaceMapping,

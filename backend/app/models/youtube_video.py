@@ -27,6 +27,7 @@ class CrawlStatus(str, Enum):
 class YoutubeVideo(Base):
     __tablename__ = "youtube_videos"
 
+    # 영상은 생성 시각보다 마지막 수집 시각이 도메인 상태라 `crawled_at`을 별도 유지한다.
     video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str] = mapped_column(String(512), nullable=False)

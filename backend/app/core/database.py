@@ -160,10 +160,10 @@ async def ensure_video_place_mapping_repeatable(conn) -> None:
                 frame_asset_id INTEGER,
                 created_at DATETIME NOT NULL,
                 PRIMARY KEY (id),
-                FOREIGN KEY(video_id) REFERENCES youtube_videos (video_id),
-                FOREIGN KEY(place_id) REFERENCES travel_places (place_id),
-                FOREIGN KEY(place_candidate_id) REFERENCES extracted_place_candidates (id),
-                FOREIGN KEY(frame_asset_id) REFERENCES media_assets (id)
+                FOREIGN KEY(video_id) REFERENCES youtube_videos (video_id) ON DELETE NO ACTION,
+                FOREIGN KEY(place_id) REFERENCES travel_places (place_id) ON DELETE NO ACTION,
+                FOREIGN KEY(place_candidate_id) REFERENCES extracted_place_candidates (id) ON DELETE NO ACTION,
+                FOREIGN KEY(frame_asset_id) REFERENCES media_assets (id) ON DELETE NO ACTION
             );
             """
         )

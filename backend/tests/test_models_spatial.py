@@ -168,3 +168,19 @@ async def test_video_place_mapping_allows_repeated_mentions(session):
 
     result = await session.execute(select(VideoPlaceMapping))
     assert len(result.scalars().all()) == 2
+
+
+def _foreign_key_ondelete(model, column_name: str) -> str | None:
+    [foreign_key] = list(model.__table__.c[column_name].foreign_keys)
+    return foreign_key.ondelete
+
+
+def test_model_foreign_keys_declare_delete_policy():
+    assert _foreign_key_ondelete(ExtractedPlaceCandidate, "video_id") == "NO ACTION"
+    assert _foreign_key_ondelete(ExtractedPlaceCandidate, "matched_place_id") == "NO ACTION"
+    assert _foreign_key_ondelete(MediaAsset, "video_id") == "NO ACTION"
+    assert _foreign_key_ondelete(MediaAsset, "place_id") == "NO ACTION"
+    assert _foreign_key_ondelete(VideoPlaceMapping, "video_id") == "NO ACTION"
+    assert _foreign_key_ondelete(VideoPlaceMapping, "place_id") == "NO ACTION"
+    assert _foreign_key_ondelete(VideoPlaceMapping, "place_candidate_id") == "NO ACTION"
+    assert _foreign_key_ondelete(VideoPlaceMapping, "frame_asset_id") == "NO ACTION"

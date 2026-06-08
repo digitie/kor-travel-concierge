@@ -28,7 +28,9 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     video_id: Mapped[str] = mapped_column(
-        ForeignKey("youtube_videos.video_id"), nullable=False, index=True
+        ForeignKey("youtube_videos.video_id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True,
     )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     ai_place_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -41,7 +43,7 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         String(32), nullable=False, default=MatchStatus.NEEDS_REVIEW, index=True
     )
     matched_place_id: Mapped[int | None] = mapped_column(
-        ForeignKey("travel_places.place_id"), nullable=True
+        ForeignKey("travel_places.place_id", ondelete="NO ACTION"), nullable=True
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 검수 메타데이터
