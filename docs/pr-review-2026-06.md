@@ -93,7 +93,8 @@
 
 ### 🔵 P3 — Nit / 제안
 
-- [ ] **P3-1.** 문서 상태 불일치 잔존(예: 일부 `CLAUDE.md` ↔ `tasks.md` 작업 상태) 정리.
+- [x] **P3-1.** 문서 상태 불일치 잔존(예: 일부 `CLAUDE.md` ↔ `tasks.md` 작업 상태) 정리. (`T-051`에서 후속 해소)
+  - 후속 처리: T-051에서 남은 P3-2~P3-5 항목을 `docs/tasks.md` 대기 작업 T-052~T-055로 승격하고, `CLAUDE.md`의 다음 착수 대상도 T-052로 맞췄다.
 - [ ] **P3-2.** `FFPROBE_PATH`가 config/.env/compose에 추가됐으나 백엔드 코드 미사용; frontend compose 서비스에 ffmpeg env 불필요 주입(#29).
 - [ ] **P3-3.** export 파일명 고정(`tripmate-places.*`) → 타임스탬프/필터 반영(#27).
 - [ ] **P3-4.** import 정렬, FK `ondelete` 명시, `TimestampMixin` 일관성 등 코드 위생(#7 외).
