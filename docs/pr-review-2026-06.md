@@ -74,7 +74,8 @@
 
 ### 🟡 P2 — Minor (정확성 / 품질 / 일관성)
 
-- [ ] **P2-1. export 직렬화가 이벤트 루프 블로킹 + 상한 부재 + XML 제어문자 미정제** (`#27`) — executor 격리, limit 상한, xlsx/GPX/KML의 XML 1.0 불법 제어문자 정제.
+- [x] **P2-1. export 직렬화가 이벤트 루프 블로킹 + 상한 부재 + XML 제어문자 미정제** (`#27`, T-043에서 후속 해소) — executor 격리, limit 상한, xlsx/GPX/KML의 XML 1.0 불법 제어문자 정제.
+  - 후속 처리: T-043에서 export 조회 상한을 기본 500건·최대 1,000건으로 제한하고, XLSX/GPX/KML 직렬화를 `asyncio.to_thread`로 격리했다. XML 텍스트는 XML 1.0 유효 문자만 남긴 뒤 escape하며, API thread 실행·limit clamp와 XML sanitizer 테스트를 추가했다.
 - [ ] **P2-2. 증분 수집 미완** (`#23`) — keyword 검색·playlist harvest 경로가 매 실행 full-rescan(`publishedAfter`/watermark 미적용). 현재는 quota cap으로만 완화됨.
 - [ ] **P2-3. `next-env.d.ts` 생성물 추적 + 훅 정규화 의존** (`#25`) — gitignore + `git rm --cached`로 흔들림 원천 제거 권장(미채택 시 추적 유지 근거를 ADR로).
 - [ ] **P2-4. Next 16 후속 정리** (`#20`) — `tsconfig` `jsx`는 Next 권장 `preserve`로, `@types/node`는 런타임(20.9+)에 맞춰 `^20`/`^22`로, `engines: {node: ">=20.9.0"}` 추가.

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -28,6 +29,9 @@ from app.services import (
 )
 
 router = APIRouter(prefix="/api")
+
+EXPORT_DESTINATION_LIMIT_DEFAULT = 500
+EXPORT_DESTINATION_LIMIT_MAX = 1_000
 
 
 class HarvestRequest(BaseModel):
@@ -247,17 +251,19 @@ async def export_destinations(
     format: str = "xlsx",
     ids: str | None = None,
     sort: str = "mention_count",
+    limit: int = EXPORT_DESTINATION_LIMIT_DEFAULT,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """선택 또는 전체 장소 목록을 `xlsx`, `gpx`, `kml`로 내보낸다."""
     _validate_destination_sort(sort)
     try:
         place_ids = _parse_place_ids(ids)
+        export_limit = _normalize_destination_export_limit(limit)
         summaries = await place_service.list_place_summaries(
-            session, sort=sort, place_ids=place_ids, limit=None
+            session, sort=sort, place_ids=place_ids, limit=export_limit
         )
-        body, media_type, filename = place_export_service.build_place_export(
-            summaries, format
+        body, media_type, filename = await asyncio.to_thread(
+            place_export_service.build_place_export, summaries, format
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -538,4 +544,12 @@ def _parse_place_ids(raw_ids: str | None) -> list[int] | None:
         if place_id <= 0:
             raise ValueError(f"장소 ID는 1 이상이어야 한다: {value}")
         place_ids.append(place_id)
+        if len(place_ids) > EXPORT_DESTINATION_LIMIT_MAX:
+            raise ValueError(
+                f"한 번에 내보낼 수 있는 장소 ID는 최대 {EXPORT_DESTINATION_LIMIT_MAX}개다."
+            )
     return place_ids or None
+
+
+def _normalize_destination_export_limit(limit: int) -> int:
+    return max(1, min(limit, EXPORT_DESTINATION_LIMIT_MAX))

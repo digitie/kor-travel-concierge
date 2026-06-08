@@ -92,8 +92,9 @@ def _worksheet_xml(rows: list[list[str]]) -> str:
         cells = []
         for column_index, value in enumerate(row, start=1):
             cell_ref = f"{_column_name(column_index)}{row_index}"
+            cell_value = _escape_xml_text(value)
             cells.append(
-                f'<c r="{cell_ref}" t="inlineStr"><is><t>{escape(value)}</t></is></c>'
+                f'<c r="{cell_ref}" t="inlineStr"><is><t>{cell_value}</t></is></c>'
             )
         body.append(f'<row r="{row_index}">{"".join(cells)}</row>')
     return (
@@ -165,8 +166,8 @@ def _build_gpx(summaries: list[PlaceSummary]) -> bytes:
             "</wpt>".format(
                 lat=place.latitude,
                 lng=place.longitude,
-                name=escape(place.name),
-                desc=escape(_description(summary)),
+                name=_escape_xml_text(place.name),
+                desc=_escape_xml_text(_description(summary)),
             )
         )
     xml = (
@@ -185,8 +186,8 @@ def _build_kml(summaries: list[PlaceSummary]) -> bytes:
         place = summary.place
         placemarks.append(
             "<Placemark>"
-            f"<name>{escape(place.name)}</name>"
-            f"<description>{escape(_description(summary))}</description>"
+            f"<name>{_escape_xml_text(place.name)}</name>"
+            f"<description>{_escape_xml_text(_description(summary))}</description>"
             "<Point>"
             f"<coordinates>{place.longitude:.7f},{place.latitude:.7f},0</coordinates>"
             "</Point>"
@@ -240,3 +241,21 @@ def _timestamp_label(mention: PlaceSourceMention | None) -> str:
     if mention.timestamp_start and mention.timestamp_end:
         return f"{mention.timestamp_start}-{mention.timestamp_end}"
     return mention.timestamp_start or mention.timestamp_end or ""
+
+
+def _escape_xml_text(value: str) -> str:
+    return escape(_strip_invalid_xml_chars(value))
+
+
+def _strip_invalid_xml_chars(value: str) -> str:
+    return "".join(char for char in value if _is_valid_xml_char(char))
+
+
+def _is_valid_xml_char(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        codepoint in (0x09, 0x0A, 0x0D)
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )

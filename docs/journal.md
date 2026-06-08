@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-043 장소 export 직렬화 안정화
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **export 상한 추가**: `/api/destinations/export`에 기본 500건, 최대 1,000건의 장소 limit을 적용하고, `ids` 목록도 1,000개 초과 시 400 응답으로 제한.
+  - **이벤트 루프 격리**: XLSX/GPX/KML 직렬화를 `asyncio.to_thread`로 실행해 ZIP/XML 생성이 FastAPI 이벤트 루프를 직접 막지 않도록 변경.
+  - **XML 문자 정제**: XLSX inline string, GPX name/desc, KML name/description에 들어가는 문자열에서 XML 1.0 불법 제어문자를 제거한 뒤 escape하도록 보강.
+  - **테스트 보강**: API route가 limit을 clamp하고 직렬화를 별도 thread에서 실행하는지 확인하는 테스트와, XLSX/GPX/KML XML sanitizer 단위 테스트를 추가.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-1 항목을 T-043 후속 해소로 표시.
+  - **검증**: 관련 export 테스트, backend 전체 pytest, `python3 -m compileall backend/app backend/tests`, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-2 증분 수집 미완 항목을 T-044로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-042 docker-compose CORS override와 Windows live 포트 종료 안전장치 보강
 
 - **담당자**: Codex

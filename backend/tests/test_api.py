@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import threading
 from zipfile import ZipFile
 
 import pytest_asyncio
@@ -184,6 +185,35 @@ async def test_destination_export_formats(client, session_factory):
     kml = await client.get(f"/api/destinations/export?format=kml&ids={place.place_id}")
     assert kml.status_code == 200
     assert "126.7958000,33.5563000,0" in kml.text
+
+
+async def test_destination_export_caps_limit_and_serializes_in_thread(client, monkeypatch):
+    from app.api import routes
+
+    captured: dict[str, int] = {}
+
+    async def fake_list_place_summaries(session, *, sort, place_ids, limit):
+        captured["limit"] = limit
+        return []
+
+    def fake_build_place_export(summaries, export_format):
+        captured["thread_id"] = threading.get_ident()
+        return b"export", "text/plain", "export.txt"
+
+    monkeypatch.setattr(
+        routes.place_service, "list_place_summaries", fake_list_place_summaries
+    )
+    monkeypatch.setattr(
+        routes.place_export_service, "build_place_export", fake_build_place_export
+    )
+
+    main_thread_id = threading.get_ident()
+    response = await client.get("/api/destinations/export?format=gpx&limit=999999")
+
+    assert response.status_code == 200
+    assert response.content == b"export"
+    assert captured["limit"] == routes.EXPORT_DESTINATION_LIMIT_MAX
+    assert captured["thread_id"] != main_thread_id
 
 
 async def test_operations_endpoints_return_runs_audits_and_storage(client, session_factory):
