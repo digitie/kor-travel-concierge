@@ -1,6 +1,16 @@
 import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
 
+function cssVariableColor(name: string): string {
+  const resolveColor = ({ opacityValue }: { opacityValue?: string }) => {
+    if (opacityValue === undefined) {
+      return `var(${name})`;
+    }
+    return `color-mix(in oklab, var(${name}) calc(${opacityValue} * 100%), transparent)`;
+  };
+  return resolveColor as unknown as string;
+}
+
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
@@ -12,48 +22,48 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        background: cssVariableColor("--background"),
+        foreground: cssVariableColor("--foreground"),
         card: {
-          DEFAULT: "var(--card)",
-          foreground: "var(--card-foreground)",
+          DEFAULT: cssVariableColor("--card"),
+          foreground: cssVariableColor("--card-foreground"),
         },
         popover: {
-          DEFAULT: "var(--popover)",
-          foreground: "var(--popover-foreground)",
+          DEFAULT: cssVariableColor("--popover"),
+          foreground: cssVariableColor("--popover-foreground"),
         },
         primary: {
-          DEFAULT: "var(--primary)",
-          foreground: "var(--primary-foreground)",
+          DEFAULT: cssVariableColor("--primary"),
+          foreground: cssVariableColor("--primary-foreground"),
         },
         secondary: {
-          DEFAULT: "var(--secondary)",
-          foreground: "var(--secondary-foreground)",
+          DEFAULT: cssVariableColor("--secondary"),
+          foreground: cssVariableColor("--secondary-foreground"),
         },
         muted: {
-          DEFAULT: "var(--muted)",
-          foreground: "var(--muted-foreground)",
+          DEFAULT: cssVariableColor("--muted"),
+          foreground: cssVariableColor("--muted-foreground"),
         },
         accent: {
-          DEFAULT: "var(--accent)",
-          foreground: "var(--accent-foreground)",
+          DEFAULT: cssVariableColor("--accent"),
+          foreground: cssVariableColor("--accent-foreground"),
         },
         destructive: {
-          DEFAULT: "var(--destructive)",
-          foreground: "var(--destructive-foreground)",
+          DEFAULT: cssVariableColor("--destructive"),
+          foreground: cssVariableColor("--destructive-foreground"),
         },
-        border: "var(--border)",
-        input: "var(--input)",
-        ring: "var(--ring)",
+        border: cssVariableColor("--border"),
+        input: cssVariableColor("--input"),
+        ring: cssVariableColor("--ring"),
         sidebar: {
-          DEFAULT: "var(--sidebar)",
-          foreground: "var(--sidebar-foreground)",
-          primary: "var(--sidebar-primary)",
-          "primary-foreground": "var(--sidebar-primary-foreground)",
-          accent: "var(--sidebar-accent)",
-          "accent-foreground": "var(--sidebar-accent-foreground)",
-          border: "var(--sidebar-border)",
-          ring: "var(--sidebar-ring)",
+          DEFAULT: cssVariableColor("--sidebar"),
+          foreground: cssVariableColor("--sidebar-foreground"),
+          primary: cssVariableColor("--sidebar-primary"),
+          "primary-foreground": cssVariableColor("--sidebar-primary-foreground"),
+          accent: cssVariableColor("--sidebar-accent"),
+          "accent-foreground": cssVariableColor("--sidebar-accent-foreground"),
+          border: cssVariableColor("--sidebar-border"),
+          ring: cssVariableColor("--sidebar-ring"),
         },
       },
     },

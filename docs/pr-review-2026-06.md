@@ -30,10 +30,11 @@
 
 ### 🔴 P0 — Blocker (런타임/배포에서 기능이 깨짐, 최우선)
 
-- [ ] **P0-1. Tailwind 색상 토큰 alpha 미지원 — 투명도 modifier 전부 무효** (`#15(b)`, #24에서 미해소)
+- [x] **P0-1. Tailwind 색상 토큰 alpha 미지원 — 투명도 modifier 전부 무효** (`#15(b)`, #24에서 미해소, T-034에서 후속 해소)
   - 근거: `frontend/src/app/globals.css` / `frontend/tailwind.config.ts`의 색상 토큰이 alpha 채널 없는 bare `var(--x)`(oklch). 프로젝트 자체 Tailwind v3.4 CLI로 컴파일 검증 결과 `bg-destructive/10`, `ring-ring/50`, `bg-muted/70`, `bg-muted/50` 등이 **CSS를 0바이트 출력**(조용히 누락).
   - 영향: 포커스 링, invalid 링, destructive 배경 틴트, #24가 새로 추가한 `VWorldMap.tsx`의 `bg-muted/70` fallback 오버레이까지 렌더링 안 됨. `build`는 통과해 가려짐.
   - 조치: 토큰을 alpha 주입 가능한 형태로 재정의(예: `hsl(var(--x) / <alpha-value>)` 또는 v3 호환 채널 분리). 누락 중인 `--destructive-foreground` 정의도 함께 보강.
+  - 후속 처리: T-034에서 Tailwind 색상 토큰을 alpha-aware 함수형 토큰으로 전환하고 `--destructive-foreground` 누락을 보강했다. Tailwind CLI 산출물에서 주요 alpha class 생성을 확인하고 frontend lint/type-check/build 및 Playwright E2E를 통과했다.
 
 - [ ] **P0-2. `deep_research` job 핸들러 미등록 — MCP `trigger_deep_research`가 즉시 실패** (`#14`, #22에서 미해소)
   - 근거: `scheduler/worker.py`의 `DEFAULT_HANDLERS`가 `{"harvest"}`만 등록. `trigger_deep_research`는 `job_type="deep_research"` crawl_run을 만들고 MCP 도구로 노출되는데, 스케줄러가 "지원하지 않는 job_type"으로 곧바로 `mark_failed` 처리.

@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-08: T-034 Tailwind 색상 토큰 alpha modifier 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **alpha modifier 복구**: Tailwind semantic 색상 토큰을 `opacityValue`를 받는 함수형 토큰으로 전환해 `bg-muted/70`, `ring-ring/50`, `bg-destructive/10`, invalid focus ring 등 opacity modifier가 실제 CSS로 생성되도록 수정.
+  - **누락 토큰 보강**: `--destructive-foreground`를 light/dark theme에 추가하고, `--sidebar-ring` 선언의 세미콜론 누락을 정리.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P0-1 항목을 T-034 후속 해소로 표시.
+  - **검증**: Tailwind CLI 산출물에서 `bg-muted/70`, `bg-muted/30`, `focus-visible:ring-ring/50`, `bg-destructive/10`, `focus-visible:ring-destructive/20`, `focus-visible:border-destructive/40`, `ring-foreground/10` class 생성을 확인. frontend `npm run lint`, `npm run type-check`, `npm run build`, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - PR #30 P0-2 `deep_research` job handler 미등록 문제를 T-035로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-033 RustFS 로컬 설정 워크트리 동기화
 
 - **담당자**: Codex
