@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-040 지도 marker diff 기반 캐싱과 선택 재중심 보강
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **marker cache 도입**: `VWorldMap`의 marker를 `place_id` 기준 cache로 관리해 장소 refresh나 선택 변경 때 기존 marker를 전량 제거·재생성하지 않고 필요한 항목만 추가·갱신·삭제하도록 변경.
+  - **이벤트 핸들러 갱신**: marker entry에 click handler와 최신 장소 데이터를 함께 저장하고, 장소 데이터가 바뀌면 popup, 위치, click handler를 최신 값으로 교체.
+  - **선택 스타일 분리**: 선택 여부에 따른 marker 크기, 색상, 그림자, 접근성 label을 별도 동기화 함수로 분리해 선택 변경 때 DOM marker만 가볍게 갱신.
+  - **재중심 조건 축소**: 선택 장소 이동은 marker cache의 `selectedPlaceId` 항목을 기준으로 선택 변경 때만 수행해, 장소 목록 데이터 refresh가 사용자의 지도 pan 위치를 강제로 되돌리지 않게 보강.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P1-4 항목을 T-040 후속 해소로 표시.
+  - **검증**: frontend `npm run lint`, `npm run type-check`, `npm run build`, Playwright E2E 4건 통과.
+- **다음 작업**:
+  - PR #30 P1-5 FFmpeg 자동 다운로드 무결성 검증과 안정 URL 보강을 T-041로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-039 schema_migrations 경량 registry 도입
 
 - **담당자**: Codex

@@ -60,8 +60,9 @@
   - `create_all`은 기존 SQLite에 신규 제약/`BigInteger`/non-null 컬럼을 ALTER하지 못함. 신규 DB에서만 반영됨. 경량 마이그레이션 체계(또는 명시적 init 보정 스크립트) 도입 검토. (DO-NOT #5)
   - 후속 처리: T-039에서 `schema_migrations` 테이블과 `run_schema_migrations`를 추가해 init 보정 작업의 적용 이력을 추적하도록 했다. 현재 보정 migration은 `crawl_runs` 상태 로그 컬럼과 `video_place_mappings` 반복 등장 제약 제거를 관리한다.
 
-- [ ] **P1-4. 지도 marker 전량 재생성 + 강제 재중심** (`#16(b)`, #24에서 부분 해소)
+- [x] **P1-4. 지도 marker 전량 재생성 + 강제 재중심** (`#16(b)`, #24에서 부분 해소, T-040에서 후속 해소)
   - `easeTo`는 별도 effect로 분리됐으나, 선택 변경 시 marker를 여전히 전량 teardown·재생성하고 실제 데이터 변경 시 사용자가 패닝한 지도를 재중심. diff 기반 marker 캐싱 + 선택 클릭에서만 `easeTo` 권장.
+  - 후속 처리: T-040에서 marker를 `place_id` 기준 cache로 관리해 기존 marker를 갱신·추가·삭제하고, 선택 스타일 동기화와 선택 장소 재중심을 분리했다. 장소 데이터 refresh는 marker 위치와 popup만 갱신하고 지도 재중심을 유발하지 않는다.
 
 - [ ] **P1-5. FFmpeg 자동 다운로드 무결성 미검증 + 취약한 고정 URL** (`#29`)
   - `ensure-windows-ffmpeg.ps1`이 `.7z`/`7zr.exe`를 SHA256 검증 없이 받아 실행(공급망 갭). 또한 날짜 고정 gyan.dev URL은 추후 404 → `start-windows-live.ps1` 시작이 throw. `Get-FileHash` 검증 + `release/ffmpeg-release-full.7z` 안정 URL(또는 갱신 주기 명문화) 권장.
