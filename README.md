@@ -131,7 +131,7 @@ npm ci
 npm run dev:live
 ```
 
-포트가 이미 점유 중이면 다음 스크립트가 해당 리스너를 종료한 뒤 고정 포트로 서버를 다시 띄웁니다.
+포트가 이미 점유 중이면 다음 스크립트가 현재 TripMate 워크트리에서 띄운 리스너만 종료한 뒤 고정 포트로 서버를 다시 띄웁니다. 다른 프로세스가 포트를 점유하고 있으면 중단되며, 의도적으로 종료하려면 `-ForcePortKill`을 명시합니다.
 
 ```powershell
 .\scripts\start-windows-live.ps1

@@ -125,7 +125,9 @@ RustFS health 확인 후 기본 버킷을 만들고 `features/healthcheck/t014-s
    ```powershell
    .\scripts\start-windows-live.ps1
    ```
-   이 스크립트는 `9041`, `9042`를 점유한 리스너 PID를 먼저 종료한 뒤 RustFS, API, Web을 순서대로 준비합니다. API 시작 전 `scripts\ensure-windows-ffmpeg.ps1`을 호출해 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증합니다. 로컬 7-Zip이 없으면 portable `7zr.exe`도 버전 고정 GitHub asset과 고정 SHA256으로 검증한 뒤 사용합니다. 검증과 압축 해제 후 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신하고, `ffmpeg -version`, `ffprobe -version` 확인을 통과해야 서버를 띄웁니다.
+   이 스크립트는 `9041`, `9042`를 점유한 리스너 중 현재 TripMate 워크트리 경로가 command line 또는 executable path에서 확인되는 프로세스만 자동 종료한 뒤 RustFS, API, Web을 순서대로 준비합니다. 다른 프로세스가 포트를 점유하면 중단하므로 직접 종료하거나, 의도한 종료라면 `.\scripts\start-windows-live.ps1 -ForcePortKill`을 명시합니다. API 시작 전 `scripts\ensure-windows-ffmpeg.ps1`을 호출해 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증합니다. 로컬 7-Zip이 없으면 portable `7zr.exe`도 버전 고정 GitHub asset과 고정 SHA256으로 검증한 뒤 사용합니다. 검증과 압축 해제 후 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신하고, `ffmpeg -version`, `ffprobe -version` 확인을 통과해야 서버를 띄웁니다.
+
+   `CORS_ALLOW_ORIGINS`는 현재 PowerShell 세션 환경변수, `.env`, 기본값 순서로 적용됩니다. 기본값에는 Windows live Web 포트(`9042` 또는 `FRONTEND_HOST_PORT` override)와 개발/E2E 포트 `3000`, `13000`, `13100`의 `localhost` 및 `127.0.0.1` origin을 포함합니다.
 
 5. 정적 검증을 실행합니다:
    ```powershell
