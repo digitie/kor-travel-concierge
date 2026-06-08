@@ -80,7 +80,8 @@
   - 후속 처리: T-044에서 keyword harvest는 `source_targets.last_crawled_at`을 YouTube `search.list`의 `publishedAfter`로 전달하고, playlist harvest는 영상 공개 시각이 target watermark 이하가 되면 pagination을 중단하도록 보강했다. 수집 성공 후 source target crawl 시각도 갱신한다.
 - [x] **P2-3. `next-env.d.ts` 생성물 추적 + 훅 정규화 의존** (`#25`, T-045에서 후속 해소) — gitignore + `git rm --cached`로 흔들림 원천 제거 권장(미채택 시 추적 유지 근거를 ADR로).
   - 후속 처리: T-045에서 `frontend/next-env.d.ts`를 git index에서 제거하고 `.gitignore`에 추가했다. 정규화용 `normalize-next-env.mjs`와 `posttype-check`/`postbuild` hook도 제거해 생성물 흔들림을 추적 상태에서 원천 차단했다.
-- [ ] **P2-4. Next 16 후속 정리** (`#20`) — `tsconfig` `jsx`는 Next 권장 `preserve`로, `@types/node`는 런타임(20.9+)에 맞춰 `^20`/`^22`로, `engines: {node: ">=20.9.0"}` 추가.
+- [x] **P2-4. Next 16 후속 정리** (`#20`, T-046에서 후속 해소) — `tsconfig` `jsx`는 Next 권장 `preserve`로, `@types/node`는 런타임(20.9+)에 맞춰 `^20`/`^22`로, `engines: {node: ">=20.9.0"}` 추가.
+  - 후속 처리: T-046에서 `engines.node >=20.9.0`을 추가하고 `@types/node`를 `^20` 계열로 낮춰 lockfile을 갱신했다. `jsx: preserve`는 `next typegen`이 Next.js 16.2.7 mandatory change로 `react-jsx`를 재적용해 현재 도구 강제값을 유지했다.
 - [ ] **P2-5. `suppressHydrationWarning` 범위 과다 + vworld 키 중복 주입** (`#28`) — 공유 `Input`의 전역 suppress는 실제 SSR 버그까지 가림. 자식 프로세스 명령줄 키 재주입 제거(상속만 사용).
 - [ ] **P2-6. heartbeat의 `contextlib.suppress(...Exception)`** (`#22`) — 하트비트 await의 모든 예외 삼킴. 좁히기.
 - [ ] **P2-7. engine 모델 설정의 단일 출처 부재** (`#28`) — frontend zod enum / backend `set_setting`(키만 검증) / `.env.example`·`config.py` 기본값이 제각각.

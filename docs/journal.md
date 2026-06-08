@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-046 Next 16 후속 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Node engine 명시**: frontend `package.json`에 `engines.node >=20.9.0`을 추가해 Next.js 16 런타임 하한을 명시.
+  - **Node 타입 정렬**: `@types/node`를 런타임 기준과 맞지 않던 `^25` 계열에서 `^20` 계열로 낮추고 `package-lock.json`을 갱신.
+  - **jsx 설정 검증**: `tsconfig.json`의 `jsx: preserve` 권고를 시험했으나 `next typegen`이 Next.js mandatory change로 `react-jsx`를 다시 적용하는 것을 확인해, 현재 Next 16.2.7 도구 강제값을 유지.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-4 항목을 T-046 후속 해소로 표시.
+  - **검증**: `npm install --package-lock-only` audit 0건, frontend `npm run lint`, `npm run type-check`, `npm run build`, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-5 `suppressHydrationWarning` 범위와 VWorld 키 중복 주입 정리를 T-047로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-045 `next-env.d.ts` 생성물 추적 제거
 
 - **담당자**: Codex
