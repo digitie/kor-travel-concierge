@@ -204,10 +204,6 @@ Test-NativeCommand -Path $ffprobePath -Argument "-version"
 $frontendEnv = @(
     "`$env:NEXT_PUBLIC_API_BASE_URL = '$apiUrl'"
 )
-if ($vworldKey) {
-    $escapedVworldKey = $vworldKey.Replace("'", "''")
-    $frontendEnv += "`$env:NEXT_PUBLIC_VWORLD_SERVICE_KEY = '$escapedVworldKey'"
-}
 $frontendEnvBlock = $frontendEnv -join "`r`n"
 
 $backendEnv = @(

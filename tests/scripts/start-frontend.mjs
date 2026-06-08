@@ -13,6 +13,7 @@ const normalizeNextEnvScript = path.join(
 const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const command = process.execPath;
+process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY = "";
 const args = [
   path.join(frontendDir, "node_modules", "next", "dist", "bin", "next"),
   "dev",
@@ -30,7 +31,6 @@ const child = spawn(
     env: {
       ...process.env,
       NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${backendPort}`,
-      NEXT_PUBLIC_VWORLD_SERVICE_KEY: "",
     },
     stdio: "inherit",
   },

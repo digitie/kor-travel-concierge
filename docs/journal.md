@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-047 hydration suppress와 VWorld 키 주입 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Input hydration suppress 제거**: 공유 `Input` 컴포넌트에서 전역 `suppressHydrationWarning`을 제거해 실제 SSR mismatch가 숨겨지지 않도록 수정.
+  - **Windows live VWorld 키 상속 정리**: `scripts/start-windows-live.ps1`은 `.env`에서 읽은 `NEXT_PUBLIC_VWORLD_SERVICE_KEY`를 부모 PowerShell 환경에만 설정하고, frontend child 명령 블록에는 다시 주입하지 않도록 변경.
+  - **E2E frontend 환경 정리**: VWorld fallback을 위한 빈 키 기본값은 E2E 시작 스크립트 부모 프로세스에만 설정하고 child는 상속 환경을 사용하도록 정리.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-5 항목을 T-047 후속 해소로 표시.
+  - **검증**: frontend `npm run lint`, `npm run type-check`, `npm run build`, `node --check tests/scripts/start-frontend.mjs`, Windows PowerShell parser 검증, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-6 heartbeat 예외 삼킴 범위 축소를 T-048로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-046 Next 16 후속 정리
 
 - **담당자**: Codex
