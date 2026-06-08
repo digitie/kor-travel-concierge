@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [x] **T-039**: PR #30 P1-3 스키마 드리프트 경량 migration registry 도입 — `schema_migrations` 테이블과 `run_schema_migrations`를 추가해 기존 SQLite DB 보정 작업을 idempotent helper 호출에만 의존하지 않고 적용 이력으로 추적. 현재 보정 migration으로 `crawl_runs` 상태 로그 컬럼 보강과 `video_place_mappings` 반복 등장 제약 제거를 등록하고, `init_db()`가 `create_all` 이후 migration registry를 실행하도록 변경. 동일 migration id가 두 번 실행되지 않는 테스트를 추가하고 backend DB migration 테스트 통과. (2026-06-08)
 - [x] **T-038**: PR #30 P1-2 `claim_next_pending` 원자적 claim 보강 — `crawl_runs` pending 작업 claim을 후보 조회 후 `WHERE state='pending'` 가드가 있는 `UPDATE ... RETURNING`으로 전환해 같은 후보를 여러 실행자가 보더라도 한 실행자만 `running` 전이에 성공하도록 수정. 파일 기반 SQLite 병렬 claim 테스트를 추가해 동시에 두 claim을 시도해도 단일 작업만 claim되는지 검증. scheduler/crawl run 관련 테스트 통과. (2026-06-08)
 - [x] **T-037**: PR #30 P1-1 원본 미디어 스트리밍 업로드 경로 추가 — `MediaStore`에 file-like 객체 업로드 메서드를 추가하고, RustFS는 `upload_fileobj` 기반 전송을 사용하도록 보강. `store_stream_and_record`가 업로드 중 읽은 chunk로 SHA256과 크기를 계산해 `media_assets`에 기록하며, `store_raw_media`는 기존 `bytes` 경로와 새 `fileobj` 경로 중 하나를 선택할 수 있게 확장. 원본 동영상 저장 테스트에 streaming 경로를 추가하고 관련 미디어 저장 테스트 통과. (2026-06-08)
 - [x] **T-036**: PR #30 P0-3 기존 DB의 stale unique index 제거 — T-028에서 제거한 `video_place_mappings(video_id, place_id)` 반복 등장 제약이 기존 SQLite DB에 남아 있는 경우를 `init_db()` 보정 경로에서 제거. 명시 unique index는 `DROP INDEX IF EXISTS`로 정리하고, 과거 table-level `UniqueConstraint`로 생성된 DB는 현재 스키마로 테이블을 재생성해 데이터를 보존하면서 중복 매핑을 허용한다. legacy unique table 재생성 후 같은 영상·장소 매핑 2건 insert가 가능한 회귀 테스트를 추가하고 backend 검증 통과. (2026-06-08)

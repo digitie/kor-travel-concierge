@@ -8,7 +8,8 @@ T-004/T-005에서 채운다.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from typing import Any
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import (
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+SchemaMigration = tuple[str, Callable[[Any], Awaitable[None]]]
 
 
 def _enable_spatialite(dbapi_connection, _connection_record) -> None:
@@ -211,6 +213,46 @@ async def ensure_video_place_mapping_repeatable(conn) -> None:
     )
 
 
+async def ensure_schema_migrations_table(conn) -> None:
+    """적용한 경량 schema migration id를 기록할 테이블을 만든다."""
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id TEXT PRIMARY KEY,
+                applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+    )
+
+
+SCHEMA_MIGRATIONS: tuple[SchemaMigration, ...] = (
+    ("20260608_001_crawl_run_status_columns", ensure_crawl_run_status_columns),
+    ("20260608_002_video_place_mapping_repeatable", ensure_video_place_mapping_repeatable),
+)
+
+
+async def run_schema_migrations(
+    conn,
+    *,
+    migrations: Sequence[SchemaMigration] = SCHEMA_MIGRATIONS,
+) -> None:
+    """기존 SQLite DB 보정 migration을 한 번씩 적용한다."""
+    await ensure_schema_migrations_table(conn)
+    result = await conn.execute(text("SELECT id FROM schema_migrations;"))
+    applied = {row[0] for row in result.fetchall()}
+    for migration_id, migration in migrations:
+        if migration_id in applied:
+            continue
+        await migration(conn)
+        await conn.execute(
+            text("INSERT INTO schema_migrations (id) VALUES (:migration_id);"),
+            {"migration_id": migration_id},
+        )
+        applied.add(migration_id)
+
+
 async def init_db() -> None:
     """모든 ORM 테이블을 생성한다 (없을 때만).
 
@@ -224,7 +266,6 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await init_spatial_metadata(conn)
         await conn.run_sync(Base.metadata.create_all)
-        await ensure_crawl_run_status_columns(conn)
-        await ensure_video_place_mapping_repeatable(conn)
+        await run_schema_migrations(conn)
         # travel_places.geom Point(4326)와 R-Tree 인덱스 구성 (SpatiaLite 가용 시)
         await ensure_geometry_columns(conn)
