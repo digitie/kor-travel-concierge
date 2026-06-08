@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-045 `next-env.d.ts` 생성물 추적 제거
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **생성물 추적 제거**: `frontend/next-env.d.ts`를 git index에서 제거하고 `.gitignore`에 추가해 Next.js 검증 중 재생성되어도 워크트리가 더러워지지 않도록 정리.
+  - **정규화 훅 제거**: 추적 파일을 강제로 되돌리기 위한 `frontend/scripts/normalize-next-env.mjs`와 `posttype-check`/`postbuild` 실행을 제거.
+  - **clean checkout 검증**: 실제 `frontend/next-env.d.ts` 파일을 삭제한 상태에서 `next typegen`과 `next build`가 파일을 재생성해도 ignored 상태로 남는지 확인.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-3 항목을 T-045 후속 해소로 표시.
+  - **검증**: frontend `npm run lint`, `npm run type-check`, `npm run build`, `git check-ignore -v frontend/next-env.d.ts`, `git diff --check` 통과.
+- **다음 작업**:
+  - PR #30 P2-4 Next 16 후속 정리를 T-046으로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-044 keyword/playlist 증분 수집 보강
 
 - **담당자**: Codex
