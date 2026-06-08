@@ -125,7 +125,7 @@ RustFS health 확인 후 기본 버킷을 만들고 `features/healthcheck/t014-s
    ```powershell
    .\scripts\start-windows-live.ps1
    ```
-   이 스크립트는 `9041`, `9042`를 점유한 리스너 PID를 먼저 종료한 뒤 RustFS, API, Web을 순서대로 준비합니다. API 시작 전 `scripts\ensure-windows-ffmpeg.ps1`을 호출해 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-2026-06-01-git-bf608f16fd-full_build.7z`를 내려받고, `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신한 뒤 `ffmpeg -version`, `ffprobe -version` 확인을 통과해야 서버를 띄웁니다.
+   이 스크립트는 `9041`, `9042`를 점유한 리스너 PID를 먼저 종료한 뒤 RustFS, API, Web을 순서대로 준비합니다. API 시작 전 `scripts\ensure-windows-ffmpeg.ps1`을 호출해 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증합니다. 로컬 7-Zip이 없으면 portable `7zr.exe`도 버전 고정 GitHub asset과 고정 SHA256으로 검증한 뒤 사용합니다. 검증과 압축 해제 후 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신하고, `ffmpeg -version`, `ffprobe -version` 확인을 통과해야 서버를 띄웁니다.
 
 5. 정적 검증을 실행합니다:
    ```powershell
@@ -166,7 +166,7 @@ pip install -e F:\dev\python-vworld-api
 
 Kakao 보조 경로는 공식 [Local API 개발 가이드](https://developers.kakao.com/docs/ko/local/dev-guide)의 주소 검색 후 결과가 없을 때 `GET /v2/local/search/keyword.json` 키워드 장소 검색을 사용한다. 내부 wrapper 계층은 늘리지 않고, 외부 응답을 내부 후보 모델로 바꾸는 최소 변환만 유지한다.
 
-대표 프레임 추출은 `FFMPEG_PATH` 환경변수에 지정된 실행 파일을 직접 사용합니다. Windows live에서는 `.local\ffmpeg` 아래의 프로젝트 로컬 바이너리를 사용하고, Docker Compose에서는 Windows 경로가 컨테이너에 새지 않도록 `DOCKER_FFMPEG_PATH`, `DOCKER_FFPROBE_PATH`를 통해 컨테이너 내부 경로(`/usr/bin/ffmpeg`, `/usr/bin/ffprobe`)를 `FFMPEG_PATH`, `FFPROBE_PATH`로 주입합니다.
+대표 프레임 추출은 `FFMPEG_PATH` 환경변수에 지정된 실행 파일을 직접 사용합니다. Windows live에서는 `.local\ffmpeg` 아래의 프로젝트 로컬 바이너리를 사용하고, 해당 바이너리는 gyan.dev `.sha256` sidecar 검증을 통과한 아카이브에서만 준비합니다. Docker Compose에서는 Windows 경로가 컨테이너에 새지 않도록 `DOCKER_FFMPEG_PATH`, `DOCKER_FFPROBE_PATH`를 통해 컨테이너 내부 경로(`/usr/bin/ffmpeg`, `/usr/bin/ffprobe`)를 `FFMPEG_PATH`, `FFPROBE_PATH`로 주입합니다.
 
 YouTube E2E 입력은 표시명보다 API에서 바로 처리 가능한 ID를 사용합니다.
 
