@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-039 schema_migrations 경량 registry 도입
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **migration registry 추가**: `schema_migrations` 테이블과 `run_schema_migrations`를 추가해 기존 SQLite DB 보정 작업의 적용 이력을 기록하도록 구성.
+  - **기존 보정 통합**: `ensure_crawl_run_status_columns`, `ensure_video_place_mapping_repeatable`을 현재 migration 목록에 등록하고, `init_db()`는 `create_all` 이후 registry를 통해 보정 작업을 실행하도록 변경.
+  - **중복 실행 방지**: 이미 적용된 migration id는 다시 실행하지 않고 건너뛰도록 구성.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P1-3 항목을 T-039 후속 해소로 표시.
+  - **검증**: 동일 migration id를 두 번 실행해도 실제 migration 함수는 한 번만 호출되는 테스트 추가. DB migration 테스트 통과.
+- **다음 작업**:
+  - PR #30 P1-4 지도 marker diff 기반 캐싱과 재중심 조건 보강을 T-040으로 승격해 처리한다.
+
+---
+
 ## 2026-06-08: T-038 crawl_runs 원자적 claim 보강
 
 - **담당자**: Codex

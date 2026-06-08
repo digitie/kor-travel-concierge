@@ -56,8 +56,9 @@
   - `busy_timeout=5000`은 추가됐으나 여전히 SELECT-후-mutate 구조이고 쓰기 시 `WHERE state='pending'` 가드가 없음. 단일 실행자 불변식에만 의존. 가드 있는 UPDATE로 진짜 원자적 claim 권장.
   - 후속 처리: T-038에서 후보 id 조회 후 `UPDATE ... WHERE id=:id AND state='pending' RETURNING id`로 claim을 확정하도록 바꿨다. 파일 기반 SQLite 병렬 claim 테스트를 추가했다.
 
-- [ ] **P1-3. 스키마 드리프트 전반 — Alembic 부재** (`#22`, `#27` 공통)
+- [x] **P1-3. 스키마 드리프트 전반 — Alembic 부재** (`#22`, `#27` 공통, T-039에서 후속 해소)
   - `create_all`은 기존 SQLite에 신규 제약/`BigInteger`/non-null 컬럼을 ALTER하지 못함. 신규 DB에서만 반영됨. 경량 마이그레이션 체계(또는 명시적 init 보정 스크립트) 도입 검토. (DO-NOT #5)
+  - 후속 처리: T-039에서 `schema_migrations` 테이블과 `run_schema_migrations`를 추가해 init 보정 작업의 적용 이력을 추적하도록 했다. 현재 보정 migration은 `crawl_runs` 상태 로그 컬럼과 `video_place_mappings` 반복 등장 제약 제거를 관리한다.
 
 - [ ] **P1-4. 지도 marker 전량 재생성 + 강제 재중심** (`#16(b)`, #24에서 부분 해소)
   - `easeTo`는 별도 effect로 분리됐으나, 선택 변경 시 marker를 여전히 전량 teardown·재생성하고 실제 데이터 변경 시 사용자가 패닝한 지도를 재중심. diff 기반 marker 캐싱 + 선택 클릭에서만 `easeTo` 권장.

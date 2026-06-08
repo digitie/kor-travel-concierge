@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
-from app.core.database import ensure_video_place_mapping_repeatable
+from app.core.database import (
+    ensure_video_place_mapping_repeatable,
+    run_schema_migrations,
+)
 from app.models import TravelPlace, VideoPlaceMapping, YoutubeVideo
 
 
@@ -72,3 +75,24 @@ async def test_ensure_video_place_mapping_repeatable_rebuilds_legacy_unique_tabl
             ]
         )
         await session.commit()
+
+
+async def test_run_schema_migrations_records_and_skips_applied_ids(engine):
+    calls = []
+
+    async def migration(conn):
+        calls.append("run")
+        await conn.execute(
+            text("CREATE TABLE IF NOT EXISTS migration_marker (id INTEGER);")
+        )
+
+    async with engine.begin() as conn:
+        await run_schema_migrations(conn, migrations=(("test_once", migration),))
+        await run_schema_migrations(conn, migrations=(("test_once", migration),))
+        result = await conn.execute(
+            text("SELECT id FROM schema_migrations WHERE id = 'test_once';")
+        )
+        applied_id = result.scalar_one()
+
+    assert calls == ["run"]
+    assert applied_id == "test_once"
