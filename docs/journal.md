@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-08: T-055 Windows Python launcher fallback 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **Python 선택 함수 분리**: `scripts/start-windows-live.ps1`의 backend Python command 생성을 `Resolve-PythonCommand`로 분리.
+  - **3.10+ fallback 적용**: backend venv가 없을 때 `py -3.12`, `py -3.11`, `py -3.10`, `py -3`, `python` 순서로 Python 3.10+ 실행기만 선택하도록 변경.
+  - **오류 메시지 보강**: venv가 3.10 미만이거나 3.10+ 실행기를 찾지 못하면 명확한 오류로 중단.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P3-5 항목을 T-055 후속 해소로 표시.
+  - **검증**: Windows PowerShell parser, 고정 `py -3.10` 제거 확인, `git diff --check` 통과.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
 ## 2026-06-08: T-054 코드 위생 정리
 
 - **담당자**: Codex
