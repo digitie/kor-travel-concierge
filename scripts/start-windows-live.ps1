@@ -106,6 +106,58 @@ function Escape-PowerShellSingleQuotedValue {
     return $Value.Replace("'", "''")
 }
 
+function New-PythonCommandText {
+    param(
+        [string]$Path,
+        [string[]]$Arguments = @()
+    )
+
+    $parts = @("& '$(Escape-PowerShellSingleQuotedValue -Value $Path)'")
+    foreach ($argument in $Arguments) {
+        $parts += "'$(Escape-PowerShellSingleQuotedValue -Value $argument)'"
+    }
+
+    return $parts -join " "
+}
+
+function Test-PythonVersion {
+    param(
+        [string]$Path,
+        [string[]]$Arguments = @()
+    )
+
+    $versionCheck = "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+    & $Path @Arguments -c $versionCheck *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Resolve-PythonCommand {
+    $venvPython = Join-Path $Root "backend\.venv\Scripts\python.exe"
+    if (Test-Path $venvPython) {
+        if (-not (Test-PythonVersion -Path $venvPython)) {
+            throw "backend 가상환경 Python이 3.10 미만입니다. Python 3.10+로 가상환경을 다시 생성하세요: backend\.venv"
+        }
+        return New-PythonCommandText -Path $venvPython
+    }
+
+    $pyCommand = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyCommand) {
+        foreach ($version in @("3.12", "3.11", "3.10", "3")) {
+            $arguments = @("-$version")
+            if (Test-PythonVersion -Path $pyCommand.Source -Arguments $arguments) {
+                return New-PythonCommandText -Path $pyCommand.Source -Arguments $arguments
+            }
+        }
+    }
+
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCommand -and (Test-PythonVersion -Path $pythonCommand.Source)) {
+        return New-PythonCommandText -Path $pythonCommand.Source
+    }
+
+    throw "Python 3.10+ 실행 파일을 찾을 수 없습니다. backend\.venv를 만들거나 Python launcher의 3.10 이상 버전을 설치하세요."
+}
+
 function Test-NativeCommand {
     param(
         [string]$Path,
@@ -165,16 +217,7 @@ if (-not $SkipRustfs -and (Get-Command docker -ErrorAction SilentlyContinue)) {
     Pop-Location
 }
 
-$python = Join-Path $Root "backend\.venv\Scripts\python.exe"
-$pythonCommand = if (Test-Path $python) {
-    "& '$python'"
-}
-elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    "& py -3.10"
-}
-else {
-    "& python"
-}
+$pythonCommand = Resolve-PythonCommand
 
 $apiUrl = "http://127.0.0.1:$ApiPort"
 $webUrl = "http://127.0.0.1:$WebPort"

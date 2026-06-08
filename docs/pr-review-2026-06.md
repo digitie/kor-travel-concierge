@@ -101,7 +101,8 @@
   - 후속 처리: T-053에서 `/api/destinations/export` 응답 파일명을 `tripmate-places-{selected|all}-{내보낸개수}-sort-{정렬}-{UTC timestamp}.{확장자}` 형식으로 바꿔 선택/전체 범위, 실제 export 개수, 정렬 기준, 생성 시각을 반영했다.
 - [x] **P3-4.** import 정렬, FK `ondelete` 명시, `TimestampMixin` 일관성 등 코드 위생(#7 외). (`T-054`에서 후속 해소)
   - 후속 처리: T-054에서 `place_service` import 순서를 정리하고, FK가 있는 모델의 `ForeignKey`에 기존 기본 동작과 같은 `ondelete="NO ACTION"`을 명시했다. `YoutubeVideo`는 `created_at`보다 마지막 수집 시각인 `crawled_at`이 도메인 상태라 `TimestampMixin` 대신 별도 컬럼을 유지한다는 주석을 남겼다.
-- [ ] **P3-5.** `& py -3.10` 마이너 고정은 3.11/3.12-only 호스트에서 폴백 실패(정책은 "3.10+")(#26).
+- [x] **P3-5.** `& py -3.10` 마이너 고정은 3.11/3.12-only 호스트에서 폴백 실패(정책은 "3.10+")(#26). (`T-055`에서 후속 해소)
+  - 후속 처리: T-055에서 Windows live 스크립트의 Python 선택을 `Resolve-PythonCommand`로 분리하고, backend venv가 없을 때 `py -3.12`, `py -3.11`, `py -3.10`, `py -3`, `python` 순서로 Python 3.10+ 실행기만 선택하도록 바꿨다.
 
 ---
 
