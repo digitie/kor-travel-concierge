@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-08: T-054 코드 위생 정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **import 정렬**: `place_service`의 표준 라이브러리 import와 `app.models` import 순서를 정리.
+  - **FK delete 정책 명시**: FK가 있는 모델의 `ForeignKey`에 현재 기본 동작과 같은 `ondelete="NO ACTION"`을 명시하고, legacy `video_place_mappings` 재생성 SQL도 같은 선언으로 맞춤.
+  - **TimestampMixin 예외 사유 기록**: `YoutubeVideo`는 생성 시각보다 마지막 수집 시각이 도메인 상태라 `crawled_at`을 유지한다는 주석을 추가.
+  - **회귀 테스트 추가**: 모델 FK 메타데이터와 legacy rebuild SQL의 delete 정책을 테스트로 검증.
+  - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P3-4 항목을 T-054 후속 해소로 표시.
+  - **검증**: 모델/마이그레이션 pytest 13건, backend `compileall` 통과.
+- **다음 작업**:
+  - PR #30 P3-5 Windows Python launcher fallback 정리를 T-055로 처리한다.
+
+---
+
 ## 2026-06-08: T-053 export 파일명 개선
 
 - **담당자**: Codex

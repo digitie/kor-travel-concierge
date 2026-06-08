@@ -49,7 +49,9 @@ async def test_ensure_video_place_mapping_repeatable_rebuilds_legacy_unique_tabl
                 "WHERE type = 'table' AND name = 'video_place_mappings';"
             )
         )
-        assert "uq_video_place_mappings_video_place" not in result.scalar_one()
+        created_sql = result.scalar_one()
+        assert "uq_video_place_mappings_video_place" not in created_sql
+        assert "ON DELETE NO ACTION" in created_sql
 
     async with session_factory() as session:
         video = YoutubeVideo(video_id="v-repeat", title="반복 장소", url="u", channel_id="c")
