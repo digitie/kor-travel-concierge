@@ -58,4 +58,6 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=9041, reload=True)
+    # 실행 환경은 Linux Docker 전용이다. Compose는 `uvicorn main:app --host 0.0.0.0
+    # --port 8000`으로 기동하며, 로컬 직접 실행도 동일한 host/port를 사용한다.
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

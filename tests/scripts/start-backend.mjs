@@ -34,6 +34,8 @@ const child = spawn(
     cwd: backendDir,
     env: {
       ...process.env,
+      // E2E 백엔드는 인증을 우회한다. APP_ENV 기본값(local)도 우회하지만 의도를 명시한다.
+      APP_ENV: "e2e",
       DATABASE_URL: "sqlite+aiosqlite:///../tests/.tmp/e2e.db",
       NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${backendPort}`,
       CORS_ALLOW_ORIGINS: [
@@ -56,15 +58,18 @@ const child = spawn(
 forwardSignals(child);
 
 function resolvePython() {
+  // E2E 하니스는 Windows 호스트에서도 실행한다(ADR-23 예외). venv interpreter와
+  // PATH fallback을 OS별로 해석한다(앱 런타임이 아니라 테스트 런처에 한정된 분기).
+  const isWindows = process.platform === "win32";
   const local = path.join(
     backendDir,
     ".venv",
-    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    isWindows ? "Scripts/python.exe" : "bin/python",
   );
   if (existsSync(local)) {
     return local;
   }
-  return process.platform === "win32" ? "python.exe" : "python";
+  return isWindows ? "python.exe" : "python3";
 }
 
 function forwardSignals(processToStop) {
@@ -76,6 +81,8 @@ function forwardSignals(processToStop) {
     }
     stopping = true;
 
+    // Windows E2E 호스트에서는 uvicorn 자식 프로세스 트리를 taskkill로 정리해야
+    // orphan이 남지 않는다(ADR-23 E2E 예외).
     if (process.platform === "win32" && processToStop.pid) {
       spawnSync("taskkill", ["/pid", String(processToStop.pid), "/t", "/f"], {
         stdio: "ignore",

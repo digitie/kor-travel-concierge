@@ -62,6 +62,8 @@ function stopChild(signal = "SIGTERM") {
   }
   stopping = true;
 
+  // Windows E2E 호스트에서는 next dev 자식 프로세스 트리를 taskkill로 정리해야
+  // orphan이 남지 않는다(ADR-23 E2E 예외).
   if (process.platform === "win32" && child.pid) {
     spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",

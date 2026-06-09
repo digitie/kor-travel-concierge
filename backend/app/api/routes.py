@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_session
+from app.core.security import require_api_key
 from app.models import MediaAsset, RunSource
 from app.services import (
     audit_service,
@@ -29,7 +30,12 @@ from app.services import (
     settings_service,
 )
 
-router = APIRouter(prefix="/api")
+# REST API는 버전 프리픽스(`/api/v1`) 아래에 노출한다. 새 버전이 필요하면 동일한
+# 패턴으로 `/api/v2` 라우터를 추가한다. 인증(인증 코드)은 라우터 전체에 적용하되
+# 로컬 실행에서는 우회된다(`app.core.security.require_api_key`).
+API_V1_PREFIX = "/api/v1"
+
+router = APIRouter(prefix=API_V1_PREFIX, dependencies=[Depends(require_api_key)])
 
 EXPORT_DESTINATION_LIMIT_DEFAULT = 500
 EXPORT_DESTINATION_LIMIT_MAX = 1_000

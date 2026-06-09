@@ -62,5 +62,5 @@ Thumbs.db
 # CodeGraph
 .codegraph/
 
-# Local tools downloaded for Windows live runs
+# Local tooling / scratch directory
 .local/

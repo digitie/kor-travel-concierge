@@ -1,7 +1,10 @@
 // 백엔드 API 베이스 URL. `.env`의 NEXT_PUBLIC_API_BASE_URL로 주입한다.
 export const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:9041"
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 ).replace(/\/$/, "");
+
+// 비로컬 백엔드 인증용 API 키. 비어 있으면 헤더를 붙이지 않는다(로컬/E2E 무인증).
+export const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 
 // VWorld 지도 서비스 키 (브라우저 직접 로드).
 export const VWORLD_SERVICE_KEY =
@@ -157,16 +160,22 @@ function harvestPayload(input: StartHarvestInput) {
   };
 }
 
+// 백엔드 요청 공통 헤더. API_KEY가 설정된 경우에만 X-API-Key를 주입한다.
+function buildHeaders(extra: HeadersInit = {}): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+  };
+  return { ...headers, ...(extra as Record<string, string>) };
+}
+
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
+    headers: buildHeaders(init.headers),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -181,20 +190,20 @@ async function requestJson<T>(
 }
 
 export async function startHarvest(input: StartHarvestInput): Promise<HarvestJob> {
-  return requestJson<HarvestJob>("/api/harvest", {
+  return requestJson<HarvestJob>("/api/v1/harvest", {
     method: "POST",
     body: JSON.stringify(harvestPayload(input)),
   });
 }
 
 export async function getHarvestStatus(jobId: string): Promise<HarvestStatus> {
-  return requestJson<HarvestStatus>(`/api/harvest/${jobId}`);
+  return requestJson<HarvestStatus>(`/api/v1/harvest/${jobId}`);
 }
 
 export async function listDestinations(
   sort: DestinationSort = "latest",
 ): Promise<DestinationSummary[]> {
-  return requestJson<DestinationSummary[]>(`/api/destinations?sort=${sort}`);
+  return requestJson<DestinationSummary[]>(`/api/v1/destinations?sort=${sort}`);
 }
 
 export function buildDestinationExportUrl({
@@ -210,11 +219,11 @@ export function buildDestinationExportUrl({
   if (placeIds.length > 0) {
     params.set("ids", placeIds.join(","));
   }
-  return `${API_BASE_URL}/api/destinations/export?${params.toString()}`;
+  return `${API_BASE_URL}/api/v1/destinations/export?${params.toString()}`;
 }
 
 export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
-  return requestJson<UnmatchedCandidate[]>("/api/destinations/unmatched");
+  return requestJson<UnmatchedCandidate[]>("/api/v1/destinations/unmatched");
 }
 
 export async function listRuns({
@@ -228,7 +237,7 @@ export async function listRuns({
   if (state) {
     params.set("state", state);
   }
-  return requestJson<CrawlRunSummary[]>(`/api/runs?${params.toString()}`);
+  return requestJson<CrawlRunSummary[]>(`/api/v1/runs?${params.toString()}`);
 }
 
 export async function listRunQueue(): Promise<CrawlRunSummary[]> {
@@ -247,21 +256,21 @@ function compareRunIdAsc(a: CrawlRunSummary, b: CrawlRunSummary) {
 }
 
 export async function listAuditLogs(): Promise<AuditLogSummary[]> {
-  return requestJson<AuditLogSummary[]>("/api/audit-logs?limit=10");
+  return requestJson<AuditLogSummary[]>("/api/v1/audit-logs?limit=10");
 }
 
 export async function getRustfsStatus(): Promise<RustfsStatus> {
-  return requestJson<RustfsStatus>("/api/storage/rustfs");
+  return requestJson<RustfsStatus>("/api/v1/storage/rustfs");
 }
 
 export async function getRuntimeSettings(): Promise<RuntimeSettings> {
-  return requestJson<RuntimeSettings>("/api/settings");
+  return requestJson<RuntimeSettings>("/api/v1/settings");
 }
 
 export async function updateRuntimeSettings(
   input: RuntimeSettingsUpdate,
 ): Promise<{ status: string; settings: RuntimeSettings }> {
-  return requestJson<{ status: string; settings: RuntimeSettings }>("/api/settings", {
+  return requestJson<{ status: string; settings: RuntimeSettings }>("/api/v1/settings", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -272,7 +281,7 @@ export async function resolveCandidate(
   input: ResolveCandidateInput,
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>(
-    `/api/destinations/unmatched/${candidateId}/resolve`,
+    `/api/v1/destinations/unmatched/${candidateId}/resolve`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -294,7 +303,7 @@ export async function triggerDeepResearch(
   placeId: number,
 ): Promise<{ job_id: string; state: string; place_id: number }> {
   return requestJson<{ job_id: string; state: string; place_id: number }>(
-    `/api/destinations/${placeId}/deep-research`,
+    `/api/v1/destinations/${placeId}/deep-research`,
     {
       method: "POST",
       body: JSON.stringify({ max_sources: 8 }),

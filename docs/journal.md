@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-06-09: T-057 REST API 버저닝(`/api/v1`)과 외부 호출용 API 인증
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **버저닝 (ADR-24)**: 모든 REST 엔드포인트를 `APIRouter(prefix="/api/v1")` 아래로 이동. 운영 점검용 `GET /health`와 루트 `GET /`는 버전 없이 유지. 향후 비호환 변경은 같은 패턴으로 `/api/v2`를 추가.
+  - **인증 코드 (`X-API-Key`)**: `app/core/security.py`의 `require_api_key` 의존성을 라우터 전체에 적용. 설정 `APP_ENV`(기본 `local`)·`API_AUTH_ENABLED`(기본 false)·`API_KEYS`를 추가해 로컬(`local/test/e2e`)은 무인증 우회, 비-local은 유효 키를 강제(키 미설정 시 안전 측 401).
+  - **연동 정리**: `docker-compose.yml`이 `APP_ENV`/`API_AUTH_ENABLED`/`API_KEYS`를 전달(기본 로컬 친화). frontend `api.ts`는 `/api/v1` 경로 호출 + `NEXT_PUBLIC_API_KEY` 기반 `X-API-Key` 헤더 주입. E2E backend는 `APP_ENV=e2e`로 무인증. `main.py` 직접 실행 포트를 stale `9041`에서 `0.0.0.0:8000`으로 정정.
+  - **검증**: backend pytest 전체 통과(신규 `test_api_auth.py` 6건 포함), `py_compile` 통과.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
+## 2026-06-09: T-056 Windows 네이티브 실행 배제와 Linux Docker/WSL 전용 전환
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **실행 모델 결정 (ADR-23)**: 실행/평가 환경을 Linux Docker 전용으로 정하고, Windows 호스트는 WSL2(Ubuntu) 안에서 Docker로 구동하도록 정리. `AGENTS.md`의 "Windows 호스트 직접 진행" 정책과 DO-NOT #4를 bash/Linux 기준으로 반전.
+  - **PowerShell 자산 제거**: `scripts/ensure-windows-ffmpeg.ps1`, `scripts/start-windows-live.ps1`, `scripts/verify-docker-compose.ps1`을 삭제.
+  - **bash 스크립트 추가**: `scripts/verify-docker-compose.sh`(Compose 기동 → health 확인 → `verify_rustfs.py` → 정리)와 thin 런처 `scripts/start-live.sh`(`docker compose up --build`)를 추가.
+  - **FFmpeg 단일 경로화**: `FFMPEG_PATH` 기본값을 `/usr/bin/ffmpeg`로 두고 `DOCKER_FFMPEG_PATH` 이원화를 제거. 컨테이너 이미지가 apt로 제공하는 경로만 사용.
+  - **host port 복귀**: Windows 라이브 전용 `9041`/`9042`를 표준 `8000`/`3000`으로 되돌리고 `docker-compose.yml`, `config.py`, `.env.example`의 API base URL·CORS 기본값을 정리.
+  - **크로스 플랫폼 정리**: frontend `dev:live` 스크립트 제거, `.gitattributes`의 `*.ps1` CRLF 규칙 제거, frame extraction 테스트 stub의 Windows 경로 문자열을 Linux 경로로 교체. 단 E2E 런처(`tests/scripts/start-backend.mjs`·`start-frontend.mjs`)는 Windows 호스트에서 실행되므로 OS별 처리(venv interpreter 경로 해석, `taskkill` 자식 프로세스 트리 정리)를 유지한다(ADR-23 E2E 예외).
+  - **문서 재작성**: `docs/dev-environment.md`를 "Linux/Docker(및 Windows WSL2) 개발 환경 구축"으로 전면 개편하고, `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/decisions.md`(ADR-23 추가, ADR-6 supersede)를 bash/Docker/WSL2 기준으로 정렬.
+  - **검증**: 편집한 backend Python `py_compile`, bash 스크립트 `bash -n` 구문 검사 통과. (Docker/npm 빌드는 호스트 가용성 문제로 실행하지 않음)
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
 ## 2026-06-08: T-055 Windows Python launcher fallback 정리
 
 - **담당자**: Codex

@@ -1,7 +1,8 @@
 # SKILL — tripmate-agent 에이전트 매뉴얼
 
 > 이 파일은 당신(AI 에이전트)이 작업을 시작하기 전 반드시 읽어야 한다.
-> Windows 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
+> Linux/Docker(및 Windows WSL2) 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
+> 앱 런타임/배포는 Linux Docker 전용이며(ADR-23), 예외적으로 E2E Playwright는 Windows 호스트에서 실행한다.
 
 ## 1. 정체성
 
@@ -15,32 +16,40 @@
 
 ### 개발 환경 기본 요건
 
-- **운영체제**: Windows 10/11 호스트 직접 빌드 및 평가.
-- **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용.
+- **앱 런타임/배포**: Linux Docker 전용(ADR-23). Windows 호스트는 WSL2(Ubuntu) + Docker 안에서 동일하게 구동한다.
+- **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용(Linux/WSL).
 - **Node.js**: Node.js 20+ LTS 사용.
-- **E2E 테스트**: Playwright를 활용하여 Windows에서 실제 동작 테스트.
+- **E2E 테스트**: Playwright를 **Windows 호스트**에서 실행해 실제 사용자에 가까운 브라우저 화면을 검증한다(ADR-23 예외).
 
-## 2. 빠른 시작 (Windows PowerShell 기준)
+## 2. 빠른 시작
 
-### 백엔드 실행
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+### 기본 실행 (단일 호스트 Docker Compose, Linux/WSL2 — ADR-18/ADR-23)
+```bash
+docker compose up --build       # backend 8000, frontend 3000, rustfs, mcp
+# 또는 thin 런처
+bash scripts/start-live.sh
+# smoke 검증 (기동 → health 확인 → RustFS 검증 → 정리)
+bash scripts/verify-docker-compose.sh
 ```
-Windows live 고정 포트는 API `9041`이다.
+REST API는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받는다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24).
 
-### 프론트엔드 실행
-```powershell
+### 백엔드 단독 실행 (컨테이너 밖 로컬 개발, Linux/WSL)
+```bash
+cd backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python main.py                  # API 8000
+```
+
+### 프론트엔드 단독 실행
+```bash
 cd frontend
 npm install
-npm run dev:live
+npm run dev                     # Web 3000
 ```
-Windows live 고정 포트는 Web `9042`이다. 포트가 이미 점유 중이면 프로젝트 루트에서 `.\scripts\start-windows-live.ps1`을 실행해 해당 리스너를 종료하고 다시 띄운다.
 
-### Playwright 테스트 실행
+### Playwright 테스트 실행 (Windows 호스트 — ADR-23 예외)
 ```powershell
 cd tests
 npm install
@@ -58,7 +67,7 @@ npx playwright test
    - 비공식 검색 크롤러는 기본 설계에서 제외하고, 비공식 의존은 자막 추출과 프레임 추출 구간으로 격리한다.
    - 한 번 수집된 비디오 정보는 SQLite + SpatiaLite 데이터베이스에 캐싱하여 재수집을 배제한다.
 4. **FastAPI 비동기 세션 leak 방지**: SQLAlchemy 2.0의 `AsyncSession` 또는 동기 `Session`을 사용할 때 Context Manager(`with` 또는 `async with`)를 사용하거나 Depends 주입 방식을 명확히 준수하여 DB 연결 누수를 막는다.
-5. **Windows 비호환 쉘 파일 작성 금지**: 윈도우 환경이므로 `.sh` 파일에 개발 유틸 스크립트를 작성하여 그것으로만 검증하도록 요구하지 않는다. 가급적 Node.js 스크립트(`package.json` scripts)나 Python 스크립트, 혹은 `.ps1` 형태로 크로스 플랫폼을 고려해 작성한다.
+5. **Windows 네이티브 앱 실행 경로 작성 금지**: 앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 개발 유틸 스크립트는 bash(`.sh`) 또는 Python으로 작성하고, PowerShell(`*.ps1`)·cmd 전용 자산이나 `process.platform === 'win32'` 류의 Windows 전용 앱 분기를 새로 만들지 않는다. Windows 사용자는 WSL2(Ubuntu) 안에서 동일한 bash/Docker 명령으로 앱을 구동한다. 예외는 Windows 호스트에서 실행하는 E2E Playwright 테스트 하니스뿐이며, 이 예외도 앱 코드에 `win32` 분기를 되살리지 않는다.
 6. **`kraddr-geo` 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 연계는 취소되었다. Geocoding/Reverse Geocoding은 VWorld를 최우선으로 하며, VWorld 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고 내부 adapter/wrapper 계층은 만들지 않는다.
 7. **RustFS 객체 자동 삭제 금지**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제나 장소 매칭 실패만으로 객체를 삭제하는 로직을 만들지 않는다.
 8. **매칭 실패 장소 자동 확정 금지**: 지오코딩 결과가 없거나 모호하면 `needs_review` 후보로 남기고 웹 UI 또는 MCP 도구를 통한 사용자 판단을 요구한다.
@@ -69,7 +78,7 @@ npx playwright test
 - **위치**: `backend/app/models/`에 SQLAlchemy 2.0 스타일 모델 정의.
 - **설명**: CRUD 관련 엔드포인트는 `backend/app/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
 - **장소 언급 소스**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지는 `video_place_mappings`와 `youtube_videos` 조인으로 계산한다. 같은 영상에서 같은 장소가 여러 구간에 반복 등장할 수 있으므로 `video_id`, `place_id` 조합은 unique로 가정하지 않는다.
-- **장소 export**: 선택 또는 전체 장소 내보내기는 `/api/destinations/export`에서 처리한다. `xlsx`는 장소-언급 행 단위, `gpx`/`kml`은 장소 좌표와 소스 설명 중심으로 생성한다.
+- **장소 export**: 선택 또는 전체 장소 내보내기는 `/api/v1/destinations/export`에서 처리한다. `xlsx`는 장소-언급 행 단위, `gpx`/`kml`은 장소 좌표와 소스 설명 중심으로 생성한다.
 
 ### Gemini API 프롬프트 및 엔진 설정
 - **위치**: `etl/summarize.py` 및 `etl/search.py`.
