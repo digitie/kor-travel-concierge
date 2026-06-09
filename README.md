@@ -54,7 +54,9 @@
 
 ## 시작하기
 
-본 프로젝트는 Windows 호스트 환경에서의 개발 및 테스트에 최적화되어 있습니다.
+앱 런타임/배포는 **Linux Docker 전용**입니다(ADR-23). 기본 실행은 단일 호스트 Docker Compose이며, Windows 사용자는 WSL2(Ubuntu) + Docker 안에서 동일한 명령을 사용합니다. 예외적으로 **E2E Playwright 테스트는 Windows 호스트에서 실행**합니다.
+
+REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입합니다(키는 브라우저에 노출되지 않음). 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 `API_KEYS`를 설정합니다(ADR-24).
 
 ### 환경 변수 설정
 
@@ -63,7 +65,17 @@
 ```dotenv
 # 프론트엔드
 NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_browser_key_here
-NEXT_PUBLIC_API_BASE_URL=http://localhost:9041
+# 브라우저는 same-origin BFF(`/api/v1`)로 호출하므로 기본 빈 값. 백엔드 직접 호출 시에만 설정
+NEXT_PUBLIC_API_BASE_URL=
+# BFF 프록시 대상(서버 전용). Compose는 http://api:8000, 로컬 기본 http://localhost:9041
+BACKEND_ORIGIN=
+# BFF가 주입하는 X-API-Key(서버 전용, NEXT_PUBLIC_* 아님). 외부 배포는 API_KEYS 중 하나와 동일하게
+BACKEND_API_KEY=
+
+# 실행 환경 및 API 인증 (ADR-24)
+APP_ENV=local              # local/test/e2e는 무인증 우회, production은 X-API-Key 요구
+API_AUTH_ENABLED=false     # true이면 환경과 무관하게 인증 강제
+API_KEYS=                  # 외부 노출 배포에서 쉼표 구분 키 목록 설정
 
 # SQLite + SpatiaLite
 DATABASE_URL=sqlite+aiosqlite:///./tripmate.db
@@ -111,57 +123,61 @@ MCP_STREAMABLE_HTTP_PATH=/mcp
 
 쓰기 도구를 실제로 검증하거나 운영에서 허용할 때만 `.env`에서 `MCP_WRITE_ENABLED=true`로 명시합니다. Docker Compose의 MCP 서버는 같은 값을 사용하되 transport는 `streamable-http`로 override합니다.
 
-### 백엔드 실행
+### 기본 실행 (단일 호스트 Docker Compose, Linux/WSL2)
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+```bash
+docker compose up -d --build    # host API 9041 / Web 9042 (컨테이너 내부 8000/3000), rustfs, mcp
+# 또는 thin 런처 (고정 포트 회수 후 기동)
+bash scripts/start-live.sh
+# smoke 검증 (기동 → health 확인 → RustFS 검증 → 정리)
+bash scripts/verify-docker-compose.sh
 ```
 
-Windows 호스트에서 직접 띄우는 live 포트는 API `http://localhost:9041`, Web `http://localhost:9042`로 고정합니다.
+API는 `http://localhost:9041`, Web은 `http://localhost:9042`로 열립니다(host 고정 포트 → 컨테이너 내부 API `8000`·Web `3000`으로 매핑). `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 고정 포트 `9041`/`9042`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수하므로 이전 기동이 포트를 점유한 상태에서도 재시작이 성공합니다(포트 회수 패턴은 `python-krtour-map` 프로젝트에서 차용). FFmpeg은 컨테이너 이미지(`Dockerfile.python`)가 apt로 제공하는 `/usr/bin/ffmpeg`를 사용하므로 호스트에서 별도로 준비할 필요가 없습니다.
 
-### 프론트엔드 실행
+### 백엔드 단독 실행 (컨테이너 밖 로컬 개발, Linux/WSL)
 
-```powershell
+```bash
+cd backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python main.py                  # API 8000
+```
+
+### 프론트엔드 단독 실행
+
+```bash
 cd ../frontend
 npm ci
-npm run dev:live
+npm run dev                     # Web 3000
 ```
-
-포트가 이미 점유 중이면 다음 스크립트가 현재 TripMate 워크트리에서 띄운 리스너만 종료한 뒤 고정 포트로 서버를 다시 띄웁니다. 다른 프로세스가 포트를 점유하고 있으면 중단되며, 의도적으로 종료하려면 `-ForcePortKill`을 명시합니다.
-
-```powershell
-.\scripts\start-windows-live.ps1
-```
-
-Windows live 시작 전 프로젝트 로컬 `.local\ffmpeg` 아래에 FFmpeg Windows 빌드가 없으면 `scripts\ensure-windows-ffmpeg.ps1`이 gyan.dev 안정 링크 `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z`와 `.sha256` sidecar를 내려받아 `Get-FileHash`로 검증한 뒤 압축을 풉니다. 로컬 7-Zip이 없을 때만 portable `7zr.exe`를 버전 고정 GitHub asset과 고정 SHA256으로 검증해 사용합니다. 이 디렉토리는 Git 추적 대상이 아니며, 스크립트는 `.env`의 `FFMPEG_PATH`, `FFPROBE_PATH`를 갱신하고 API 프로세스는 해당 환경변수 경로로 대표 프레임 추출을 수행합니다.
 
 ### ETL 실행
 
-```powershell
+```bash
 cd ../etl
 python runner.py
 ```
 
-### E2E 테스트 실행
+### E2E 테스트 실행 (Windows 호스트 — ADR-23 예외)
+
+앱 런타임은 Linux Docker 전용이지만, E2E Playwright 하니스는 실제 사용자에 가까운 Windows 브라우저 검증을 위해 **Windows 호스트**에서 실행합니다.
 
 ```powershell
 cd ../tests
-npm ci
+npm install
 npx playwright install
 npx playwright test
 ```
 
-Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동하고, `tests\.tmp\e2e.db`를 테스트마다 재시드한다.
+Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동하고, `tests/.tmp/e2e.db`를 테스트마다 재시드합니다(E2E backend는 `APP_ENV=e2e`로 무인증 동작).
 
 ## 참고 문서
 
 - [`AGENTS.md`](./AGENTS.md) — 프로젝트 내 문서화 언어 정책 및 에이전트 개발 규칙
 - [`CLAUDE.md`](./CLAUDE.md) — 세션 연동 프로젝트 현황 및 소스 트리 구조 설명
-- [`SKILL.md`](./SKILL.md) — 에이전트 지침서, Windows 개발 팁 및 도메인 어휘집
+- [`SKILL.md`](./SKILL.md) — 에이전트 지침서, Linux/Docker(및 Windows WSL2) 개발 팁 및 도메인 어휘집
 - [`docs/architecture.md`](./docs/architecture.md) — 시스템 아키텍처와 데이터 흐름
 - [`docs/decisions.md`](./docs/decisions.md) — 주요 아키텍처 결정 기록
 - [`docs/tasks.md`](./docs/tasks.md) — 개발 진행 현황 및 백로그

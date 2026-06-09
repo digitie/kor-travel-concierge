@@ -4,6 +4,61 @@
 
 ---
 
+## 2026-06-09: T-059 PR #54 리뷰 반영 — same-origin BFF 프록시로 API 키 서버 전용화
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **BFF 프록시 도입 (P1-2)**: `NEXT_PUBLIC_*`는 빌드 시 브라우저 번들에 인라인되어 보안 경계가 못 되므로, 브라우저가 API 키를 더 이상 보내지 않도록 same-origin Next BFF(catch-all Route Handler `frontend/src/app/api/v1/[...path]/route.ts`)를 도입. BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다. 프록시 대상은 서버 전용 `BACKEND_ORIGIN`(Compose `http://api:8000`, 로컬 기본 `http://localhost:9041`).
+  - **인증 환경 export 정상화 (P1-1)**: export 등 top-level navigation 다운로드는 fetch 헤더를 못 붙여 인증 환경에서 401이 발생했는데, BFF 경유로 키가 서버 사이드에서 주입되어 정상 동작한다.
+  - **`NEXT_PUBLIC_API_KEY` 제거**: 해당 환경 변수를 삭제. `NEXT_PUBLIC_API_BASE_URL`은 기본 빈 값으로 두어 브라우저가 same-origin(`/api/v1`)으로 호출하게 하고, 백엔드 직접 호출 시에만 설정한다. 직접/외부(비-브라우저) 호출자는 여전히 `X-API-Key`를 직접 보낸다.
+  - **문서 정렬**: `docs/decisions.md`(ADR-24 프론트엔드 연동·결과·보강 노트), `README.md`, `docs/dev-environment.md`, `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, `docs/architecture.md`, `docs/tasks.md`를 BFF 기준으로 정렬.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
+## 2026-06-09: T-058 고정 host port 회수 런처 도입
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **결정 정정 (ADR-23/ADR-18)**: Compose host port를 표준 `8000`/`3000`으로 되돌린다는 이전 서술을 반전. host port는 고정 `9041`(API)/`9042`(Web)를 유지하고 컨테이너 내부는 `8000`/`3000`을 유지(host가 `9041→8000`, `9042→3000` 매핑)하는 것으로 문서를 정렬.
+  - **포트 회수 런처 추가**: `python-krtour-map` 프로젝트에서 차용한 `scripts/stop-fixed-ports.sh`를 도입. 고정 포트 `9041`/`9042`를 점유한 리스너(Linux/Docker/WSL/Windows)를 정리한다. `scripts/start-live.sh`는 `docker compose up -d --build` 이전에 이 회수 스크립트를 먼저 실행해 이전 기동이 포트를 점유한 상태에서도 재시작이 성공하도록 보강.
+  - **문서 정렬**: `docs/decisions.md`(ADR-23 결정·ADR-18 보강 노트), `docs/dev-environment.md`(§8 health check, start-live 설명, VWorld 도메인), `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/tasks.md`의 host 접속 포트와 라이브 런처 설명을 고정 `9041`/`9042` 기준으로 정렬. 컨테이너 내부 포트(`uvicorn --port 8000`, `next` 3000)와 E2E 포트(`18080`/`13100`)는 그대로 유지.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
+## 2026-06-09: T-057 REST API 버저닝(`/api/v1`)과 외부 호출용 API 인증
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **버저닝 (ADR-24)**: 모든 REST 엔드포인트를 `APIRouter(prefix="/api/v1")` 아래로 이동. 운영 점검용 `GET /health`와 루트 `GET /`는 버전 없이 유지. 향후 비호환 변경은 같은 패턴으로 `/api/v2`를 추가.
+  - **인증 코드 (`X-API-Key`)**: `app/core/security.py`의 `require_api_key` 의존성을 라우터 전체에 적용. 설정 `APP_ENV`(기본 `local`)·`API_AUTH_ENABLED`(기본 false)·`API_KEYS`를 추가해 로컬(`local/test/e2e`)은 무인증 우회, 비-local은 유효 키를 강제(키 미설정 시 안전 측 401).
+  - **연동 정리**: `docker-compose.yml`이 `APP_ENV`/`API_AUTH_ENABLED`/`API_KEYS`를 전달(기본 로컬 친화). 브라우저는 same-origin Next BFF Route Handler(`/api/v1/*`) 경유로 호출하고 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입(키는 브라우저 비노출). E2E backend는 `APP_ENV=e2e`로 무인증. `main.py` 직접 실행은 host 고정 포트 `9041`에 바인딩(컨테이너 내부 uvicorn은 8000 유지, host `9041→8000` 매핑).
+  - **검증**: backend pytest 전체 통과(신규 `test_api_auth.py` 6건 포함), `py_compile` 통과.
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
+## 2026-06-09: T-056 Windows 네이티브 실행 배제와 Linux Docker/WSL 전용 전환
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **실행 모델 결정 (ADR-23)**: 실행/평가 환경을 Linux Docker 전용으로 정하고, Windows 호스트는 WSL2(Ubuntu) 안에서 Docker로 구동하도록 정리. `AGENTS.md`의 "Windows 호스트 직접 진행" 정책과 DO-NOT #4를 bash/Linux 기준으로 반전.
+  - **PowerShell 자산 제거**: `scripts/ensure-windows-ffmpeg.ps1`, `scripts/start-windows-live.ps1`, `scripts/verify-docker-compose.ps1`을 삭제.
+  - **bash 스크립트 추가**: `scripts/verify-docker-compose.sh`(Compose 기동 → health 확인 → `verify_rustfs.py` → 정리)와 thin 런처 `scripts/start-live.sh`(`docker compose up --build`)를 추가.
+  - **FFmpeg 단일 경로화**: `FFMPEG_PATH` 기본값을 `/usr/bin/ffmpeg`로 두고 `DOCKER_FFMPEG_PATH` 이원화를 제거. 컨테이너 이미지가 apt로 제공하는 경로만 사용.
+  - **host port 유지**: Compose 고정 host port `9041`(API)/`9042`(Web)를 유지(컨테이너 내부는 `8000`/`3000`이며 host가 `9041→8000`, `9042→3000`으로 매핑)하고, 더 이상 Windows 전용이 아닌 OS 중립 표준 host port로 정리. `docker-compose.yml`, `config.py`, `.env.example`의 API base URL·CORS 기본값을 고정 포트 기준으로 정렬.
+  - **크로스 플랫폼 정리**: frontend `dev:live` 스크립트 제거, `.gitattributes`의 `*.ps1` CRLF 규칙 제거, frame extraction 테스트 stub의 Windows 경로 문자열을 Linux 경로로 교체. 단 E2E 런처(`tests/scripts/start-backend.mjs`·`start-frontend.mjs`)는 Windows 호스트에서 실행되므로 OS별 처리(venv interpreter 경로 해석, `taskkill` 자식 프로세스 트리 정리)를 유지한다(ADR-23 E2E 예외).
+  - **문서 재작성**: `docs/dev-environment.md`를 "Linux/Docker(및 Windows WSL2) 개발 환경 구축"으로 전면 개편하고, `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/decisions.md`(ADR-23 추가, ADR-6 supersede)를 bash/Docker/WSL2 기준으로 정렬.
+  - **검증**: 편집한 backend Python `py_compile`, bash 스크립트 `bash -n` 구문 검사 통과. (Docker/npm 빌드는 호스트 가용성 문제로 실행하지 않음)
+- **다음 작업**:
+  - 현재 등록된 대기 작업 없음.
+
+---
+
 ## 2026-06-08: T-055 Windows Python launcher fallback 정리
 
 - **담당자**: Codex

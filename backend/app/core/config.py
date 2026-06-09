@@ -47,6 +47,15 @@ class Settings(BaseSettings):
         "http://localhost:13100,http://127.0.0.1:13100"
     )
 
+    # --- 1.5. 실행 환경 및 API 인증 ---
+    # APP_ENV이 local(또는 test/e2e)일 때는 외부 호출용 인증 코드 없이 동작한다.
+    # 외부에 노출되는 비-local 배포에서는 API 키(X-API-Key 헤더)를 요구한다.
+    APP_ENV: str = "local"
+    # 명시적으로 인증을 강제하고 싶을 때 true로 둔다(로컬에서 인증 동작 검증 등).
+    API_AUTH_ENABLED: bool = False
+    # 허용 API 키 목록(쉼표 구분). 외부 노출 배포에서 반드시 설정한다.
+    API_KEYS: str = ""
+
     # --- 2. 데이터베이스 (SQLite + SpatiaLite) ---
     DATABASE_URL: str = "sqlite+aiosqlite:///./tripmate.db"
     SPATIALITE_EXTENSION_PATH: str = "mod_spatialite"
@@ -64,7 +73,8 @@ class Settings(BaseSettings):
 
     # --- 자막/전사 폴백 순서 ---
     TRANSCRIPT_PROVIDER_ORDER: str = "youtube-transcript-api,yt-dlp,faster-whisper"
-    FFMPEG_PATH: str = "ffmpeg"
+    # 실행 환경은 Linux Docker 전용이며 FFmpeg은 컨테이너 이미지가 apt로 제공한다.
+    FFMPEG_PATH: str = "/usr/bin/ffmpeg"
 
     # --- RustFS 미디어 저장소 ---
     RUSTFS_ENABLED: bool = True
@@ -105,6 +115,28 @@ class Settings(BaseSettings):
     SCHEDULER_HEARTBEAT_INTERVAL_SECONDS: int = 30
     SCHEDULER_STALE_THRESHOLD_SECONDS: int = 300
     SCHEDULER_MAX_RETRIES: int = 3
+
+    @property
+    def api_keys(self) -> list[str]:
+        """`API_KEYS`를 허용 키 목록으로 파싱한다."""
+        return [key.strip() for key in self.API_KEYS.split(",") if key.strip()]
+
+    @property
+    def is_local_env(self) -> bool:
+        """local/test/e2e 실행 환경 여부."""
+        return self.APP_ENV.strip().lower() in {"local", "test", "e2e"}
+
+    @property
+    def auth_required(self) -> bool:
+        """API 인증(인증 코드) 요구 여부.
+
+        로컬 실행(`APP_ENV=local` 등)에서는 인증 없이 동작하고, 외부에 노출되는
+        비-local 환경에서는 인증 코드를 요구한다. `API_AUTH_ENABLED=true`이면
+        환경과 무관하게 인증을 강제한다.
+        """
+        if self.API_AUTH_ENABLED:
+            return True
+        return not self.is_local_env
 
     @property
     def transcript_provider_order(self) -> list[str]:

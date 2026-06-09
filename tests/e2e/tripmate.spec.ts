@@ -56,7 +56,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     await page.locator('#harvest-max-videos').fill('3');
     const responsePromise = page.waitForResponse(
       (response) =>
-        response.url().includes('/api/harvest') &&
+        response.url().includes('/api/v1/harvest') &&
         response.request().method() === 'POST',
     );
     await page.getByRole('button', { name: /수집 시작/ }).click();
@@ -84,7 +84,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     await placesRegion.getByRole('button', { name: /월정리 해변/ }).click();
     const deepResearchResponse = page.waitForResponse(
       (response) =>
-        response.url().includes('/api/destinations/') &&
+        response.url().includes('/api/v1/destinations/') &&
         response.url().endsWith('/deep-research') &&
         response.request().method() === 'POST',
     );
@@ -92,7 +92,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     expect((await deepResearchResponse).ok()).toBeTruthy();
     await expect
       .poll(async () => {
-        const response = await page.request.get(`${backendURL}/api/runs?limit=12`);
+        const response = await page.request.get(`${backendURL}/api/v1/runs?limit=12`);
         const runs = (await response.json()) as Array<{ job_type: string }>;
         return runs.some((run) => run.job_type === 'deep_research');
       })
@@ -105,7 +105,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     await page.getByLabel('보정 카테고리').fill('카페');
     const resolveResponse = page.waitForResponse(
       (response) =>
-        response.url().includes('/api/destinations/unmatched/') &&
+        response.url().includes('/api/v1/destinations/unmatched/') &&
         response.url().endsWith('/resolve') &&
         response.request().method() === 'POST',
     );
@@ -114,7 +114,7 @@ test.describe('TripMate Agent E2E 검증', () => {
 
     await expect
       .poll(async () => {
-        const response = await page.request.get(`${backendURL}/api/destinations/unmatched`);
+        const response = await page.request.get(`${backendURL}/api/v1/destinations/unmatched`);
         const candidates = (await response.json()) as unknown[];
         return candidates.length;
       })
@@ -137,7 +137,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     await expect(page.locator('#success-toast')).toBeVisible();
     await expect
       .poll(async () => {
-        const response = await page.request.get(`${backendURL}/api/settings`);
+        const response = await page.request.get(`${backendURL}/api/v1/settings`);
         const settings = (await response.json()) as Record<string, string>;
         return settings.gemini_engine_version;
       })
@@ -164,9 +164,9 @@ async function expectSeedReady(page: Page) {
     .poll(
       async () => {
         const [placesResponse, candidatesResponse, auditResponse] = await Promise.all([
-          page.request.get(`${backendURL}/api/destinations`),
-          page.request.get(`${backendURL}/api/destinations/unmatched`),
-          page.request.get(`${backendURL}/api/audit-logs?limit=10`),
+          page.request.get(`${backendURL}/api/v1/destinations`),
+          page.request.get(`${backendURL}/api/v1/destinations/unmatched`),
+          page.request.get(`${backendURL}/api/v1/audit-logs?limit=10`),
         ]);
         if (!placesResponse.ok() || !candidatesResponse.ok() || !auditResponse.ok()) {
           return 'not-ready';

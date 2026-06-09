@@ -30,7 +30,10 @@ const child = spawn(
     cwd: frontendDir,
     env: {
       ...process.env,
-      NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${backendPort}`,
+      // 브라우저는 same-origin BFF(`/api/v1/*`)로 호출한다(상대 경로).
+      NEXT_PUBLIC_API_BASE_URL: "",
+      // BFF Route Handler가 서버 사이드에서 E2E 백엔드로 프록시한다(APP_ENV=e2e 무인증).
+      BACKEND_ORIGIN: `http://127.0.0.1:${backendPort}`,
     },
     stdio: "inherit",
   },
@@ -62,6 +65,8 @@ function stopChild(signal = "SIGTERM") {
   }
   stopping = true;
 
+  // Windows E2E 호스트에서는 next dev 자식 프로세스 트리를 taskkill로 정리해야
+  // orphan이 남지 않는다(ADR-23 E2E 예외).
   if (process.platform === "win32" && child.pid) {
     spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",

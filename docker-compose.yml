@@ -11,12 +11,12 @@ x-python-env: &python-env
   DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
   SPATIALITE_EXTENSION_PATH: mod_spatialite
   NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-9041}
-  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-9042},http://127.0.0.1:${FRONTEND_HOST_PORT:-9042},http://localhost:3000,http://127.0.0.1:3000,http://localhost:13000,http://127.0.0.1:13000,http://localhost:13100,http://127.0.0.1:13100}
+  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-9042},http://127.0.0.1:${FRONTEND_HOST_PORT:-9042},http://localhost:13000,http://127.0.0.1:13000,http://localhost:13100,http://127.0.0.1:13100}
   RUSTFS_ENABLED: "true"
   # 컨테이너 간 통신은 Compose 서비스명과 RustFS 기본 내부 포트(9000)를 사용한다.
   RUSTFS_ENDPOINT: ${RUSTFS_DOCKER_ENDPOINT:-http://rustfs:9000}
   RUSTFS_PUBLIC_BASE_URL: ${RUSTFS_PUBLIC_BASE_URL:-http://127.0.0.1:9003/krtour-map}
-  # 콘솔은 사용자가 Windows 호스트 브라우저에서 여는 공개 URL이다.
+  # 콘솔은 사용자가 호스트(또는 WSL2) 브라우저에서 여는 공개 URL이다.
   RUSTFS_CONSOLE_URL: http://127.0.0.1:9004
   RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
   RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
@@ -27,7 +27,13 @@ x-python-env: &python-env
   RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
   RUSTFS_HEALTH_PATH: /health/live
   MEDIA_RETENTION_POLICY: infinite
-  FFMPEG_PATH: ${DOCKER_FFMPEG_PATH:-/usr/bin/ffmpeg}
+  # FFmpeg은 컨테이너 이미지(Dockerfile.python apt)가 /usr/bin/ffmpeg로 제공한다.
+  FFMPEG_PATH: ${FFMPEG_PATH:-/usr/bin/ffmpeg}
+  # 실행 환경 및 API 인증. 기본 local은 인증 코드 없이 동작한다. 외부에 노출할 때는
+  # .env에 APP_ENV=production과 API_KEYS=<쉼표 구분 키>를 설정한다.
+  APP_ENV: ${APP_ENV:-local}
+  API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
+  API_KEYS: ${API_KEYS:-}
 
 services:
   rustfs:
@@ -118,7 +124,11 @@ services:
       context: ./frontend
     env_file: *app-env-file
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-9041}
+      # 브라우저는 same-origin BFF(`/api/v1/*` Route Handler)로 호출한다(상대 경로).
+      # BFF가 서버 사이드에서 백엔드로 프록시하며 인증 코드를 주입하므로, 키는
+      # 서버 전용 BACKEND_API_KEY로만 보관하고 브라우저에 노출하지 않는다(ADR-24).
+      BACKEND_ORIGIN: http://api:8000
+      BACKEND_API_KEY: ${BACKEND_API_KEY:-}
       NEXT_PUBLIC_VWORLD_SERVICE_KEY: ${NEXT_PUBLIC_VWORLD_SERVICE_KEY:-}
     ports:
       - "${FRONTEND_HOST_PORT:-9042}:3000"

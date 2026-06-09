@@ -104,7 +104,7 @@ def test_extract_jpeg_with_ffmpeg_uses_configured_binary(monkeypatch):
     captured = {}
 
     class SettingsStub:
-        FFMPEG_PATH = r"F:\dev\tripmate-agent\.local\ffmpeg\bin\ffmpeg.exe"
+        FFMPEG_PATH = "/opt/ffmpeg/bin/ffmpeg"
 
     monkeypatch.setattr(frame_extraction, "get_settings", lambda: SettingsStub())
 
@@ -136,7 +136,7 @@ def test_extract_jpeg_with_ffmpeg_wraps_timeout():
 
 def test_extract_jpeg_with_ffmpeg_wraps_missing_binary(monkeypatch):
     class SettingsStub:
-        FFMPEG_PATH = r"F:\missing\ffmpeg.exe"
+        FFMPEG_PATH = "/missing/ffmpeg"
 
     monkeypatch.setattr(frame_extraction, "get_settings", lambda: SettingsStub())
 

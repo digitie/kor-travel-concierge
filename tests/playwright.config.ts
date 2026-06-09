@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Windows 환경 Playwright E2E 테스트 기본 설정
+ * Linux / Docker(및 Windows WSL2) 환경 Playwright E2E 테스트 기본 설정
  */
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? '13100';
 const backendPort = process.env.E2E_BACKEND_PORT ?? '18080';
