@@ -293,18 +293,7 @@ async def list_unmatched_candidates(
 ) -> list[dict[str, Any]]:
     """매칭 실패(`needs_review`) 후보 검수 큐."""
     candidates = await place_service.list_unmatched_candidates(session)
-    return [
-        {
-            "id": c.id,
-            "video_id": c.video_id,
-            "ai_place_name": c.ai_place_name,
-            "location_hint": c.location_hint,
-            "candidate_category": c.candidate_category,
-            "match_status": c.match_status,
-            "timestamp_start": c.timestamp_start,
-        }
-        for c in candidates
-    ]
+    return [_candidate_payload(candidate) for candidate in candidates]
 
 
 @router.post("/destinations/{place_id}/correct")
@@ -410,11 +399,7 @@ async def resolve_unmatched_candidate(
     )
     return {
         "status": "resolved",
-        "candidate": {
-            "id": candidate.id,
-            "match_status": candidate.match_status,
-            "matched_place_id": candidate.matched_place_id,
-        },
+        "candidate": _candidate_payload(candidate),
         "place": _place_payload(place) if place else None,
         "mapping_id": mapping.id if mapping else None,
     }
@@ -507,6 +492,34 @@ def _place_payload(place) -> dict[str, Any]:
         "category": place.category,
         "api_source": place.api_source,
         "is_geocoded": place.is_geocoded,
+    }
+
+
+def _candidate_payload(candidate) -> dict[str, Any]:
+    return {
+        "id": candidate.id,
+        "video_id": candidate.video_id,
+        "source_channel_id": candidate.source_channel_id,
+        "source_playlist_id": candidate.source_playlist_id,
+        "analysis_run_id": candidate.analysis_run_id,
+        "source_kind": candidate.source_kind,
+        "source_text": candidate.source_text,
+        "ai_place_name": candidate.ai_place_name,
+        "speaker_note": candidate.speaker_note,
+        "location_hint": candidate.location_hint,
+        "timestamp_start": candidate.timestamp_start,
+        "timestamp_end": candidate.timestamp_end,
+        "candidate_category": candidate.candidate_category,
+        "match_status": candidate.match_status,
+        "matched_place_id": candidate.matched_place_id,
+        "confidence_score": candidate.confidence_score,
+        "provider_evidence_json": candidate.provider_evidence_json,
+        "feature_export_status": candidate.feature_export_status,
+        "reviewed_by": candidate.reviewed_by,
+        "reviewed_at": (
+            candidate.reviewed_at.isoformat() if candidate.reviewed_at else None
+        ),
+        "review_note": candidate.review_note,
     }
 
 

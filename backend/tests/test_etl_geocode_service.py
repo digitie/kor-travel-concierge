@@ -8,6 +8,7 @@ from app.etl.geocode_service import _names_compatible, apply_geocode_to_candidat
 from app.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from app.models import (
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     TravelPlace,
     VideoPlaceMapping,
@@ -49,9 +50,14 @@ async def test_apply_matched_creates_place(session):
     assert refreshed.match_status == MatchStatus.MATCHED
     assert refreshed.matched_place_id == place.place_id
     assert refreshed.reviewed_at is not None
+    assert refreshed.feature_export_status == FeatureExportStatus.READY
+    assert refreshed.provider_evidence_json["geocoding"]["decision"]["reason"] == "single_result"
+    assert refreshed.provider_evidence_json["geocoding"]["selected_candidate"]["source"] == "kakao"
     mapping = (await session.execute(select(VideoPlaceMapping))).scalars().one()
     assert mapping.video_id == candidate.video_id
     assert mapping.place_id == place.place_id
+    assert mapping.feature_export_status == FeatureExportStatus.READY
+    assert mapping.provider_evidence_json == refreshed.provider_evidence_json
 
 
 async def test_apply_needs_review_keeps_candidate(session):
@@ -63,6 +69,8 @@ async def test_apply_needs_review_keeps_candidate(session):
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
     assert refreshed.review_note == "no_result"
+    assert refreshed.feature_export_status == FeatureExportStatus.PENDING
+    assert refreshed.provider_evidence_json["geocoding"]["decision"]["reason"] == "no_result"
     # 장소는 생성되지 않는다 (자동 확정 금지)
     places = (await session.execute(select(TravelPlace))).scalars().all()
     assert places == []
@@ -109,6 +117,7 @@ async def test_apply_matched_nearby_name_mismatch_needs_review(session):
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
     assert refreshed.review_note == "nearby_place_name_mismatch"
+    assert refreshed.feature_export_status == FeatureExportStatus.PENDING
 
 
 async def test_apply_matched_nearby_short_partial_name_needs_review(session):

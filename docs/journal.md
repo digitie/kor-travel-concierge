@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-10: T-065 장소 후보 schema 보강 및 외부 API evidence 저장
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **후보·매핑 provenance schema 추가**: `extracted_place_candidates`와 `video_place_mappings`에 `source_channel_id`, `source_playlist_id`, `analysis_run_id`, `source_kind`, `provider_evidence_json`, `feature_export_status`를 추가하고 Alembic migration `20260610_0004`를 작성했다.
+  - **기존 데이터 backfill**: migration에서 기존 후보와 매핑의 `source_channel_id`를 `youtube_videos.channel_id`로 채우고, 이미 확정된 후보·매핑은 export 상태를 `ready`로 보정한다.
+  - **transcript evidence 저장**: 자막 기반 후보 생성 시 channel, 첫 playlist, transcript asset/source/timestamp 근거를 JSONB에 저장한다.
+  - **지오코딩 evidence 저장**: VWorld/Kakao/Naver 후보 목록, 선택 후보, decision reason/confidence, reverse VWorld 주소 보강 결과를 `provider_evidence_json.geocoding`에 남긴다.
+  - **검수·매핑 상태 연결**: 자동/수동 확정 후보와 매핑은 `ready`, 검수 대기 후보는 `pending`, ignore 후보는 `rejected`로 둔다. reconcile 충돌 후보는 analysis run id와 reconcile evidence를 남기고 `pending`으로 유지한다.
+  - **API/MCP 응답 보강**: FastAPI 검수 큐와 MCP candidate/mapping serializer가 provenance/evidence/export 필드를 반환한다.
+  - **남은 확인 유지**: Google Places API 보강은 과금·저장 정책·라이선스 확인 전까지 구현하지 않았고, `python-krtour-map` 8자리 category mapping은 별도 작업으로 남겼다.
+- **검증**:
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head` → `20260610_0004` 적용
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_summarize.py backend/tests/test_etl_geocode_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_api.py backend/tests/test_mcp_tools.py` → `39 passed`
+  - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
+  - `backend/.venv/bin/python -m compileall backend/app backend/tests tripmate_mcp backend/alembic scheduler`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `docker compose config --quiet`
+  - `git diff --check`
+- **다음 작업**:
+  - T-066 범용 full/incremental feature 수집 API 추가.
+
+---
+
 ## 2026-06-10: T-064 Gemini YouTube URL 요약과 transcript 비교·정리
 
 - **담당자**: Codex

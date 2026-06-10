@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import (
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     VideoAnalysisRunState,
     YoutubeVideo,
@@ -485,6 +486,7 @@ def _apply_reconcile_review_notes(
     *,
     candidates: list[ExtractedPlaceCandidate],
     result: ReconcileResult,
+    analysis_run_id: int,
 ) -> int:
     by_id = {candidate.id: candidate for candidate in candidates}
     updated = 0
@@ -498,6 +500,21 @@ def _apply_reconcile_review_notes(
                 continue
             candidate.match_status = MatchStatus.NEEDS_REVIEW
             candidate.review_note = note
+            candidate.analysis_run_id = analysis_run_id
+            candidate.feature_export_status = FeatureExportStatus.PENDING.value
+            candidate.provider_evidence_json = _merge_provider_evidence(
+                candidate.provider_evidence_json,
+                reconcile={
+                    "analysis_run_id": analysis_run_id,
+                    "name": place.name,
+                    "decision": place.decision,
+                    "transcript_evidence": place.transcript_evidence,
+                    "url_evidence": place.url_evidence,
+                    "confidence_score": place.confidence_score,
+                    "needs_review_reason": place.needs_review_reason,
+                    "conflicts": result.conflicts,
+                },
+            )
             updated += 1
     return updated
 
@@ -539,6 +556,7 @@ async def run_reconcile_analysis(
     updated_candidates = _apply_reconcile_review_notes(
         candidates=candidates,
         result=result,
+        analysis_run_id=analysis_run.id,
     )
     analysis_run.summary_json = result_json
     analysis_run.summary_text = result.summary
@@ -558,3 +576,13 @@ async def run_reconcile_analysis(
         "updated_review_candidates": updated_candidates,
         "confidence_score": score,
     }
+
+
+def _merge_provider_evidence(
+    existing: dict[str, Any] | None,
+    *,
+    reconcile: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(existing or {})
+    merged["reconcile"] = reconcile
+    return merged

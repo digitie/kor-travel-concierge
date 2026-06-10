@@ -14,6 +14,7 @@ from app.etl.transcript import TranscriptResult, TranscriptSegment
 from app.models import (
     AssetType,
     CrawlStatus,
+    FeatureExportStatus,
     ExtractedPlaceCandidate,
     MatchStatus,
     MediaAsset,
@@ -152,6 +153,11 @@ async def test_summarize_video_full_flow(session):
     cands = (await session.execute(select(ExtractedPlaceCandidate))).scalars().all()
     assert len(cands) == 2
     assert all(c.match_status == MatchStatus.NEEDS_REVIEW for c in cands)
+    assert all(c.source_channel_id == "c" for c in cands)
+    assert all(c.source_kind == "transcript" for c in cands)
+    assert all(c.feature_export_status == FeatureExportStatus.PENDING for c in cands)
+    assert cands[0].provider_evidence_json["transcript"]["source"] == "transcript_api"
+    assert cands[0].provider_evidence_json["transcript"]["asset_id"] is not None
 
     # 전사 결과가 RustFS+media_assets에 기록
     assets = (await session.execute(select(MediaAsset))).scalars().all()

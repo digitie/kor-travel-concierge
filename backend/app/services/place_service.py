@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.spatial import sync_place_geometry
 from app.models import (
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     MediaAsset,
     TravelPlace,
@@ -441,6 +442,7 @@ async def resolve_candidate(
     mapping: VideoPlaceMapping | None = None
     if action == "ignore":
         candidate.match_status = MatchStatus.IGNORED
+        candidate.feature_export_status = FeatureExportStatus.REJECTED.value
     elif action == "match_existing":
         if place_id is None:
             raise ValueError("기존 장소 매칭에는 place_id가 필요하다")
@@ -449,6 +451,7 @@ async def resolve_candidate(
             raise ValueError(f"place not found: {place_id}")
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
+        candidate.feature_export_status = FeatureExportStatus.READY.value
         mapping = await _ensure_candidate_mapping(session, candidate, place)
     elif action == "create_place":
         data = place_data or {}
@@ -474,6 +477,7 @@ async def resolve_candidate(
         await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
+        candidate.feature_export_status = FeatureExportStatus.READY.value
         mapping = await _ensure_candidate_mapping(session, candidate, place)
     else:
         raise ValueError(f"지원하지 않는 후보 해결 action: {action}")
@@ -505,17 +509,29 @@ async def _ensure_candidate_mapping(
     if mapping is None:
         mapping = VideoPlaceMapping(
             video_id=candidate.video_id,
+            source_channel_id=candidate.source_channel_id,
+            source_playlist_id=candidate.source_playlist_id,
+            analysis_run_id=candidate.analysis_run_id,
+            source_kind=candidate.source_kind,
             place_id=place.place_id,
             place_candidate_id=candidate.id,
             ai_summary=candidate.source_text,
             speaker_note=candidate.speaker_note,
             timestamp_start=candidate.timestamp_start,
             timestamp_end=candidate.timestamp_end,
+            provider_evidence_json=candidate.provider_evidence_json,
+            feature_export_status=candidate.feature_export_status,
         )
         session.add(mapping)
         await session.flush()
     else:
         mapping.place_id = place.place_id
+        mapping.source_channel_id = candidate.source_channel_id
+        mapping.source_playlist_id = candidate.source_playlist_id
+        mapping.analysis_run_id = candidate.analysis_run_id
+        mapping.source_kind = candidate.source_kind
+        mapping.provider_evidence_json = candidate.provider_evidence_json
+        mapping.feature_export_status = candidate.feature_export_status
     return mapping
 
 

@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from app.models import (  # noqa: E402
     AuditLog,
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     MediaAsset,
     RunSource,
@@ -251,11 +252,13 @@ async def test_resolve_place_candidate_create_place_adds_mapping(session_factory
     )
 
     assert result["candidate"]["match_status"] == MatchStatus.USER_CORRECTED
+    assert result["candidate"]["feature_export_status"] == FeatureExportStatus.READY
     assert result["place"]["name"] == "해운대 해수욕장"
     async with session_factory() as session:
         mappings = (await session.execute(select(VideoPlaceMapping))).scalars().all()
         assert len(mappings) == 1
         assert mappings[0].place_candidate_id == candidate.id
+        assert mappings[0].feature_export_status == FeatureExportStatus.READY
 
 
 async def test_resolve_place_candidate_can_ignore_candidate(session_factory):
@@ -271,6 +274,7 @@ async def test_resolve_place_candidate_can_ignore_candidate(session_factory):
     )
 
     assert result["candidate"]["match_status"] == MatchStatus.IGNORED
+    assert result["candidate"]["feature_export_status"] == FeatureExportStatus.REJECTED
     assert result["place"] is None
     assert result["mapping"] is None
 

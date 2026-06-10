@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -50,6 +50,7 @@ class GeocodeDecision:
     confidence: float
     reason: str
     candidate_count: int
+    provider_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 # --- 좌표 정규화 ---
@@ -375,12 +376,17 @@ def evaluate_geocode(
 
     secondary = secondary or []
     count = len(primary)
+    evidence = {
+        "primary": [_candidate_to_evidence(candidate) for candidate in primary],
+        "secondary": [_candidate_to_evidence(candidate) for candidate in secondary],
+        "secondary_name": secondary_name,
+    }
 
     if count == 0:
-        return GeocodeDecision("needs_review", None, 0.0, "no_result", 0)
+        return GeocodeDecision("needs_review", None, 0.0, "no_result", 0, evidence)
 
     if count == 1:
-        return GeocodeDecision("matched", primary[0], 1.0, "single_result", 1)
+        return GeocodeDecision("matched", primary[0], 1.0, "single_result", 1, evidence)
 
     # 후보 과다: 보조 공급자 최상위와 좌표가 근접하면 확정, 아니면 검수 대기
     top = primary[0]
@@ -390,11 +396,28 @@ def evaluate_geocode(
         )
         if dist <= DISAMBIGUATION_RADIUS_M:
             return GeocodeDecision(
-                "matched", top, 0.7, f"disambiguated_by_{secondary_name}", count
+                "matched",
+                top,
+                0.7,
+                f"disambiguated_by_{secondary_name}",
+                count,
+                evidence,
             )
 
     confidence = 1.0 / count
-    return GeocodeDecision("needs_review", None, confidence, "ambiguous", count)
+    return GeocodeDecision("needs_review", None, confidence, "ambiguous", count, evidence)
+
+
+def _candidate_to_evidence(candidate: GeocodeCandidate) -> dict[str, Any]:
+    return {
+        "source": candidate.source,
+        "place_name": candidate.place_name,
+        "road_address": candidate.road_address,
+        "official_address": candidate.official_address,
+        "category": candidate.category,
+        "latitude": candidate.latitude,
+        "longitude": candidate.longitude,
+    }
 
 
 def _vworld_result_text(result: dict) -> str | None:
