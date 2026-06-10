@@ -17,6 +17,7 @@ API·MCP·scheduler가 공유하는 도메인 로직을 모은다.
 from app.services import (
     audit_service,
     crawl_run_service,
+    feature_export_service,
     place_export_service,
     place_service,
     settings_service,
@@ -29,5 +30,6 @@ __all__ = [
     "settings_service",
     "place_service",
     "place_export_service",
+    "feature_export_service",
     "source_scan_service",
 ]

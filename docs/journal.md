@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-10: T-066 범용 full/incremental feature 수집 API 추가
+
+- **담당자**: Claude
+- **작업 내용**:
+  - **`feature_exports` export ledger 추가**: `extracted_place_candidates`를 출처로 삼는 export ledger 모델(`app/models/feature_export.py`)과 Alembic migration `20260610_0005`를 추가했다. `export_id`(`ytpc_{candidate_id}`), 증가 cursor용 `sequence`(전용 PostgreSQL sequence `feature_export_sequence`), `operation`(`upsert`/`reject`/`tombstone`), `export_state`, `payload_json`, `payload_hash`(`sha256:` prefix), `last_exported_at`, `rejection_reason`, `created_at`/`updated_at`를 보존하고 `(export_state, updated_at, export_id)`·`sequence` unique·`candidate_id` unique·`payload_json` GIN 인덱스를 둔다.
+  - **멱등 동기화**: `feature_export_service.sync_feature_exports`가 후보 상태로부터 ledger를 멱등 동기화한다. payload가 의미 있게 바뀐 export에만 `nextval`로 새 sequence를 부여해, 변화가 없으면 cursor가 안정적이다(반복 호출이 churn을 만들지 않음). 확정(`ready`/`exported` + matched place) 후보는 `upsert`, `ignored`/`rejected` 후보는 과거 export가 있을 때만 `reject`, 후보가 사라진 ledger row는 `tombstone`으로 전환한다.
+  - **범용 수집 API**: `GET /api/v1/features/snapshot`(현재 활성 `upsert`만)과 `GET /api/v1/features/changes`(`upsert`/`reject`/`tombstone` 모두)를 추가했다. 응답 item은 `export_id`, `operation`, `candidate_id`, place/address/coordinate/category suggestion, YouTube video/channel/playlist evidence, transcript/Gemini evidence, `source_record`(provider `tripmate-agent-youtube`, `raw_payload_hash`), `updated_at`를 포함하고, 페이지는 opaque base64 cursor와 `next_cursor`/`has_more`로 노출한다. REST path에는 특정 consumer 이름을 넣지 않고 ADR-24 `X-API-Key` 인증을 그대로 적용한다.
+  - **category code 보류**: `python-krtour-map` 8자리 category mapping 확정 전까지 `category_code_suggestion`은 `null`로 두고 `category_label`만 제안한다(`feature_id` 생성은 consumer 책임).
+- **검증** (`python-kraddr-geo` PostgreSQL/PostGIS 서버 `localhost:15434`, disposable DB):
+  - `DATABASE_URL=...tripmate_agent_alembic alembic upgrade head` → `20260610_0005`까지 적용, `downgrade 20260610_0004` → `upgrade head` round-trip 성공
+  - Alembic offline SQL(`20260610_0004:head --sql`)에 `feature_exports` 포함 확인
+  - T-066 타깃 pytest `tests/test_feature_export_api.py` → `7 passed`
+  - backend 전체 pytest → `178 passed`
+  - `compileall`, `docker compose config --quiet`, `git diff --check`
+
 ## 2026-06-10: T-065 장소 후보 schema 보강 및 외부 API evidence 저장
 
 - **담당자**: Codex

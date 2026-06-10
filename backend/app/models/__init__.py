@@ -19,6 +19,11 @@ from app.models.base import Base, TimestampMixin, utcnow
 from app.models.crawl_run import CrawlRun, RunSource, RunState
 from app.models.extracted_place_candidate import ExtractedPlaceCandidate, MatchStatus
 from app.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
+from app.models.feature_export import (
+    FeatureExport,
+    FeatureExportOperation,
+    feature_export_sequence,
+)
 from app.models.media_asset import AssetType, MediaAsset
 from app.models.search_keyword import SearchKeyword
 from app.models.source_target import SourceTarget, TargetType
@@ -64,6 +69,9 @@ __all__ = [
     "MatchStatus",
     "EvidenceSourceKind",
     "FeatureExportStatus",
+    "FeatureExport",
+    "FeatureExportOperation",
+    "feature_export_sequence",
     "VideoPlaceMapping",
     "MediaAsset",
     "AssetType",

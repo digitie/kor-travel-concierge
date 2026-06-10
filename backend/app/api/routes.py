@@ -25,6 +25,7 @@ from app.models import MediaAsset, RunSource
 from app.services import (
     audit_service,
     crawl_run_service,
+    feature_export_service,
     place_export_service,
     place_service,
     settings_service,
@@ -447,6 +448,53 @@ async def get_rustfs_status(
         "retention_policy": settings.MEDIA_RETENTION_POLICY,
         "health": health,
         "assets": assets,
+    }
+
+
+# --- 범용 feature 수집 API (ADR-26) ---
+
+
+@router.get("/features/snapshot")
+async def features_snapshot(
+    cursor: str | None = None,
+    limit: int = feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """현재 활성 feature 후보를 full snapshot으로 노출한다.
+
+    downstream consumer(`python-krtour-map` 등)가 opaque `cursor`로 전체를
+    페이지네이션해 가져간다. REST path에는 특정 consumer 이름을 넣지 않는다.
+    """
+    try:
+        page = await feature_export_service.get_snapshot(
+            session, cursor=cursor, limit=limit
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "items": page.items,
+        "next_cursor": page.next_cursor,
+        "has_more": page.has_more,
+    }
+
+
+@router.get("/features/changes")
+async def features_changes(
+    cursor: str | None = None,
+    limit: int = feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """`upsert`/`reject`/`tombstone` 변경을 incremental로 노출한다."""
+    try:
+        page = await feature_export_service.get_changes(
+            session, cursor=cursor, limit=limit
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "items": page.items,
+        "next_cursor": page.next_cursor,
+        "has_more": page.has_more,
     }
 
 
