@@ -15,6 +15,7 @@
 - [ ] **T-067**: `python-krtour-map` consumer/import 후속 PR — `python-krtour-map` repo에 `tripmate-agent-youtube` provider를 추가해 T-066 API를 주기적으로 pull하고 `FeatureBundle`로 변환한다. `feature_id` 생성은 `python-krtour-map`의 `make_feature_id(...)`를 사용하고, `SourceRecord`/`SourceLink`에는 YouTube 후보 payload와 confidence를 보존한다. full 재동기화와 incremental cursor 모두 검증한다.
 - [ ] **T-068**: TripMate curated plan 소비 흐름 검증 — TripMate는 `tripmate-agent` DB에 직접 붙지 않고 `python-krtour-map` feature를 통해 `feature_id`와 `feature_snapshot`을 사용한다. notice plan/POI 작성 흐름에서 YouTube 기반 feature가 이름, 좌표, 카테고리, 영상 근거를 충분히 표시하는지 확인하고, 자동 curated plan 등록이 필요한지는 사용자에게 재확인한다.
 - [ ] **T-069**: 통합 검증과 운영 문서 정리 — PostgreSQL/PostGIS compose 연동, optional real DB pytest, backend 전체 pytest, frontend lint/type-check/build, Windows host Playwright E2E, `python-krtour-map` pull smoke, TripMate curated plan smoke를 실행하고 README/AGENTS/SKILL/dev-environment/architecture 문서를 구현 결과와 다시 정렬한다.
+- [ ] **T-070**: `category_code_suggestion` 채우기 — `python-krtour-map`의 8자리 category 코드표를 `tripmate-agent`로 **복사**해 넣고, Gemini가 그 목록 중 장소에 적절한 코드 하나를 고르도록 해서 feature export `category_code_suggestion`을 채운다(현재 T-066에서 `null`). 런타임에 `python-krtour-map`을 참조하면 순환참조(provider↔consumer)가 되므로 복사로 끊는다. 카테고리 표 복사는 정합성 drift 위험이 있으나 카테고리가 거의 바뀌지 않아 실무상 문제없다고 판단(2026-06-11 결정). `feature_id` 생성은 여전히 `python-krtour-map` 책임으로 둔다.
 
 ---
 
