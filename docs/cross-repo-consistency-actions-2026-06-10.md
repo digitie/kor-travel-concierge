@@ -20,15 +20,14 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 
 | 항목 | krtour-map 구현 값 | 근거 |
 |---|---|---|
-| 호출 경로 (**현재 main 구현**) | `GET {base}/api/v1/krtour/features/{snapshot\|changes}` — endpoint 선택은 consumer 설정 `tripmate_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py:87` (krtour `origin/main` 기준) |
-| 호출 경로 (**목표 — 경로 중립화**) | `GET {base}/api/v1/features/{snapshot\|changes}` — downstream 이름 제거. krtour-map#334(ADR-050 #1 제안)의 T-217a로 fetcher 정렬 예정. **T-066은 목표 경로로 구현하되, 배포는 krtour T-217a와 동시**(한쪽만 나가면 404/적재 실패) | krtour-map#334 (열린 PR) |
-| 인증 | `X-API-Key` 헤더 (tripmate-agent `API_KEYS` 중 하나) | 같은 파일 `:89` |
-| 요청 파라미터 | `limit`(krtour 설정 `tripmate_agent_feature_page_size`), `cursor`(opaque) | `:96-100` |
+| 호출 경로 | `GET {base}/api/v1/features/{snapshot\|changes}` — **중립 경로 정렬 완료** (krtour T-217a, krtour-map#346 머지 2026-06-11). endpoint 선택은 consumer 설정 `tripmate_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py` |
+| 인증 | `X-API-Key` 헤더 (tripmate-agent `API_KEYS` 중 하나) | 같은 파일 |
+| 요청 파라미터 | `limit`(krtour 설정 `tripmate_agent_feature_page_size`, **상한 500** — 본 repo `FEATURE_EXPORT_LIMIT_MAX`와 정렬됨), `cursor`(opaque) | 〃 |
 | 응답 필수 형태 | JSON object — `items: list` 필수, `has_more: bool`, `next_cursor: str` | `:104-118` |
 | cursor 규약 | `has_more=true`면 `next_cursor` 비어있으면 안 되고, **직전 cursor와 같으면 에러**(무한루프 가드) — cursor는 단조 전진해야 함 | `:112-124` |
 | krtour 측 env | `KRTOUR_MAP_TRIPMATE_AGENT_BASE_URL`, `KRTOUR_MAP_TRIPMATE_AGENT_API_KEY`, timeout | `:72-84` |
 | provider 식별 | provider `tripmate-agent-youtube`, dataset `youtube_place_candidates` | krtour `src/krtour/map/providers/tripmate_agent.py` |
-| operation 처리 | **`upsert`만 적재. `reject`/`tombstone`은 현재 skip** (krtour 측 후속 과제로 식별됨 — 아래 §3 D-03) | 같은 파일 `:76,87` |
+| operation 처리 | `upsert` 적재 + **`reject`/`tombstone` → 대응 feature `status='inactive'` 전환**(krtour T-217b 구현 완료, ADR-050 #4 — MOIS Step C 동형. 부가 `rejection_reason`은 krtour 비적재라 무시) | krtour `providers/tripmate_agent.py` + Dagster asset |
 
 본 repo `docs/youtube-feature-pipeline-plan.md` §7의 스키마와 위 기대치는 **일치함을
 확인**했다 (필드명·페이지네이션·operation 모두). 즉 T-066은 plan §7대로 구현하면 된다.
@@ -37,13 +36,12 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 만약 sibling repo 구현 또는 설정 기본값이 이전 downstream 전용 경로를 가리키고
 있다면 T-067에서 `/api/v1/features/*`로 함께 정렬해야 한다.
 
-> **2026-06-10 결정 반영 — merge dependency 주의**: 경로 중립화(ADR-050 #1)와
-> fetcher 정렬 task(T-217a)는 **아직 열린 PR `digitie/python-krtour-map#334`의 내용**
-> 이다 — 본 문서에서 인용하는 ADR-050~052·T-217a~g 전부 동일 (krtour 현재 main에
-> 머지된 것은 ADR-049까지). #334 머지 전에는 "제안/대기 중"으로 읽을 것. 본 PR(#56)은
-> **#334 머지 후에 머지**하는 것을 권장한다.
-> **양쪽 동시 배포 필수** — T-066 배포 시점에 krtour-map T-217a가 함께 나가야
-> 적재가 끊기지 않는다 (현재는 양쪽 다 미가동이라 안전).
+> **2026-06-11 갱신 — merge dependency 해소**: ADR-050~052는 krtour-map#334로,
+> fetcher 경로 정렬(T-217a)·철회→inactive(T-217b)는 krtour-map#346으로 **모두
+> 머지 완료**. 본 repo T-066(#60)도 중립 경로로 머지돼 있어 **양쪽 경로가 이미
+> 일치한다 — 동시 배포 제약 없음**. krtour 측 전 필드 대조 결과는
+> krtour-map#346 코멘트 참조(item 스키마/상수/operation/cursor 전부 일치,
+> limit 상한 500 정렬).
 
 ## 2. tripmate-agent 액션 (TA-)
 
