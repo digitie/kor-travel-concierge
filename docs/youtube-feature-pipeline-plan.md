@@ -436,7 +436,12 @@ X-API-Key: ...
 - `python-krtour-map`이 pull API를 직접 호출할지, 별도 provider 모듈을
   `python-krtour-map` repo에 추가할지 구현 위치를 확정한다.
 - `python-krtour-map` category 8자리 코드와 TripMate 표시 카테고리 간 mapping 표가
-  필요하다. 초기에는 `category_code_suggestion`을 제안값으로만 제공한다.
+  필요하다. T-066은 `category_code_suggestion`을 `null`로 두고 `category_label`만
+  제안한다. **확정 방식(2026-06-11)**: `python-krtour-map`의 8자리 category 코드표를
+  `tripmate-agent`로 복사해 넣고, Gemini가 그 목록 중 적절한 코드 하나를 고르게 해서
+  `category_code_suggestion`을 채운다(T-070). 런타임 참조는 순환참조(provider↔consumer)가
+  되므로 복사로 끊는다. 표 복사의 정합성 drift 위험은 카테고리가 거의 바뀌지 않아
+  실무상 수용 가능하다고 판단한다.
 - TripMate curated plan에 자동 등록까지 할지, admin이 feature를 골라 notice plan에
   넣는 수동 흐름을 유지할지 확인한다.
 - YouTube URL 직접 Gemini 호출의 현재 모델 지원 범위는 T-064 구현 직전에 공식
