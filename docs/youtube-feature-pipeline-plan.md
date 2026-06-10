@@ -288,10 +288,15 @@ payload checksum 비교가 어려우므로 별도 테이블로 둔다. `python-k
 3. Gemini에 transcript 기반 POI 추출을 요청한다.
 4. Gemini에 YouTube URL을 직접 전달해 영상 전체의 상세 요약, 방문 장소,
    화면·설명란 근거, 유튜버 관점의 추천 포인트를 요청한다.
-5. 세 번째 Gemini 호출 또는 deterministic merge 단계에서 transcript 결과와 URL
-   summary 결과를 비교한다.
+   T-064 구현은 Gemini API video understanding 문서의 REST 예시를 기준으로
+   공개 YouTube URL을 `file_data.file_uri`에 담아 보낸다. 해당 기능은 preview로
+   문서화되어 있어 모델별 안정성은 운영 전 실제 key smoke가 필요하다.
+5. 세 번째 Gemini 호출에서 transcript 결과와 URL summary 결과를 비교한다.
+   T-064 구현은 deterministic merge가 아니라 구조화 JSON을 요구하는 Gemini
+   reconcile prompt를 사용한다.
 6. 불일치가 있으면 자동 확정하지 않고 `needs_review` 후보로 남긴다.
 7. 일치하거나 충분히 높은 신뢰도의 후보만 `feature_export_status = ready`로 둔다.
+   `feature_export_status` 컬럼과 외부 evidence 연결은 T-065에서 추가한다.
 
 ### 6.2 비교 기준
 
@@ -425,8 +430,9 @@ X-API-Key: ...
   필요하다. 초기에는 `category_code_suggestion`을 제안값으로만 제공한다.
 - TripMate curated plan에 자동 등록까지 할지, admin이 feature를 골라 notice plan에
   넣는 수동 흐름을 유지할지 확인한다.
-- YouTube URL 직접 Gemini 호출의 현재 모델 지원 범위와 안정성은 구현 직전에 공식
-  문서와 실제 smoke로 확인한다.
+- YouTube URL 직접 Gemini 호출의 현재 모델 지원 범위는 T-064 구현 직전에 공식
+  문서로 확인했다. 공개 YouTube URL은 preview 기능이고 REST payload는
+  `file_data.file_uri`를 사용한다. 실제 API key smoke는 아직 수행하지 않았다.
 
 ## 10. 구현 순서
 

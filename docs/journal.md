@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-10: T-064 Gemini YouTube URL 요약과 transcript 비교·정리
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **공식 지원 범위 재확인**: Gemini API video understanding 문서를 2026-06-10 기준 확인했다. 공개 YouTube URL은 preview 기능이며 REST payload에서는 `file_data.file_uri`로 전달한다. 실제 Gemini 호출 smoke는 API 키와 할당량을 쓰지 않기 위해 이번 PR에서는 수행하지 않았다.
+  - **URL summary 서비스 추가**: `backend/app/etl/video_analysis_service.py`를 추가해 YouTube URL 직접 분석 프롬프트, Gemini REST payload, JSON Schema 응답 파싱, `youtube_video_analysis_runs` 상태 전이를 한 곳에 모았다.
+  - **reconcile 절차 추가**: transcript 기반 후보와 URL summary를 Gemini에 다시 비교 요청한다. 충돌·낮은 신뢰도·불확실 후보는 자동 확정하지 않고 `extracted_place_candidates.match_status = needs_review`와 `review_note`에 남긴다.
+  - **scheduler 연결**: `video_analysis` handler가 T-063 placeholder를 넘어 `url_summary`와 `reconcile` pending run을 순서대로 실행한다. 실행 결과와 실패는 `youtube_video_analysis_runs`에 남기고, crawl_run 결과에는 실행·실패 건수를 요약한다.
+  - **transcript summary 저장**: 기존 자막 기반 POI 추출 결과의 `summary`를 `youtube_videos.transcript_summary`에 저장해 reconcile 프롬프트의 입력으로 재사용한다.
+- **검증**:
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:15434`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py` → `21 passed`
+  - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
+  - `backend/.venv/bin/python -m compileall backend/app/etl/video_analysis_service.py scheduler/worker.py backend/app/etl/summarize_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py`
+  - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `docker compose config --quiet`
+  - `git diff --check`
+- **다음 작업**:
+  - T-065 장소 후보 schema 보강 및 외부 API evidence 저장.
+
+---
+
 ## 2026-06-10: T-063 주기 source_scan job 및 APScheduler persistent job store
 
 - **담당자**: Codex

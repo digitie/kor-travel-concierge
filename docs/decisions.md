@@ -901,7 +901,9 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 ### 재확인 필요
 - TripMate curated plan에 자동 등록할지, admin이 `python-krtour-map` feature를 선택하는 수동 흐름을 유지할지 확인한다.
 - Google Places API를 보강 provider로 도입할지 확인한다. 도입 시 과금, 저장 정책, 라이선스, API 키 이름을 별도 ADR로 확정한다.
-- YouTube URL 직접 Gemini 호출은 구현 직전에 공식 지원 범위와 실제 smoke를 확인한다.
+- YouTube URL 직접 Gemini 호출의 공식 지원 범위는 T-064 구현 직전에 확인했다.
+  공개 YouTube URL은 preview 기능이며 REST payload는 `file_data.file_uri`를
+  사용한다. 실제 API key smoke는 아직 남은 확인 항목이다.
 - `python-krtour-map` category mapping 표를 어느 repo에서 관리할지 결정한다.
 
 ### 관련

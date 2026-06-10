@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
 from app.core.database import async_session_factory, init_db
-from app.etl import deep_research_service
+from app.etl import deep_research_service, video_analysis_service
 from app.etl.pipeline import run_harvest
 from app.etl.postprocess_service import process_harvest_videos
 from app.etl.youtube_client import YouTubeClient
@@ -265,7 +266,13 @@ def _analysis_run_type_values(payload: Mapping[str, Any]) -> list[str]:
         value = str(item)
         if value in allowed and value not in values:
             values.append(value)
-    return values or [VideoAnalysisRunType.URL_SUMMARY.value]
+    values = values or [VideoAnalysisRunType.URL_SUMMARY.value]
+    priority = {
+        VideoAnalysisRunType.URL_SUMMARY.value: 10,
+        VideoAnalysisRunType.RECONCILE.value: 20,
+        VideoAnalysisRunType.TRANSCRIPT_EXTRACT.value: 30,
+    }
+    return sorted(values, key=lambda value: priority.get(value, 100))
 
 
 async def _has_analysis_run(
@@ -274,8 +281,6 @@ async def _has_analysis_run(
     video_id: str,
     run_type: str,
 ) -> bool:
-    from sqlalchemy import select
-
     stmt = (
         select(YoutubeVideoAnalysisRun.id)
         .where(
@@ -295,8 +300,27 @@ async def _has_analysis_run(
     return result.scalar_one_or_none() is not None
 
 
+async def _pending_analysis_runs(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    run_type: str,
+) -> list[YoutubeVideoAnalysisRun]:
+    stmt = (
+        select(YoutubeVideoAnalysisRun)
+        .where(
+            YoutubeVideoAnalysisRun.video_id == video_id,
+            YoutubeVideoAnalysisRun.run_type == run_type,
+            YoutubeVideoAnalysisRun.state == VideoAnalysisRunState.PENDING,
+        )
+        .order_by(YoutubeVideoAnalysisRun.id)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
-    """T-064 처리기가 소비할 영상 분석 실행 row를 보장한다."""
+    """영상 분석 실행 row를 보장하고 pending 분석을 실제 처리한다."""
     payload = load_payload(run)
     video_id = str(payload.get("video_id") or run.target_id or "")
     if run.target_type != "video" or not video_id:
@@ -321,12 +345,50 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
         await session.flush()
         created_run_ids.append(analysis_run.id)
     await session.commit()
+
+    executed_results: list[dict[str, Any]] = []
+    skipped_unsupported = 0
+    for run_type in _analysis_run_type_values(payload):
+        pending_runs = await _pending_analysis_runs(
+            session,
+            video_id=video_id,
+            run_type=run_type,
+        )
+        if run_type == VideoAnalysisRunType.URL_SUMMARY.value:
+            for analysis_run in pending_runs:
+                executed_results.append(
+                    await video_analysis_service.run_url_summary_analysis(
+                        session,
+                        video,
+                        analysis_run,
+                    )
+                )
+        elif run_type == VideoAnalysisRunType.RECONCILE.value:
+            for analysis_run in pending_runs:
+                executed_results.append(
+                    await video_analysis_service.run_reconcile_analysis(
+                        session,
+                        video,
+                        analysis_run,
+                    )
+                )
+        else:
+            skipped_unsupported += len(pending_runs)
+
+    failed = sum(
+        1
+        for item in executed_results
+        if item.get("state") == VideoAnalysisRunState.FAILED.value
+    )
     return {
         "video_id": video_id,
         "created_analysis_runs": len(created_run_ids),
         "skipped_existing_analysis_runs": skipped,
         "analysis_run_ids": created_run_ids,
-        "note": "Gemini URL 요약과 transcript 비교 실행은 T-064에서 구현한다.",
+        "executed_analysis_runs": len(executed_results),
+        "failed_analysis_runs": failed,
+        "skipped_unsupported_analysis_runs": skipped_unsupported,
+        "analysis_results": executed_results,
     }
 
 

@@ -464,7 +464,45 @@ async def test_source_scan_skips_existing_active_run(session, session_factory):
     assert refreshed_target.next_crawl_at > now
 
 
-async def test_video_analysis_handler_creates_pending_analysis_runs(session, session_factory):
+async def test_video_analysis_handler_executes_pending_analysis_runs(
+    monkeypatch, session, session_factory
+):
+    calls = []
+
+    async def fake_url_summary(session, video, analysis_run):
+        calls.append(("url_summary", analysis_run.id))
+        analysis_run.state = "done"
+        analysis_run.summary_text = "서울 여행 URL 요약"
+        video.gemini_url_summary_json = {"summary": "서울 여행 URL 요약", "places": []}
+        await session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": "done",
+        }
+
+    async def fake_reconcile(session, video, analysis_run):
+        calls.append(("reconcile", analysis_run.id))
+        assert video.gemini_url_summary_json == {"summary": "서울 여행 URL 요약", "places": []}
+        analysis_run.state = "done"
+        analysis_run.summary_text = "서울 여행 비교 결과"
+        await session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": "done",
+        }
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        fake_url_summary,
+    )
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_reconcile_analysis",
+        fake_reconcile,
+    )
     session.add(YoutubeChannel(channel_id="UC1", title="여행채널"))
     session.add(
         YoutubeVideo(
@@ -496,6 +534,8 @@ async def test_video_analysis_handler_creates_pending_analysis_runs(session, ses
     refreshed = await _fresh_run(session_factory, run.id)
     assert refreshed.state == RunState.DONE
     assert "created_analysis_runs" in (refreshed.result_json or "")
+    assert '"executed_analysis_runs": 2' in (refreshed.result_json or "")
+    assert [item[0] for item in calls] == ["url_summary", "reconcile"]
     async with session_factory() as verify_session:
         analysis_runs = (
             await verify_session.execute(
@@ -505,7 +545,7 @@ async def test_video_analysis_handler_creates_pending_analysis_runs(session, ses
             )
         ).scalars().all()
     assert {item.run_type for item in analysis_runs} == {"url_summary", "reconcile"}
-    assert {item.state for item in analysis_runs} == {"pending"}
+    assert {item.state for item in analysis_runs} == {"done"}
 
 
 async def test_enqueue_source_scan_once_deduplicates(session_factory):

@@ -465,12 +465,15 @@ enqueue한다. APScheduler의 persistent job store는 job 정의와 next run tim
 - `youtube_playlist_videos`: `(playlist_id, video_id)` PK, 재생목록 내 순서,
   playlist item id, 추가·관측 시각.
 - `youtube_video_analysis_runs`: transcript 기반 추출, YouTube URL Gemini 요약,
-  reconcile 실행을 추적한다.
+  reconcile 실행을 추적한다. T-064 이후 scheduler `video_analysis` handler가
+  `url_summary`와 `reconcile` pending run을 순서대로 처리하며, 각 run에는
+  상태, 모델명, prompt version, summary JSON, summary text, confidence, 오류를
+  남긴다.
 
 기존 `youtube_videos`는 channel FK, canonical URL, duration, thumbnail,
 Gemini URL summary, transcript summary, reconciled summary를 갖도록 보강한다.
-`extracted_place_candidates`와 `video_place_mappings`에는 `source_channel_id`,
-`source_playlist_id`, `analysis_run_id`를 연결한다.
+T-065에서는 `extracted_place_candidates`와 `video_place_mappings`에
+`source_channel_id`, `source_playlist_id`, `analysis_run_id`를 연결한다.
 
 ### 6.12 범용 feature export 상태 (T-066 예정)
 

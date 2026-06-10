@@ -117,6 +117,8 @@ async def summarize_video(
             "candidates": 0,
         }
 
+    video.transcript_summary = result.summary
+
     # 3) 영상 설명 보정본 저장 (원문 description_raw 보존)
     if result.description_gemini_corrected:
         video.description_gemini_corrected = result.description_gemini_corrected
