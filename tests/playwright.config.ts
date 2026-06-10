@@ -14,7 +14,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1, // 로컬 SQLite + SpatiaLite 락 충돌 방지를 위해 순차적 실행 권장
+  workers: 1, // E2E seed와 shared PostGIS 테스트 DB 충돌을 피하기 위해 순차 실행
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,

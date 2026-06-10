@@ -1,29 +1,31 @@
-"""백엔드 pytest 공용 픽스처.
-
-SpatiaLite 확장이 없는 환경에서도 동작하도록 in-memory SQLite(StaticPool)로
-격리된 엔진을 구성한다. 공통 작업/감사/설정 모델은 공간 함수에 의존하지 않는다.
-"""
+"""백엔드 pytest 공용 픽스처."""
 
 from __future__ import annotations
 
+import os
+
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
+from app.core.spatial import ensure_postgis_extension
 from app.models import Base
 
 
 @pytest_asyncio.fixture
 async def engine():
-    """테스트용 in-memory 비동기 엔진."""
-    eng = create_async_engine(
-        "sqlite+aiosqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    """테스트용 disposable PostgreSQL/PostGIS 엔진."""
+    dsn = os.getenv("TRIPMATE_AGENT_TEST_PG_DSN")
+    if not dsn:
+        pytest.skip("TRIPMATE_AGENT_TEST_PG_DSN이 없어 PostGIS DB 테스트를 건너뜁니다.")
+    eng = create_async_engine(dsn, pool_pre_ping=True)
     async with eng.begin() as conn:
+        await ensure_postgis_extension(conn)
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield eng
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await eng.dispose()
 
 

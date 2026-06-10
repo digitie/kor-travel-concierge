@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, utcnow
@@ -31,11 +33,20 @@ class YoutubeVideo(Base):
     video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str] = mapped_column(String(512), nullable=False)
-    channel_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("youtube_channels.channel_id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True,
+    )
     channel_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    canonical_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    default_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tags_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     engagement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -47,6 +58,22 @@ class YoutubeVideo(Base):
         DateTime(timezone=True), nullable=True
     )
     description_gemini_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gemini_url_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gemini_url_summary_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    gemini_url_summary_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gemini_url_summary_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    transcript_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_summary_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    reconciled_summary_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     crawl_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=CrawlStatus.DISCOVERED

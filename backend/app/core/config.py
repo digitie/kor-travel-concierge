@@ -56,10 +56,9 @@ class Settings(BaseSettings):
     # 허용 API 키 목록(쉼표 구분). 외부 노출 배포에서 반드시 설정한다.
     API_KEYS: str = ""
 
-    # --- 2. 데이터베이스 (SQLite + SpatiaLite) ---
-    DATABASE_URL: str = "sqlite+aiosqlite:///./tripmate.db"
-    SPATIALITE_EXTENSION_PATH: str = "mod_spatialite"
-    SQLITE_WAL_ENABLED: bool = True
+    # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
+    DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent"
+    TRIPMATE_AGENT_TEST_PG_DSN: str = ""
 
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""

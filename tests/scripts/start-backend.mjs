@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,15 +8,21 @@ const testsRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(testsRoot, "..");
 const backendDir = path.join(repoRoot, "backend");
 const tmpDir = path.join(testsRoot, ".tmp");
-const dbPath = path.join(tmpDir, "e2e.db");
 const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
+const e2eDatabaseUrl =
+  process.env.TRIPMATE_AGENT_E2E_DATABASE_URL ??
+  process.env.TRIPMATE_AGENT_TEST_PG_DSN ??
+  process.env.DATABASE_URL;
+
+if (!e2eDatabaseUrl) {
+  throw new Error(
+    "E2E 실행에는 TRIPMATE_AGENT_E2E_DATABASE_URL 또는 TRIPMATE_AGENT_TEST_PG_DSN이 필요합니다.",
+  );
+}
 
 mkdirSync(tmpDir, { recursive: true });
-for (const suffix of ["", "-wal", "-shm"]) {
-  rmSync(`${dbPath}${suffix}`, { force: true });
-}
 
 const python = resolvePython();
 const child = spawn(
@@ -36,7 +42,7 @@ const child = spawn(
       ...process.env,
       // E2E 백엔드는 인증을 우회한다. APP_ENV 기본값(local)도 우회하지만 의도를 명시한다.
       APP_ENV: "e2e",
-      DATABASE_URL: "sqlite+aiosqlite:///../tests/.tmp/e2e.db",
+      DATABASE_URL: e2eDatabaseUrl,
       NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${backendPort}`,
       CORS_ALLOW_ORIGINS: [
         frontendOrigin,

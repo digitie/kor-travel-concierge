@@ -4,6 +4,62 @@
 
 ---
 
+## 2026-06-10: T-062 YouTube channel/video/playlist 정규 테이블 및 ingestion upsert
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **YouTube source 정규화**: `youtube_channels`, `youtube_playlists`, `youtube_playlist_videos`, `youtube_video_analysis_runs` 모델과 Alembic migration `20260610_0002`를 추가했다.
+  - **기존 영상 테이블 보강**: `youtube_videos.channel_id`를 `youtube_channels.channel_id` FK로 승격하고, canonical URL, duration, thumbnail, 기본 언어, tags JSONB, Gemini URL summary, transcript summary, reconciled summary 컬럼을 추가했다.
+  - **수집 적재 확장**: YouTube Data API의 `channels.list`, `playlists.list`, `playlistItems.list`, `videos.list` 응답을 channel/playlist/video/link metadata로 변환해 멱등 upsert한다.
+  - **재생목록 provenance 저장**: playlist에서 발견한 영상은 `youtube_playlist_videos`에 위치, playlist item id, 추가·관측 시각을 남긴다.
+  - **분석 이력 기반 준비**: URL summary와 transcript reconcile 작업을 `youtube_video_analysis_runs`에 저장할 수 있도록 run type/state, input asset, summary JSONB, confidence, 오류 필드를 마련했다.
+- **검증**:
+  - `backend/.venv/bin/python -m compileall backend/app backend/tests tests/scripts`
+  - `backend/.venv/bin/alembic upgrade head --sql`
+  - `backend/.venv/bin/python -m pytest -s backend/tests/test_etl_ingest.py backend/tests/test_etl_pipeline.py` → `7 passed, 14 skipped`
+  - `docker compose config --quiet`
+  - `git diff --check`
+  - `backend/.venv/bin/python -m pytest -s backend/tests` → `60 passed, 102 skipped`
+- **다음 작업**:
+  - T-063 주기 `source_scan` job 추가.
+
+---
+
+## 2026-06-10: T-061 PostgreSQL/PostGIS 전환 및 Alembic bootstrap
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **DB runtime 전환**: `backend/app/core/database.py`에서 SQLite/SpatiaLite connect event와 경량 `schema_migrations` registry를 제거하고, `asyncpg` 기반 PostgreSQL async engine으로 전환했다.
+  - **PostGIS 모델 보강**: `travel_places.geom geometry(Point, 4326)`를 ORM 모델에 추가하고, `sync_place_geometry`를 `ST_SetSRID(ST_MakePoint(...), 4326)` 기준으로 교체했다. 반경 검색은 `ST_DWithin`과 geography 거리 계산으로 바꿨다.
+  - **작업 claim 보강**: `crawl_runs` claim을 PostgreSQL `FOR UPDATE SKIP LOCKED` 기준으로 정리했다.
+  - **Alembic 도입**: `alembic.ini`, `backend/alembic/env.py`, 초기 migration `20260610_0001_postgres_postgis_bootstrap.py`를 추가했다. migration에는 PostGIS extension, 초기 테이블, GiST/FK/composite index를 포함했다.
+  - **환경 정렬**: `.env.example`, local `.env`, Docker Compose, Dockerfile, E2E backend launcher를 PostgreSQL/PostGIS 기준으로 바꿨다. repo 내부 PostgreSQL 컨테이너는 추가하지 않고 `python-kraddr-geo` 서버를 외부 DB로 바라본다.
+  - **테스트 경계 정리**: backend pytest fixture는 `TRIPMATE_AGENT_TEST_PG_DSN`이 있을 때 disposable PostGIS DB를 만들고, 없으면 DB 테스트를 skip한다.
+- **검증**:
+  - `backend/.venv/bin/python -m pip install -r backend/requirements.txt`
+  - `backend/.venv/bin/python -m compileall backend/app backend/tests tests/scripts`
+  - `backend/.venv/bin/alembic upgrade head --sql`
+  - `docker compose config --quiet`
+  - `backend/.venv/bin/python -m pytest -s backend/tests` → `58 passed, 101 skipped`
+- **다음 작업**:
+  - T-062 YouTube channel/video/playlist 정규 테이블 및 ingestion upsert.
+
+---
+
+## 2026-06-10: T-060 PostgreSQL/PostGIS 전환 및 YouTube feature 공급 로드맵 문서화
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **DB 전환 결정 문서화**: ADR-25를 추가해 SQLite + SpatiaLite에서 PostgreSQL + PostGIS로 전환하고, `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `tripmate_agent`를 쓰는 목표를 정리했다.
+  - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `tripmate-agent`가 YouTube 장소 후보 provider가 되고, `python-krtour-map`이 `/api/v1/krtour/features/*` API를 full/incremental 방식으로 pull해 feature로 승격하는 경계를 정리했다.
+  - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, `python-krtour-map` export API, TripMate curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
+  - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, krtour API, sibling repo consumer, TripMate curated plan 검증, 통합 검증 순서로 나눴다.
+  - **아키텍처 정렬**: `docs/architecture.md` 상단에 2026-06-10 전환 기준을 추가하고, 목표 DB와 feature 공급 흐름을 최신 결정에 맞춰 보강했다.
+- **다음 작업**:
+  - T-061 PostgreSQL/PostGIS 전환 및 Alembic bootstrap.
+
+---
+
 ## 2026-06-09: T-059 PR #54 리뷰 반영 — same-origin BFF 프록시로 API 키 서버 전용화
 
 - **담당자**: Codex

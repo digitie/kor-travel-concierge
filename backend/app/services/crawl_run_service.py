@@ -132,38 +132,24 @@ async def list_runs(
 async def claim_next_pending(session: AsyncSession) -> CrawlRun | None:
     """가장 오래된 `pending` 작업 1건을 claim해 `running`으로 전이한다.
 
-    후보 조회 후 `WHERE state='pending'` 가드가 있는 UPDATE로 전이한다. 같은 후보를
-    여러 실행자가 동시에 보더라도 UPDATE에 성공한 실행자만 claim한다.
+    PostgreSQL `FOR UPDATE SKIP LOCKED`로 후보를 잠근 뒤 전이한다.
     """
     stmt = (
-        select(CrawlRun.id)
+        select(CrawlRun)
         .where(CrawlRun.state == RunState.PENDING)
         .order_by(CrawlRun.id.asc())
+        .with_for_update(skip_locked=True)
         .limit(1)
     )
     result = await session.execute(stmt)
-    candidate_id = result.scalar_one_or_none()
-    if candidate_id is None:
+    run = result.scalars().first()
+    if run is None:
         return None
 
     now = utcnow()
-    claim_stmt = (
-        update(CrawlRun)
-        .where(CrawlRun.id == candidate_id, CrawlRun.state == RunState.PENDING)
-        .values(state=RunState.RUNNING, started_at=now, heartbeat_at=now)
-        .returning(CrawlRun.id)
-    )
-    claim_result = await session.execute(claim_stmt)
-    claimed_id = claim_result.scalar_one_or_none()
-    if claimed_id is None:
-        await session.rollback()
-        return None
-
-    run = await session.get(CrawlRun, claimed_id)
-    if run is None:
-        await session.rollback()
-        return None
-
+    run.state = RunState.RUNNING
+    run.started_at = now
+    run.heartbeat_at = now
     _append_log_to_run(run, "작업 실행자가 작업을 시작했습니다.", progress=0.05)
     await session.commit()
     await session.refresh(run)

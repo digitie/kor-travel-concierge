@@ -1,14 +1,4 @@
-"""장소 조회 및 근접 중복 후보 탐색 서비스 (저장소 계층).
-
-공간 함수 호출을 이 계층에 캡슐화해, SpatiaLite → PostGIS 전환 시 호출부를
-바꾸지 않아도 되게 한다(ADR-12·ADR-17).
-
-근접 탐색은 두 단계로 한다.
-    1. lat/lng 인덱스에 푸시다운하는 경위도 bounding box로 후보를 좁힌다.
-    2. Haversine 거리로 정밀 필터링한다.
-SpatiaLite/PostGIS 환경에서는 동일 인터페이스를 `ST_DWithin`/`PtDistWithin`으로
-대체할 수 있다.
-"""
+"""장소 조회 및 근접 중복 후보 탐색 서비스 (저장소 계층)."""
 
 from __future__ import annotations
 
@@ -16,7 +6,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import or_, select
+from geoalchemy2 import Geography
+from sqlalchemy import cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.spatial import sync_place_geometry
@@ -31,7 +22,6 @@ from app.models import (
 )
 
 EARTH_RADIUS_M = 6_371_000.0
-_DEG_LAT_METERS = 111_320.0  # 위도 1도당 미터(근사)
 
 
 @dataclass(frozen=True)
@@ -69,15 +59,6 @@ def haversine_meters(lat1: float, lng1: float, lat2: float, lng2: float) -> floa
     return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-def _bounding_box(lat: float, lng: float, radius_m: float) -> tuple[float, float, float, float]:
-    """반경을 포함하는 경위도 bounding box (min_lat, max_lat, min_lng, max_lng)."""
-    dlat = radius_m / _DEG_LAT_METERS
-    # 고위도에서 경도 1도의 거리가 줄어드는 것을 보정한다.
-    cos_lat = max(math.cos(math.radians(lat)), 1e-6)
-    dlng = radius_m / (_DEG_LAT_METERS * cos_lat)
-    return lat - dlat, lat + dlat, lng - dlng, lng + dlng
-
-
 async def find_places_within_radius(
     session: AsyncSession,
     *,
@@ -86,23 +67,23 @@ async def find_places_within_radius(
     radius_meters: float,
     limit: int = 20,
 ) -> list[tuple[TravelPlace, float]]:
-    """반경 내 장소를 거리 오름차순으로 반환한다. `(place, distance_m)` 튜플."""
-    min_lat, max_lat, min_lng, max_lng = _bounding_box(lat, lng, radius_meters)
-    stmt = select(TravelPlace).where(
-        TravelPlace.is_geocoded.is_(True),
-        TravelPlace.latitude >= min_lat,
-        TravelPlace.latitude <= max_lat,
-        TravelPlace.longitude >= min_lng,
-        TravelPlace.longitude <= max_lng,
+    """PostGIS `ST_DWithin`으로 반경 내 장소를 거리 오름차순 반환한다."""
+    point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
+    place_geog = cast(TravelPlace.geom, Geography)
+    point_geog = cast(point, Geography)
+    distance_m = func.ST_Distance(place_geog, point_geog)
+    stmt = (
+        select(TravelPlace, distance_m.label("distance_m"))
+        .where(
+            TravelPlace.is_geocoded.is_(True),
+            TravelPlace.geom.is_not(None),
+            func.ST_DWithin(place_geog, point_geog, radius_meters),
+        )
+        .order_by(distance_m.asc(), TravelPlace.place_id.asc())
+        .limit(limit)
     )
     result = await session.execute(stmt)
-    scored: list[tuple[TravelPlace, float]] = []
-    for place in result.scalars().all():
-        dist = haversine_meters(lat, lng, place.latitude, place.longitude)
-        if dist <= radius_meters:
-            scored.append((place, dist))
-    scored.sort(key=lambda item: item[1])
-    return scored[:limit]
+    return [(place, float(distance or 0.0)) for place, distance in result.all()]
 
 
 async def find_duplicate_candidates(

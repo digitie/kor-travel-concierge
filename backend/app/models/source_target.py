@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -29,6 +29,7 @@ class SourceTarget(TimestampMixin, Base):
             "source_value",
             name="uq_source_targets_target_type_source_value",
         ),
+        Index("ix_source_targets_active_next_crawl", "is_active", "next_crawl_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

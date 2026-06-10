@@ -9,7 +9,7 @@
 이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
 - **프론트엔드**: Next.js (App Router) + React. `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 연결하여 지도 시각화를 구현한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
-- **백엔드**: FastAPI + SQLAlchemy 2.0 + `aiosqlite`. SQLite + SpatiaLite 데이터베이스에 연동하여 비즈니스 데이터, 공간 데이터, 작업 상태를 보관한다.
+- **백엔드**: FastAPI + SQLAlchemy 2.0. DB는 PostgreSQL + PostGIS이며, `asyncpg`와 Alembic으로 schema를 관리한다.
 - **ETL 모듈**: 공식 YouTube Data API v3 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(`yt-dlp`/FFmpeg) → 원본 동영상·자막·전사 결과·대표 프레임 RustFS 저장 → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
 - **스케줄러**: APScheduler 단일 실행자가 `crawl_runs`의 pending 작업을 claim하고 전면 비동기 파이프라인을 실행한다.
 - **미디어 저장소**: RustFS를 별도 로컬 Docker 서비스로 구동하고, 원본 동영상·자막·전사 결과·대표 프레임을 무기한 보존한다.
@@ -67,10 +67,10 @@ npx playwright test
    - Gemini API를 활용하여 검색 키워드를 조합 및 극도로 최적화한 후 호출 횟수를 조율한다.
    - `playlistItems.list`, `channels.list`, `videos.list`처럼 1 유닛 호출로 해결 가능한 경로를 우선한다.
    - 비공식 검색 크롤러는 기본 설계에서 제외하고, 비공식 의존은 자막 추출과 프레임 추출 구간으로 격리한다.
-   - 한 번 수집된 비디오 정보는 SQLite + SpatiaLite 데이터베이스에 캐싱하여 재수집을 배제한다.
+   - 한 번 수집된 비디오 정보는 PostgreSQL + PostGIS DB에 캐싱하여 재수집을 배제한다.
 4. **FastAPI 비동기 세션 leak 방지**: SQLAlchemy 2.0의 `AsyncSession` 또는 동기 `Session`을 사용할 때 Context Manager(`with` 또는 `async with`)를 사용하거나 Depends 주입 방식을 명확히 준수하여 DB 연결 누수를 막는다.
 5. **Windows 네이티브 앱 실행 경로 작성 금지**: 앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 개발 유틸 스크립트는 bash(`.sh`) 또는 Python으로 작성하고, PowerShell(`*.ps1`)·cmd 전용 자산이나 `process.platform === 'win32'` 류의 Windows 전용 앱 분기를 새로 만들지 않는다. Windows 사용자는 WSL2(Ubuntu) 안에서 동일한 bash/Docker 명령으로 앱을 구동한다. 예외는 Windows 호스트에서 실행하는 E2E Playwright 테스트 하니스뿐이며, 이 예외도 앱 코드에 `win32` 분기를 되살리지 않는다.
-6. **`kraddr-geo` 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 연계는 취소되었다. Geocoding/Reverse Geocoding은 VWorld를 최우선으로 하며, VWorld 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고 내부 adapter/wrapper 계층은 만들지 않는다.
+6. **`kraddr-geo` 지오코딩 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 지오코딩 연계는 취소되었다. Geocoding/Reverse Geocoding은 VWorld를 최우선으로 하며, VWorld 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고 내부 adapter/wrapper 계층은 만들지 않는다. 단, ADR-25의 `python-kraddr-geo` PostgreSQL/PostGIS DB 서버 재사용은 지오코딩 연계가 아니라 로컬 인프라 재사용이다.
 7. **RustFS 객체 자동 삭제 금지**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제나 장소 매칭 실패만으로 객체를 삭제하는 로직을 만들지 않는다.
 8. **매칭 실패 장소 자동 확정 금지**: 지오코딩 결과가 없거나 모호하면 `needs_review` 후보로 남기고 웹 UI 또는 MCP 도구를 통한 사용자 판단을 요구한다.
 
@@ -78,7 +78,7 @@ npx playwright test
 
 ### 데이터베이스 스키마 및 CRUD 추가
 - **위치**: `backend/app/models/`에 SQLAlchemy 2.0 스타일 모델 정의.
-- **설명**: CRUD 관련 엔드포인트는 `backend/app/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
+- **설명**: CRUD 관련 엔드포인트는 `backend/app/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. T-061 이후 schema 변경은 Alembic migration을 함께 작성한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
 - **장소 언급 소스**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지는 `video_place_mappings`와 `youtube_videos` 조인으로 계산한다. 같은 영상에서 같은 장소가 여러 구간에 반복 등장할 수 있으므로 `video_id`, `place_id` 조합은 unique로 가정하지 않는다.
 - **장소 export**: 선택 또는 전체 장소 내보내기는 `/api/v1/destinations/export`에서 처리한다. `xlsx`는 장소-언급 행 단위, `gpx`/`kml`은 장소 좌표와 소스 설명 중심으로 생성한다.
 
@@ -132,7 +132,8 @@ npx playwright test
 | **MCP 서버 UX** | AI 에이전트가 브라우저 없이도 여행 데이터베이스를 읽고 쓰는 도구 기반 사용자 경험. |
 | **Geocoding API** | YouTube 영상 설명 속 불완전한 텍스트 장소명을 VWorld 우선, Kakao Local 키워드 장소 검색 fallback, Naver 보조 검증으로 표준 주소 및 위경도에 매핑하는 외부 API 경로. |
 | **Reverse Geocoding API** | 위경도 좌표를 `python-vworld-api`의 `AsyncVworldClient`로 행정 주소, 도로명 주소, 지번 주소에 매핑하는 외부 API 경로. |
-| **SpatiaLite** | SQLite에 공간 함수와 R-Tree 인덱스를 더해 반경 검색과 중복 장소 탐지를 지원하는 임베디드 공간 DB 확장. |
+| **PostgreSQL + PostGIS** | ADR-25 이후 목표 공간 DB. `travel_places.geom geometry(Point, 4326)`, GiST 인덱스, `ST_DWithin` 기반 근접 검색을 사용한다. |
+| **SpatiaLite** | legacy SQLite 공간 확장. 과거 문서와 완료 이력에만 남아 있으며 신규 구현 기준은 아니다. |
 | **RustFS** | 원본 동영상, 자막, 전사 결과, 대표 프레임을 S3 호환 API로 저장하는 별도 로컬 Docker 객체 저장소. |
 | **media_assets** | RustFS 객체의 버킷, 키, URI, 체크섬, 크기, 보존 정책을 DB에 기록하는 메타데이터 테이블. |
 | **extracted_place_candidates** | Gemini가 추출했지만 자동 매칭되지 않았거나 사용자 검수가 필요한 장소 후보 테이블. |

@@ -43,7 +43,9 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         String(32), nullable=False, default=MatchStatus.NEEDS_REVIEW, index=True
     )
     matched_place_id: Mapped[int | None] = mapped_column(
-        ForeignKey("travel_places.place_id", ondelete="NO ACTION"), nullable=True
+        ForeignKey("travel_places.place_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 검수 메타데이터

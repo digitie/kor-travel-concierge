@@ -27,12 +27,16 @@ class VideoPlaceMapping(TimestampMixin, Base):
         index=True,
     )
     place_candidate_id: Mapped[int | None] = mapped_column(
-        ForeignKey("extracted_place_candidates.id", ondelete="NO ACTION"), nullable=True
+        ForeignKey("extracted_place_candidates.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
     )
     ai_summary: Mapped[str] = mapped_column(Text, nullable=False)
     speaker_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
     timestamp_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
     frame_asset_id: Mapped[int | None] = mapped_column(
-        ForeignKey("media_assets.id", ondelete="NO ACTION"), nullable=True
+        ForeignKey("media_assets.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
     )

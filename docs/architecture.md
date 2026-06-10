@@ -4,6 +4,28 @@
 
 ---
 
+## 0. 2026-06-10 전환 기준
+
+이 문서의 초기 장들은 SQLite + SpatiaLite 기준으로 작성되었으나, 최신 사용자
+요청과 ADR-25에 따라 목표 아키텍처는 PostgreSQL + PostGIS로 전환한다. 코드
+전환은 T-061에서 시작되어 backend runtime, Alembic, PostGIS 공간 컬럼, YouTube
+source 정규화 테이블이 T-062까지 반영되었다.
+
+후속 구현자는 다음 기준을 우선한다.
+
+- DB 서버는 `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용한다.
+- DB는 `kraddr_geo`와 분리된 `tripmate_agent`를 목표로 한다.
+- 장소 공간 컬럼은 PostGIS `geometry(Point, 4326)`와 GiST 인덱스를 사용한다.
+- 유튜버, YouTube 영상, 재생목록, Gemini 분석 실행은 별도 테이블로 정규화한다.
+- `tripmate-agent`는 YouTube 장소 후보 provider가 되고, `python-krtour-map`이
+  `/api/v1/krtour/features/*` API를 주기적으로 pull해 feature로 승격한다.
+- TripMate curated plan은 `python-krtour-map`이 만든 `feature_id`와
+  `feature_snapshot`을 통해 소비한다.
+
+상세 테이블 후보와 API 계약은 `docs/youtube-feature-pipeline-plan.md`를 따른다.
+
+---
+
 ## 1. 설계 기준
 
 `tripmate-agent`는 1~2인이 개발·운영하고 동시 사용자가 10명 내외인 소형 프로젝트를 전제로 한다. 따라서 대규모 분산 크롤링보다 운영 단순성, 장애 원인 축소, 재현 가능한 로컬/단일 호스트 배포를 우선한다.
@@ -12,14 +34,17 @@
 
 - 검색·메타데이터 수집은 공식 YouTube Data API v3를 기본으로 한다.
 - 비공식 의존은 공식 대안이 없는 자막 추출과 프레임 추출로만 격리한다.
-- 공간 DB는 별도 DB 서버 없이 SQLite + SpatiaLite로 시작한다.
+- 공간 DB는 ADR-25 이후 PostgreSQL + PostGIS를 목표로 한다. 로컬 개발에서는
+  `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버를 재사용하고 별도 DB
+  `tripmate_agent`를 둔다.
 - 백엔드와 ETL은 전면 `asyncio` 기반으로 작성한다.
-- 블로킹 라이브러리(`yt-dlp`, `faster-whisper`, FFmpeg, SpatiaLite 동기 호출)는 executor로 격리한다.
+- 블로킹 라이브러리(`yt-dlp`, `faster-whisper`, FFmpeg)는 executor로 격리한다.
 - 정기 크롤 실행자는 APScheduler 단일 실행자로 시작하며, Celery, Redis, RabbitMQ, PostgreSQL Advisory Lock은 초기 범위에서 제외한다.
 - 사람용 Web REST UX와 AI 에이전트용 MCP UX는 분리하되 같은 작업 테이블과 같은 파이프라인을 공유한다.
 - 다운로드한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 별도 로컬 Docker 서비스로 구동하는 RustFS에 저장한다.
 - RustFS 객체의 보존 기간은 무기한이며, 자동 lifecycle 삭제 정책을 두지 않는다.
-- SQLite + SpatiaLite에는 RustFS 객체 URI, 체크섬, 크기, 추출·보정 결과 메타데이터만 저장하고 대용량 바이너리는 저장하지 않는다.
+- PostgreSQL에는 RustFS 객체 URI, 체크섬, 크기, 추출·보정 결과 메타데이터만
+  저장하고 대용량 바이너리는 저장하지 않는다.
 
 ---
 
@@ -64,16 +89,37 @@
                          │ 결과 적재    │ 객체 저장    │ 외부 호출
                          ▼             ▼             ▼
            ┌────────────────────┐ ┌────────────────┐ ┌──────────────────────┐
-           │ SQLite + SpatiaLite │ │ RustFS 로컬     │ │ 외부 API / 로컬 도구  │
-           │ - tripmate.db       │ │ Docker 서비스   │ │ - YouTube Data API v3 │
-           │ - 공간 함수/R-Tree  │ │ - 원본 동영상   │ │ - Google Gemini API   │
+           │PostgreSQL + PostGIS│ │ RustFS 로컬     │ │ 외부 API / 로컬 도구  │
+           │ - tripmate_agent DB│ │ Docker 서비스   │ │ - YouTube Data API v3 │
+           │ - geometry/GiST    │ │ - 원본 동영상   │ │ - Google Gemini API   │
            │ - crawl_runs        │ │ - 자막/전사     │ │ - Kakao/Naver/VWorld  │
            │ - places/mappings   │ │ - 대표 프레임   │ │ - yt-dlp/FFmpeg       │
            │                    │ │ - 무기한 보존   │ │ - faster-whisper      │
            └────────────────────┘ └────────────────┘ └──────────────────────┘
 ```
 
-앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 단일 호스트 Docker Compose 배포 시에는 `frontend`, `api`, `mcp`, `scheduler` 컨테이너가 같은 SQLite/SpatiaLite 데이터 볼륨을 공유한다. RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다. 기본 host port는 고정값으로 API `http://localhost:9041`, Web `http://localhost:9042`(host가 컨테이너 내부 API `8000`·Web `3000`으로 매핑), RustFS S3 API `http://127.0.0.1:9003`, 콘솔 `http://127.0.0.1:9004`이고, 앱 컨테이너 내부에서는 Compose 서비스명 `http://rustfs:9000`으로 접근한다(Windows 사용자는 WSL2 안에서 동일하게 구동). `scripts/start-live.sh`는 기동 전 `scripts/stop-fixed-ports.sh`로 고정 포트 `9041`/`9042`를 점유한 리스너를 회수해 재시작을 보장한다(패턴은 `python-krtour-map`에서 차용). Compose CORS 허용 origin은 `.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 `3000`, `13000`, `13100`의 local origin을 포함한다. REST API는 `/api/v1` 프리픽스 아래에 노출되고(`GET /health`·`GET /`만 버전 없음) `X-API-Key` 인증 경계를 가진다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부(비-브라우저) 호출자는 `X-API-Key`를 직접 보내며, 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24). 실제 무거운 작업 실행은 `scheduler`가 단일 claim 방식으로 담당하여 API 서버와 MCP 서버가 직접 장시간 작업을 수행하지 않게 한다.
+앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 목표 상태에서는 `frontend`,
+`api`, `mcp`, `scheduler` 컨테이너가 같은 PostgreSQL/PostGIS DB를 바라본다.
+구현은 `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버의 별도 DB
+`tripmate_agent`를 기준으로 작성한다. RustFS는 애플리케이션 컨테이너에 내장하지
+않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다.
+기본 host port는 고정값으로 API `http://localhost:9041`, Web
+`http://localhost:9042`(host가 컨테이너 내부 API `8000`·Web `3000`으로 매핑),
+RustFS S3 API `http://127.0.0.1:9003`, 콘솔 `http://127.0.0.1:9004`이고, 앱
+컨테이너 내부에서는 Compose 서비스명 `http://rustfs:9000`으로 접근한다(Windows
+사용자는 WSL2 안에서 동일하게 구동). `scripts/start-live.sh`는 기동 전
+`scripts/stop-fixed-ports.sh`로 고정 포트 `9041`/`9042`를 점유한 리스너를 회수해
+재시작을 보장한다(패턴은 `python-krtour-map`에서 차용). Compose CORS 허용 origin은
+`.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 `3000`, `13000`, `13100`의 local
+origin을 포함한다. REST API는 `/api/v1` 프리픽스 아래에 노출되고(`GET /health`·
+`GET /`만 버전 없음) `X-API-Key` 인증 경계를 가진다. 브라우저는 키를 직접 다루지
+않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버
+사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를
+주입한다(키는 브라우저에 노출되지 않음). 직접/외부(비-브라우저) 호출자는
+`X-API-Key`를 직접 보내며, 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출
+배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24). 실제 무거운 작업
+실행은 `scheduler`가 claim 방식으로 담당하여 API 서버와 MCP 서버가 직접 장시간
+작업을 수행하지 않게 한다.
 
 ---
 
@@ -198,7 +244,9 @@ ffmpeg -ss 00:03:25 -i "<STREAM_URL>" -frames:v 1 -q:v 2 -f image2 pipe:1
 
 ### 4.7 RustFS 미디어 저장
 
-RustFS는 YouTube에서 확보한 대용량 파일을 SQLite DB와 분리해 보관하는 S3 호환 객체 저장소다. 로컬 개발과 단일 호스트 배포에서는 별도 Docker 서비스로 구동한다.
+RustFS는 YouTube에서 확보한 대용량 파일을 PostgreSQL DB와 분리해 보관하는 S3
+호환 객체 저장소다. 로컬 개발과 단일 호스트 배포에서는 별도 Docker 서비스로
+구동한다.
 
 초기 버킷과 prefix 기준:
 
@@ -222,8 +270,10 @@ RustFS는 YouTube에서 확보한 대용량 파일을 SQLite DB와 분리해 보
 
 - HTTP 호출: `httpx.AsyncClient`
 - 동시성 상한: `asyncio.Semaphore`
-- DB 접근: `aiosqlite`
-- SQLite 동시 접근 완화: WAL 모드
+- DB 접근: SQLAlchemy 2.0 async + PostgreSQL driver(ADR-25 구현 시 확정)
+- 공간 검색: PostGIS `ST_DWithin`, GiST 인덱스
+- 일반 인덱스: PostgreSQL FK 컬럼 명시 인덱스, 상태+시간 범위 composite index,
+  조회 대상 JSONB의 GIN 또는 expression index
 - 블로킹 격리: `asyncio.to_thread()` 또는 `loop.run_in_executor()`
 - CPU 집약 전사: 필요 시 별도 프로세스풀
 
@@ -233,7 +283,9 @@ API 서버, MCP 서버, 정기 스케줄러는 모두 같은 작업 테이블(`c
 
 ## 6. 데이터베이스 엔티티 구조
 
-초기 DB는 SQLite + SpatiaLite다. SQLAlchemy 2.0과 `aiosqlite`를 사용하며, 공간 함수와 R-Tree 인덱스는 SpatiaLite로 제공한다.
+초기 구현 DB는 SQLite + SpatiaLite였으나, ADR-25와 T-061 이후 PostgreSQL +
+PostGIS가 기준이다. Alembic migration과 PostGIS 공간 컬럼 기준으로 schema를
+관리한다.
 
 ### 6.1 `search_keywords`
 
@@ -254,8 +306,13 @@ API 서버, MCP 서버, 정기 스케줄러는 모두 같은 작업 테이블(`c
 - `is_active` (Boolean)
 - `last_crawled_at` (DateTime, Nullable) - 키워드·재생목록 증분 수집 기준 시각
 - `next_crawl_at` (DateTime, Nullable)
+- `scan_interval_minutes` (Integer, Nullable, T-063 이후)
+- `last_seen_cursor` (String, Nullable, T-063 이후)
+- `last_seen_video_published_at` (DateTime, Nullable, T-063 이후)
+- `api_budget_group` (String, Nullable, T-063 이후)
 - `created_at` (DateTime)
 - Unique: `target_type`, `source_value`
+- Index: `(is_active, next_crawl_at, id)`
 
 ### 6.3 `youtube_videos`
 
@@ -286,7 +343,7 @@ API 서버, MCP 서버, 정기 스케줄러는 모두 같은 작업 테이블(`c
 - `road_address` (String, Nullable)
 - `latitude` (Float)
 - `longitude` (Float)
-- `geom` (SpatiaLite Point, 4326)
+- `geom` (PostGIS `geometry(Point, 4326)`, T-061 이후)
 - `api_source` (String, Nullable)
 - `category` (String, Nullable)
 - `is_geocoded` (Boolean)
@@ -383,6 +440,44 @@ RustFS에 저장한 동영상, 자막, 전사 결과, 대표 프레임의 메타
 - `payload_json` (Text, Nullable)
 - `created_at` (DateTime)
 
+### 6.11 YouTube source 정규화 테이블
+
+`python-krtour-map`과 TripMate curated plan에서 영상·유튜버·재생목록 근거를
+사용할 수 있도록 YouTube source를 분리한다. 상세 컬럼은
+`docs/youtube-feature-pipeline-plan.md`가 우선한다.
+
+- `youtube_channels`: `channel_id` PK, 채널명, handle, 설명, 썸네일, 구독자 수,
+  Gemini 채널 요약, 마지막 확인 시각.
+- `youtube_playlists`: `playlist_id` PK, 소유 `channel_id`, 제목, 설명, 썸네일,
+  영상 수, 마지막 수집 시각.
+- `youtube_playlist_videos`: `(playlist_id, video_id)` PK, 재생목록 내 순서,
+  playlist item id, 추가·관측 시각.
+- `youtube_video_analysis_runs`: transcript 기반 추출, YouTube URL Gemini 요약,
+  reconcile 실행을 추적한다.
+
+기존 `youtube_videos`는 channel FK, canonical URL, duration, thumbnail,
+Gemini URL summary, transcript summary, reconciled summary를 갖도록 보강한다.
+`extracted_place_candidates`와 `video_place_mappings`에는 `source_channel_id`,
+`source_playlist_id`, `analysis_run_id`를 연결한다.
+
+### 6.12 `python-krtour-map` feature export 상태 (T-066 예정)
+
+`tripmate-agent`는 feature owner가 아니므로 `feature_id`를 직접 생성하지 않는다.
+대신 `python-krtour-map`이 가져갈 export 상태를 관리한다.
+
+- `krtour_feature_exports.export_id`: API cursor와 idempotency에 쓰는 안정 ID.
+- `sequence`: 증가 cursor용 bigint identity 또는 sequence.
+- `candidate_id`: 원본 `extracted_place_candidates.id`.
+- `operation`: `upsert`, `reject`, `tombstone`.
+- `export_status`: `pending`, `ready`, `exported`, `rejected`.
+- `payload_json`: API 응답에 쓰는 정규화 JSONB.
+- `payload_hash`: `python-krtour-map`이 `SourceRecord.raw_payload_hash`로 사용할 값.
+- `updated_at`: full/incremental cursor 기준.
+- Index: `(export_status, updated_at, export_id)`, `(sequence)`, `(candidate_id)`.
+
+Full snapshot API와 incremental changes API는 `/api/v1/krtour/features/*` 아래에
+추가하며, 외부 호출이므로 ADR-24의 `X-API-Key` 인증을 그대로 따른다.
+
 ---
 
 ## 7. 프론트엔드 아키텍처
@@ -404,11 +499,10 @@ Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack
 
 ## 8. 대규모 전환 후보
 
-다음 조건이 실제로 발생하면 후속 ADR로 전환을 검토한다. T-016 검토 결과, 현재 단계에서는 새 저장소·큐 계층을 선제 도입하지 않고 수치 트리거가 관측될 때만 전환한다(ADR-20).
+ADR-25로 PostgreSQL/PostGIS 전환은 확정되었다. 이 절은 그 이후에 남는 optional
+전환 후보를 다룬다.
 
-- 동시 사용자나 수집 대상이 늘어 SQLite 동시 쓰기 한계가 반복된다.
 - 멀티 워커가 필요해 scheduler 단일 실행자 모델이 병목이 된다.
-- 반경 검색, 클러스터링, 공간 조인이 SpatiaLite로 감당하기 어려워진다.
 - 작업 큐 모니터링과 재시도 투명성이 더 중요해진다.
 
 전환 후보:
@@ -416,7 +510,6 @@ Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack
 | 후보 | 도입 기준 | 전환 범위 |
 | --- | --- | --- |
 | sqlite-vec / SQLite Vec1 | 확정 장소 20,000건 이상 또는 최근 30일 검색 결과 0건/오탐으로 인한 수동 보정 비율 20% 초과 | `place_embeddings` 별도 테이블과 검색 서비스 함수. 기본 API와 `travel_places` 스키마는 유지 |
-| PostgreSQL/PostGIS | 확정 장소 100,000건 이상, 영상-장소 매핑 1,000,000건 이상, 반경 검색 p95 500ms 초과, 최근 7일 `database is locked` 재시도 10회 이상 | `app.core.spatial`, `app.services.place_service`, DB migration. ADR-12/ADR-17 후속 갱신과 `ST_DWithin` + GiST 인덱스 사용 |
 | PgQueuer | PostgreSQL 전환 이후 pending 대기 작업 최고 연령 5분 초과가 3회 연속 관측되거나 단일 worker가 24시간 내 신규 영상 처리량을 소화하지 못할 때 | `crawl_runs` claim/worker loop를 DB native queue로 이전 |
 | APScheduler + PostgreSQL advisory lock | 여러 scheduler 프로세스 중 단일 leader만 보장하면 충분할 때 | scheduler leader election 보조. 여러 consumer queue 처리에는 사용하지 않음 |
 | Celery + Beat | DB native queue로 부족하고 외부 worker 격리, 분산 retry, 별도 broker 운영이 필요할 때 | 별도 broker와 worker observability를 포함하는 새 ADR 필요 |

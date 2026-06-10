@@ -14,7 +14,7 @@ from app.etl.youtube_client import (
     YouTubeClient,
     YouTubeQuotaExceededError,
 )
-from app.models import SearchKeyword, SourceTarget, YoutubeVideo
+from app.models import SearchKeyword, SourceTarget, YoutubeChannel, YoutubeVideo
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 
@@ -67,11 +67,33 @@ _VIDEOS_RESPONSE = {
 _CHANNEL_RESPONSE = {
     "items": [
         {
+            "id": "UC1",
+            "snippet": {
+                "title": "여행채널",
+                "customUrl": "@travel",
+                "publishedAt": "2020-01-01T00:00:00Z",
+                "thumbnails": {"high": {"url": "channel.jpg"}},
+            },
+            "statistics": {"subscriberCount": "1000", "videoCount": "10"},
             "contentDetails": {
                 "relatedPlaylists": {
                     "uploads": "PL_UPLOADS",
                 }
             }
+        }
+    ]
+}
+
+_PLAYLIST_RESPONSE = {
+    "items": [
+        {
+            "id": "PL_UPLOADS",
+            "snippet": {
+                "channelId": "UC1",
+                "title": "여행채널 업로드",
+                "publishedAt": "2020-01-01T00:00:00Z",
+            },
+            "contentDetails": {"itemCount": "3"},
         }
     ]
 }
@@ -98,7 +120,35 @@ def _handler(request: httpx.Request) -> httpx.Response:
     if path.endswith("/search"):
         return httpx.Response(200, json=_SEARCH_RESPONSE)
     if path.endswith("/channels"):
-        return httpx.Response(200, json=_CHANNEL_RESPONSE)
+        requested = set((request.url.params.get("id") or "").split(","))
+        items = []
+        for channel_id in requested:
+            if channel_id == "UC1":
+                items.extend(_CHANNEL_RESPONSE["items"])
+            elif channel_id:
+                items.append(
+                    {
+                        "id": channel_id,
+                        "snippet": {"title": f"{channel_id} 채널"},
+                        "statistics": {},
+                    }
+                )
+        return httpx.Response(200, json={"items": items})
+    if path.endswith("/playlists"):
+        requested = set((request.url.params.get("id") or "").split(","))
+        items = []
+        for playlist_id in requested:
+            if playlist_id == "PL_UPLOADS":
+                items.extend(_PLAYLIST_RESPONSE["items"])
+            elif playlist_id:
+                items.append(
+                    {
+                        "id": playlist_id,
+                        "snippet": {"channelId": "UC1", "title": f"{playlist_id} 목록"},
+                        "contentDetails": {"itemCount": "2"},
+                    }
+                )
+        return httpx.Response(200, json={"items": items})
     if path.endswith("/playlistItems"):
         if request.url.params.get("pageToken") == "NEXT":
             return httpx.Response(200, json=_PLAYLIST_PAGE_2)
@@ -211,6 +261,8 @@ async def test_keyword_harvest_uses_source_target_watermark(session):
                     ]
                 },
             )
+        if request.url.path.endswith("/channels"):
+            return httpx.Response(200, json=_CHANNEL_RESPONSE)
         return httpx.Response(404, request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
@@ -250,8 +302,10 @@ async def test_run_harvest_playlist_reuses_ingest_path(session, yt_client):
     assert summary["derived_keywords"] == []
     assert summary["discovered"] == 2
     assert summary["inserted"] == 2
-    # playlistItems(1) + videos(1)
-    assert summary["quota_used"] == 2
+    # playlists(1) + playlistItems(1) + videos(1) + channels(1)
+    assert summary["quota_used"] == 4
+    assert summary["playlists_inserted"] == 1
+    assert summary["playlist_links_inserted"] == 2
 
     videos = (await session.execute(select(YoutubeVideo))).scalars().all()
     assert {v.video_id for v in videos} == {"v1", "v2"}
@@ -293,6 +347,19 @@ async def test_playlist_harvest_stops_at_source_target_watermark(session):
                     "nextPageToken": "SHOULD_NOT_FETCH",
                 },
             )
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "PL_DIRECT",
+                            "snippet": {"channelId": "UC1", "title": "직접 목록"},
+                            "contentDetails": {"itemCount": "2"},
+                        }
+                    ]
+                },
+            )
         if request.url.path.endswith("/videos"):
             return httpx.Response(
                 200,
@@ -311,6 +378,8 @@ async def test_playlist_harvest_stops_at_source_target_watermark(session):
                     ]
                 },
             )
+        if request.url.path.endswith("/channels"):
+            return httpx.Response(200, json=_CHANNEL_RESPONSE)
         return httpx.Response(404, request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
@@ -350,8 +419,11 @@ async def test_run_harvest_channel_uses_uploads_playlist(session, yt_client):
     assert summary["uploads_playlist_id"] == "PL_UPLOADS"
     assert summary["discovered"] == 3
     assert summary["inserted"] == 3
-    # channels(1) + playlistItems(1) + playlistItems(1) + videos(1)
-    assert summary["quota_used"] == 4
+    # channels(1) + playlistItems(2) + playlists(1) + videos(1) + channels(1)
+    assert summary["quota_used"] == 6
+    assert summary["channels_inserted"] == 2
+    assert summary["playlists_inserted"] == 1
+    assert summary["playlist_links_inserted"] == 3
 
     videos = (await session.execute(select(YoutubeVideo))).scalars().all()
     assert {v.video_id for v in videos} == {"v1", "v2", "v3"}
@@ -360,6 +432,7 @@ async def test_run_harvest_channel_uses_uploads_playlist(session, yt_client):
 async def test_channel_harvest_stops_at_existing_watermark(session):
     seen_paths: list[str] = []
 
+    await session.merge(YoutubeChannel(channel_id="UC1", title="여행채널"))
     await session.merge(
         YoutubeVideo(
             video_id="old",
@@ -375,6 +448,8 @@ async def test_channel_harvest_stops_at_existing_watermark(session):
         seen_paths.append(request.url.path)
         if request.url.path.endswith("/channels"):
             return httpx.Response(200, json=_CHANNEL_RESPONSE)
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(200, json=_PLAYLIST_RESPONSE)
         if request.url.path.endswith("/playlistItems"):
             return httpx.Response(
                 200,

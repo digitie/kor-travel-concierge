@@ -33,7 +33,9 @@ class MediaAsset(TimestampMixin, Base):
         index=True,
     )
     place_id: Mapped[int | None] = mapped_column(
-        ForeignKey("travel_places.place_id", ondelete="NO ACTION"), nullable=True
+        ForeignKey("travel_places.place_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
     )
     storage_provider: Mapped[str] = mapped_column(
         String(16), nullable=False, default="rustfs"

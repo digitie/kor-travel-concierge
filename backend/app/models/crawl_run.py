@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -35,6 +35,9 @@ class RunSource(str, Enum):
 
 class CrawlRun(TimestampMixin, Base):
     __tablename__ = "crawl_runs"
+    __table_args__ = (
+        Index("ix_crawl_runs_claim_pending", "state", "id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)

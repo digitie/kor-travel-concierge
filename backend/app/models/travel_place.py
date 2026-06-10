@@ -1,8 +1,7 @@
 """`travel_places` 모델.
 
 확정된 여행지를 저장한다. 좌표는 `latitude`/`longitude` 컬럼으로 보관하고,
-SpatiaLite Point(4326) `geom` 컬럼과 R-Tree 공간 인덱스는 ORM 밖에서
-`app.core.spatial`이 SpatiaLite DDL로 관리한다(ADR-17).
+PostGIS `geometry(Point, 4326)` `geom` 컬럼은 반경 검색과 중복 탐지에 사용한다.
 
 장소 기본 설명(`description`)과 Gemini 보강 설명(`gemini_enriched_description`)을
 분리 저장한다. (`docs/architecture.md` 4.4·6.4, ADR-16)
@@ -12,8 +11,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from geoalchemy2 import Geometry
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -27,6 +28,9 @@ class DescriptionReviewStatus(str, Enum):
 
 class TravelPlace(TimestampMixin, Base):
     __tablename__ = "travel_places"
+    __table_args__ = (
+        Index("ix_travel_places_geom_gist", "geom", postgresql_using="gist"),
+    )
 
     place_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
@@ -39,7 +43,10 @@ class TravelPlace(TimestampMixin, Base):
     road_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
     latitude: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     longitude: Mapped[float] = mapped_column(Float, nullable=False, index=True)
-    # geom: SpatiaLite Point(4326) — app.core.spatial이 DDL로 추가/동기화한다.
+    geom: Mapped[Any | None] = mapped_column(
+        Geometry(geometry_type="POINT", srid=4326, spatial_index=False),
+        nullable=True,
+    )
     api_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_geocoded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

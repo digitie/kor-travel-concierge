@@ -1,6 +1,6 @@
 # TripMate Agent 단일 호스트 Docker Compose 구성
 # 서비스: rustfs(미디어 저장) / api(FastAPI) / mcp / scheduler / frontend(Next.js)
-# api·mcp·scheduler는 같은 SQLite + SpatiaLite 데이터 볼륨을 공유한다.
+# api·mcp·scheduler는 같은 외부 PostgreSQL/PostGIS DB를 사용한다(ADR-25).
 # RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 서비스로 구동한다(ADR-15).
 
 x-app-env-file: &app-env-file
@@ -8,8 +8,7 @@ x-app-env-file: &app-env-file
     required: false
 
 x-python-env: &python-env
-  DATABASE_URL: sqlite+aiosqlite:////data/tripmate.db
-  SPATIALITE_EXTENSION_PATH: mod_spatialite
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:15434/tripmate_agent}
   NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-9041}
   CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-9042},http://127.0.0.1:${FRONTEND_HOST_PORT:-9042},http://localhost:13000,http://127.0.0.1:13000,http://localhost:13100,http://127.0.0.1:13100}
   RUSTFS_ENABLED: "true"
@@ -65,10 +64,10 @@ services:
     env_file: *app-env-file
     ports:
       - "${API_HOST_PORT:-9041}:8000"
-    volumes:
-      - sqlite-data:/data
     environment:
       <<: *python-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       rustfs:
         condition: service_started
@@ -91,14 +90,14 @@ services:
     env_file: *app-env-file
     ports:
       - "${MCP_HOST_PORT:-8010}:8010"
-    volumes:
-      - sqlite-data:/data
     environment:
       <<: *python-env
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8010"
       MCP_STREAMABLE_HTTP_PATH: /mcp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
@@ -109,10 +108,10 @@ services:
       dockerfile: Dockerfile.python
     command: python /app/scheduler/worker.py
     env_file: *app-env-file
-    volumes:
-      - sqlite-data:/data
     environment:
       <<: *python-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
@@ -137,7 +136,5 @@ services:
         condition: service_healthy
 
 volumes:
-  # SQLite + SpatiaLite 데이터 볼륨 (api/mcp/scheduler 공유)
-  sqlite-data:
   # RustFS 객체 데이터 볼륨 (무기한 보존)
   rustfs-data:

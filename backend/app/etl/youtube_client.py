@@ -21,6 +21,7 @@ QUOTA_COST = {
     "search": 100,
     "playlistItems": 1,
     "channels": 1,
+    "playlists": 1,
     "videos": 1,
 }
 
@@ -123,17 +124,27 @@ class YouTubeClient:
         for chunk in _chunks([video_id for video_id in video_ids if video_id], 50):
             data = await self._get(
                 "videos",
-                {"part": "snippet,statistics", "id": ",".join(chunk)},
+                {"part": "snippet,statistics,contentDetails", "id": ",".join(chunk)},
             )
             chunk_items = data.get("items", [])
             if isinstance(chunk_items, list):
                 items.extend(item for item in chunk_items if isinstance(item, dict))
         return {"items": items}
 
-    async def channels_list(self, channel_id: str) -> dict[str, Any]:
-        """채널 contentDetails 조회 (쿼터 1)."""
+    async def channels_list(self, channel_ids: str | list[str]) -> dict[str, Any]:
+        """채널 snippet/statistics/contentDetails 조회 (쿼터 1)."""
+        ids = ",".join(channel_ids) if isinstance(channel_ids, list) else channel_ids
         return await self._get(
-            "channels", {"part": "contentDetails", "id": channel_id}
+            "channels",
+            {"part": "snippet,statistics,contentDetails", "id": ids},
+        )
+
+    async def playlists_list(self, playlist_ids: str | list[str]) -> dict[str, Any]:
+        """재생목록 snippet/contentDetails 조회 (쿼터 1)."""
+        ids = ",".join(playlist_ids) if isinstance(playlist_ids, list) else playlist_ids
+        return await self._get(
+            "playlists",
+            {"part": "snippet,contentDetails", "id": ids},
         )
 
     async def playlist_items_list(

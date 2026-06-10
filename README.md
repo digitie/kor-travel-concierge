@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js" />
   <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/Gemini_API-8E75C2?style=for-the-badge&logo=google-gemini&logoColor=white" alt="Gemini" />
-  <img src="https://img.shields.io/badge/SpatiaLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SpatiaLite" />
+  <img src="https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-336791?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL + PostGIS" />
   <img src="https://img.shields.io/badge/RustFS-111827?style=for-the-badge" alt="RustFS" />
   <img src="https://img.shields.io/badge/Playwright-2EAD33?style=for-the-badge&logo=playwright&logoColor=white" alt="Playwright" />
 
@@ -12,9 +12,9 @@
 
 <br />
 
-`tripmate-agent`는 사용자가 지정한 유튜버, 재생목록, 검색 키워드를 바탕으로 YouTube 여행 콘텐츠를 탐색하고, Gemini API로 영상 속 여행지 정보를 추출·요약해 SQLite + SpatiaLite 공간 데이터베이스로 구축하는 애플리케이션입니다.
+`tripmate-agent`는 사용자가 지정한 유튜버, 재생목록, 검색 키워드를 바탕으로 YouTube 여행 콘텐츠를 탐색하고, Gemini API로 영상 속 여행지 정보를 추출·요약해 PostgreSQL + PostGIS 공간 데이터베이스로 구축하는 애플리케이션입니다.
 
-이 저장소는 1~2인 개발·운영과 동시 사용자 10명 내외를 전제로 합니다. 대규모 분산 크롤러보다 공식 API, 파일 기반 공간 DB, 전면 비동기 처리, 단일 실행자 스케줄러를 우선해 운영 부담을 줄입니다.
+이 저장소는 1~2인 개발·운영과 동시 사용자 10명 내외를 전제로 합니다. 대규모 분산 크롤러보다 공식 API, 관리 가능한 PostgreSQL/PostGIS schema, 전면 비동기 처리, 단일 실행자 스케줄러를 우선해 운영 부담을 줄입니다.
 
 ## 핵심 특징
 
@@ -22,13 +22,13 @@
 - **격리된 자막 폴백**: 타인 영상 자막은 공식 captions API로 처리하기 어렵기 때문에 `youtube-transcript-api` → `yt-dlp` → `faster-whisper` 순서로 폴백합니다.
 - **Gemini 기반 POI 추출**: 자막과 메타데이터에서 장소명, 위치 단서, 설명, 타임스탬프를 JSON Schema 기반으로 추출합니다.
 - **RustFS 미디어 저장**: 다운로드한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 무기한 보존합니다.
-- **SQLite + SpatiaLite 공간 DB**: 별도 DB 서버 없이 단일 파일에 장소, 영상, 매핑, 작업 상태, 공간 인덱스를 저장합니다.
-- **VWorld 우선 지오코딩**: 지오코딩과 역지오코딩은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고, Kakao Local 주소 검색·키워드 장소 검색과 Naver를 보조 경로로 사용합니다. `kraddr-geo` 연계는 현재 계획에 포함하지 않습니다.
+- **PostgreSQL + PostGIS 목표 DB**: `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `tripmate_agent`를 목표로 하고, 장소·영상·매핑·작업 상태·공간 인덱스를 Alembic으로 관리합니다.
+- **VWorld 우선 지오코딩**: 지오코딩과 역지오코딩은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고, Kakao Local 주소 검색·키워드 장소 검색과 Naver를 보조 경로로 사용합니다. `kraddr-geo` 지오코딩 연계는 현재 계획에 포함하지 않습니다.
 - **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
 - **장소 언급 소스와 내보내기**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지 확인하고, 언급 횟수로 정렬하며, 선택 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보낼 수 있습니다.
 - **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
-- **전면 비동기 실행**: `httpx.AsyncClient`, `aiosqlite`, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
+- **전면 비동기 실행**: `httpx.AsyncClient`, SQLAlchemy async session, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
 - **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, `maplibre-gl` + VWorld WMTS를 기준으로 합니다.
 
 ## 시스템 구성도
@@ -38,7 +38,7 @@
         │                                  │
         │ 상태 폴링                         │ crawl_runs 생성
         ▼                                  ▼
-[TanStack Query]                    [SQLite + SpatiaLite]
+[TanStack Query]                    [PostgreSQL + PostGIS]
                                            ▲
 [MCP 서버] ── 도구 호출 / 작업 생성 ────────┤
                                            │
@@ -77,10 +77,9 @@ APP_ENV=local              # local/test/e2e는 무인증 우회, production은 X
 API_AUTH_ENABLED=false     # true이면 환경과 무관하게 인증 강제
 API_KEYS=                  # 외부 노출 배포에서 쉼표 구분 키 목록 설정
 
-# SQLite + SpatiaLite
-DATABASE_URL=sqlite+aiosqlite:///./tripmate.db
-SPATIALITE_EXTENSION_PATH=mod_spatialite
-SQLITE_WAL_ENABLED=true
+# PostgreSQL + PostGIS 목표(ADR-25, T-061)
+# 개발 기본 서버는 python-kraddr-geo의 PostgreSQL/PostGIS 서버를 재사용하되 DB는 분리
+DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent
 
 # Gemini
 GEMINI_API_KEY=your_gemini_api_key_here

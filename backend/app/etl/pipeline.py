@@ -44,10 +44,15 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _best_thumbnail_url(thumbnails: dict[str, Any] | None) -> str | None:
+    return ingest_service.best_thumbnail_url(thumbnails)
+
+
 def build_candidate(item: dict[str, Any], *, seed: str, now: datetime) -> dict[str, Any]:
     """`videos.list` 항목을 점수가 매겨진 후보 dict로 변환한다."""
     snippet = item.get("snippet", {})
     stats = item.get("statistics", {})
+    content_details = item.get("contentDetails", {})
     video_id = item["id"]
     title = snippet.get("title", "")
     published_at = ingest_service.parse_published_at(snippet.get("publishedAt"))
@@ -65,9 +70,17 @@ def build_candidate(item: dict[str, Any], *, seed: str, now: datetime) -> dict[s
         "video_id": video_id,
         "title": title,
         "url": f"https://youtu.be/{video_id}",
+        "canonical_url": f"https://www.youtube.com/watch?v={video_id}",
         "channel_id": snippet.get("channelId", ""),
         "channel_name": snippet.get("channelTitle"),
         "published_at": published_at,
+        "duration_seconds": ingest_service.parse_duration_seconds(
+            content_details.get("duration")
+        ),
+        "thumbnail_url": _best_thumbnail_url(snippet.get("thumbnails")),
+        "default_language": snippet.get("defaultAudioLanguage")
+        or snippet.get("defaultLanguage"),
+        "tags_json": snippet.get("tags") if isinstance(snippet.get("tags"), list) else None,
         "view_count": view_count,
         "like_count": like_count,
         "description_raw": snippet.get("description"),
@@ -160,9 +173,10 @@ async def _collect_playlist_video_ids(
     max_videos: int,
     stop_at_or_before: datetime | None = None,
     status_reporter: StatusReporter | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     """재생목록 항목에서 중복 없는 video_id를 모은다."""
     ids: list[str] = []
+    links: list[dict[str, Any]] = []
     seen: set[str] = set()
     page_token: str | None = None
     stop_pagination = False
@@ -190,6 +204,13 @@ async def _collect_playlist_video_ids(
             if video_id and video_id not in seen:
                 seen.add(video_id)
                 ids.append(video_id)
+                link = ingest_service.build_playlist_video_link(
+                    item,
+                    playlist_id=playlist_id,
+                    now=ingest_service.utcnow(),
+                )
+                if link is not None:
+                    links.append(link)
                 if len(ids) >= max_videos:
                     break
         page_token = data.get("nextPageToken")
@@ -200,39 +221,58 @@ async def _collect_playlist_video_ids(
         f"YouTube 재생목록 {playlist_id}에서 {len(ids[:max_videos])}개의 동영상을 찾았습니다.",
         0.55,
     )
-    return ids[:max_videos]
+    return ids[:max_videos], links[:max_videos]
 
 
 async def _collect_channel_video_ids(
     client: YouTubeClient,
     channel_id: str,
     *,
+    uploads_playlist_id: str | None = None,
     max_videos: int,
     stop_at_or_before: datetime | None = None,
     status_reporter: StatusReporter | None = None,
-) -> tuple[list[str], str | None]:
+) -> tuple[list[str], str | None, list[dict[str, Any]]]:
     """채널 업로드 재생목록을 찾아 video_id를 모은다."""
     await _report(
         status_reporter,
         f"YouTube 채널 {channel_id}의 업로드 재생목록을 확인 중입니다.",
         0.2,
     )
-    uploads_playlist_id = await client.uploads_playlist_id(channel_id)
+    if uploads_playlist_id is None:
+        uploads_playlist_id = await client.uploads_playlist_id(channel_id)
     if not uploads_playlist_id:
         await _report(
             status_reporter,
             f"YouTube 채널 {channel_id}에서 업로드 재생목록을 찾지 못했습니다.",
             0.4,
         )
-        return [], None
-    ids = await _collect_playlist_video_ids(
+        return [], None, []
+    ids, links = await _collect_playlist_video_ids(
         client,
         uploads_playlist_id,
         max_videos=max_videos,
         stop_at_or_before=stop_at_or_before,
         status_reporter=status_reporter,
     )
-    return ids, uploads_playlist_id
+    return ids, uploads_playlist_id, links
+
+
+def _metadata_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    items = data.get("items", [])
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _uploads_playlist_id_from_channels(data: dict[str, Any]) -> str | None:
+    for item in _metadata_items(data):
+        uploads = (
+            item.get("contentDetails", {})
+            .get("relatedPlaylists", {})
+            .get("uploads")
+        )
+        if uploads:
+            return str(uploads)
+    return None
 
 
 async def run_harvest(
@@ -256,16 +296,24 @@ async def run_harvest(
     target_id = seed_keyword
     derived: list[str] = []
     uploads_playlist_id: str | None = None
+    channel_metadata: list[dict[str, Any]] = []
+    playlist_metadata: list[dict[str, Any]] = []
+    playlist_links: list[dict[str, Any]] = []
 
     if playlist_id:
         target_type = "playlist"
         target_id = playlist_id
+        playlist_details = await client.playlists_list(playlist_id)
+        playlist_metadata = [
+            ingest_service.build_playlist_metadata(item, now=now)
+            for item in _metadata_items(playlist_details)
+        ]
         watermark = _as_utc_aware(
             await ingest_service.get_source_target_watermark(
                 session, target_type=target_type, source_value=playlist_id
             )
         )
-        video_ids = await _collect_playlist_video_ids(
+        video_ids, playlist_links = await _collect_playlist_video_ids(
             client,
             playlist_id,
             max_videos=max_videos,
@@ -275,14 +323,27 @@ async def run_harvest(
     elif channel_id:
         target_type = "channel"
         target_id = channel_id
+        channel_details = await client.channels_list(channel_id)
+        channel_metadata = [
+            ingest_service.build_channel_metadata(item, now=now)
+            for item in _metadata_items(channel_details)
+        ]
         watermark = _as_utc_aware(await ingest_service.get_channel_watermark(session, channel_id))
-        video_ids, uploads_playlist_id = await _collect_channel_video_ids(
+        uploads_playlist_id = _uploads_playlist_id_from_channels(channel_details)
+        video_ids, uploads_playlist_id, playlist_links = await _collect_channel_video_ids(
             client,
             channel_id,
+            uploads_playlist_id=uploads_playlist_id,
             max_videos=max_videos,
             stop_at_or_before=watermark,
             status_reporter=status_reporter,
         )
+        if uploads_playlist_id:
+            playlist_details = await client.playlists_list(uploads_playlist_id)
+            playlist_metadata = [
+                ingest_service.build_playlist_metadata(item, now=now)
+                for item in _metadata_items(playlist_details)
+            ]
     else:
         if not seed_keyword:
             raise ValueError("run_harvest에는 seed_keyword, channel_id, playlist_id 중 하나가 필요하다")
@@ -326,9 +387,33 @@ async def run_harvest(
             build_candidate(item, seed=seed_keyword or "", now=now)
             for item in details.get("items", [])
         ]
+        candidate_channel_ids = sorted(
+            {
+                str(candidate.get("channel_id"))
+                for candidate in candidates
+                if candidate.get("channel_id")
+            }
+        )
+        if candidate_channel_ids:
+            channel_details = await client.channels_list(candidate_channel_ids)
+            channel_metadata_by_id = {
+                payload["channel_id"]: payload
+                for payload in channel_metadata
+                if payload.get("channel_id")
+            }
+            for item in _metadata_items(channel_details):
+                payload = ingest_service.build_channel_metadata(item, now=now)
+                channel_metadata_by_id[payload["channel_id"]] = payload
+            channel_metadata = list(channel_metadata_by_id.values())
         # 우선순위 점수 내림차순 정렬 후 상한 적용
         candidates.sort(key=lambda c: c["priority_score"], reverse=True)
         candidates = candidates[:max_videos]
+        candidate_video_ids = {str(candidate["video_id"]) for candidate in candidates}
+        playlist_links = [
+            link
+            for link in playlist_links
+            if str(link.get("video_id") or "") in candidate_video_ids
+        ]
         titles = [str(candidate.get("title") or candidate["video_id"]) for candidate in candidates]
         await _report(
             status_reporter,
@@ -343,7 +428,13 @@ async def run_harvest(
         f"동영상 후보 {len(candidates)}개를 데이터베이스에 저장 중입니다.",
         0.78,
     )
-    summary = await ingest_service.ingest_candidates(session, candidates)
+    summary = await ingest_service.ingest_candidates(
+        session,
+        candidates,
+        channels=channel_metadata,
+        playlists=playlist_metadata,
+        playlist_links=playlist_links,
+    )
     if target_id:
         await ingest_service.mark_source_target_crawled(
             session,

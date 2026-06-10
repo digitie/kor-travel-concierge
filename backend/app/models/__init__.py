@@ -9,8 +9,7 @@
     - search_keywords, source_targets, youtube_videos, travel_places,
       extracted_place_candidates, video_place_mappings, media_assets
 
-`travel_places.geom`(Point 4326)과 R-Tree 공간 인덱스는 ORM 밖에서
-`app.core.spatial`이 SpatiaLite DDL로 관리한다(ADR-17).
+`travel_places.geom`은 PostGIS `geometry(Point, 4326)` 컬럼이다(ADR-25).
 """
 
 from __future__ import annotations
@@ -25,7 +24,15 @@ from app.models.source_target import SourceTarget, TargetType
 from app.models.system_setting import SystemSetting
 from app.models.travel_place import DescriptionReviewStatus, TravelPlace
 from app.models.video_place_mapping import VideoPlaceMapping
+from app.models.youtube_channel import YoutubeChannel
+from app.models.youtube_playlist import YoutubePlaylist
+from app.models.youtube_playlist_video import YoutubePlaylistVideo
 from app.models.youtube_video import CrawlStatus, YoutubeVideo
+from app.models.youtube_video_analysis_run import (
+    VideoAnalysisRunState,
+    VideoAnalysisRunType,
+    YoutubeVideoAnalysisRun,
+)
 
 __all__ = [
     # 공통 기반
@@ -44,6 +51,12 @@ __all__ = [
     "TargetType",
     "YoutubeVideo",
     "CrawlStatus",
+    "YoutubeChannel",
+    "YoutubePlaylist",
+    "YoutubePlaylistVideo",
+    "YoutubeVideoAnalysisRun",
+    "VideoAnalysisRunType",
+    "VideoAnalysisRunState",
     "TravelPlace",
     "DescriptionReviewStatus",
     "ExtractedPlaceCandidate",

@@ -2,10 +2,9 @@
 # api / mcp / scheduler / etl 가 동일 이미지를 공유하고, compose에서 command로 분기한다.
 FROM python:3.11-slim
 
-# SpatiaLite 확장 및 FFmpeg(대표 프레임 추출) 시스템 의존성
+# FFmpeg(대표 프레임 추출) 시스템 의존성
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libsqlite3-mod-spatialite \
         ffmpeg \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*

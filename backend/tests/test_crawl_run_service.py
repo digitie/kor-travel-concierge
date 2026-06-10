@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-from app.models import Base, RunState, utcnow
+from app.models import RunState, utcnow
 from app.services import crawl_run_service as svc
 
 
@@ -54,29 +52,22 @@ async def test_claim_returns_none_when_empty(session):
     assert await svc.claim_next_pending(session) is None
 
 
-async def test_claim_next_pending_allows_single_parallel_claim(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim.db'}")
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        async with session_factory() as session:
-            run = await svc.create_run(session, job_type="harvest", source="web")
+async def test_claim_next_pending_allows_single_parallel_claim(session_factory):
+    async with session_factory() as session:
+        run = await svc.create_run(session, job_type="harvest", source="web")
 
-        async def claim_one():
-            async with session_factory() as claim_session:
-                return await svc.claim_next_pending(claim_session)
+    async def claim_one():
+        async with session_factory() as claim_session:
+            return await svc.claim_next_pending(claim_session)
 
-        first, second = await asyncio.gather(claim_one(), claim_one())
+    first, second = await asyncio.gather(claim_one(), claim_one())
 
-        claimed = [item for item in (first, second) if item is not None]
-        assert len(claimed) == 1
-        assert claimed[0].id == run.id
-        async with session_factory() as verify_session:
-            refreshed = await svc.get_run(verify_session, run.id)
-            assert refreshed.state == RunState.RUNNING
-    finally:
-        await engine.dispose()
+    claimed = [item for item in (first, second) if item is not None]
+    assert len(claimed) == 1
+    assert claimed[0].id == run.id
+    async with session_factory() as verify_session:
+        refreshed = await svc.get_run(verify_session, run.id)
+        assert refreshed.state == RunState.RUNNING
 
 
 async def test_heartbeat_and_done(session):

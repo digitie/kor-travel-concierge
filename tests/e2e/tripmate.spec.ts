@@ -148,11 +148,20 @@ test.describe('TripMate Agent E2E 검증', () => {
 });
 
 function seedE2EData() {
+  const databaseUrl =
+    process.env.TRIPMATE_AGENT_E2E_DATABASE_URL ??
+    process.env.TRIPMATE_AGENT_TEST_PG_DSN ??
+    process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error(
+      'E2E seed에는 TRIPMATE_AGENT_E2E_DATABASE_URL 또는 TRIPMATE_AGENT_TEST_PG_DSN이 필요합니다.',
+    );
+  }
   execFileSync(resolvePython(), [seedScript], {
     cwd: backendDir,
     env: {
       ...process.env,
-      DATABASE_URL: 'sqlite+aiosqlite:///../tests/.tmp/e2e.db',
+      DATABASE_URL: databaseUrl,
       PYTHONPATH: backendDir,
     },
     stdio: 'inherit',
