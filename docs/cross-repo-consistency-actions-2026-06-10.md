@@ -20,7 +20,8 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 
 | 항목 | krtour-map 구현 값 | 근거 |
 |---|---|---|
-| 호출 경로 | `GET {base}/api/v1/features/{snapshot\|changes}` — endpoint 선택은 consumer 설정 `tripmate_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py:87` |
+| 호출 경로 (**현재 main 구현**) | `GET {base}/api/v1/krtour/features/{snapshot\|changes}` — endpoint 선택은 consumer 설정 `tripmate_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py:87` (krtour `origin/main` 기준) |
+| 호출 경로 (**목표 — 경로 중립화**) | `GET {base}/api/v1/features/{snapshot\|changes}` — downstream 이름 제거. krtour-map#334(ADR-050 #1 제안)의 T-217a로 fetcher 정렬 예정. **T-066은 목표 경로로 구현하되, 배포는 krtour T-217a와 동시**(한쪽만 나가면 404/적재 실패) | krtour-map#334 (열린 PR) |
 | 인증 | `X-API-Key` 헤더 (tripmate-agent `API_KEYS` 중 하나) | 같은 파일 `:89` |
 | 요청 파라미터 | `limit`(krtour 설정 `tripmate_agent_feature_page_size`), `cursor`(opaque) | `:96-100` |
 | 응답 필수 형태 | JSON object — `items: list` 필수, `has_more: bool`, `next_cursor: str` | `:104-118` |
@@ -36,9 +37,11 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 만약 sibling repo 구현 또는 설정 기본값이 이전 downstream 전용 경로를 가리키고
 있다면 T-067에서 `/api/v1/features/*`로 함께 정렬해야 한다.
 
-> **2026-06-10 결정 반영**: 경로 중립화는 krtour-map **ADR-050 #1**로 확정됐고,
-> krtour-map fetcher의 기존 하드코딩(`/api/v1/krtour/features/*`,
-> `provider_fetchers.py:87`) 정렬은 krtour-map **T-217a**로 등록됐다.
+> **2026-06-10 결정 반영 — merge dependency 주의**: 경로 중립화(ADR-050 #1)와
+> fetcher 정렬 task(T-217a)는 **아직 열린 PR `digitie/python-krtour-map#334`의 내용**
+> 이다 — 본 문서에서 인용하는 ADR-050~052·T-217a~g 전부 동일 (krtour 현재 main에
+> 머지된 것은 ADR-049까지). #334 머지 전에는 "제안/대기 중"으로 읽을 것. 본 PR(#56)은
+> **#334 머지 후에 머지**하는 것을 권장한다.
 > **양쪽 동시 배포 필수** — T-066 배포 시점에 krtour-map T-217a가 함께 나가야
 > 적재가 끊기지 않는다 (현재는 양쪽 다 미가동이라 안전).
 
