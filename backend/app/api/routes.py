@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_session
 from app.core.security import require_api_key
+from app.etl import category_suggestion
 from app.models import MediaAsset, RunSource
 from app.services import (
     audit_service,
@@ -386,6 +387,7 @@ async def resolve_unmatched_candidate(
             review_note=payload.review_note,
             place_id=payload.place_id,
             place_data=place_data,
+            category_code_selector=category_suggestion.make_default_selector(),
             commit=False,
         )
     except ValueError as exc:

@@ -85,6 +85,65 @@ async def test_list_unmatched_candidates(session):
     assert unmatched[0].ai_place_name == "검수대상"
 
 
+async def test_resolve_create_place_fills_category_code_via_selector(session):
+    session.add(YoutubeVideo(video_id="v1", title="t", url="u", channel_id="c"))
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="v1", source_text="s", ai_place_name="월정리 해변",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    captured = {}
+
+    def fake_selector(*, name, category_label=None, description=None, address=None):
+        captured["name"] = name
+        captured["category_label"] = category_label
+        return "01050100"
+
+    _, place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={
+            "name": "월정리 해변",
+            "latitude": 33.5563,
+            "longitude": 126.7958,
+            "category": "해변",
+        },
+        category_code_selector=fake_selector,
+    )
+    assert place is not None
+    assert place.category_code_suggestion == "01050100"
+    assert captured["name"] == "월정리 해변"
+    assert captured["category_label"] == "해변"
+
+
+async def test_resolve_create_place_without_selector_leaves_code_none(session):
+    session.add(YoutubeVideo(video_id="v2", title="t", url="u", channel_id="c"))
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="v2", source_text="s", ai_place_name="장소",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    _, place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={"name": "장소", "latitude": 33.5, "longitude": 126.7},
+    )
+    assert place is not None
+    assert place.category_code_suggestion is None
+
+
 async def test_list_place_summaries_sorts_by_mention_count(session):
     video = YoutubeVideo(
         video_id="v-source",

@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-11: T-070 후속 — 수동 `create_place` 경로 카테고리 코드 보강
+
+- **담당자**: Claude
+- **작업 내용**:
+  - T-070은 자동 지오코딩 확정 경로(`geocode_service`)만 `category_code_suggestion`을 채웠다. 검수 큐에서 사용자가 신규 장소를 만드는 수동 `create_place` 경로도 채우도록 보강했다.
+  - **주입형 selector로 layering 유지**: `place_service.resolve_candidate`에 `category_code_selector` 파라미터를 추가했다. services 계층이 etl을 직접 import하지 않도록, 실제 Gemini 선택기는 composition root가 주입한다. `category_suggestion.make_default_selector()`(Gemini 키 없으면 `None`)가 `(name, category_label, description, address) -> code|None` callable을 만든다.
+  - **composition root 배선**: REST `POST /api/v1/destinations/unmatched/{id}/resolve`(`routes.py`)와 MCP `resolve_candidate`(`tripmate_mcp/tools.py`)가 `make_default_selector()`를 주입한다. `create_place` 분기에서만 신규 장소에 코드를 채우고, `match_existing`은 기존 장소를 건드리지 않는다.
+- **검증**: `localhost:15434` disposable DB에서 backend 전체 pytest **197 passed**(신규 place_service selector 2건 포함), compileall(`tripmate_mcp` 포함), import 순환참조 없음(routes/MCP→etl 단방향).
+
 ## 2026-06-11: T-070 feature export `category_code_suggestion` 채우기
 
 - **담당자**: Claude
