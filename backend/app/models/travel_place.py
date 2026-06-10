@@ -49,6 +49,11 @@ class TravelPlace(TimestampMixin, Base):
     )
     api_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # `python-krtour-map` 8자리 category 코드 제안값(T-070). Gemini가 복사된 코드표에서
+    # 고른 결과이며, feature export `category_code_suggestion`으로 노출한다.
+    category_code_suggestion: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
     is_geocoded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     detailed_research_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_reviewed_at: Mapped[datetime | None] = mapped_column(

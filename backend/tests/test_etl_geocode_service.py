@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 
 from app.etl.geocode_service import _names_compatible, apply_geocode_to_candidate
@@ -58,6 +60,44 @@ async def test_apply_matched_creates_place(session):
     assert mapping.place_id == place.place_id
     assert mapping.feature_export_status == FeatureExportStatus.READY
     assert mapping.provider_evidence_json == refreshed.provider_evidence_json
+
+
+async def test_apply_matched_sets_category_code_suggestion(session):
+    candidate = await _make_candidate(session, name="월정리 해변", category="해변")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563, longitude=126.7958, road_address="제주 구좌읍", source="kakao"
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+
+    def fake_category_llm(prompt: str) -> str:
+        assert "카테고리 목록" in prompt
+        return json.dumps({"category_code": "01050100"})
+
+    place = await apply_geocode_to_candidate(
+        session, candidate, decision, category_code_llm=fake_category_llm
+    )
+    assert place.category_code_suggestion == "01050100"
+
+
+async def test_apply_matched_skips_category_suggestion_when_llm_none(session):
+    candidate = await _make_candidate(session)
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(latitude=33.5563, longitude=126.7958, source="kakao"),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    # 명시적 None → 카테고리 코드 제안을 끈다(네트워크 호출 없음).
+    place = await apply_geocode_to_candidate(
+        session, candidate, decision, category_code_llm=None
+    )
+    assert place.category_code_suggestion is None
 
 
 async def test_apply_needs_review_keeps_candidate(session):

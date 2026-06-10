@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-11: T-070 feature export `category_code_suggestion` 채우기
+
+- **담당자**: Claude
+- **작업 내용**:
+  - **카테고리 코드표 복사**: `python-krtour-map`의 `krtour.map.category`(8자리 `AABBCCDD`, 144개)를 `backend/app/data/place_category_codes.json`으로 복사하고 provenance/동기화 기준(2026-05-25)·복사 사유를 헤더에 남겼다. 런타임에 `python-krtour-map`을 참조하면 provider↔consumer 순환참조가 되므로 복사로 끊는다(2026-06-11 결정). 카테고리는 거의 바뀌지 않아 복사본 drift는 수용 가능하다고 판단하며, 변경 시 JSON을 재동기화한다.
+  - **카탈로그 로더**: `app/etl/category_catalog.py`가 JSON을 읽어 `is_known_code`/`label_for`/`selectable_categories`/`prompt_catalog`를 제공한다.
+  - **Gemini 선택기**: `app/etl/category_suggestion.py`가 복사된 카탈로그를 Gemini에 보여주고 장소명·카테고리 label·설명·주소를 근거로 8자리 코드 하나를 고르게 한다(`poi_extraction`과 동일한 주입형 `LlmCallable` 패턴). 결과는 카탈로그에 존재하는 코드로 검증하고, 알 수 없는 코드·분류 미지정(`00000000`)·호출 실패는 `None`(제안 없음)으로 둔다(자동 확정 금지).
+  - **저장·노출**: `TravelPlace.category_code_suggestion`(`String(16)`) 컬럼과 migration `20260610_0006`를 추가했다. `geocode_service.apply_geocode_to_candidate`가 장소 확정 시 기존 제안이 없을 때 한 번 채우며(생략 시 Gemini 키 유무 기반 기본 선택기, 명시적 `None`이면 제안 비활성), `feature_export_service` payload의 `category_code_suggestion`이 이 값을 노출한다(기존 하드코딩 `null` 대체).
+  - **layering**: 선택기는 etl 계층에 두고 services→etl 역의존을 피했다. `feature_id` 생성은 여전히 `python-krtour-map` 책임이며, 수동 `create_place` 경로 보강은 후속으로 남긴다.
+- **검증** (`localhost:15434` PostGIS disposable DB):
+  - Alembic `upgrade head`(→`0006`), `downgrade 20260610_0005` → `upgrade` round-trip
+  - Alembic offline SQL(`0005:head --sql`)에 `category_code_suggestion` 포함 확인
+  - backend 전체 pytest → **195 passed**(신규 `test_category_suggestion` 13건, geocode/feature-export 추가 케이스 포함)
+  - `compileall`, etl 패키지 import(순환참조 없음), `git diff --check`
+
 ## 2026-06-10: T-066 범용 full/incremental feature 수집 API 추가
 
 - **담당자**: Claude

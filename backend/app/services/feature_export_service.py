@@ -133,8 +133,11 @@ def _build_payload(
             place.gemini_enriched_description if place else None
         ),
         "category_label": place.category if place else candidate.candidate_category,
-        # `python-krtour-map` 8자리 category mapping 확정 전까지 제안값은 비운다.
-        "category_code_suggestion": None,
+        # Gemini가 복사된 `python-krtour-map` 코드표에서 고른 8자리 제안값(T-070).
+        # 아직 채워지지 않았으면 None(`feature_id`/카테고리 확정은 consumer 책임).
+        "category_code_suggestion": (
+            place.category_code_suggestion if place else None
+        ),
         "longitude": place.longitude if place else None,
         "latitude": place.latitude if place else None,
         "address": {

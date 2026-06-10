@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.core.spatial import sync_place_geometry
+from app.etl import category_suggestion
 from app.etl.geocoding import (
     GeocodeDecision,
     KakaoGeocoder,
@@ -31,6 +34,9 @@ from app.services import place_service
 
 _MIN_CONTAINED_NAME_LENGTH = 4
 _MIN_CONTAINED_NAME_RATIO = 0.6
+
+# `category_code_llm` 미지정과 명시적 None(제안 비활성)을 구분하는 sentinel.
+_UNSET: Any = object()
 
 
 async def geocode_query(
@@ -90,11 +96,15 @@ async def apply_geocode_to_candidate(
     *,
     vworld: AsyncVworldClient | None = None,
     reviewer: str = "system",
+    category_code_llm: Any = _UNSET,
 ) -> TravelPlace | None:
     """평가 결과를 후보에 적용한다.
 
     matched면 중복 확인 후 장소를 확정(또는 재사용)하고, 그 외에는 `needs_review`로
     남긴다. 확정한 `TravelPlace`를 반환한다(미확정 시 None).
+
+    `category_code_llm`을 생략하면 설정의 Gemini 키 유무에 따라 기본 선택기를 쓰고
+    (키 없으면 제안 생략), 명시적으로 None을 주면 카테고리 코드 제안을 끈다(T-070).
     """
     candidate.confidence_score = decision.confidence
     candidate.provider_evidence_json = _merge_provider_evidence(
@@ -155,6 +165,24 @@ async def apply_geocode_to_candidate(
     candidate.reviewed_by = reviewer
     candidate.reviewed_at = utcnow()
     candidate.feature_export_status = FeatureExportStatus.READY.value
+
+    # 8자리 category 코드 제안: 기존 제안이 없을 때만 Gemini로 한 번 채운다(T-070).
+    selector = (
+        category_suggestion.default_category_llm()
+        if category_code_llm is _UNSET
+        else category_code_llm
+    )
+    if place.category_code_suggestion is None and selector is not None:
+        code = category_suggestion.suggest_category_code(
+            name=place.name,
+            category_label=place.category,
+            description=place.description,
+            address=place.road_address or place.official_address,
+            llm=selector,
+        )
+        if code:
+            place.category_code_suggestion = code
+
     await place_service.ensure_candidate_mapping(session, candidate, place)
     await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
     await session.commit()

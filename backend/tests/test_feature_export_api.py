@@ -118,6 +118,21 @@ async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factor
     assert item["source_record"]["raw_payload_hash"].startswith("sha256:")
 
 
+async def test_snapshot_surfaces_category_code_suggestion(client, session_factory):
+    from app.models import TravelPlace
+
+    _, place_id = await _seed_ready_candidate(session_factory)
+    async with session_factory() as s:
+        place = await s.get(TravelPlace, place_id)
+        place.category_code_suggestion = "01050100"
+        await s.commit()
+
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["place"]["category_code_suggestion"] == "01050100"
+
+
 async def test_snapshot_excludes_pending_candidate(client, session_factory):
     from app.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
 

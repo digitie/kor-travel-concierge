@@ -28,6 +28,8 @@ scheduler 단일 실행자와 서비스 계층이 import해 사용한다(ADR-13)
 """
 
 from app.etl import (
+    category_catalog,
+    category_suggestion,
     deep_research_service,
     frame_extraction,
     geocode_service,
@@ -57,6 +59,8 @@ __all__ = [
     "postprocess_service",
     "geocoding",
     "geocode_service",
+    "category_catalog",
+    "category_suggestion",
     "frame_extraction",
     "deep_research_service",
 ]
