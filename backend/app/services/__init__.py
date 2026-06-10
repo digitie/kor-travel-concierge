@@ -20,6 +20,7 @@ from app.services import (
     place_export_service,
     place_service,
     settings_service,
+    source_scan_service,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "settings_service",
     "place_service",
     "place_export_service",
+    "source_scan_service",
 ]

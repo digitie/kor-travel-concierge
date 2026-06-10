@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-10: T-063 주기 source_scan job 및 APScheduler persistent job store
+
+- **담당자**: Codex
+- **작업 내용**:
+  - **source target 스케줄 필드 추가**: `source_targets`에 `video` target type과 `scan_interval_minutes`, `last_seen_cursor`, `last_seen_video_published_at`, `api_budget_group`, `scan_failure_count`, `last_scan_error`, `last_scan_at`를 추가하고 Alembic migration `20260610_0003`을 작성했다.
+  - **주기 scan 서비스 추가**: `source_scan` handler가 active due target을 조회해 keyword/channel/playlist는 `harvest`, video는 `video_analysis` crawl_run으로 enqueue한다. 같은 target의 pending/running 작업이 있으면 중복 생성하지 않고 backoff 시각을 잡는다.
+  - **분석 실행 row 준비**: `video_analysis` handler는 T-064가 소비할 `youtube_video_analysis_runs`의 `url_summary`/`reconcile` pending row를 중복 없이 만든다.
+  - **APScheduler persistent job store 적용**: 기본 scheduler 실행 경로에서 PostgreSQL SQLAlchemyJobStore를 사용해 `crawl-run-worker`와 `source-scan-enqueue` interval job 정의를 `apscheduler_jobs`에 저장한다. 실제 작업 상태와 payload는 계속 `crawl_runs`가 source of truth다.
+  - **범용 REST API 명명 정리**: T-066 계획을 `/api/v1/features/snapshot`, `/api/v1/features/changes`, `feature_exports` ledger 기준으로 고쳐 REST path에서 특정 downstream 이름을 제거했다.
+- **검증**:
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:15434`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_scheduler_worker.py backend/tests/test_postgis_database.py` → `20 passed`
+  - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `168 passed`
+  - APScheduler SQLAlchemyJobStore smoke에서 `apscheduler_jobs_smoke` 테이블 생성 확인 후 제거
+  - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `docker compose config --quiet`
+  - `git diff --check`
+- **다음 작업**:
+  - T-064 Gemini YouTube URL 상세 요약과 transcript 비교·정리.
+
+---
+
 ## 2026-06-10: T-062 YouTube channel/video/playlist 정규 테이블 및 ingestion upsert
 
 - **담당자**: Codex
@@ -51,9 +75,9 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **DB 전환 결정 문서화**: ADR-25를 추가해 SQLite + SpatiaLite에서 PostgreSQL + PostGIS로 전환하고, `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `tripmate_agent`를 쓰는 목표를 정리했다.
-  - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `tripmate-agent`가 YouTube 장소 후보 provider가 되고, `python-krtour-map`이 `/api/v1/krtour/features/*` API를 full/incremental 방식으로 pull해 feature로 승격하는 경계를 정리했다.
-  - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, `python-krtour-map` export API, TripMate curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
-  - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, krtour API, sibling repo consumer, TripMate curated plan 검증, 통합 검증 순서로 나눴다.
+  - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `tripmate-agent`가 YouTube 장소 후보 provider가 되고, 범용 `/api/v1/features/*` API를 full/incremental 방식으로 제공해 downstream consumer가 feature로 승격하는 경계를 정리했다.
+  - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, 범용 feature export API, TripMate curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
+  - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, 범용 feature API, sibling repo consumer, TripMate curated plan 검증, 통합 검증 순서로 나눴다.
   - **아키텍처 정렬**: `docs/architecture.md` 상단에 2026-06-10 전환 기준을 추가하고, 목표 DB와 feature 공급 흐름을 최신 결정에 맞춰 보강했다.
 - **다음 작업**:
   - T-061 PostgreSQL/PostGIS 전환 및 Alembic bootstrap.

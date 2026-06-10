@@ -81,6 +81,15 @@ API_KEYS=                  # 외부 노출 배포에서 쉼표 구분 키 목록
 # 개발 기본 서버는 python-kraddr-geo의 PostgreSQL/PostGIS 서버를 재사용하되 DB는 분리
 DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent
 
+# 스케줄러 / 주기 source scan
+SCHEDULER_ENABLED=true
+SCHEDULER_JOBSTORE_ENABLED=true
+# 비우면 DATABASE_URL과 같은 DB를 sync psycopg URL로 사용
+SCHEDULER_JOBSTORE_URL=
+SCHEDULER_JOBSTORE_TABLE=apscheduler_jobs
+SOURCE_SCAN_ENABLED=true
+SOURCE_SCAN_INTERVAL_SECONDS=300
+
 # Gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_ENGINE_VERSION=gemini-2.0-flash

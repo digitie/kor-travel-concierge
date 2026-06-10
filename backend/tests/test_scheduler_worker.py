@@ -8,8 +8,18 @@ import logging
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
 
-from app.models import RunState, TravelPlace, utcnow
+from app.models import (
+    CrawlRun,
+    RunState,
+    SourceTarget,
+    TravelPlace,
+    YoutubeChannel,
+    YoutubeVideo,
+    YoutubeVideoAnalysisRun,
+    utcnow,
+)
 from app.services import crawl_run_service, settings_service
 from scheduler import worker
 
@@ -31,6 +41,21 @@ async def _boom_handler(session, run):
 async def _yielding_ok_handler(session, run):
     await asyncio.sleep(0)
     return {"handled_run_id": run.id}
+
+
+def test_scheduler_jobstore_url_converts_asyncpg_to_psycopg():
+    url = worker.scheduler_jobstore_url(
+        "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent"
+    )
+    assert url == "postgresql+psycopg://addr:addr@localhost:15434/tripmate_agent"
+
+
+def test_scheduler_jobstore_url_prefers_explicit_url():
+    url = worker.scheduler_jobstore_url(
+        "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent",
+        "postgresql+psycopg://addr:addr@localhost:15434/scheduler_jobs",
+    )
+    assert url == "postgresql+psycopg://addr:addr@localhost:15434/scheduler_jobs"
 
 
 async def test_run_once_claims_executes_and_marks_done(session, session_factory):
@@ -341,6 +366,161 @@ async def test_run_once_executes_deep_research_default_handler(
         assert "산복도로 풍경" in refreshed_place.detailed_research_content
         assert refreshed_place.gemini_enriched_description == "부산의 대표적인 산복도로 문화마을."
         assert refreshed_place.last_reviewed_at is not None
+
+
+async def test_source_scan_handler_enqueues_due_harvest(session, session_factory):
+    now = utcnow()
+    target = SourceTarget(
+        target_type="keyword",
+        source_value="서울 맛집",
+        is_active=True,
+        next_crawl_at=now - timedelta(minutes=1),
+        scan_interval_minutes=30,
+    )
+    session.add(target)
+    await session.commit()
+    await session.refresh(target)
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="source_scan",
+        source="scheduler",
+        target_type="source_targets",
+        target_id="active",
+        payload={"limit": 10, "default_interval_minutes": 60, "max_videos": 3},
+    )
+
+    executed_id = await worker.run_once(
+        session_factory,
+        heartbeat_interval_seconds=999,
+    )
+
+    assert executed_id == run.id
+    refreshed_scan = await _fresh_run(session_factory, run.id)
+    assert refreshed_scan.state == RunState.DONE
+    async with session_factory() as verify_session:
+        harvest = (
+            await verify_session.execute(
+                select(CrawlRun).where(
+                    CrawlRun.job_type == "harvest",
+                    CrawlRun.target_type == "keyword",
+                    CrawlRun.target_id == "서울 맛집",
+                )
+            )
+        ).scalar_one()
+        refreshed_target = await verify_session.get(SourceTarget, target.id)
+    assert harvest.state == RunState.PENDING
+    assert '"max_videos": 3' in (harvest.payload_json or "")
+    assert refreshed_target.next_crawl_at is not None
+    assert refreshed_target.next_crawl_at > now
+    assert refreshed_target.scan_failure_count == 0
+
+
+async def test_source_scan_skips_existing_active_run(session, session_factory):
+    now = utcnow()
+    target = SourceTarget(
+        target_type="playlist",
+        source_value="PL123",
+        is_active=True,
+        next_crawl_at=now - timedelta(minutes=1),
+    )
+    session.add(target)
+    await session.commit()
+    scan = await crawl_run_service.create_run(
+        session,
+        job_type="source_scan",
+        source="scheduler",
+        target_type="source_targets",
+        target_id="active",
+        payload={"duplicate_backoff_minutes": 5},
+    )
+    await crawl_run_service.create_run(
+        session,
+        job_type="harvest",
+        source="scheduler",
+        target_type="playlist",
+        target_id="PL123",
+        payload={"playlist_id": "PL123"},
+    )
+
+    executed_id = await worker.run_once(
+        session_factory,
+        heartbeat_interval_seconds=999,
+    )
+
+    assert executed_id == scan.id
+    async with session_factory() as verify_session:
+        runs = (
+            await verify_session.execute(
+                select(CrawlRun).where(
+                    CrawlRun.job_type == "harvest",
+                    CrawlRun.target_type == "playlist",
+                    CrawlRun.target_id == "PL123",
+                )
+            )
+        ).scalars().all()
+        refreshed_target = await verify_session.get(SourceTarget, target.id)
+    assert len(runs) == 1
+    assert refreshed_target.next_crawl_at is not None
+    assert refreshed_target.next_crawl_at > now
+
+
+async def test_video_analysis_handler_creates_pending_analysis_runs(session, session_factory):
+    session.add(YoutubeChannel(channel_id="UC1", title="여행채널"))
+    session.add(
+        YoutubeVideo(
+            video_id="v1",
+            title="서울 여행",
+            url="https://youtu.be/v1",
+            channel_id="UC1",
+        )
+    )
+    await session.commit()
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="video_analysis",
+        source="scheduler",
+        target_type="video",
+        target_id="v1",
+        payload={
+            "video_id": "v1",
+            "analysis_run_types": ["url_summary", "reconcile"],
+        },
+    )
+
+    executed_id = await worker.run_once(
+        session_factory,
+        heartbeat_interval_seconds=999,
+    )
+
+    assert executed_id == run.id
+    refreshed = await _fresh_run(session_factory, run.id)
+    assert refreshed.state == RunState.DONE
+    assert "created_analysis_runs" in (refreshed.result_json or "")
+    async with session_factory() as verify_session:
+        analysis_runs = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == "v1"
+                )
+            )
+        ).scalars().all()
+    assert {item.run_type for item in analysis_runs} == {"url_summary", "reconcile"}
+    assert {item.state for item in analysis_runs} == {"pending"}
+
+
+async def test_enqueue_source_scan_once_deduplicates(session_factory):
+    first_id = await worker.enqueue_source_scan_once(session_factory)
+    second_id = await worker.enqueue_source_scan_once(session_factory)
+
+    assert first_id is not None
+    assert second_id is None
+    async with session_factory() as session:
+        runs = (
+            await session.execute(
+                select(CrawlRun).where(CrawlRun.job_type == "source_scan")
+            )
+        ).scalars().all()
+    assert len(runs) == 1
 
 
 async def test_load_payload_rejects_invalid_json(session):

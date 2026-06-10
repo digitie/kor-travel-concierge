@@ -114,6 +114,14 @@ class Settings(BaseSettings):
     SCHEDULER_HEARTBEAT_INTERVAL_SECONDS: int = 30
     SCHEDULER_STALE_THRESHOLD_SECONDS: int = 300
     SCHEDULER_MAX_RETRIES: int = 3
+    SCHEDULER_JOBSTORE_ENABLED: bool = True
+    SCHEDULER_JOBSTORE_URL: str = ""
+    SCHEDULER_JOBSTORE_TABLE: str = "apscheduler_jobs"
+    SOURCE_SCAN_ENABLED: bool = True
+    SOURCE_SCAN_INTERVAL_SECONDS: int = 300
+    SOURCE_SCAN_BATCH_SIZE: int = 20
+    SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES: int = 10_080
+    SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES: int = 15
 
     @property
     def api_keys(self) -> list[str]:
