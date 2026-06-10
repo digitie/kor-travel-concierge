@@ -227,17 +227,26 @@ payload checksum 비교가 어려우므로 별도 테이블로 둔다. `python-k
 - `source_channel_id`
 - `source_playlist_id`
 - `analysis_run_id`
-- `source_kind`: `keyword`, `channel`, `playlist`, `video`
-- `provider_evidence_json`: VWorld/Kakao/Naver/Google 보강 근거 JSONB
+- `source_kind`: `transcript`, `url_summary`, `reconcile`, `manual`, `geocoding`
+- `provider_evidence_json`: transcript, reconcile, VWorld/Kakao/Naver 보강 근거 JSONB
 - `feature_export_status`: `pending`, `ready`, `exported`, `rejected`
-- `feature_exported_at`
-- `updated_at` 기반 증분 조회가 안정적이도록 `feature_exports`와 함께
-  갱신한다.
 
 `video_place_mappings`에는 다음을 추가한다.
 
-- `source_playlist_id`: 플레이리스트 수집에서 유래한 경우 채움
-- `analysis_run_id`: 어떤 분석 결과에서 만든 매핑인지 추적
+- `source_channel_id`
+- `source_playlist_id`
+- `analysis_run_id`
+- `source_kind`
+- `provider_evidence_json`
+- `feature_export_status`
+
+T-065 구현은 위 컬럼을 `extracted_place_candidates`와 `video_place_mappings` 양쪽에
+추가했다. transcript 후보 생성 시 영상 channel과 첫 playlist provenance를 채우고,
+지오코딩 결정은 `provider_evidence_json.geocoding`에 구조화해 저장한다. 사람이
+후보를 확정하거나 자동 지오코딩이 확정한 매핑은 `ready`, 검수 대기 후보는
+`pending`, 제외 후보는 `rejected`로 둔다. Google Places API 보강과
+`python-krtour-map` 8자리 category mapping은 과금·저장 정책과 mapping 표 확인 전까지
+별도 작업으로 남긴다.
 
 ## 5. 주기 스캔 job
 

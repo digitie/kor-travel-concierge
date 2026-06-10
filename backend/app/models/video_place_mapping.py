@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
+from app.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
 
 
 class VideoPlaceMapping(TimestampMixin, Base):
@@ -20,6 +24,24 @@ class VideoPlaceMapping(TimestampMixin, Base):
         ForeignKey("youtube_videos.video_id", ondelete="NO ACTION"),
         nullable=False,
         index=True,
+    )
+    source_channel_id: Mapped[str | None] = mapped_column(
+        ForeignKey("youtube_channels.channel_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    source_playlist_id: Mapped[str | None] = mapped_column(
+        ForeignKey("youtube_playlists.playlist_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    analysis_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("youtube_video_analysis_runs.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=EvidenceSourceKind.TRANSCRIPT.value
     )
     place_id: Mapped[int] = mapped_column(
         ForeignKey("travel_places.place_id", ondelete="NO ACTION"),
@@ -35,6 +57,15 @@ class VideoPlaceMapping(TimestampMixin, Base):
     speaker_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
     timestamp_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    provider_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    feature_export_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=FeatureExportStatus.PENDING.value,
+        index=True,
+    )
     frame_asset_id: Mapped[int | None] = mapped_column(
         ForeignKey("media_assets.id", ondelete="NO ACTION"),
         nullable=True,

@@ -472,8 +472,12 @@ enqueue한다. APScheduler의 persistent job store는 job 정의와 next run tim
 
 기존 `youtube_videos`는 channel FK, canonical URL, duration, thumbnail,
 Gemini URL summary, transcript summary, reconciled summary를 갖도록 보강한다.
-T-065에서는 `extracted_place_candidates`와 `video_place_mappings`에
-`source_channel_id`, `source_playlist_id`, `analysis_run_id`를 연결한다.
+T-065 이후 `extracted_place_candidates`와 `video_place_mappings`에는
+`source_channel_id`, `source_playlist_id`, `analysis_run_id`, `source_kind`,
+`provider_evidence_json`, `feature_export_status`를 둔다. transcript 후보 생성은
+영상 channel과 playlist provenance를 기록하고, 지오코딩 결정은
+`provider_evidence_json.geocoding`에 VWorld/Kakao/Naver 후보와 선택 결과를
+저장한다.
 
 ### 6.12 범용 feature export 상태 (T-066 예정)
 

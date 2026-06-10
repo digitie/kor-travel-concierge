@@ -20,7 +20,13 @@ from app.etl.geocoding import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from vworld import AsyncVworldClient
 
-from app.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, utcnow
+from app.models import (
+    ExtractedPlaceCandidate,
+    FeatureExportStatus,
+    MatchStatus,
+    TravelPlace,
+    utcnow,
+)
 from app.services import place_service
 
 _MIN_CONTAINED_NAME_LENGTH = 4
@@ -91,10 +97,15 @@ async def apply_geocode_to_candidate(
     남긴다. 확정한 `TravelPlace`를 반환한다(미확정 시 None).
     """
     candidate.confidence_score = decision.confidence
+    candidate.provider_evidence_json = _merge_provider_evidence(
+        candidate.provider_evidence_json,
+        geocoding=_geocode_evidence(decision),
+    )
 
     if decision.status != "matched" or decision.candidate is None:
         candidate.match_status = MatchStatus.NEEDS_REVIEW
         candidate.review_note = decision.reason
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
         await session.commit()
         return None
 
@@ -113,6 +124,7 @@ async def apply_geocode_to_candidate(
         ):
             candidate.match_status = MatchStatus.NEEDS_REVIEW
             candidate.review_note = "nearby_place_name_mismatch"
+            candidate.feature_export_status = FeatureExportStatus.PENDING.value
             await session.commit()
             return None
     else:
@@ -121,6 +133,10 @@ async def apply_geocode_to_candidate(
             rev = await reverse_with_vworld(vworld, c.latitude, c.longitude)
             road = road or rev.get("road_address")
             official = official or rev.get("parcel_address")
+            candidate.provider_evidence_json = _merge_provider_evidence(
+                candidate.provider_evidence_json,
+                geocoding=_geocode_evidence(decision, reverse_vworld=rev),
+            )
         place = TravelPlace(
             name=candidate.ai_place_name,
             latitude=c.latitude,
@@ -138,6 +154,7 @@ async def apply_geocode_to_candidate(
     candidate.matched_place_id = place.place_id
     candidate.reviewed_by = reviewer
     candidate.reviewed_at = utcnow()
+    candidate.feature_export_status = FeatureExportStatus.READY.value
     await place_service.ensure_candidate_mapping(session, candidate, place)
     await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
     await session.commit()
@@ -168,3 +185,42 @@ def _is_specific_contained_name(left: str, right: str) -> bool:
 
 def _normalize_name(value: str | None) -> str:
     return "".join((value or "").casefold().split())
+
+
+def _geocode_evidence(
+    decision: GeocodeDecision,
+    *,
+    reverse_vworld: dict[str, str | None] | None = None,
+) -> dict:
+    selected = None
+    if decision.candidate is not None:
+        selected = {
+            "source": decision.candidate.source,
+            "place_name": decision.candidate.place_name,
+            "road_address": decision.candidate.road_address,
+            "official_address": decision.candidate.official_address,
+            "category": decision.candidate.category,
+            "latitude": decision.candidate.latitude,
+            "longitude": decision.candidate.longitude,
+        }
+    return {
+        "decision": {
+            "status": decision.status,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+            "candidate_count": decision.candidate_count,
+        },
+        "selected_candidate": selected,
+        "provider_candidates": decision.provider_evidence,
+        "reverse_vworld": reverse_vworld,
+    }
+
+
+def _merge_provider_evidence(
+    existing: dict | None,
+    *,
+    geocoding: dict,
+) -> dict:
+    merged = dict(existing or {})
+    merged["geocoding"] = geocoding
+    return merged

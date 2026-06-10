@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
+from app.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
 
 
 class MatchStatus(str, Enum):
@@ -32,6 +35,24 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    source_channel_id: Mapped[str | None] = mapped_column(
+        ForeignKey("youtube_channels.channel_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    source_playlist_id: Mapped[str | None] = mapped_column(
+        ForeignKey("youtube_playlists.playlist_id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    analysis_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("youtube_video_analysis_runs.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True,
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=EvidenceSourceKind.TRANSCRIPT.value
+    )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     ai_place_name: Mapped[str] = mapped_column(String(255), nullable=False)
     speaker_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -48,6 +69,15 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         index=True,
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    provider_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    feature_export_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=FeatureExportStatus.PENDING.value,
+        index=True,
+    )
     # 검수 메타데이터
     reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(

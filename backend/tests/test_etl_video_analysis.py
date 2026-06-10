@@ -7,6 +7,7 @@ import json
 from app.etl import video_analysis_service
 from app.models import (
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     VideoAnalysisRunState,
     VideoAnalysisRunType,
@@ -150,7 +151,11 @@ async def test_run_reconcile_analysis_marks_conflict_candidate_needs_review(sess
     assert run.prompt_version == video_analysis_service.RECONCILE_PROMPT_VERSION
     assert video.reconciled_summary == "URL 분석은 광장시장, 자막 후보는 망원시장이라 충돌한다."
     assert candidate.match_status == MatchStatus.NEEDS_REVIEW
+    assert candidate.analysis_run_id == run.id
+    assert candidate.feature_export_status == FeatureExportStatus.PENDING
     assert candidate.review_note == "시장명이 서로 달라 사람 검수가 필요하다."
+    assert candidate.provider_evidence_json["reconcile"]["analysis_run_id"] == run.id
+    assert candidate.provider_evidence_json["reconcile"]["decision"] == "conflict"
 
 
 def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):

@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -24,8 +25,11 @@ from app.etl.transcript import TranscriptResult
 from app.models import (
     AssetType,
     CrawlStatus,
+    EvidenceSourceKind,
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
+    YoutubePlaylistVideo,
     YoutubeVideo,
 )
 
@@ -132,9 +136,13 @@ async def summarize_video(
 
     # 4) 추출 장소를 needs_review 후보로 생성 (자동 확정 금지)
     created = 0
+    source_playlist_id = await _source_playlist_id_for_video(session, video.video_id)
     for poi in result.places:
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
+            source_channel_id=video.channel_id,
+            source_playlist_id=source_playlist_id,
+            source_kind=EvidenceSourceKind.TRANSCRIPT.value,
             source_text=poi.gemini_enriched_description or poi.name,
             ai_place_name=poi.name,
             speaker_note=poi.speaker_note,
@@ -143,6 +151,18 @@ async def summarize_video(
             timestamp_end=poi.timestamp_end,
             candidate_category=poi.category,
             match_status=MatchStatus.NEEDS_REVIEW,
+            provider_evidence_json={
+                "transcript": {
+                    "source": transcript.source,
+                    "asset_id": asset.id,
+                    "summary": result.summary,
+                    "timestamp_start": poi.timestamp_start,
+                    "timestamp_end": poi.timestamp_end,
+                    "speaker_note": poi.speaker_note,
+                    "location_hint": poi.location_hint,
+                }
+            },
+            feature_export_status=FeatureExportStatus.PENDING.value,
         )
         session.add(candidate)
         created += 1
@@ -162,3 +182,16 @@ async def summarize_video(
         "transcript_asset_id": asset.id,
         "candidates": created,
     }
+
+
+async def _source_playlist_id_for_video(
+    session: AsyncSession,
+    video_id: str,
+) -> str | None:
+    result = await session.execute(
+        select(YoutubePlaylistVideo.playlist_id)
+        .where(YoutubePlaylistVideo.video_id == video_id)
+        .order_by(YoutubePlaylistVideo.first_seen_at, YoutubePlaylistVideo.playlist_id)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()

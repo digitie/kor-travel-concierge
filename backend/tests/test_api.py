@@ -88,6 +88,7 @@ async def test_health(client):
 async def test_destinations_reflect_db(client, session_factory):
     from app.models import (
         ExtractedPlaceCandidate,
+        FeatureExportStatus,
         MatchStatus,
         TravelPlace,
         VideoPlaceMapping,
@@ -143,6 +144,9 @@ async def test_destinations_reflect_db(client, session_factory):
     unmatched = await client.get("/api/v1/destinations/unmatched")
     assert unmatched.status_code == 200
     assert any(u["ai_place_name"] == "검수대상" for u in unmatched.json())
+    unmatched_item = next(u for u in unmatched.json() if u["ai_place_name"] == "검수대상")
+    assert unmatched_item["source_kind"] == "transcript"
+    assert unmatched_item["feature_export_status"] == FeatureExportStatus.PENDING
 
 
 async def test_destination_export_formats(client, session_factory):
@@ -286,7 +290,13 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
 
 
 async def test_resolve_candidate_and_deep_research(client, session_factory):
-    from app.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+    from app.models import (
+        ExtractedPlaceCandidate,
+        FeatureExportStatus,
+        MatchStatus,
+        TravelPlace,
+        YoutubeVideo,
+    )
 
     async with session_factory() as s:
         place = TravelPlace(name="해운대", latitude=35.1587, longitude=129.1604)
@@ -310,6 +320,7 @@ async def test_resolve_candidate_and_deep_research(client, session_factory):
     )
     assert resolved.status_code == 200
     assert resolved.json()["candidate"]["match_status"] == MatchStatus.USER_CORRECTED
+    assert resolved.json()["candidate"]["feature_export_status"] == FeatureExportStatus.READY
 
     research = await client.post(f"/api/v1/destinations/{place.place_id}/deep-research", json={})
     assert research.status_code == 200
