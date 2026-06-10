@@ -146,3 +146,36 @@ def default_category_llm() -> LlmCallable | None:
     if not get_settings().GEMINI_API_KEY:
         return None
     return make_gemini_category_llm()
+
+
+# 장소 컨텍스트로 8자리 코드를 고르는 selector. services 계층(예: place_service)이
+# etl을 직접 import하지 않고 주입받아 쓰도록 callable로 노출한다.
+CategoryCodeSelector = Callable[..., "str | None"]
+
+
+def make_default_selector() -> CategoryCodeSelector | None:
+    """설정 기반 기본 카테고리 코드 selector를 만든다.
+
+    Gemini 키가 없으면 None(제안 비활성). 반환 callable은
+    `(name, category_label, description, address)` 키워드로 호출한다.
+    """
+    llm = default_category_llm()
+    if llm is None:
+        return None
+
+    def selector(
+        *,
+        name: str,
+        category_label: str | None = None,
+        description: str | None = None,
+        address: str | None = None,
+    ) -> str | None:
+        return suggest_category_code(
+            name=name,
+            category_label=category_label,
+            description=description,
+            address=address,
+            llm=llm,
+        )
+
+    return selector

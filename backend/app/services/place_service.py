@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -431,9 +432,15 @@ async def resolve_candidate(
     review_note: str | None = None,
     place_id: int | None = None,
     place_data: dict[str, Any] | None = None,
+    category_code_selector: Callable[..., str | None] | None = None,
     commit: bool = True,
 ) -> tuple[ExtractedPlaceCandidate, TravelPlace | None, VideoPlaceMapping | None]:
-    """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다."""
+    """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다.
+
+    `category_code_selector`를 주입하면 신규 장소(`create_place`)에 8자리 category
+    코드 제안값을 채운다. services 계층이 etl을 직접 import하지 않도록, 실제 Gemini
+    선택기는 호출자(routes/MCP)가 주입한다(T-070).
+    """
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
     if candidate is None:
         raise ValueError(f"candidate not found: {candidate_id}")
@@ -475,6 +482,15 @@ async def resolve_candidate(
         session.add(place)
         await session.flush()
         await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
+        if category_code_selector is not None:
+            code = category_code_selector(
+                name=place.name,
+                category_label=place.category,
+                description=place.description,
+                address=place.road_address or place.official_address,
+            )
+            if code:
+                place.category_code_suggestion = code
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value
