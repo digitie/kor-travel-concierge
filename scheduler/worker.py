@@ -28,11 +28,43 @@ from app.etl import deep_research_service
 from app.etl.pipeline import run_harvest
 from app.etl.postprocess_service import process_harvest_videos
 from app.etl.youtube_client import YouTubeClient
-from app.models import CrawlRun
-from app.services import crawl_run_service, place_service
+from app.models import (
+    CrawlRun,
+    VideoAnalysisRunState,
+    VideoAnalysisRunType,
+    YoutubeVideo,
+    YoutubeVideoAnalysisRun,
+)
+from app.services import crawl_run_service, place_service, source_scan_service
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
+
+
+def scheduler_jobstore_url(database_url: str, explicit_url: str | None = None) -> str:
+    """APScheduler SQLAlchemyJobStore용 sync DB URL을 반환한다."""
+    if explicit_url:
+        return explicit_url
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return database_url
+
+
+def should_use_persistent_jobstore(
+    session_factory: async_sessionmaker[AsyncSession],
+    handlers: Mapping[str, JobHandler] | None,
+) -> bool:
+    """기본 운영 실행 경로에서만 persistent APScheduler job store를 사용한다."""
+    settings = get_settings()
+    return (
+        settings.SCHEDULER_JOBSTORE_ENABLED
+        and session_factory is async_session_factory
+        and handlers is None
+    )
 
 
 def load_payload(run: CrawlRun) -> dict[str, Any]:
@@ -160,9 +192,149 @@ async def deep_research_handler(session: AsyncSession, run: CrawlRun) -> dict[st
     )
 
 
+def _int_from_payload(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
+    raw = payload.get(key, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    if maximum is not None:
+        value = min(value, maximum)
+    return max(minimum, value)
+
+
+async def source_scan_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
+    """active source target을 스캔해 후속 작업을 enqueue한다."""
+    payload = load_payload(run)
+    settings = get_settings()
+    await crawl_run_service.append_status_log(
+        session,
+        run.id,
+        "주기 수집 대상을 확인 중입니다.",
+        progress=0.2,
+    )
+    summary = await source_scan_service.scan_due_targets(
+        session,
+        limit=_int_from_payload(
+            payload,
+            "limit",
+            settings.SOURCE_SCAN_BATCH_SIZE,
+            maximum=100,
+        ),
+        default_interval_minutes=_int_from_payload(
+            payload,
+            "default_interval_minutes",
+            settings.SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES,
+            maximum=525_600,
+        ),
+        duplicate_backoff_minutes=_int_from_payload(
+            payload,
+            "duplicate_backoff_minutes",
+            settings.SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES,
+            maximum=1_440,
+        ),
+        max_videos=_max_videos_from_payload(payload),
+        api_budget_group=(
+            str(payload["api_budget_group"]) if payload.get("api_budget_group") else None
+        ),
+    )
+    await crawl_run_service.append_status_log(
+        session,
+        run.id,
+        f"source target {summary['scanned_targets']}건을 확인하고 "
+        f"후속 작업 {summary['enqueued_runs']}건을 등록했습니다.",
+        progress=0.75,
+    )
+    return summary
+
+
+def _analysis_run_type_values(payload: Mapping[str, Any]) -> list[str]:
+    raw = payload.get("analysis_run_types") or [VideoAnalysisRunType.URL_SUMMARY]
+    if not isinstance(raw, list):
+        raw = [raw]
+    allowed = {item.value for item in VideoAnalysisRunType}
+    values: list[str] = []
+    for item in raw:
+        value = str(item)
+        if value in allowed and value not in values:
+            values.append(value)
+    return values or [VideoAnalysisRunType.URL_SUMMARY.value]
+
+
+async def _has_analysis_run(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    run_type: str,
+) -> bool:
+    from sqlalchemy import select
+
+    stmt = (
+        select(YoutubeVideoAnalysisRun.id)
+        .where(
+            YoutubeVideoAnalysisRun.video_id == video_id,
+            YoutubeVideoAnalysisRun.run_type == run_type,
+            YoutubeVideoAnalysisRun.state.in_(
+                [
+                    VideoAnalysisRunState.PENDING,
+                    VideoAnalysisRunState.RUNNING,
+                    VideoAnalysisRunState.DONE,
+                ]
+            ),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
+    """T-064 처리기가 소비할 영상 분석 실행 row를 보장한다."""
+    payload = load_payload(run)
+    video_id = str(payload.get("video_id") or run.target_id or "")
+    if run.target_type != "video" or not video_id:
+        raise ValueError("video_analysis 작업에는 target_type=video와 video_id가 필요하다")
+    video = await session.get(YoutubeVideo, video_id)
+    if video is None:
+        raise ValueError(f"video not found: {video_id}")
+
+    created_run_ids: list[int] = []
+    skipped = 0
+    for run_type in _analysis_run_type_values(payload):
+        if await _has_analysis_run(session, video_id=video_id, run_type=run_type):
+            skipped += 1
+            continue
+        analysis_run = YoutubeVideoAnalysisRun(
+            video_id=video_id,
+            run_type=run_type,
+            state=VideoAnalysisRunState.PENDING,
+            prompt_version="t063-placeholder",
+        )
+        session.add(analysis_run)
+        await session.flush()
+        created_run_ids.append(analysis_run.id)
+    await session.commit()
+    return {
+        "video_id": video_id,
+        "created_analysis_runs": len(created_run_ids),
+        "skipped_existing_analysis_runs": skipped,
+        "analysis_run_ids": created_run_ids,
+        "note": "Gemini URL 요약과 transcript 비교 실행은 T-064에서 구현한다.",
+    }
+
+
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "harvest": harvest_handler,
     "deep_research": deep_research_handler,
+    "source_scan": source_scan_handler,
+    "video_analysis": video_analysis_handler,
 }
 
 
@@ -284,17 +456,56 @@ async def worker_loop(
         raise RuntimeError("APScheduler가 설치되어 있지 않다") from exc
 
     settings = get_settings()
-    scheduler = AsyncIOScheduler(timezone=timezone.utc)
+    use_persistent_jobstore = should_use_persistent_jobstore(session_factory, handlers)
+    scheduler_kwargs: dict[str, Any] = {"timezone": timezone.utc}
+    if use_persistent_jobstore:
+        try:
+            from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "APScheduler persistent job store에는 SQLAlchemy jobstore 의존성이 필요하다"
+            ) from exc
+        scheduler_kwargs["jobstores"] = {
+            "default": SQLAlchemyJobStore(
+                url=scheduler_jobstore_url(
+                    settings.DATABASE_URL,
+                    settings.SCHEDULER_JOBSTORE_URL or None,
+                ),
+                tablename=settings.SCHEDULER_JOBSTORE_TABLE,
+            )
+        }
+    scheduler = AsyncIOScheduler(**scheduler_kwargs)
+    run_once_kwargs = (
+        {}
+        if use_persistent_jobstore
+        else {"session_factory": session_factory, "handlers": handlers}
+    )
     scheduler.add_job(
         run_once,
         "interval",
         seconds=settings.SCHEDULER_POLL_INTERVAL_SECONDS,
         next_run_time=datetime.now(timezone.utc),
-        kwargs={"session_factory": session_factory, "handlers": handlers},
+        kwargs=run_once_kwargs,
         id="crawl-run-worker",
         max_instances=1,
         coalesce=True,
+        replace_existing=True,
     )
+    if settings.SOURCE_SCAN_ENABLED:
+        source_scan_kwargs = (
+            {} if use_persistent_jobstore else {"session_factory": session_factory}
+        )
+        scheduler.add_job(
+            enqueue_source_scan_once,
+            "interval",
+            seconds=settings.SOURCE_SCAN_INTERVAL_SECONDS,
+            next_run_time=datetime.now(timezone.utc),
+            kwargs=source_scan_kwargs,
+            id="source-scan-enqueue",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     scheduler.start()
 
     try:
@@ -317,6 +528,25 @@ async def amain() -> None:
         f"max_retries={settings.SCHEDULER_MAX_RETRIES})"
     )
     await worker_loop()
+
+
+async def enqueue_source_scan_once(
+    session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
+) -> int | None:
+    """active source target scan 작업을 중복 없이 enqueue한다."""
+    settings = get_settings()
+    payload = {
+        "limit": settings.SOURCE_SCAN_BATCH_SIZE,
+        "default_interval_minutes": settings.SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES,
+        "duplicate_backoff_minutes": settings.SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES,
+        "max_videos": settings.YOUTUBE_MAX_VIDEOS_PER_RUN,
+    }
+    async with session_factory() as session:
+        run, created = await source_scan_service.ensure_source_scan_run(
+            session,
+            payload=payload,
+        )
+        return run.id if created and run is not None else None
 
 
 def main() -> None:

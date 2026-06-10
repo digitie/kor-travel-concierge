@@ -54,6 +54,7 @@ def test_bucket_routing():
 
 
 async def test_store_and_record(session):
+    await _make_video(session)
     store = InMemoryMediaStore()
     asset = await store_and_record(
         session,
@@ -84,6 +85,7 @@ async def test_store_and_record(session):
 
 
 async def test_store_and_record_applies_configured_prefix(session, monkeypatch):
+    await _make_video(session)
     monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "krtour-map")
     monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "features")
     get_settings.cache_clear()

@@ -4,3 +4,5 @@
 
 # APScheduler 단일 실행자 (ADR-13)
 apscheduler>=3.10.4
+# APScheduler SQLAlchemyJobStore는 sync PostgreSQL driver가 필요하다.
+psycopg[binary]>=3.1.18

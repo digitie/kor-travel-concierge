@@ -73,7 +73,7 @@ TripMate의 `app.trip_day_pois`는 `feature_id TEXT`와 `feature_snapshot JSONB`
 - PostgreSQL은 FK 컬럼을 자동으로 인덱싱하지 않는다. 새 FK와 기존 FK 승격 컬럼은
   migration에서 명시 인덱스를 함께 만든다.
 - 증분 API가 자주 조회하는 상태 + 시간 범위 조건은 단일 컬럼 인덱스 여러 개가
-  아니라 composite index로 만든다. 예: `(krtour_export_status, updated_at, id)`,
+  아니라 composite index로 만든다. 예: `(feature_export_status, updated_at, id)`,
   `(state, next_crawl_at, id)`, `(video_id, run_type, state)`.
 - JSONB는 payload 보존용과 조회용을 구분한다. `provider_evidence_json`,
   `summary_json`, export payload에서 containment 검색이 필요한 필드에는 GIN 인덱스
@@ -90,7 +90,7 @@ TripMate의 `app.trip_day_pois`는 `feature_id TEXT`와 `feature_snapshot JSONB`
 - [ ] `backend/app/core/database.py`에서 SQLite connect event와 SpatiaLite 초기화 제거.
 - [ ] `backend/app/core/spatial.py`를 PostGIS DDL/쿼리 helper로 교체하거나 제거.
 - [ ] `TravelPlace.geom` 또는 migration DDL로 `geometry(Point, 4326)` 생성.
-- [ ] FK 컬럼, `source_scan` 조회 조건, `krtour` export cursor 조건의 인덱스를
+- [ ] FK 컬럼, `source_scan` 조회 조건, feature export cursor 조건의 인덱스를
   migration에 함께 작성.
 - [ ] `place_service`의 bbox + Haversine 후보 검색을 `ST_DWithin`로 교체.
 - [ ] `crawl_runs` claim은 PostgreSQL `UPDATE ... WHERE state='pending' RETURNING`
@@ -174,11 +174,12 @@ PK는 `(playlist_id, video_id)`로 둔다.
 | `started_at` / `finished_at` | 실행 시각 |
 | `last_error` | 실패 원인 |
 
-#### `krtour_feature_exports`
+#### `feature_exports`
 
-`python-krtour-map` pull API의 안정적인 full/incremental cursor와 tombstone을 위한
-export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject/tombstone
-재전송과 payload checksum 비교가 어려우므로 별도 테이블로 둔다.
+범용 feature pull API의 안정적인 full/incremental cursor와 tombstone을 위한 export
+ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject/tombstone 재전송과
+payload checksum 비교가 어려우므로 별도 테이블로 둔다. `python-krtour-map`은 이
+범용 API를 가져가는 첫 consumer다.
 
 | 컬럼 | 설명 |
 | --- | --- |
@@ -228,9 +229,9 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
 - `analysis_run_id`
 - `source_kind`: `keyword`, `channel`, `playlist`, `video`
 - `provider_evidence_json`: VWorld/Kakao/Naver/Google 보강 근거 JSONB
-- `krtour_export_status`: `pending`, `ready`, `exported`, `rejected`
-- `krtour_exported_at`
-- `updated_at` 기반 증분 조회가 안정적이도록 `krtour_feature_exports`와 함께
+- `feature_export_status`: `pending`, `ready`, `exported`, `rejected`
+- `feature_exported_at`
+- `updated_at` 기반 증분 조회가 안정적이도록 `feature_exports`와 함께
   갱신한다.
 
 `video_place_mappings`에는 다음을 추가한다.
@@ -241,7 +242,7 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
 ## 5. 주기 스캔 job
 
 새 job type은 `source_scan`으로 둔다. 이 job은 직접 Gemini 분석까지 수행하지 않고,
-활성 `source_targets` 또는 새 source 테이블을 훑어 필요한 `harvest`/`analyze`
+활성 `source_targets` 또는 새 source 테이블을 훑어 필요한 `harvest`/`video_analysis`
 작업을 생성한다.
 
 `source_targets`는 현재 `target_type`, `source_value`, `display_name`, `is_active`,
@@ -251,11 +252,13 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
 - `scan_interval_minutes`
 - `last_seen_cursor`
 - `last_seen_video_published_at`
-- `failure_count`
-- `last_error`
 - `api_budget_group`
+- `scan_failure_count`
+- `last_scan_error`
+- `last_scan_at`
 
-`source_scan` 조회는 `(is_active, next_crawl_at, id)` composite index를 사용한다.
+`source_scan` 조회는 `(is_active, next_crawl_at, id)`와
+`(api_budget_group, is_active, next_crawl_at, id)` composite index를 사용한다.
 여러 scheduler가 동시에 실행될 가능성을 열어 둘 경우에는 PostgreSQL claim 쿼리에
 `FOR UPDATE SKIP LOCKED`를 적용한다.
 
@@ -269,7 +272,9 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
 6. 새 영상 또는 메타데이터 변경 영상은 `youtube_videos`,
    `youtube_channels`, `youtube_playlists`, `youtube_playlist_videos`에 upsert한다.
 7. 분석이 필요한 영상에 `video_analysis` 또는 기존 `harvest` 후처리 job을 생성한다.
-8. target의 `last_crawled_at`, `next_crawl_at`, 실패 카운트를 갱신한다.
+8. target의 `last_scan_at`, `next_crawl_at`, scan 실패 카운트를 갱신한다.
+   실제 수집 watermark인 `last_crawled_at`은 후속 `harvest` 성공 경로에서만
+   갱신해 증분 수집 기준이 scan enqueue만으로 앞당겨지지 않게 한다.
 
 재시도와 stale 처리는 기존 `crawl_runs` 정책을 재사용한다.
 
@@ -286,7 +291,7 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
 5. 세 번째 Gemini 호출 또는 deterministic merge 단계에서 transcript 결과와 URL
    summary 결과를 비교한다.
 6. 불일치가 있으면 자동 확정하지 않고 `needs_review` 후보로 남긴다.
-7. 일치하거나 충분히 높은 신뢰도의 후보만 `krtour_export_status = ready`로 둔다.
+7. 일치하거나 충분히 높은 신뢰도의 후보만 `feature_export_status = ready`로 둔다.
 
 ### 6.2 비교 기준
 
@@ -297,15 +302,17 @@ export ledger다. 후보 테이블의 `updated_at`만 직접 노출하면 reject
   8자리 category mapping 비교
 - 영상 근거: transcript timestamp와 Gemini URL evidence가 같은 구간을 가리키는지
 
-## 7. `python-krtour-map` 수집 API
+## 7. 범용 feature 수집 API
 
-`python-krtour-map`이 주기적으로 긁어갈 REST API를 `tripmate-agent`에 추가한다.
-외부 호출이므로 `/api/v1`와 `X-API-Key` 인증을 그대로 사용한다.
+downstream consumer가 주기적으로 긁어갈 REST API를 `tripmate-agent`에 추가한다.
+REST path에는 특정 consumer 이름을 넣지 않는다. `python-krtour-map`은
+이 범용 API를 가져가는 첫 consumer다. 외부 호출이므로 `/api/v1`와 `X-API-Key`
+인증을 그대로 사용한다.
 
 ### 7.1 Full snapshot
 
 ```http
-GET /api/v1/krtour/features/snapshot?cursor=<opaque>&limit=200
+GET /api/v1/features/snapshot?cursor=<opaque>&limit=200
 X-API-Key: ...
 ```
 
@@ -376,12 +383,12 @@ X-API-Key: ...
 ### 7.2 Incremental changes
 
 ```http
-GET /api/v1/krtour/features/changes?cursor=<opaque>&limit=200
+GET /api/v1/features/changes?cursor=<opaque>&limit=200
 X-API-Key: ...
 ```
 
 증분 cursor는 opaque string으로 둔다. 내부적으로는 `(updated_at, export_id)` 또는
-별도 `krtour_feature_exports.sequence`를 사용한다. API 소비자는 cursor 내용을
+별도 `feature_exports.sequence`를 사용한다. API 소비자는 cursor 내용을
 해석하지 않는다.
 
 증분 응답은 `operation`을 포함한다.
@@ -428,7 +435,7 @@ X-API-Key: ...
 3. `T-063`: `source_scan` 주기 job과 target별 증분 수집.
 4. `T-064`: Gemini URL 요약, transcript 비교·정리, analysis run 저장.
 5. `T-065`: 장소 후보 보강 스키마와 외부 API evidence 저장.
-6. `T-066`: `python-krtour-map` full/incremental 수집 API.
+6. `T-066`: 범용 full/incremental feature 수집 API.
 7. `T-067`: `python-krtour-map` provider/import 쪽 후속 PR.
 8. `T-068`: TripMate curated plan 소비 흐름과 `feature_snapshot` 호환 검증.
 9. `T-069`: 통합 검증, E2E, 운영 문서 정리.
