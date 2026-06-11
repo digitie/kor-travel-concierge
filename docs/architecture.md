@@ -479,7 +479,7 @@ T-065 이후 `extracted_place_candidates`와 `video_place_mappings`에는
 `provider_evidence_json.geocoding`에 VWorld/Kakao/Naver 후보와 선택 결과를
 저장한다.
 
-### 6.12 범용 feature export 상태 (T-066 예정)
+### 6.12 범용 feature export 상태
 
 `tripmate-agent`는 feature owner가 아니므로 `feature_id`를 직접 생성하지 않는다.
 대신 downstream consumer가 가져갈 export 상태를 관리한다.
@@ -497,6 +497,12 @@ T-065 이후 `extracted_place_candidates`와 `video_place_mappings`에는
 Full snapshot API와 incremental changes API는 `/api/v1/features/*` 아래에
 추가한다. 특정 consumer 이름을 REST path에 넣지 않으며, 외부 호출이므로 ADR-24의
 `X-API-Key` 인증을 그대로 따른다.
+
+계약 정본은 `docs/feature-export-api.md`다. T-068 기준 TripMate curated plan/POI
+소비는 `tripmate-agent` DB 직접 접근이나 자동 등록이 아니라
+`python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 선택하는 흐름으로
+유지한다. 따라서 export item은 이름, 좌표, 8자리 카테고리 제안, YouTube 영상·채널·
+재생목록 근거와 confidence를 빠짐없이 포함해야 한다.
 
 ---
 

@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-11: T-068 TripMate curated plan 소비 흐름 검증
+
+- **담당자**: Codex
+- **결론**: `tripmate-agent`는 TripMate DB에 직접 붙거나 자동 curated plan 등록을 수행하지 않는다. YouTube 장소 후보는 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 공급되고, `python-krtour-map`이 `tripmate-agent-youtube` provider로 이를 pull해 `feature_id`와 최종 `feature_snapshot`을 만든다. TripMate curated plan/POI 작성 흐름은 이 feature를 수동 선택·저장하는 방식으로 유지한다.
+- **작업 내용**:
+  - 공급자 정본 계약 문서 `docs/feature-export-api.md`를 추가했다. 계획 문서가 아니라 실제 API 계약의 기준 문서이며, top-level `{items,next_cursor,has_more}`, opaque cursor, `upsert`/`reject`/`tombstone`, `X-API-Key`, TripMate 소비 필드를 명문화했다.
+  - `backend/tests/test_feature_export_api.py`의 ready 후보 fixture를 YouTube channel/playlist, 장소 설명, `category_code_suggestion`, 도로명 주소, Gemini URL evidence, VWorld/Kakao/Naver evidence까지 포함하도록 보강했다.
+  - 새 회귀 테스트가 TripMate curated plan/POI snapshot까지 이어지는 이름, 좌표, 8자리 카테고리 제안, marker 색상 기준(`P-13`), YouTube 영상·채널·재생목록 근거, transcript/Gemini evidence를 확인한다.
+  - `docs/youtube-feature-pipeline-plan.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md`, `CLAUDE.md`, `docs/tasks.md`를 자동 등록 없음·수동 선택 흐름 유지 기준으로 정렬했다.
+- **검증**:
+  - `TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_t068 backend/.venv/bin/python -m pytest -s backend/tests/test_feature_export_api.py` → `9 passed`
+- **다음 작업**:
+  - T-069 통합 검증과 운영 문서 정리.
+
 ## 2026-06-11: T-067 `python-krtour-map` consumer 상태 확인 (이미 머지됨)
 
 - **담당자**: Claude

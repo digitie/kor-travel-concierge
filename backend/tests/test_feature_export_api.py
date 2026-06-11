@@ -40,6 +40,7 @@ async def _seed_ready_candidate(
         MatchStatus,
         TravelPlace,
         YoutubeChannel,
+        YoutubePlaylist,
         YoutubeVideo,
     )
 
@@ -59,20 +60,31 @@ async def _seed_ready_candidate(
             channel_name="제주 여행 채널",
             transcript_summary="월정리 방문",
         )
+        playlist = YoutubePlaylist(
+            playlist_id=f"playlist-{video_id}",
+            channel_id=channel_id,
+            title="제주 동쪽 코스",
+            description="월정리와 성산을 묶은 여행 코스",
+        )
         place = TravelPlace(
             name=place_name,
+            description="에메랄드빛 바다와 카페가 가까운 제주 동쪽 해변",
+            gemini_enriched_description="해안 도로 드라이브와 짧은 산책에 적합",
             latitude=33.5563,
             longitude=126.7958,
             category="해변",
+            category_code_suggestion="01050100",
             official_address="제주특별자치도 제주시 구좌읍 월정리",
+            road_address="제주특별자치도 제주시 구좌읍 해맞이해안로",
             is_geocoded=True,
         )
-        s.add_all([video, place])
+        s.add_all([video, playlist, place])
         await s.commit()
         await s.refresh(place)
         candidate = ExtractedPlaceCandidate(
             video_id=video_id,
             source_channel_id=channel_id,
+            source_playlist_id=playlist.playlist_id,
             source_text="월정리 해변이 정말 예뻐요",
             ai_place_name=candidate_name or place_name,
             timestamp_start="00:03:12",
@@ -82,6 +94,16 @@ async def _seed_ready_candidate(
             match_status=MatchStatus.MATCHED,
             matched_place_id=place.place_id,
             feature_export_status=FeatureExportStatus.READY.value,
+            provider_evidence_json={
+                "gemini_url_evidence": "영상 3분대에서 해변 산책 장면과 장소명이 일치",
+                "geocoding": {
+                    "provider_candidates": {
+                        "vworld": {"name": "월정리", "score": 0.91},
+                        "kakao": {"name": "월정리해변", "score": 0.88},
+                        "naver": {"name": "월정리", "score": 0.73},
+                    }
+                },
+            },
         )
         s.add(candidate)
         await s.commit()
@@ -106,10 +128,12 @@ async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factor
     assert item["place"]["name"] == "월정리 해변"
     assert item["place"]["latitude"] == 33.5563
     assert item["place"]["category_label"] == "해변"
-    assert item["place"]["category_code_suggestion"] is None
+    assert item["place"]["category_code_suggestion"] == "01050100"
     assert item["place"]["address"]["official_address"].startswith("제주")
+    assert item["place"]["address"]["road_address"].startswith("제주")
     assert item["youtube"]["video_id"] == "vid1"
     assert item["youtube"]["channel_title"] == "제주 여행 채널"
+    assert item["youtube"]["playlist_title"] == "제주 동쪽 코스"
     assert item["youtube"]["video_summary"] == "월정리 방문"
     assert item["evidence"]["timestamp_start"] == "00:03:12"
     assert item["evidence"]["confidence_score"] == 0.86
@@ -131,6 +155,39 @@ async def test_snapshot_surfaces_category_code_suggestion(client, session_factor
     assert resp.status_code == 200
     item = resp.json()["items"][0]
     assert item["place"]["category_code_suggestion"] == "01050100"
+
+
+async def test_snapshot_has_tripmate_curated_plan_inputs(client, session_factory):
+    """T-068: TripMate curated plan/POI snapshot까지 이어질 입력을 보존한다."""
+    await _seed_ready_candidate(session_factory)
+
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+
+    tripmate_snapshot_source = {
+        "name": item["place"]["name"],
+        "coord": {
+            "longitude": item["place"]["longitude"],
+            "latitude": item["place"]["latitude"],
+        },
+        "category": item["place"]["category_code_suggestion"],
+        "marker_color": "P-13",
+        "marker_icon": "krtour-map category mapping",
+    }
+    assert tripmate_snapshot_source["name"] == "월정리 해변"
+    assert tripmate_snapshot_source["coord"] == {
+        "longitude": 126.7958,
+        "latitude": 33.5563,
+    }
+    assert tripmate_snapshot_source["category"] == "01050100"
+
+    assert item["youtube"]["video_url"] == "https://www.youtube.com/watch?v=vid1"
+    assert item["youtube"]["channel_id"] == "chan-vid1"
+    assert item["youtube"]["playlist_id"] == "playlist-vid1"
+    assert item["evidence"]["transcript_excerpt"] == "월정리 해변이 정말 예뻐요"
+    assert item["evidence"]["gemini_url_evidence"].startswith("영상 3분대")
+    assert set(item["evidence"]["providers"]) == {"vworld", "kakao", "naver"}
 
 
 async def test_snapshot_excludes_pending_candidate(client, session_factory):

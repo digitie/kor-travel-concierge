@@ -899,12 +899,16 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - full/incremental API cursor와 tombstone 정책을 잘못 설계하면 `python-krtour-map` 쪽 중복 feature 또는 누락이 생길 수 있다.
 
 ### 재확인 필요
-- TripMate curated plan에 자동 등록할지, admin이 `python-krtour-map` feature를 선택하는 수동 흐름을 유지할지 확인한다.
+- 2026-06-11 T-068에서 TripMate curated plan 소비 흐름을 재확인했다. 자동 등록은
+  하지 않고, admin이 `python-krtour-map`에 생성된 feature를 선택해 curated plan 또는
+  POI에 `feature_id`와 `feature_snapshot`으로 저장하는 수동 흐름을 유지한다.
 - Google Places API를 보강 provider로 도입할지 확인한다. 도입 시 과금, 저장 정책, 라이선스, API 키 이름을 별도 ADR로 확정한다.
 - YouTube URL 직접 Gemini 호출의 공식 지원 범위는 T-064 구현 직전에 확인했다.
   공개 YouTube URL은 preview 기능이며 REST payload는 `file_data.file_uri`를
   사용한다. 실제 API key smoke는 아직 남은 확인 항목이다.
 - `python-krtour-map` category mapping 표를 어느 repo에서 관리할지 결정한다.
+  2026-06-11 T-070에서는 provider↔consumer 순환참조를 피하기 위해
+  `python-krtour-map` 8자리 코드표를 `tripmate-agent`에 복사해 사용한다.
 
 ### 관련
 - ADR-22(장소 언급 소스 집계와 export 계약)를 확장한다.
