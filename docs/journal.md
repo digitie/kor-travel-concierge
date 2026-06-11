@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-11: T-067 `python-krtour-map` consumer 상태 확인 (이미 머지됨)
+
+- **담당자**: Claude
+- **결론**: T-067(krtour-map가 T-066 API를 pull해 `FeatureBundle`로 변환)은 `python-krtour-map` origin/main에 **이미 구현·머지**되어 있다. tripmate-agent 측 코드 변경은 없다.
+  - PR #346(T-217a/b/f): `tripmate-agent-youtube` provider 변환(`tripmate_agent_items_to_bundles`, `make_feature_id`, `SourceRecord`/`SourceLink`에 YouTube payload·confidence·primary source role), Dagster fetcher 경로 `/api/v1/features/*` 중립화, `reject`/`tombstone` → feature `status='inactive'` 전환.
+  - PR #347(T-217c/d/e), #345(T-217g): 제안 연동 합의·integration-map·RustFS·동기화 신선도 대시보드.
+  - fetcher는 snapshot(full)·changes(incremental)를 opaque cursor와 `X-API-Key`로 pull한다.
+- **process 메모(반성)**: 본 세션에서 `python-krtour-map`의 **stale·divergent 로컬 main**(origin에 없는 로컬 커밋)에서 분기해 T-217a/b를 처음부터 중복 구현했다. PR 생성 시점에 conflict/CI 미발화로 확인하다 origin/main의 #346과 중복임을 발견하고 중복 PR(#352)을 닫고 브랜치를 삭제했다. **교훈**: 형제 repo 작업 착수 전 반드시 `git fetch origin` 후 `origin/main` 기준으로 분기하고 기존 구현/머지 여부를 먼저 확인한다.
+- **남은 일**: 실제 live pull smoke(running tripmate-agent ↔ krtour-map Dagster)는 T-069 통합 검증에서 수행.
+
 ## 2026-06-11: T-070 후속 — 수동 `create_place` 경로 카테고리 코드 보강
 
 - **담당자**: Claude
