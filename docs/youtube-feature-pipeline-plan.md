@@ -1,6 +1,6 @@
 # YouTube 장소 feature 공급 로드맵
 
-본 문서는 `tripmate-agent`가 YouTube 여행 콘텐츠에서 장소 후보를 추출하고,
+본 문서는 `krtour-ai-agent`가 YouTube 여행 콘텐츠에서 장소 후보를 추출하고,
 `python-krtour-map`이 주기적으로 가져가 `feature`로 승격할 수 있도록 만드는
 후속 작업의 실행 계획이다. 구현은 문서화 → DB 전환 → 수집·분석 스키마 보강 →
 증분 API → sibling repo 연동 순서로 진행한다.
@@ -9,13 +9,13 @@
 
 1. SQLite + SpatiaLite를 PostgreSQL + PostGIS 기반으로 전환한다.
 2. 개발 DB 서버는 `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를
-   공유하되, DB는 `tripmate_agent`처럼 별도 이름으로 분리한다.
+   공유하되, DB는 `krtour_ai_agent`처럼 별도 이름으로 분리한다.
 3. 유튜버, 개별 YouTube 영상, 재생목록 정보를 별도 테이블로 저장하고, 장소
    후보·확정 장소·영상 언급 매핑과 연결한다.
 4. 플레이리스트에서 발견한 영상이라면 그 출처 플레이리스트까지 추적한다.
 5. 자막 기반 POI 추출과 별도로 Gemini에 YouTube URL을 직접 전달해 영상 상세
    요약을 만들고, 자막 기반 결과와 비교·조정하는 분석 절차를 추가한다.
-6. `python-krtour-map`은 `tripmate-agent` REST API를 주기적으로 스캔해 full 또는
+6. `python-krtour-map`은 `krtour-ai-agent` REST API를 주기적으로 스캔해 full 또는
    incremental 방식으로 후보를 가져가 `FeatureBundle`로 변환한다.
 7. TripMate가 자체 feature 연계 POI row를 만들 수 있도록 `feature_id` 생성 이후
    `feature_snapshot`에 필요한 이름, 좌표, 카테고리, 설명, 영상 근거를 제공한다.
@@ -31,8 +31,8 @@
 - port: `5432`
 - user/password: `addr` / `addr` (개발 기본값)
 - 기존 DB: `kraddr_geo`
-- `tripmate-agent` 목표 DB: `tripmate_agent`
-- 목표 DSN: `postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent`
+- `krtour-ai-agent` 목표 DB: `krtour_ai_agent`
+- 목표 DSN: `postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent`
 
 운영 배포에서는 같은 변수명(`DATABASE_URL`)에 운영 DSN을 주입한다. 개발 기본값을
 문서화하더라도 실제 비밀값은 `.env`에만 둔다.
@@ -46,7 +46,7 @@ TripMate의 여행 POI(`app.trip_day_pois`)와 notice/curated plan POI
 TripMate curated plan은 feature row 자체의 모음이 아니라, TripMate가 소유한
 feature 연계 POI row들의 모음이다.
 
-따라서 첫 단계에서 `tripmate-agent`가 TripMate DB에 직접 POI나 curated plan을 쓰지
+따라서 첫 단계에서 `krtour-ai-agent`가 TripMate DB에 직접 POI나 curated plan을 쓰지
 않는다. `python-krtour-map`이 feature를 만든 뒤 TripMate의 POI 또는 curated plan
 작성 화면이 그 `feature_id`를 선택하고, `feature_snapshot`을 TripMate POI row에
 저장하는 흐름을 기본으로 둔다. T-068에서 이 흐름을 다시 확인했고, 자동 POI/curated
@@ -63,7 +63,7 @@ plan 등록은 현재 범위에서 제외한다.
   `match_method`, `confidence`, `is_primary_source`를 가진다.
 - provider cursor는 `provider_sync.provider_sync_state.cursor`로 관리한다.
 
-`tripmate-agent`는 `FeatureBundle`을 직접 DB에 쓰지 않고, `python-krtour-map`이
+`krtour-ai-agent`는 `FeatureBundle`을 직접 DB에 쓰지 않고, `python-krtour-map`이
 가져갈 수 있는 API payload를 제공한다. `feature_id` 생성은
 `python-krtour-map`의 `make_feature_id(...)` 책임으로 남긴다.
 
@@ -324,7 +324,7 @@ T-065 구현은 위 컬럼을 `extracted_place_candidates`와 `video_place_mappi
 
 ## 7. 범용 feature 수집 API
 
-downstream consumer가 주기적으로 긁어갈 REST API를 `tripmate-agent`에 추가한다.
+downstream consumer가 주기적으로 긁어갈 REST API를 `krtour-ai-agent`에 추가한다.
 REST path에는 특정 consumer 이름을 넣지 않는다. `python-krtour-map`은
 이 범용 API를 가져가는 첫 consumer다. 외부 호출이므로 `/api/v1`와 `X-API-Key`
 인증을 그대로 사용한다.
@@ -389,7 +389,7 @@ X-API-Key: ...
         }
       },
       "source_record": {
-        "provider": "tripmate-agent-youtube",
+        "provider": "krtour-ai-agent-youtube",
         "dataset_key": "youtube_place_candidates",
         "source_entity_type": "extracted_place_candidate",
         "source_entity_id": "123",
@@ -438,7 +438,7 @@ X-API-Key: ...
 
 ## 9. 재확인 필요 사항
 
-- `tripmate-agent` DB 이름을 `tripmate_agent`로 확정할지, 사용자가 다른 이름을
+- `krtour-ai-agent` DB 이름을 `krtour_ai_agent`로 확정할지, 사용자가 다른 이름을
   원하는지 확인한다.
 - `DATABASE_URL` 드라이버를 `asyncpg`로 확정할지, `python-kraddr-geo`와 같은
   `psycopg` 계열로 맞출지 확인한다. 본 문서는 우선 `asyncpg`를 목표로 둔다.
@@ -447,14 +447,14 @@ X-API-Key: ...
 - `python-krtour-map` category 8자리 코드와 TripMate 표시 카테고리 간 mapping 표가
   필요하다. T-066은 `category_code_suggestion`을 `null`로 두고 `category_label`만
   제안한다. **확정 방식(2026-06-11)**: `python-krtour-map`의 8자리 category 코드표를
-  `tripmate-agent`로 복사해 넣고, Gemini가 그 목록 중 적절한 코드 하나를 고르게 해서
+  `krtour-ai-agent`로 복사해 넣고, Gemini가 그 목록 중 적절한 코드 하나를 고르게 해서
   `category_code_suggestion`을 채운다(T-070). 런타임 참조는 순환참조(provider↔consumer)가
   되므로 복사로 끊는다. 표 복사의 정합성 drift 위험은 카테고리가 거의 바뀌지 않아
   실무상 수용 가능하다고 판단한다.
 - TripMate POI 또는 curated plan에 자동 등록까지 할지, admin이 feature를 골라
   TripMate POI row로 저장하는 수동 흐름을 유지할지 확인한다. **확정 방식(2026-06-11,
   T-068/T-069 정렬)**: 자동 등록은 하지 않는다. `python-krtour-map`이
-  `tripmate-agent-youtube` provider로 feature를 만든 뒤, TripMate admin/작성 흐름에서
+  `krtour-ai-agent-youtube` provider로 feature를 만든 뒤, TripMate admin/작성 흐름에서
   그 `feature_id`와 `feature_snapshot`을 `app.trip_day_pois` 또는 `app.notice_pois`
   row에 저장한다. Curated plan은 저장된 POI row들의 모음이다.
 - YouTube URL 직접 Gemini 호출의 현재 모델 지원 범위는 T-064 구현 직전에 공식

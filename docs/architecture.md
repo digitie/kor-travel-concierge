@@ -1,6 +1,6 @@
 # 아키텍처
 
-본 문서는 `tripmate-agent` 프로젝트의 전체 시스템 설계와 구성 요소 간 데이터 흐름을 다룬다. 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`이며, 의사결정의 역사는 `decisions.md`의 ADR에서 별도로 관리한다.
+본 문서는 `krtour-ai-agent` 프로젝트의 전체 시스템 설계와 구성 요소 간 데이터 흐름을 다룬다. 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`이며, 의사결정의 역사는 `decisions.md`의 ADR에서 별도로 관리한다.
 
 ---
 
@@ -14,10 +14,10 @@ source 정규화 테이블이 T-062까지 반영되었다.
 후속 구현자는 다음 기준을 우선한다.
 
 - DB 서버는 `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용한다.
-- DB는 `kraddr_geo`와 분리된 `tripmate_agent`를 목표로 한다.
+- DB는 `kraddr_geo`와 분리된 `krtour_ai_agent`를 목표로 한다.
 - 장소 공간 컬럼은 PostGIS `geometry(Point, 4326)`와 GiST 인덱스를 사용한다.
 - 유튜버, YouTube 영상, 재생목록, Gemini 분석 실행은 별도 테이블로 정규화한다.
-- `tripmate-agent`는 YouTube 장소 후보 provider가 되고, 범용
+- `krtour-ai-agent`는 YouTube 장소 후보 provider가 되고, 범용
   `/api/v1/features/*` API를 제공한다. `python-krtour-map`은 이 API를 주기적으로
   pull하는 첫 consumer로서 후보를 feature로 승격한다.
 - TripMate는 `python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 자체
@@ -29,7 +29,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
 
 ## 1. 설계 기준
 
-`tripmate-agent`는 1~2인이 개발·운영하고 동시 사용자가 10명 내외인 소형 프로젝트를 전제로 한다. 따라서 대규모 분산 크롤링보다 운영 단순성, 장애 원인 축소, 재현 가능한 로컬/단일 호스트 배포를 우선한다.
+`krtour-ai-agent`는 1~2인이 개발·운영하고 동시 사용자가 10명 내외인 소형 프로젝트를 전제로 한다. 따라서 대규모 분산 크롤링보다 운영 단순성, 장애 원인 축소, 재현 가능한 로컬/단일 호스트 배포를 우선한다.
 
 핵심 원칙은 다음과 같다.
 
@@ -37,7 +37,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
 - 비공식 의존은 공식 대안이 없는 자막 추출과 프레임 추출로만 격리한다.
 - 공간 DB는 ADR-25 이후 PostgreSQL + PostGIS를 목표로 한다. 로컬 개발에서는
   `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버를 재사용하고 별도 DB
-  `tripmate_agent`를 둔다.
+  `krtour_ai_agent`를 둔다.
 - 백엔드와 ETL은 전면 `asyncio` 기반으로 작성한다.
 - 블로킹 라이브러리(`yt-dlp`, `faster-whisper`, FFmpeg)는 executor로 격리한다.
 - 정기 크롤 실행자는 APScheduler 단일 실행자로 시작하며, interval job 정의는
@@ -93,7 +93,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
                          ▼             ▼             ▼
            ┌────────────────────┐ ┌────────────────┐ ┌──────────────────────┐
            │PostgreSQL + PostGIS│ │ RustFS 로컬     │ │ 외부 API / 로컬 도구  │
-           │ - tripmate_agent DB│ │ Docker 서비스   │ │ - YouTube Data API v3 │
+           │ - krtour_ai_agent DB│ │ Docker 서비스   │ │ - YouTube Data API v3 │
            │ - geometry/GiST    │ │ - 원본 동영상   │ │ - Google Gemini API   │
            │ - crawl_runs        │ │ - 자막/전사     │ │ - Kakao/Naver/VWorld  │
            │ - places/mappings   │ │ - 대표 프레임   │ │ - yt-dlp/FFmpeg       │
@@ -104,7 +104,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
 앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 목표 상태에서는 `frontend`,
 `api`, `mcp`, `scheduler` 컨테이너가 같은 PostgreSQL/PostGIS DB를 바라본다.
 구현은 `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버의 별도 DB
-`tripmate_agent`를 기준으로 작성한다. RustFS는 애플리케이션 컨테이너에 내장하지
+`krtour_ai_agent`를 기준으로 작성한다. RustFS는 애플리케이션 컨테이너에 내장하지
 않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다.
 기본 host port는 고정값으로 API `http://localhost:12401`, MCP
 `http://localhost:12402/mcp`, Web `http://localhost:12405`(host가 컨테이너 내부 API
@@ -483,7 +483,7 @@ T-065 이후 `extracted_place_candidates`와 `video_place_mappings`에는
 
 ### 6.12 범용 feature export 상태
 
-`tripmate-agent`는 feature owner가 아니므로 `feature_id`를 직접 생성하지 않는다.
+`krtour-ai-agent`는 feature owner가 아니므로 `feature_id`를 직접 생성하지 않는다.
 대신 downstream consumer가 가져갈 export 상태를 관리한다.
 
 - `feature_exports.export_id`: API cursor와 idempotency에 쓰는 안정 ID.
@@ -501,7 +501,7 @@ Full snapshot API와 incremental changes API는 `/api/v1/features/*` 아래에
 `X-API-Key` 인증을 그대로 따른다.
 
 계약 정본은 `docs/feature-export-api.md`다. T-068/T-069 기준 TripMate 소비는
-`tripmate-agent` DB 직접 접근이나 자동 등록이 아니라, `python-krtour-map`이 만든
+`krtour-ai-agent` DB 직접 접근이나 자동 등록이 아니라, `python-krtour-map`이 만든
 `feature_id`와 `feature_snapshot`을 TripMate의 feature 연계 POI row
 (`app.trip_day_pois`, `app.notice_pois`)에 저장하는 흐름으로 유지한다. Curated
 plan은 feature row 자체가 아니라 그 POI row들의 모음이다. 따라서 export item은 이름,

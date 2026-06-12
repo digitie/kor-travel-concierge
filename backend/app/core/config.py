@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     API_KEYS: str = ""
 
     # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
-    DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent"
-    TRIPMATE_AGENT_TEST_PG_DSN: str = ""
+    DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent"
+    KRTOUR_AI_AGENT_TEST_PG_DSN: str = ""
 
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""

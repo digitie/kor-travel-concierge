@@ -27,7 +27,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="TripMate Agent API",
+        title="krtour-ai-agent API",
         description="FastAPI Backend for YouTube Travel Curation with Gemini",
         version="0.1.0",
         lifespan=lifespan,
@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def read_root() -> dict[str, str]:
-        return {"message": "Welcome to TripMate Agent API", "status": "running"}
+        return {"message": "Welcome to krtour-ai-agent API", "status": "running"}
 
     @app.get("/health")
     def health() -> dict[str, str]:

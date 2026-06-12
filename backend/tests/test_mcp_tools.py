@@ -24,7 +24,7 @@ from app.models import (  # noqa: E402
     YoutubeVideo,
 )
 from app.services import crawl_run_service  # noqa: E402
-from tripmate_mcp.tools import ToolRuntime, tool_metadata  # noqa: E402
+from krtour_ai_mcp.tools import ToolRuntime, tool_metadata  # noqa: E402
 
 
 def _runtime(session_factory, *, write_enabled: bool = True) -> ToolRuntime:
@@ -163,9 +163,9 @@ async def test_merge_places_moves_mappings_and_deletes_source(session_factory):
             asset_type="frame",
             video_id=video.video_id,
             place_id=source.place_id,
-            bucket="tripmate-frames",
+            bucket="krtour-frames",
             object_key="video-merge/frame.jpg",
-            object_uri="http://localhost:12101/tripmate-frames/video-merge/frame.jpg",
+            object_uri="http://localhost:12101/krtour-frames/video-merge/frame.jpg",
         )
         session.add_all([mapping, asset])
         await session.commit()

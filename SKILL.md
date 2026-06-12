@@ -1,4 +1,4 @@
-# SKILL — tripmate-agent 에이전트 매뉴얼
+# SKILL — krtour-ai-agent 에이전트 매뉴얼
 
 > 이 파일은 당신(AI 에이전트)이 작업을 시작하기 전 반드시 읽어야 한다.
 > Linux/Docker(및 Windows WSL2) 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
@@ -6,7 +6,7 @@
 
 ## 1. 정체성
 
-이 저장소(GitHub 저장소 이름 `tripmate-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
+이 저장소(GitHub 저장소 이름 `krtour-ai-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
 - **프론트엔드**: Next.js (App Router) + React. `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 연결하여 지도 시각화를 구현한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
 - **백엔드**: FastAPI + SQLAlchemy 2.0. DB는 PostgreSQL + PostGIS이며, `asyncpg`와 Alembic으로 schema를 관리한다.
@@ -42,7 +42,7 @@ cd backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent python main.py  # API 12401
+DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent python main.py  # API 12401
 ```
 
 ### 프론트엔드 단독 실행

@@ -50,9 +50,9 @@ def _ensure_postgis_test_stubs(session, flush_context, instances):
 @pytest_asyncio.fixture
 async def engine():
     """테스트용 disposable PostgreSQL/PostGIS 엔진."""
-    dsn = os.getenv("TRIPMATE_AGENT_TEST_PG_DSN")
+    dsn = os.getenv("KRTOUR_AI_AGENT_TEST_PG_DSN")
     if not dsn:
-        pytest.skip("TRIPMATE_AGENT_TEST_PG_DSN이 없어 PostGIS DB 테스트를 건너뜁니다.")
+        pytest.skip("KRTOUR_AI_AGENT_TEST_PG_DSN이 없어 PostGIS DB 테스트를 건너뜁니다.")
     eng = create_async_engine(dsn, pool_pre_ping=True)
     async with eng.begin() as conn:
         await ensure_postgis_extension(conn)

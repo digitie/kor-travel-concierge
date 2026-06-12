@@ -1,10 +1,10 @@
-# cross-repo 일관성 검토 — tripmate-agent 측 반영 항목 (2026-06-10)
+# cross-repo 일관성 검토 — krtour-ai-agent 측 반영 항목 (2026-06-10)
 
 > **출처**: python-krtour-map repo에서 수행한 3-시스템(krtour-map · TripMate ·
-> tripmate-agent) 완성도·정합성 교차 검토의 tripmate-agent 측 산출물.
+> krtour-ai-agent) 완성도·정합성 교차 검토의 krtour-ai-agent 측 산출물.
 > 전체 검토는 python-krtour-map `docs/reports/service-completeness-review-2026-06-10.md`,
 > 실행 계획은 같은 위치 `consistency-uplift-plan-2026-06-10.md` 참조.
-> **기준 커밋**: tripmate-agent `origin/main` `a443ca0`(#55) · krtour-map `origin/main`
+> **기준 커밋**: krtour-ai-agent `origin/main` `a443ca0`(#55) · krtour-map `origin/main`
 > `0e45bd7`(T-216 + TripMate-agent provider) · TripMate `origin/main` `4a10a5b`(#149).
 >
 > 본 문서는 정보 전달용이며, 기존 정본(decisions.md/tasks.md 등) 반영은 사용자 승인 후 진행.
@@ -20,14 +20,14 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 
 | 항목 | krtour-map 구현 값 | 근거 |
 |---|---|---|
-| 호출 경로 | `GET {base}/api/v1/features/{snapshot\|changes}` — **중립 경로 정렬 완료** (krtour T-217a, krtour-map#346 머지 2026-06-11). endpoint 선택은 consumer 설정 `tripmate_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py` |
-| 인증 | `X-API-Key` 헤더 (tripmate-agent `API_KEYS` 중 하나) | 같은 파일 |
-| 요청 파라미터 | `limit`(krtour 설정 `tripmate_agent_feature_page_size`, **상한 500** — 본 repo `FEATURE_EXPORT_LIMIT_MAX`와 정렬됨), `cursor`(opaque) | 〃 |
+| 호출 경로 | `GET {base}/api/v1/features/{snapshot\|changes}` — **중립 경로 정렬 완료** (krtour T-217a, krtour-map#346 머지 2026-06-11). endpoint 선택은 consumer 설정 `krtour_ai_agent_feature_sync_endpoint` | `packages/krtour-map-dagster/.../provider_fetchers.py` |
+| 인증 | `X-API-Key` 헤더 (krtour-ai-agent `API_KEYS` 중 하나) | 같은 파일 |
+| 요청 파라미터 | `limit`(krtour 설정 `krtour_ai_agent_feature_page_size`, **상한 500** — 본 repo `FEATURE_EXPORT_LIMIT_MAX`와 정렬됨), `cursor`(opaque) | 〃 |
 | 응답 필수 형태 | JSON object — `items: list` 필수, `has_more: bool`, `next_cursor: str` | `:104-118` |
 | cursor 규약 | `has_more=true`면 `next_cursor` 비어있으면 안 되고, **직전 cursor와 같으면 에러**(무한루프 가드) — cursor는 단조 전진해야 함 | `:112-124` |
 | krtour 측 env | `KRTOUR_MAP_TRIPMATE_AGENT_BASE_URL`, `KRTOUR_MAP_TRIPMATE_AGENT_API_KEY`, timeout | `:72-84` |
-| provider 식별 | provider `tripmate-agent-youtube`, dataset `youtube_place_candidates` | krtour `src/krtour/map/providers/tripmate_agent.py` |
-| operation 처리 | `upsert` 적재 + **`reject`/`tombstone` → 대응 feature `status='inactive'` 전환**(krtour T-217b 구현 완료, ADR-050 #4 — MOIS Step C 동형. 부가 `rejection_reason`은 krtour 비적재라 무시) | krtour `providers/tripmate_agent.py` + Dagster asset |
+| provider 식별 | provider `krtour-ai-agent-youtube`, dataset `youtube_place_candidates` | krtour `src/krtour/map/providers/krtour_ai_agent.py` |
+| operation 처리 | `upsert` 적재 + **`reject`/`tombstone` → 대응 feature `status='inactive'` 전환**(krtour T-217b 구현 완료, ADR-050 #4 — MOIS Step C 동형. 부가 `rejection_reason`은 krtour 비적재라 무시) | krtour `providers/krtour_ai_agent.py` + Dagster asset |
 
 본 repo `docs/youtube-feature-pipeline-plan.md` §7의 스키마와 위 기대치는 **일치함을
 확인**했다 (필드명·페이지네이션·operation 모두). 즉 T-066은 plan §7대로 구현하면 된다.
@@ -43,7 +43,7 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 > krtour-map#346 코멘트 참조(item 스키마/상수/operation/cursor 전부 일치,
 > limit 상한 500 정렬).
 
-## 2. tripmate-agent 액션 (TA-)
+## 2. krtour-ai-agent 액션 (TA-)
 
 - **TA-01 🔴 — T-066 export API 구현 시 준수 체크리스트**
   - [ ] `GET /api/v1/features/snapshot` — full resync 가능해야 함 (plan §7.1)
@@ -52,7 +52,7 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
   - [ ] 응답 top-level: `{items, has_more, next_cursor}` — krtour `{data,meta}` envelope을
         따라하지 말 것 (krtour fetcher가 top-level `items`를 읽는다)
   - [ ] `limit` 쿼리 파라미터 수용 (기본/최대값은 본 repo가 정의하되 krtour 설정
-        `tripmate_agent_feature_page_size`와 운영 합의)
+        `krtour_ai_agent_feature_page_size`와 운영 합의)
   - [ ] `X-API-Key` 인증 — krtour 전용 키를 `API_KEYS`에 별도 발급 권장 (감사 추적 분리)
   - [ ] `operation` 필드: `upsert`/`reject`/`tombstone` (plan §7.2)
   - [ ] 빈 결과(`items: []`, `has_more: false`)도 200으로 — fetcher는 4xx/5xx에서
@@ -96,6 +96,6 @@ krtour-map 측 실측 (이 계약을 어기면 즉시 적재 실패):
 
 ## 4. 문서 상태 평가 (본 repo)
 
-이번 교차 검토에서 tripmate-agent 문서는 세 repo 중 **일관성 최상** 평가
+이번 교차 검토에서 krtour-ai-agent 문서는 세 repo 중 **일관성 최상** 평가
 (README/CLAUDE/AGENTS/architecture/decisions/tasks가 2026-06-10 기준 정렬, 충돌 0건).
 보완 필요는 위 TA-02(계약 정본 독립)와 TripMate 소비 계약 상세(T-068 범위) 두 가지다.

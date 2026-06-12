@@ -24,9 +24,9 @@ from app.models import (
 
 @pytest.fixture(autouse=True)
 def rustfs_test_settings(monkeypatch):
-    monkeypatch.setenv("RUSTFS_BUCKET_RAW_VIDEOS", "tripmate-raw-videos")
-    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "tripmate-subtitles")
-    monkeypatch.setenv("RUSTFS_BUCKET_FRAMES", "tripmate-frames")
+    monkeypatch.setenv("RUSTFS_BUCKET_RAW_VIDEOS", "krtour-raw-videos")
+    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "krtour-subtitles")
+    monkeypatch.setenv("RUSTFS_BUCKET_FRAMES", "krtour-frames")
     monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "")
     monkeypatch.setenv("RUSTFS_PUBLIC_BASE_URL", "")
     get_settings.cache_clear()
@@ -48,10 +48,10 @@ _LLM_JSON = json.dumps(
 
 
 def test_bucket_routing():
-    assert media_store.bucket_for(AssetType.TRANSCRIPT) == "tripmate-subtitles"
-    assert media_store.bucket_for(AssetType.SUBTITLE) == "tripmate-subtitles"
-    assert media_store.bucket_for(AssetType.FRAME) == "tripmate-frames"
-    assert media_store.bucket_for(AssetType.RAW_VIDEO) == "tripmate-raw-videos"
+    assert media_store.bucket_for(AssetType.TRANSCRIPT) == "krtour-subtitles"
+    assert media_store.bucket_for(AssetType.SUBTITLE) == "krtour-subtitles"
+    assert media_store.bucket_for(AssetType.FRAME) == "krtour-frames"
+    assert media_store.bucket_for(AssetType.RAW_VIDEO) == "krtour-raw-videos"
 
 
 async def test_store_and_record(session):
@@ -67,11 +67,11 @@ async def test_store_and_record(session):
         video_id="v1",
     )
     assert asset.id is not None
-    assert asset.bucket == "tripmate-subtitles"
+    assert asset.bucket == "krtour-subtitles"
     assert asset.size_bytes == 5
     assert asset.sha256 == media_store.sha256_hex(b"hello")
     assert asset.retention_policy == "infinite"
-    assert ("tripmate-subtitles", "v1/sub.txt") in store.objects
+    assert ("krtour-subtitles", "v1/sub.txt") in store.objects
 
     reused = await store_and_record(
         session,

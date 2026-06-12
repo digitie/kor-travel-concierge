@@ -1,4 +1,4 @@
-"""TripMate MCP 서버 엔트리포인트."""
+"""KRTour AI MCP 서버 엔트리포인트."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.database import async_session_factory, init_db
-from tripmate_mcp.tools import ToolRuntime, register_mcp_tools, tool_metadata
+from krtour_ai_mcp.tools import ToolRuntime, register_mcp_tools, tool_metadata
 
 
 def build_server(*, session_factory: Any = async_session_factory):
@@ -16,9 +16,9 @@ def build_server(*, session_factory: Any = async_session_factory):
 
     settings = get_settings()
     server = FastMCP(
-        "tripmate-agent",
+        "krtour-ai-agent",
         instructions=(
-            "TripMate 여행 데이터베이스를 조회하고 수집, 보정, 병합, "
+            "KRTour AI 여행 데이터베이스를 조회하고 수집, 보정, 병합, "
             "매칭 검수 작업을 수행하는 MCP 서버입니다."
         ),
         host=settings.MCP_HOST,

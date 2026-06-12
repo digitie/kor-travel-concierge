@@ -1,6 +1,6 @@
 # DECISIONS — Architecture Decision Records
 
-본 문서는 `tripmate-agent` 프로젝트의 아키텍처 및 구현 의사결정을 시간순으로 누적한다. 결정이 뒤집힐 때도 이전 기록은 지우지 않고 `superseded by ADR-XXX`로 표시한다.
+본 문서는 `krtour-ai-agent` 프로젝트의 아키텍처 및 구현 의사결정을 시간순으로 누적한다. 결정이 뒤집힐 때도 이전 기록은 지우지 않고 `superseded by ADR-XXX`로 표시한다.
 
 ---
 
@@ -816,7 +816,7 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - 결정자: 사용자, AI agent
 
 ### 컨텍스트
-초기 구현은 SQLite + SpatiaLite를 기준으로 만들어졌다(ADR-12/ADR-17). 그러나 최신 요청에서 사용자는 `tripmate-agent`의 DB를 PostgreSQL/PostGIS 기반으로 전환하고, 별도 DB 서버를 새로 만들지 말고 `python-kraddr-geo`가 사용 중인 로컬 PostgreSQL/PostGIS 서버를 활용하라고 지시했다. 동시에 `tripmate`의 POI/curated plan 흐름과 `python-krtour-map`의 feature schema를 확인해 장소 데이터 구조를 보강해야 한다.
+초기 구현은 SQLite + SpatiaLite를 기준으로 만들어졌다(ADR-12/ADR-17). 그러나 최신 요청에서 사용자는 `krtour-ai-agent`의 DB를 PostgreSQL/PostGIS 기반으로 전환하고, 별도 DB 서버를 새로 만들지 말고 `python-kraddr-geo`가 사용 중인 로컬 PostgreSQL/PostGIS 서버를 활용하라고 지시했다. 동시에 `tripmate`의 POI/curated plan 흐름과 `python-krtour-map`의 feature schema를 확인해 장소 데이터 구조를 보강해야 한다.
 
 참조한 sibling repo 기준:
 
@@ -825,9 +825,9 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - `python-krtour-map`은 `feature.features`, `provider_sync.source_records`, `provider_sync.source_links`, `provider_sync.provider_sync_state`를 중심으로 `FeatureBundle`을 적재한다.
 
 ### 결정
-- `tripmate-agent`의 목표 DB는 PostgreSQL + PostGIS로 전환한다. SQLite + SpatiaLite는 전환 전 legacy 구현으로만 남긴다.
-- 로컬 개발 DB 서버는 `python-kraddr-geo`의 PostgreSQL/PostGIS 서버를 재사용한다. 단, `kraddr_geo` DB를 같이 쓰지 않고 별도 DB `tripmate_agent`를 생성한다.
-- 목표 개발 DSN은 `postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent`로 문서화한다. 실제 값은 `DATABASE_URL`로 주입한다.
+- `krtour-ai-agent`의 목표 DB는 PostgreSQL + PostGIS로 전환한다. SQLite + SpatiaLite는 전환 전 legacy 구현으로만 남긴다.
+- 로컬 개발 DB 서버는 `python-kraddr-geo`의 PostgreSQL/PostGIS 서버를 재사용한다. 단, `kraddr_geo` DB를 같이 쓰지 않고 별도 DB `krtour_ai_agent`를 생성한다.
+- 목표 개발 DSN은 `postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent`로 문서화한다. 실제 값은 `DATABASE_URL`로 주입한다.
 - SQLAlchemy 2.0 async 패턴은 유지하되, DB driver와 migration 체계를 PostgreSQL 기준으로 정리한다.
 - 스키마 변경은 Alembic으로 관리한다. 기존 경량 `schema_migrations` registry는 SQLite 보정 전용이므로 Postgres 전환 후 제거하거나 Alembic bootstrap으로 흡수한다.
 - `travel_places`는 PostGIS `geometry(Point, 4326)` 컬럼과 GiST 인덱스를 가진다. 근접/중복 검색은 `ST_DWithin`을 사용한다.
@@ -840,7 +840,7 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - 사용자가 DB 서버를 명시했으므로 ADR-20의 “수치 트리거가 생길 때만 전환” 조건보다 최신 사용자 요청이 우선한다.
 - PostgreSQL/PostGIS를 도입하면 장소 중복 탐지, 반경 검색, 증분 export cursor, 향후 `python-krtour-map` 연동에 같은 공간 DB 어휘를 쓸 수 있다.
 - `python-kraddr-geo` 서버를 재사용하면 로컬에 PostGIS 서버를 중복 운영하지 않아도 된다.
-- 별도 DB를 쓰면 `python-kraddr-geo`의 주소 정본 스키마와 `tripmate-agent`의 YouTube/ETL 스키마가 충돌하지 않는다.
+- 별도 DB를 쓰면 `python-kraddr-geo`의 주소 정본 스키마와 `krtour-ai-agent`의 YouTube/ETL 스키마가 충돌하지 않는다.
 
 ### 결과 (긍정)
 - 공간 검색과 증분 동기화 구현이 PostGIS 기준으로 단순해진다.
@@ -853,7 +853,7 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - Alembic bootstrap, PostGIS extension 준비, optional real DB integration test가 새 작업 범위로 추가된다.
 
 ### 재확인 필요
-- `tripmate_agent` DB 이름을 그대로 쓸지 사용자가 다른 이름을 원하는지 확인한다.
+- `krtour_ai_agent` DB 이름을 그대로 쓸지 사용자가 다른 이름을 원하는지 확인한다.
 - SQLAlchemy async driver를 `asyncpg`로 확정할지, `python-kraddr-geo`와 같은 `psycopg` 계열로 맞출지 구현 직전에 확인한다.
 - 운영 환경에서 DB 서버를 `python-kraddr-geo`와 계속 공유할지, 로컬 개발에만 공유하고 운영은 별도 DB로 분리할지 확인한다.
 
@@ -872,10 +872,10 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - 결정자: 사용자, AI agent
 
 ### 컨텍스트
-사용자는 `tripmate-agent`가 뽑아낸 장소 정보를 TripMate feature 연계 POI로 저장하고, curated plan은 그 POI들의 모음으로 만들 수 있게 하라고 요청했다. 장소 후보에는 YouTube 동영상 정보, 유튜버 정보, 플레이리스트 정보를 연결해야 한다. 또한 `python-krtour-map`에는 이 결과를 feature로 추가하되, `python-krtour-map`이 `tripmate-agent`를 주기적으로 긁어가는 구조를 원했다. 따라서 `tripmate-agent`는 source provider 역할을 하고, `python-krtour-map`은 feature owner 역할을 유지해야 한다.
+사용자는 `krtour-ai-agent`가 뽑아낸 장소 정보를 TripMate feature 연계 POI로 저장하고, curated plan은 그 POI들의 모음으로 만들 수 있게 하라고 요청했다. 장소 후보에는 YouTube 동영상 정보, 유튜버 정보, 플레이리스트 정보를 연결해야 한다. 또한 `python-krtour-map`에는 이 결과를 feature로 추가하되, `python-krtour-map`이 `krtour-ai-agent`를 주기적으로 긁어가는 구조를 원했다. 따라서 `krtour-ai-agent`는 source provider 역할을 하고, `python-krtour-map`은 feature owner 역할을 유지해야 한다.
 
 ### 결정
-- `tripmate-agent`는 `youtube_channels`, `youtube_playlists`, `youtube_playlist_videos`, `youtube_video_analysis_runs`를 추가해 유튜버·영상·재생목록·분석 실행을 정규화한다.
+- `krtour-ai-agent`는 `youtube_channels`, `youtube_playlists`, `youtube_playlist_videos`, `youtube_video_analysis_runs`를 추가해 유튜버·영상·재생목록·분석 실행을 정규화한다.
 - 기존 `youtube_videos`는 channel FK, canonical URL, duration, thumbnail, Gemini URL summary, transcript summary, reconciled summary를 갖도록 보강한다.
 - 기존 `extracted_place_candidates`와 `video_place_mappings`는 어떤 채널·플레이리스트·분석 실행에서 유래했는지 추적하는 FK/상태 컬럼을 갖는다.
 - 범용 full/incremental feature API는 `feature_exports` 같은 export ledger를 사용해 안정적인 `export_id`, sequence cursor, payload hash, reject/tombstone 재전송 상태를 관리한다.
@@ -884,24 +884,24 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
   - 자막·전사 기반 POI 추출
   - Gemini에 YouTube URL을 직접 전달한 영상 상세 요약
 - 두 결과는 별도 reconcile 단계에서 비교한다. 불일치, 낮은 신뢰도, 지오코딩 충돌은 자동 확정하지 않고 `needs_review`로 남긴다.
-- `tripmate-agent`는 `/api/v1/features/snapshot`과 `/api/v1/features/changes` API를 제공한다. REST path에는 특정 downstream 이름을 넣지 않는다. `python-krtour-map`은 full snapshot 또는 incremental changes를 선택해 주기적으로 가져가는 첫 consumer다.
+- `krtour-ai-agent`는 `/api/v1/features/snapshot`과 `/api/v1/features/changes` API를 제공한다. REST path에는 특정 downstream 이름을 넣지 않는다. `python-krtour-map`은 full snapshot 또는 incremental changes를 선택해 주기적으로 가져가는 첫 consumer다.
 - API payload에는 `python-krtour-map`이 `FeatureBundle`을 만들 수 있도록 place, address, coordinate, category suggestion, YouTube evidence, source record metadata를 포함한다.
-- `feature_id` 생성과 최종 `feature.features` 적재는 `python-krtour-map` 책임으로 둔다. `tripmate-agent`는 안정적인 `export_id`, `source_entity_id`, `raw_payload_hash`를 제공한다.
-- TripMate는 직접 `tripmate-agent` DB를 보지 않고, `python-krtour-map`에 생성된 `feature_id`와 `feature_snapshot`을 자체 POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장한다. Curated plan은 feature row 자체가 아니라 이 POI row들의 모음이다.
+- `feature_id` 생성과 최종 `feature.features` 적재는 `python-krtour-map` 책임으로 둔다. `krtour-ai-agent`는 안정적인 `export_id`, `source_entity_id`, `raw_payload_hash`를 제공한다.
+- TripMate는 직접 `krtour-ai-agent` DB를 보지 않고, `python-krtour-map`에 생성된 `feature_id`와 `feature_snapshot`을 자체 POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장한다. Curated plan은 feature row 자체가 아니라 이 POI row들의 모음이다.
 
 ### 근거
-- `python-krtour-map`이 feature schema와 `FeatureBundle` 계약을 소유하므로, `tripmate-agent`가 feature 테이블에 직접 쓰면 schema 책임이 흐려진다.
+- `python-krtour-map`이 feature schema와 `FeatureBundle` 계약을 소유하므로, `krtour-ai-agent`가 feature 테이블에 직접 쓰면 schema 책임이 흐려진다.
 - pull 방식은 `python-krtour-map`의 provider cursor, full/incremental sync, source_records/source_links 패턴과 맞는다.
 - YouTube 영상/채널/플레이리스트 근거를 별도 테이블로 정규화해야 TripMate POI와 curated plan에서 “왜 이 장소가 추천되었는지”를 설명할 수 있다.
 - Gemini URL summary와 transcript 결과를 비교하면 자막 누락, 자동 전사 오류, 영상 설명란 과장 정보를 더 잘 걸러낼 수 있다.
 
 ### 결과 (긍정)
-- `tripmate-agent`는 YouTube 장소 intelligence provider로 독립적으로 발전할 수 있다.
+- `krtour-ai-agent`는 YouTube 장소 intelligence provider로 독립적으로 발전할 수 있다.
 - `python-krtour-map`은 기존 feature/source lineage 모델을 유지하면서 YouTube 기반 장소 후보를 수집할 수 있다.
 - TripMate는 feature_id 기반 POI와 curated plan 흐름을 그대로 유지한다.
 
 ### 결과 (부정)
-- 이 작업은 `tripmate-agent`, `python-krtour-map`, `tripmate` 세 repo의 순차 PR이 필요하다.
+- 이 작업은 `krtour-ai-agent`, `python-krtour-map`, `tripmate` 세 repo의 순차 PR이 필요하다.
 - category 8자리 코드 mapping, Gemini YouTube URL 입력 안정성, Google API 보강 여부는 구현 전 재확인이 필요하다.
 - full/incremental API cursor와 tombstone 정책을 잘못 설계하면 `python-krtour-map` 쪽 중복 feature 또는 누락이 생길 수 있다.
 
@@ -917,7 +917,7 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
   사용한다. 실제 API key smoke는 아직 남은 확인 항목이다.
 - `python-krtour-map` category mapping 표를 어느 repo에서 관리할지 결정한다.
   2026-06-11 T-070에서는 provider↔consumer 순환참조를 피하기 위해
-  `python-krtour-map` 8자리 코드표를 `tripmate-agent`에 복사해 사용한다.
+  `python-krtour-map` 8자리 코드표를 `krtour-ai-agent`에 복사해 사용한다.
 
 ### 관련
 - ADR-22(장소 언급 소스 집계와 export 계약)를 확장한다.

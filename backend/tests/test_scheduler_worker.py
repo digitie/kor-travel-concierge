@@ -45,14 +45,14 @@ async def _yielding_ok_handler(session, run):
 
 def test_scheduler_jobstore_url_converts_asyncpg_to_psycopg():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent"
+        "postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent"
     )
-    assert url == "postgresql+psycopg://addr:addr@localhost:5432/tripmate_agent"
+    assert url == "postgresql+psycopg://addr:addr@localhost:5432/krtour_ai_agent"
 
 
 def test_scheduler_jobstore_url_prefers_explicit_url():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent",
+        "postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent",
         "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs",
     )
     assert url == "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs"

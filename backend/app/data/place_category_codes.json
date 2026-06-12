@@ -3,7 +3,7 @@
   "_source_origin": "python-kraddr-base/src/kraddr/base/categories.py (ADR-023 이전) + ADR-027 LODGING_MOUNTAIN_SHELTER 3건 추가",
   "_krtour_map_synced_on": "2026-05-25",
   "_copied_on": "2026-06-11",
-  "_note": "tripmate-agent feature export의 category_code_suggestion 선택용으로 python-krtour-map의 8자리 category 코드표를 복사한 사본이다(T-070, ADR 결정 2026-06-11). 순환참조 회피용 복사본이므로 python-krtour-map 카테고리 변경 시 재동기화가 필요하다. feature_id 생성은 python-krtour-map 책임.",
+  "_note": "krtour-ai-agent feature export의 category_code_suggestion 선택용으로 python-krtour-map의 8자리 category 코드표를 복사한 사본이다(T-070, ADR 결정 2026-06-11). 순환참조 회피용 복사본이므로 python-krtour-map 카테고리 변경 시 재동기화가 필요하다. feature_id 생성은 python-krtour-map 책임.",
   "count": 144,
   "categories": [
     {

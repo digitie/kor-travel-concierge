@@ -41,7 +41,7 @@ from app.models import (
 )
 
 # `python-krtour-map` `SourceRecord` 계약과 맞추는 provider 식별자.
-PROVIDER = "tripmate-agent-youtube"
+PROVIDER = "krtour-ai-agent-youtube"
 DATASET_KEY = "youtube_place_candidates"
 SOURCE_ENTITY_TYPE = "extracted_place_candidate"
 

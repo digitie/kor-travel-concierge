@@ -1,4 +1,4 @@
-# TripMate Agent 단일 호스트 Docker Compose 구성
+# KRTour AI Agent 단일 호스트 Docker Compose 구성
 # 서비스: api(FastAPI) / mcp / scheduler / frontend(Next.js)
 # api·mcp·scheduler는 같은 외부 PostgreSQL/PostGIS DB를 사용한다(ADR-25).
 # RustFS는 고정 host port 12101/12105의 별도 Docker 서비스를 사용한다(ADR-15).
@@ -8,7 +8,7 @@ x-app-env-file: &app-env-file
     required: false
 
 x-python-env: &python-env
-  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:5432/tripmate_agent}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:5432/krtour_ai_agent}
   NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-12401}
   CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-12405},http://127.0.0.1:${FRONTEND_HOST_PORT:-12405},http://localhost:3000,http://127.0.0.1:3000,http://localhost:13100,http://127.0.0.1:13100}
   RUSTFS_ENABLED: "true"

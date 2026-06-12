@@ -1,1 +1,1 @@
-"""TripMate Agent 백엔드 애플리케이션 패키지."""
+"""krtour-ai-agent 백엔드 애플리케이션 패키지."""

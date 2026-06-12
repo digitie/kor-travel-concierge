@@ -6,7 +6,7 @@
 # 검증하고, 기본적으로 `docker compose down`으로 정리한다.
 #
 # host port는 아래 고정값을 기본으로 사용하고, 검증 동작만 환경 변수로 조정한다.
-#   PROJECT_NAME             Compose project 이름 (기본: tripmate-agent-verify)
+#   PROJECT_NAME             Compose project 이름 (기본: krtour-ai-agent-verify)
 #   RUSTFS_HOST_PORT         RustFS S3 API host port (기본: 12101)
 #   RUSTFS_CONSOLE_HOST_PORT RustFS 콘솔 host port (기본: 12105)
 #   API_HOST_PORT            FastAPI host port (기본: 12401)
@@ -16,7 +16,7 @@
 #   KEEP_RUNNING=1           검증 후 컨테이너를 내리지 않고 유지
 set -euo pipefail
 
-PROJECT_NAME="${PROJECT_NAME:-tripmate-agent-verify}"
+PROJECT_NAME="${PROJECT_NAME:-krtour-ai-agent-verify}"
 export RUSTFS_HOST_PORT="${RUSTFS_HOST_PORT:-12101}"
 export RUSTFS_CONSOLE_HOST_PORT="${RUSTFS_CONSOLE_HOST_PORT:-12105}"
 export RUSTFS_DOCKER_ENDPOINT="${RUSTFS_DOCKER_ENDPOINT:-http://host.docker.internal:${RUSTFS_HOST_PORT}}"

@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, '../..');
 const backendDir = path.join(repoRoot, 'backend');
 const seedScript = path.join(repoRoot, 'tests/scripts/seed_e2e.py');
 
-test.describe('TripMate Agent E2E 검증', () => {
+test.describe('KRTour AI Agent E2E 검증', () => {
   test.beforeEach(() => {
     seedE2EData();
   });
@@ -24,7 +24,7 @@ test.describe('TripMate Agent E2E 검증', () => {
     const operationsRegion = page.getByRole('region', { name: '운영 패널' });
     const sidebar = page.locator('#destination-list');
 
-    await expect(page).toHaveTitle(/TripMate Agent/);
+    await expect(page).toHaveTitle(/KRTour AI Agent/);
     await expect(page.locator('#destination-list')).toBeVisible();
     await expect(page.locator('#vworld-map-container')).toBeVisible();
     await expect(page.locator('#vworld-map-container')).toHaveAttribute(
@@ -149,12 +149,12 @@ test.describe('TripMate Agent E2E 검증', () => {
 
 function seedE2EData() {
   const databaseUrl =
-    process.env.TRIPMATE_AGENT_E2E_DATABASE_URL ??
-    process.env.TRIPMATE_AGENT_TEST_PG_DSN ??
+    process.env.KRTOUR_AI_AGENT_E2E_DATABASE_URL ??
+    process.env.KRTOUR_AI_AGENT_TEST_PG_DSN ??
     process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error(
-      'E2E seed에는 TRIPMATE_AGENT_E2E_DATABASE_URL 또는 TRIPMATE_AGENT_TEST_PG_DSN이 필요합니다.',
+      'E2E seed에는 KRTOUR_AI_AGENT_E2E_DATABASE_URL 또는 KRTOUR_AI_AGENT_TEST_PG_DSN이 필요합니다.',
     );
   }
   execFileSync(resolvePython(), [seedScript], {

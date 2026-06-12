@@ -108,7 +108,7 @@ export function HarvestConsole() {
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-normal">TripMate Agent</h1>
+        <h1 className="text-xl font-semibold tracking-normal">KRTour AI Agent</h1>
         <p className="text-sm text-muted-foreground">
           YouTube 여행 수집 작업
         </p>

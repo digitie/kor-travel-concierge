@@ -52,7 +52,7 @@ def main() -> int:
         region_name=os.environ.get("RUSTFS_REGION", "us-east-1"),
     )
 
-    body = f"tripmate-agent rustfs smoke {datetime.now(UTC).isoformat()}\n".encode()
+    body = f"krtour-ai-agent rustfs smoke {datetime.now(UTC).isoformat()}\n".encode()
     prefix = os.environ.get("RUSTFS_OBJECT_PREFIX", "").strip("/")
     key = f"{prefix}/healthcheck/t014-smoke.txt" if prefix else "healthcheck/t014-smoke.txt"
     for bucket in buckets:

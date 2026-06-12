@@ -137,7 +137,7 @@ async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factor
     assert item["youtube"]["video_summary"] == "월정리 방문"
     assert item["evidence"]["timestamp_start"] == "00:03:12"
     assert item["evidence"]["confidence_score"] == 0.86
-    assert item["source_record"]["provider"] == "tripmate-agent-youtube"
+    assert item["source_record"]["provider"] == "krtour-ai-agent-youtube"
     assert item["source_record"]["source_entity_id"] == str(candidate_id)
     assert item["source_record"]["raw_payload_hash"].startswith("sha256:")
 

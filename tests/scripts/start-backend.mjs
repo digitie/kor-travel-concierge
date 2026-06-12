@@ -12,13 +12,13 @@ const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
 const e2eDatabaseUrl =
-  process.env.TRIPMATE_AGENT_E2E_DATABASE_URL ??
-  process.env.TRIPMATE_AGENT_TEST_PG_DSN ??
+  process.env.KRTOUR_AI_AGENT_E2E_DATABASE_URL ??
+  process.env.KRTOUR_AI_AGENT_TEST_PG_DSN ??
   process.env.DATABASE_URL;
 
 if (!e2eDatabaseUrl) {
   throw new Error(
-    "E2E 실행에는 TRIPMATE_AGENT_E2E_DATABASE_URL 또는 TRIPMATE_AGENT_TEST_PG_DSN이 필요합니다.",
+    "E2E 실행에는 KRTOUR_AI_AGENT_E2E_DATABASE_URL 또는 KRTOUR_AI_AGENT_TEST_PG_DSN이 필요합니다.",
   );
 }
 
