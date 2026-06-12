@@ -75,9 +75,9 @@ def store_media_asset(
     Placeholder: 실제 업로드는 T-007/T-009에서 `boto3`/`aioboto3` S3 클라이언트로
     구현한다. 현재는 버킷 라우팅, 체크섬, URI 조립 계약만 고정한다.
     """
-    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:9003")
+    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:12101")
     public_base_url = os.getenv(
-        "RUSTFS_PUBLIC_BASE_URL", "http://127.0.0.1:9003/krtour-map"
+        "RUSTFS_PUBLIC_BASE_URL", "http://127.0.0.1:12101/krtour-map"
     ).rstrip("/")
     bucket = _bucket_for(asset_type)
     stored_object_key = _object_key_with_prefix(object_key)

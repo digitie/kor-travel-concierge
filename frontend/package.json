@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "dev:live": "next dev --hostname 127.0.0.1 --port 9042",
+    "dev:live": "next dev --hostname 127.0.0.1 --port 12405",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

@@ -69,8 +69,8 @@
   - 후속 처리: T-041에서 기본 FFmpeg URL을 gyan.dev 안정 링크 `ffmpeg-release-full.7z`로 전환하고 `.sha256` sidecar 또는 명시 hash 검증을 통과한 아카이브만 압축 해제하도록 보강했다. portable `7zr.exe`도 버전 고정 GitHub asset과 고정 SHA256으로 검증한다.
 
 - [x] **P1-6. docker-compose CORS 하드코딩 / 포트 점유 프로세스 무확인 강제 종료** (`#26`, T-042에서 후속 해소)
-  - `docker-compose.yml`이 CORS를 하드코딩해 `.env`의 `CORS_ALLOW_ORIGINS` override가 단절되고 `3000`/`13000` origin 누락. `Stop-PortOwner`가 9041/9042 점유 임의 프로세스를 경고 없이 `Stop-Process -Force` → 확인 절차 추가 권장.
-  - 후속 처리: T-042에서 Compose CORS가 `.env` override를 우선하고 기본 origin에 Web host port(`9042` 또는 `FRONTEND_HOST_PORT` override), `3000`, `13000`, `13100`을 포함하도록 수정했다. Windows live 스크립트는 현재 워크트리 프로세스로 확인되는 포트 점유자만 자동 종료하고, 다른 프로세스는 `-ForcePortKill` 명시가 필요하다.
+  - `docker-compose.yml`이 CORS를 하드코딩해 `.env`의 `CORS_ALLOW_ORIGINS` override가 단절되고 `3000`/`12405` origin 누락. `Stop-PortOwner`가 12401/12405 점유 임의 프로세스를 경고 없이 `Stop-Process -Force` → 확인 절차 추가 권장.
+  - 후속 처리: T-042에서 Compose CORS가 `.env` override를 우선하고 기본 origin에 Web host port(`12405` 또는 `FRONTEND_HOST_PORT` override), `3000`, `12405`, `13100`을 포함하도록 수정했다. Windows live 스크립트는 현재 워크트리 프로세스로 확인되는 포트 점유자만 자동 종료하고, 다른 프로세스는 `-ForcePortKill` 명시가 필요하다.
 
 ### 🟡 P2 — Minor (정확성 / 품질 / 일관성)
 

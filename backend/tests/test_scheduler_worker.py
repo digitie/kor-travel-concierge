@@ -45,17 +45,17 @@ async def _yielding_ok_handler(session, run):
 
 def test_scheduler_jobstore_url_converts_asyncpg_to_psycopg():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent"
+        "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent"
     )
-    assert url == "postgresql+psycopg://addr:addr@localhost:15434/tripmate_agent"
+    assert url == "postgresql+psycopg://addr:addr@localhost:5432/tripmate_agent"
 
 
 def test_scheduler_jobstore_url_prefers_explicit_url():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent",
-        "postgresql+psycopg://addr:addr@localhost:15434/scheduler_jobs",
+        "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent",
+        "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs",
     )
-    assert url == "postgresql+psycopg://addr:addr@localhost:15434/scheduler_jobs"
+    assert url == "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs"
 
 
 async def test_run_once_claims_executes_and_marks_done(session, session_factory):

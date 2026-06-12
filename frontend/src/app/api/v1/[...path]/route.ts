@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // 백엔드 origin(서버 사이드 전용). Compose에서는 컨테이너 간 `http://api:8000`.
-const BACKEND_ORIGIN = (process.env.BACKEND_ORIGIN ?? "http://localhost:9041").replace(
+const BACKEND_ORIGIN = (process.env.BACKEND_ORIGIN ?? "http://localhost:12401").replace(
   /\/$/,
   "",
 );

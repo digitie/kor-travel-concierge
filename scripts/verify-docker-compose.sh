@@ -5,23 +5,24 @@
 # `api` 컨테이너 안에서 `scripts/verify_rustfs.py`로 RustFS 버킷/객체 저장을
 # 검증하고, 기본적으로 `docker compose down`으로 정리한다.
 #
-# 환경 변수로 host port와 동작을 조정한다.
+# host port는 아래 고정값을 기본으로 사용하고, 검증 동작만 환경 변수로 조정한다.
 #   PROJECT_NAME             Compose project 이름 (기본: tripmate-agent-verify)
-#   RUSTFS_HOST_PORT         RustFS S3 API host port (기본: 9003)
-#   RUSTFS_CONSOLE_HOST_PORT RustFS 콘솔 host port (기본: 9004)
-#   API_HOST_PORT            FastAPI host port (기본: 8000)
-#   MCP_HOST_PORT            MCP host port (기본: 8010)
-#   FRONTEND_HOST_PORT       Next.js host port (기본: 3000)
+#   RUSTFS_HOST_PORT         RustFS S3 API host port (기본: 12101)
+#   RUSTFS_CONSOLE_HOST_PORT RustFS 콘솔 host port (기본: 12105)
+#   API_HOST_PORT            FastAPI host port (기본: 12401)
+#   MCP_HOST_PORT            MCP host port (기본: 12402)
+#   FRONTEND_HOST_PORT       Next.js host port (기본: 12405)
 #   SKIP_BUILD=1             이미지 빌드 단계 건너뛰기
 #   KEEP_RUNNING=1           검증 후 컨테이너를 내리지 않고 유지
 set -euo pipefail
 
 PROJECT_NAME="${PROJECT_NAME:-tripmate-agent-verify}"
-export RUSTFS_HOST_PORT="${RUSTFS_HOST_PORT:-9003}"
-export RUSTFS_CONSOLE_HOST_PORT="${RUSTFS_CONSOLE_HOST_PORT:-9004}"
-export API_HOST_PORT="${API_HOST_PORT:-8000}"
-export MCP_HOST_PORT="${MCP_HOST_PORT:-8010}"
-export FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-3000}"
+export RUSTFS_HOST_PORT="${RUSTFS_HOST_PORT:-12101}"
+export RUSTFS_CONSOLE_HOST_PORT="${RUSTFS_CONSOLE_HOST_PORT:-12105}"
+export RUSTFS_DOCKER_ENDPOINT="${RUSTFS_DOCKER_ENDPOINT:-http://host.docker.internal:${RUSTFS_HOST_PORT}}"
+export API_HOST_PORT="${API_HOST_PORT:-12401}"
+export MCP_HOST_PORT="${MCP_HOST_PORT:-12402}"
+export FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-12405}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 KEEP_RUNNING="${KEEP_RUNNING:-0}"
 
@@ -96,7 +97,7 @@ if [[ "${SKIP_BUILD}" != "1" ]]; then
   compose build api mcp scheduler frontend
 fi
 
-compose up -d rustfs api mcp scheduler frontend
+compose up -d api mcp scheduler frontend
 
 wait_http "http://localhost:${RUSTFS_HOST_PORT}/health/live"
 wait_http "http://localhost:${API_HOST_PORT}/health"

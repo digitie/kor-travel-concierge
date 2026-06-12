@@ -45,6 +45,7 @@
 ## 개발 환경 정책
 
 앱 런타임/배포 실행 환경은 **Linux Docker 전용**이다(ADR-23). Windows 네이티브 **앱** 실행 경로는 배제하며, Windows 호스트에서는 **WSL2(Ubuntu) 안에서 Linux/Docker로 구동**한다. 모든 신규 스크립트·명령은 bash·Linux 기준으로 작성한다. **단, E2E Playwright 테스트 하니스는 의도적으로 Windows 호스트에서 실행한다**(ADR-23 예외, 아래 Playwright 구동 참조).
+- **Codex 명령 실행 위치 강제**: 이 저장소에서 에이전트/Codex가 실행하는 모든 작업 명령은 기본적으로 WSL2(Ubuntu) bash에서 수행한다. 예외는 `git` 명령과 Windows 호스트 Playwright E2E(`cd tests; npm install; npx playwright install; npx playwright test`)뿐이다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행한다.
 - **기본 실행**: 단일 호스트 Docker Compose(ADR-18). `docker compose up --build`로 backend(8000), frontend(3000), rustfs, mcp를 함께 띄운다. Windows 사용자는 WSL2 + Docker Engine(또는 Docker Desktop WSL backend) 안에서 같은 명령을 bash로 실행한다.
 - **REST API 경계**: REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있다(`/health`·`/`만 버전 없음). 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부(비-브라우저) 호출자는 `X-API-Key`를 직접 보내며, 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 우회한다. 외부 노출 배포는 `APP_ENV=production`과 `API_KEYS`를 설정한다(ADR-24).
 - **Python 환경**: 컨테이너 밖 로컬 개발은 Linux/WSL에서 `python3 -m venv .venv && . .venv/bin/activate`로 Python 3.10+ 가상환경을 만들어 FastAPI, SQLAlchemy, ETL 스크립트를 구동한다. DB 연결은 PostgreSQL/PostGIS 기준이다.
@@ -80,6 +81,7 @@
 5. **데이터베이스 마이그레이션 누락 금지** — SQLAlchemy 2.0 스키마를 수정할 때 PostgreSQL/PostGIS schema와 Alembic migration을 함께 갱신해야 한다.
 6. **RustFS 객체 자동 삭제 금지** — 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제, 매칭 실패, 영상 제외 처리만으로 RustFS 객체를 삭제하지 않는다.
 7. **매칭 실패 장소 자동 확정 금지** — 지오코딩 결과가 없거나 모호한 장소는 `needs_review` 후보로 남기고, 웹 UI 또는 MCP 검수 도구에서 사용자가 확정하도록 한다.
+8. **PowerShell/cmd 직접 작업 금지** — 에이전트/Codex는 `git` 명령과 Windows Playwright E2E를 제외한 작업 명령을 PowerShell/cmd에서 직접 실행하지 않는다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL2(Ubuntu) bash에서 실행한다.
 
 ## 작업 후 체크리스트
 
@@ -93,12 +95,12 @@
 
 ## 검증
 
-앱 런타임/배포 환경은 Linux Docker 전용이다. Windows 사용자는 WSL2(Ubuntu) 안에서 아래 bash 명령으로 앱·백엔드·프론트엔드를 구동·검증한다. **E2E Playwright만 Windows 호스트에서 실행한다**(ADR-23 예외).
+앱 런타임/배포 환경은 Linux Docker 전용이다. Windows 사용자는 WSL2(Ubuntu) 안에서 아래 bash 명령으로 앱·백엔드·프론트엔드를 구동·검증한다. 에이전트/Codex 실행 명령도 `git`과 Windows Playwright E2E를 제외하면 WSL에서만 수행한다. **E2E Playwright만 Windows 호스트에서 실행한다**(ADR-23 예외).
 
 ```bash
 # --- Linux / WSL2 (앱 런타임·백엔드·프론트엔드) ---
 # 단일 호스트 Docker Compose 통합 검증 (기본 실행 계약, ADR-18)
-docker compose up --build       # backend 8000, frontend 3000, rustfs, mcp
+docker compose up --build       # host API 12401 / MCP 12402 / Web 12405 / RustFS 12101·12105
 # 또는 smoke 검증 스크립트
 bash scripts/verify-docker-compose.sh
 

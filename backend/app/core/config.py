@@ -39,11 +39,10 @@ class Settings(BaseSettings):
 
     # --- 1. 프론트엔드 (참조용, 백엔드에서는 사용하지 않음) ---
     NEXT_PUBLIC_VWORLD_SERVICE_KEY: str = ""
-    NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:9041"
+    NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:12401"
     CORS_ALLOW_ORIGINS: str = (
-        "http://localhost:9042,http://127.0.0.1:9042,"
+        "http://localhost:12405,http://127.0.0.1:12405,"
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:13000,http://127.0.0.1:13000,"
         "http://localhost:13100,http://127.0.0.1:13100"
     )
 
@@ -57,7 +56,7 @@ class Settings(BaseSettings):
     API_KEYS: str = ""
 
     # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
-    DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent"
+    DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent"
     TRIPMATE_AGENT_TEST_PG_DSN: str = ""
 
     # --- LLM: Gemini ---
@@ -77,10 +76,10 @@ class Settings(BaseSettings):
 
     # --- RustFS 미디어 저장소 ---
     RUSTFS_ENABLED: bool = True
-    RUSTFS_ENDPOINT: str = "http://127.0.0.1:9003"
-    RUSTFS_PUBLIC_BASE_URL: str = "http://127.0.0.1:9003/krtour-map"
-    RUSTFS_DOCKER_ENDPOINT: str = "http://rustfs:9000"
-    RUSTFS_CONSOLE_URL: str = "http://127.0.0.1:9004"
+    RUSTFS_ENDPOINT: str = "http://127.0.0.1:12101"
+    RUSTFS_PUBLIC_BASE_URL: str = "http://127.0.0.1:12101/krtour-map"
+    RUSTFS_DOCKER_ENDPOINT: str = "http://host.docker.internal:12101"
+    RUSTFS_CONSOLE_URL: str = "http://127.0.0.1:12105"
     RUSTFS_ACCESS_KEY: str = ""
     RUSTFS_SECRET_KEY: str = ""
     RUSTFS_BUCKET_RAW_VIDEOS: str = "krtour-map"
@@ -102,7 +101,7 @@ class Settings(BaseSettings):
     MCP_WRITE_ENABLED: bool = False
     MCP_TRANSPORT: str = "stdio"
     MCP_HOST: str = "127.0.0.1"
-    MCP_PORT: int = 8010
+    MCP_PORT: int = 12402
     MCP_STREAMABLE_HTTP_PATH: str = "/mcp"
 
     # --- 4. 스케줄러 및 동시성 ---

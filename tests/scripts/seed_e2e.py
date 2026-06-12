@@ -1,4 +1,4 @@
-"""Playwright E2E용 SQLite fixture 데이터 적재."""
+"""Playwright E2E용 PostgreSQL/PostGIS fixture 데이터 적재."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from app.models import (
     SystemSetting,
     TravelPlace,
     VideoPlaceMapping,
+    YoutubeChannel,
     YoutubeVideo,
 )
 
@@ -33,12 +34,17 @@ async def main() -> None:
             MediaAsset,
             TravelPlace,
             YoutubeVideo,
+            YoutubeChannel,
             CrawlRun,
             AuditLog,
             SystemSetting,
         ):
             await session.execute(delete(model))
 
+        channel = YoutubeChannel(
+            channel_id="UC_E2E",
+            title="E2E 여행",
+        )
         video = YoutubeVideo(
             video_id="e2e-video-1",
             title="제주 월정리 여행",
@@ -60,7 +66,7 @@ async def main() -> None:
             api_source="vworld",
             is_geocoded=True,
         )
-        session.add_all([video, place])
+        session.add_all([channel, video, place])
         await session.flush()
 
         candidate = ExtractedPlaceCandidate(
@@ -123,7 +129,7 @@ async def main() -> None:
             storage_provider="rustfs",
             bucket="krtour-map",
             object_key="features/e2e-video-1/frame.jpg",
-            object_uri="http://127.0.0.1:9003/krtour-map/features/e2e-video-1/frame.jpg",
+            object_uri="http://127.0.0.1:12101/krtour-map/features/e2e-video-1/frame.jpg",
             content_type="image/jpeg",
             size_bytes=1024,
             retention_policy="infinite",

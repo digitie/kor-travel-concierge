@@ -1,22 +1,22 @@
 # TripMate Agent 단일 호스트 Docker Compose 구성
-# 서비스: rustfs(미디어 저장) / api(FastAPI) / mcp / scheduler / frontend(Next.js)
+# 서비스: api(FastAPI) / mcp / scheduler / frontend(Next.js)
 # api·mcp·scheduler는 같은 외부 PostgreSQL/PostGIS DB를 사용한다(ADR-25).
-# RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 서비스로 구동한다(ADR-15).
+# RustFS는 고정 host port 12101/12105의 별도 Docker 서비스를 사용한다(ADR-15).
 
 x-app-env-file: &app-env-file
   - path: .env
     required: false
 
 x-python-env: &python-env
-  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:15434/tripmate_agent}
-  NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-9041}
-  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-9042},http://127.0.0.1:${FRONTEND_HOST_PORT:-9042},http://localhost:13000,http://127.0.0.1:13000,http://localhost:13100,http://127.0.0.1:13100}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:5432/tripmate_agent}
+  NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-12401}
+  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-12405},http://127.0.0.1:${FRONTEND_HOST_PORT:-12405},http://localhost:3000,http://127.0.0.1:3000,http://localhost:13100,http://127.0.0.1:13100}
   RUSTFS_ENABLED: "true"
-  # 컨테이너 간 통신은 Compose 서비스명과 RustFS 기본 내부 포트(9000)를 사용한다.
-  RUSTFS_ENDPOINT: ${RUSTFS_DOCKER_ENDPOINT:-http://rustfs:9000}
-  RUSTFS_PUBLIC_BASE_URL: ${RUSTFS_PUBLIC_BASE_URL:-http://127.0.0.1:9003/krtour-map}
+  # RustFS는 이 repo Compose 밖의 고정 Docker 서비스(12101/12105)를 사용한다.
+  RUSTFS_ENDPOINT: ${RUSTFS_DOCKER_ENDPOINT:-http://host.docker.internal:12101}
+  RUSTFS_PUBLIC_BASE_URL: ${RUSTFS_PUBLIC_BASE_URL:-http://127.0.0.1:12101/krtour-map}
   # 콘솔은 사용자가 호스트(또는 WSL2) 브라우저에서 여는 공개 URL이다.
-  RUSTFS_CONSOLE_URL: http://127.0.0.1:9004
+  RUSTFS_CONSOLE_URL: http://127.0.0.1:12105
   RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
   RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
   RUSTFS_BUCKET_RAW_VIDEOS: ${RUSTFS_BUCKET_RAW_VIDEOS:-krtour-map}
@@ -36,11 +36,13 @@ x-python-env: &python-env
 
 services:
   rustfs:
-    # 별도 로컬 Docker RustFS 서비스. S3 API 9003, 콘솔 9004.
+    # 선택형 내장 RustFS. 기본 실행에서는 기존 고정 RustFS(host 12101/12105)를 사용한다.
+    # 필요할 때만 COMPOSE_PROFILES=embedded-rustfs 와 RUSTFS_DOCKER_ENDPOINT=http://rustfs:9000 으로 켠다.
+    profiles: ["embedded-rustfs"]
     image: rustfs/rustfs:latest
     ports:
-      - "${RUSTFS_HOST_PORT:-9003}:9000"
-      - "${RUSTFS_CONSOLE_HOST_PORT:-9004}:9001"
+      - "${RUSTFS_HOST_PORT:-12101}:9000"
+      - "${RUSTFS_CONSOLE_HOST_PORT:-12105}:9001"
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
@@ -63,14 +65,11 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     env_file: *app-env-file
     ports:
-      - "${API_HOST_PORT:-9041}:8000"
+      - "${API_HOST_PORT:-12401}:8000"
     environment:
       <<: *python-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      rustfs:
-        condition: service_started
     healthcheck:
       test:
         - CMD
@@ -89,12 +88,12 @@ services:
     command: python /app/mcp/server.py
     env_file: *app-env-file
     ports:
-      - "${MCP_HOST_PORT:-8010}:8010"
+      - "${MCP_HOST_PORT:-12402}:12402"
     environment:
       <<: *python-env
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
-      MCP_PORT: "8010"
+      MCP_PORT: "12402"
       MCP_STREAMABLE_HTTP_PATH: /mcp
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -115,8 +114,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      rustfs:
-        condition: service_started
 
   frontend:
     build:
@@ -130,7 +127,7 @@ services:
       BACKEND_API_KEY: ${BACKEND_API_KEY:-}
       NEXT_PUBLIC_VWORLD_SERVICE_KEY: ${NEXT_PUBLIC_VWORLD_SERVICE_KEY:-}
     ports:
-      - "${FRONTEND_HOST_PORT:-9042}:3000"
+      - "${FRONTEND_HOST_PORT:-12405}:3000"
     depends_on:
       api:
         condition: service_healthy

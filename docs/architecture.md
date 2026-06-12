@@ -20,8 +20,8 @@ source 정규화 테이블이 T-062까지 반영되었다.
 - `tripmate-agent`는 YouTube 장소 후보 provider가 되고, 범용
   `/api/v1/features/*` API를 제공한다. `python-krtour-map`은 이 API를 주기적으로
   pull하는 첫 consumer로서 후보를 feature로 승격한다.
-- TripMate curated plan은 `python-krtour-map`이 만든 `feature_id`와
-  `feature_snapshot`을 통해 소비한다.
+- TripMate는 `python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 자체
+  feature 연계 POI row에 저장하고, curated plan은 그 POI row들의 모음으로 구성한다.
 
 상세 테이블 후보와 API 계약은 `docs/youtube-feature-pipeline-plan.md`를 따른다.
 
@@ -106,14 +106,16 @@ source 정규화 테이블이 T-062까지 반영되었다.
 구현은 `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버의 별도 DB
 `tripmate_agent`를 기준으로 작성한다. RustFS는 애플리케이션 컨테이너에 내장하지
 않고 별도의 로컬 Docker 서비스로 실행하며, 앱은 S3 호환 엔드포인트로 접근한다.
-기본 host port는 고정값으로 API `http://localhost:9041`, Web
-`http://localhost:9042`(host가 컨테이너 내부 API `8000`·Web `3000`으로 매핑),
-RustFS S3 API `http://127.0.0.1:9003`, 콘솔 `http://127.0.0.1:9004`이고, 앱
-컨테이너 내부에서는 Compose 서비스명 `http://rustfs:9000`으로 접근한다(Windows
-사용자는 WSL2 안에서 동일하게 구동). `scripts/start-live.sh`는 기동 전
-`scripts/stop-fixed-ports.sh`로 고정 포트 `9041`/`9042`를 점유한 리스너를 회수해
-재시작을 보장한다(패턴은 `python-krtour-map`에서 차용). Compose CORS 허용 origin은
-`.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 `3000`, `13000`, `13100`의 local
+기본 host port는 고정값으로 API `http://localhost:12401`, MCP
+`http://localhost:12402/mcp`, Web `http://localhost:12405`(host가 컨테이너 내부 API
+`8000`·Web `3000`으로 매핑), 외부 RustFS S3 API `http://127.0.0.1:12101`,
+콘솔 `http://127.0.0.1:12105`이다. 앱 컨테이너는 RustFS를
+`http://host.docker.internal:12101`로 호출하고, `http://rustfs:9000`은 선택형
+`embedded-rustfs` profile에서만 사용한다(Windows 사용자는 WSL2 안에서 동일하게
+구동). `scripts/start-live.sh`는 기동 전 `scripts/stop-fixed-ports.sh`로
+이 repo 소유 고정 포트 `12401`/`12402`/`12405`를 점유한 리스너를 회수해
+재시작을 보장하고 RustFS 포트 `12101`/`12105`는 회수하지 않는다(패턴은 `python-krtour-map`에서 차용).
+Compose CORS 허용 origin은 `.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 `3000`, `12405`, `13100`의 local
 origin을 포함한다. REST API는 `/api/v1` 프리픽스 아래에 노출되고(`GET /health`·
 `GET /`만 버전 없음) `X-API-Key` 인증 경계를 가진다. 브라우저는 키를 직접 다루지
 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버
@@ -263,7 +265,7 @@ RustFS는 YouTube에서 확보한 대용량 파일을 PostgreSQL DB와 분리해
 - 장소 매칭 실패, 영상 제외, DB 논리 삭제가 발생해도 RustFS 객체를 자동 삭제하지 않는다.
 - 삭제 기능이 필요해질 경우 별도 관리자 작업, 감사 로그, 복구 가능성 검토를 거친 뒤 구현한다.
 
-로컬 Docker 기준 호스트 포트는 S3 API `9003`, 콘솔 `9004`를 사용한다. 호스트와 로컬 venv에서는 `http://127.0.0.1:9003`으로 접근하고, 공개 객체 URL은 `http://127.0.0.1:9003/krtour-map/{object_key}` 형식을 사용한다. RustFS 컨테이너 내부는 공식 기본 포트인 S3 API `9000`, 콘솔 `9001`을 유지하고 Compose port mapping으로 호스트 포트만 바꾼다. 앱 컨테이너 내부에서는 `http://rustfs:9000`으로 접근한다. 상태 확인은 `/health/live`를 우선 사용한다.
+로컬 Docker 기준 RustFS 호스트 포트는 S3 API `12101`, 콘솔 `12105`를 사용한다. 호스트와 로컬 venv에서는 `http://127.0.0.1:12101`으로 접근하고, 공개 객체 URL은 `http://127.0.0.1:12101/krtour-map/{object_key}` 형식을 사용한다. 앱 컨테이너 내부에서는 외부 고정 RustFS 서비스를 `http://host.docker.internal:12101`로 접근한다. RustFS 컨테이너 자체는 공식 기본 포트인 S3 API `9000`, 콘솔 `9001`을 유지하되 이 repo Compose의 기본 서비스에는 포함하지 않는다. 상태 확인은 `/health/live`를 우선 사용한다.
 
 ---
 
@@ -454,8 +456,8 @@ enqueue한다. APScheduler의 persistent job store는 job 정의와 next run tim
 
 ### 6.11 YouTube source 정규화 테이블
 
-`python-krtour-map`과 TripMate curated plan에서 영상·유튜버·재생목록 근거를
-사용할 수 있도록 YouTube source를 분리한다. 상세 컬럼은
+`python-krtour-map`과 TripMate feature 연계 POI/curated plan에서 영상·유튜버·재생목록
+근거를 사용할 수 있도록 YouTube source를 분리한다. 상세 컬럼은
 `docs/youtube-feature-pipeline-plan.md`가 우선한다.
 
 - `youtube_channels`: `channel_id` PK, 채널명, handle, 설명, 썸네일, 구독자 수,
@@ -498,11 +500,13 @@ Full snapshot API와 incremental changes API는 `/api/v1/features/*` 아래에
 추가한다. 특정 consumer 이름을 REST path에 넣지 않으며, 외부 호출이므로 ADR-24의
 `X-API-Key` 인증을 그대로 따른다.
 
-계약 정본은 `docs/feature-export-api.md`다. T-068 기준 TripMate curated plan/POI
-소비는 `tripmate-agent` DB 직접 접근이나 자동 등록이 아니라
-`python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 선택하는 흐름으로
-유지한다. 따라서 export item은 이름, 좌표, 8자리 카테고리 제안, YouTube 영상·채널·
-재생목록 근거와 confidence를 빠짐없이 포함해야 한다.
+계약 정본은 `docs/feature-export-api.md`다. T-068/T-069 기준 TripMate 소비는
+`tripmate-agent` DB 직접 접근이나 자동 등록이 아니라, `python-krtour-map`이 만든
+`feature_id`와 `feature_snapshot`을 TripMate의 feature 연계 POI row
+(`app.trip_day_pois`, `app.notice_pois`)에 저장하는 흐름으로 유지한다. Curated
+plan은 feature row 자체가 아니라 그 POI row들의 모음이다. 따라서 export item은 이름,
+좌표, 8자리 카테고리 제안, YouTube 영상·채널·재생목록 근거와 confidence를 빠짐없이
+포함해야 한다.
 
 ---
 

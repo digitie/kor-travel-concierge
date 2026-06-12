@@ -59,6 +59,6 @@ app = create_app()
 
 if __name__ == "__main__":
     # 실행 환경은 Linux Docker 전용이다. Compose는 컨테이너 내부에서
-    # `uvicorn main:app --host 0.0.0.0 --port 8000`으로 기동하고 host port 9041로
-    # 매핑한다. WSL2 등에서 직접 실행할 때는 고정 라이브 포트 9041을 사용한다.
-    uvicorn.run("main:app", host="0.0.0.0", port=9041, reload=True)
+    # `uvicorn main:app --host 0.0.0.0 --port 8000`으로 기동하고 host port 12401로
+    # 매핑한다. WSL2 등에서 직접 실행할 때는 고정 라이브 포트 12401을 사용한다.
+    uvicorn.run("main:app", host="0.0.0.0", port=12401, reload=True)

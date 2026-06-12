@@ -165,7 +165,7 @@ async def test_merge_places_moves_mappings_and_deletes_source(session_factory):
             place_id=source.place_id,
             bucket="tripmate-frames",
             object_key="video-merge/frame.jpg",
-            object_uri="http://localhost:9003/tripmate-frames/video-merge/frame.jpg",
+            object_uri="http://localhost:12101/tripmate-frames/video-merge/frame.jpg",
         )
         session.add_all([mapping, asset])
         await session.commit()

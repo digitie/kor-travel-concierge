@@ -20,7 +20,7 @@ load_dotenv()
 
 
 def main() -> int:
-    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:9003")
+    endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:12101")
     access_key = os.getenv("RUSTFS_ACCESS_KEY", "")
     secret_key = os.getenv("RUSTFS_SECRET_KEY", "")
     buckets = list(dict.fromkeys([

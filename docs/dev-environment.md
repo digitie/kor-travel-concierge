@@ -3,6 +3,7 @@
 본 문서는 `tripmate-agent` 프로젝트의 프론트엔드, 백엔드, ETL 파이프라인을 **Linux Docker**(앱 런타임/배포 전용, ADR-23)에서 빌드·실행하고, **E2E Playwright 테스트를 Windows 호스트에서 실행**(ADR-23 예외)하기 위한 상세 절차를 다룹니다. Windows 사용자는 앱 구동에 한해 WSL2(Ubuntu) + Docker를 사용합니다.
 
 > 앱 런타임을 Windows 네이티브로 직접 띄우지 않습니다. 모든 앱 실행 명령은 Linux/WSL2 bash 기준이며, E2E 하니스만 Windows 호스트에서 실행합니다.
+> 에이전트/Codex가 이 저장소에서 실행하는 명령은 `git` 명령과 Windows Playwright E2E를 제외하고 WSL2(Ubuntu) bash에서만 수행합니다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행합니다.
 > ADR-25/T-061 이후 DB는 PostgreSQL + PostGIS입니다. 신규 DB 작업은 Alembic migration과 모델을 함께 갱신합니다.
 
 ---
@@ -45,7 +46,7 @@
 
 4. `.env`에 PostgreSQL/PostGIS DSN을 지정합니다:
    ```dotenv
-   DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent
+   DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent
    ```
    실제 테스트 DB를 사용할 때는 disposable DB DSN을 `TRIPMATE_AGENT_TEST_PG_DSN`에 지정합니다.
 
@@ -53,7 +54,7 @@
    ```bash
    python main.py
    ```
-   서버는 `http://localhost:9041`에서 실행되며(`main.py` 직접 실행은 host 고정 포트 `9041`에 바인딩), API 명세(Swagger UI)는 `http://localhost:9041/docs`에서 확인할 수 있습니다. REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회합니다(ADR-24).
+   서버는 `http://localhost:12401`에서 실행되며(`main.py` 직접 실행은 host 고정 포트 `12401`에 바인딩), API 명세(Swagger UI)는 `http://localhost:12401/docs`에서 확인할 수 있습니다. REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회합니다(ADR-24).
 
 ---
 
@@ -63,24 +64,25 @@ RustFS는 앱 컨테이너에 포함하지 않고 별도의 로컬 Docker 서비
 
 권장 로컬 포트:
 
-- S3 API: `http://127.0.0.1:9003`
-- 콘솔: `http://127.0.0.1:9004`
-- 공개 객체 URL 기준: `http://127.0.0.1:9003/krtour-map`
+- S3 API: `http://127.0.0.1:12101`
+- 콘솔: `http://127.0.0.1:12105`
+- 공개 객체 URL 기준: `http://127.0.0.1:12101/krtour-map`
 
 Docker Compose 내부에서 `api`, `mcp`, `scheduler` 컨테이너가 RustFS에 접근할 때는
-호스트 포트가 아니라 서비스명과 내부 포트인 `http://rustfs:9000`을 사용합니다.
-`docker-compose.yml`은 이 값을 컨테이너 환경 변수로 override하므로, 로컬 `.env`의
-`RUSTFS_ENDPOINT=http://127.0.0.1:9003`은 컨테이너 밖 Linux/WSL2에서 직접 실행하는
-Python 프로세스 기준으로 유지합니다.
+이 repo Compose 밖의 고정 RustFS 서비스를 `http://host.docker.internal:12101`로 호출합니다.
+로컬 `.env`의 `RUSTFS_ENDPOINT=http://127.0.0.1:12101`은 컨테이너 밖 Linux/WSL2에서 직접 실행하는
+Python 프로세스 기준으로 유지하고, Compose 컨테이너용 `RUSTFS_DOCKER_ENDPOINT`는
+`http://host.docker.internal:12101`로 둡니다. 내장 RustFS profile을 임시로 켤 때만
+`RUSTFS_DOCKER_ENDPOINT=http://rustfs:9000`으로 override합니다.
 
 `.env`에는 다음 값을 둡니다.
 
 ```dotenv
 RUSTFS_ENABLED=true
-RUSTFS_ENDPOINT=http://127.0.0.1:9003
-RUSTFS_PUBLIC_BASE_URL=http://127.0.0.1:9003/krtour-map
-RUSTFS_DOCKER_ENDPOINT=http://rustfs:9000
-RUSTFS_CONSOLE_URL=http://127.0.0.1:9004
+RUSTFS_ENDPOINT=http://127.0.0.1:12101
+RUSTFS_PUBLIC_BASE_URL=http://127.0.0.1:12101/krtour-map
+RUSTFS_DOCKER_ENDPOINT=http://host.docker.internal:12101
+RUSTFS_CONSOLE_URL=http://127.0.0.1:12105
 RUSTFS_ACCESS_KEY=your_rustfs_access_key_here
 RUSTFS_SECRET_KEY=your_rustfs_secret_key_here
 RUSTFS_BUCKET_RAW_VIDEOS=krtour-map
@@ -125,9 +127,9 @@ RustFS health 확인 후 `api` 컨테이너 안에서 `scripts/verify_rustfs.py`
    ```bash
    npm run dev
    ```
-   웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다. 브라우저는 same-origin `/api/v1`(`NEXT_PUBLIC_API_BASE_URL` 기본 빈 값)로 호출하고, Next BFF Route Handler가 이를 서버 사이드에서 `BACKEND_ORIGIN`(기본 `http://localhost:9041`)으로 프록시하므로 별도 API base를 지정할 필요가 없습니다. 인증 환경에서는 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입하며, 로컬(`APP_ENV=local/test/e2e`)에서는 인증이 우회됩니다(ADR-24).
+   웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다. 브라우저는 same-origin `/api/v1`(`NEXT_PUBLIC_API_BASE_URL` 기본 빈 값)로 호출하고, Next BFF Route Handler가 이를 서버 사이드에서 `BACKEND_ORIGIN`(기본 `http://localhost:12401`)으로 프록시하므로 별도 API base를 지정할 필요가 없습니다. 인증 환경에서는 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입하며, 로컬(`APP_ENV=local/test/e2e`)에서는 인증이 우회됩니다(ADR-24).
 
-   `CORS_ALLOW_ORIGINS`는 환경변수, `.env`, 기본값 순서로 적용됩니다. 기본값에는 프론트엔드 개발 포트(`3000` 또는 `FRONTEND_HOST_PORT` override)와 E2E 포트 `13100`의 `localhost` 및 `127.0.0.1` origin을 포함합니다.
+   `CORS_ALLOW_ORIGINS`는 환경변수, `.env`, 기본값 순서로 적용됩니다. 기본값에는 Web 고정 포트 `12405`, 프론트엔드 단독 개발 포트 `3000`, E2E 포트 `13100`의 `localhost` 및 `127.0.0.1` origin을 포함합니다.
 
 4. 정적 검증을 실행합니다:
    ```bash
@@ -269,13 +271,17 @@ cp .env.example .env
 ./scripts/verify-docker-compose.sh
 ```
 
+`.env.example`의 `DATABASE_URL`은 Compose 컨테이너가 호스트 PostgreSQL/PostGIS에
+접속할 수 있도록 `host.docker.internal:5432`를 사용합니다. 컨테이너 밖 Linux/WSL2
+venv에서 백엔드를 직접 실행할 때만 `localhost:5432`로 override합니다.
+
 `scripts/verify-docker-compose.sh`가 수행하는 일:
 
 1. `docker compose config --quiet`로 Compose 문법과 환경 변수 해석을 확인합니다.
 2. `api`, `mcp`, `scheduler`, `frontend` 이미지를 빌드합니다(`SKIP_BUILD=1`로 생략 가능).
 3. `rustfs`, `api`, `mcp`, `scheduler`, `frontend`를 단일 프로젝트(`tripmate-agent-verify`)로 실행합니다.
-4. `http://127.0.0.1:9003/health/live`, `http://localhost:9041/health`, `http://localhost:9042` 응답을 확인합니다(고정 host port API `9041`→컨테이너 `8000`, Web `9042`→컨테이너 `3000`). API health(`/health`)는 버전 프리픽스 없이 노출되며, 검증 컨텍스트는 무인증입니다.
-5. MCP `streamable-http` 포트(`8010`)가 리스닝 중인지 확인합니다. MCP endpoint는 일반 브라우저 GET이 아니라 MCP client protocol로 접근해야 합니다.
+4. `http://127.0.0.1:12101/health/live`, `http://localhost:12401/health`, `http://localhost:12405` 응답을 확인합니다(고정 host port API `12401`→컨테이너 `8000`, Web `12405`→컨테이너 `3000`, 외부 RustFS 서비스 `12101`/`12105`). API health(`/health`)는 버전 프리픽스 없이 노출되며, 검증 컨텍스트는 무인증입니다.
+5. MCP `streamable-http` 포트(`12402`)가 리스닝 중인지 확인합니다. MCP endpoint는 일반 브라우저 GET이 아니라 MCP client protocol로 접근해야 합니다.
 6. `api` 컨테이너 안에서 `scripts/verify_rustfs.py`를 실행해 `krtour-map` 버킷 생성과 `features/healthcheck/t014-smoke.txt` 객체 업로드·조회를 확인합니다.
 7. 기본적으로 `docker compose down`으로 컨테이너를 정리합니다.
 
@@ -285,27 +291,16 @@ cp .env.example .env
 KEEP_RUNNING=1 ./scripts/verify-docker-compose.sh
 ```
 
-단순히 라이브로 띄우기만 하려면 `scripts/start-live.sh`를 사용합니다. 이 스크립트는 Docker CLI를 확인한 뒤 먼저 `scripts/stop-fixed-ports.sh`로 고정 host port `9041`/`9042`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수하고, 이어서 `docker compose up -d --build`로 `rustfs`/`api`/`mcp`/`scheduler`/`frontend`를 함께 띄우는 래퍼입니다. 따라서 이전 기동이 포트를 점유한 상태에서도 재시작이 성공합니다(포트 회수 패턴은 `python-krtour-map` 프로젝트에서 차용). 기동 후에는 API `http://localhost:9041`, Web `http://localhost:9042`로 접속합니다.
+단순히 라이브로 띄우기만 하려면 `scripts/start-live.sh`를 사용합니다. 이 스크립트는 Docker CLI를 확인한 뒤 먼저 `scripts/stop-fixed-ports.sh`로 이 repo 소유 고정 host port `12401`/`12402`/`12405`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수하고, 이어서 `docker compose up -d --build`로 `api`/`mcp`/`scheduler`/`frontend`를 띄우는 래퍼입니다. RustFS S3 API `12101`과 콘솔 `12105`는 외부 고정 Docker 서비스가 소유하므로 회수하지 않습니다. 따라서 이전 앱 기동이 포트를 점유한 상태에서도 재시작이 성공합니다(포트 회수 패턴은 `python-krtour-map` 프로젝트에서 차용). 기동 후에는 API `http://localhost:12401`, MCP `http://localhost:12402/mcp`, Web `http://localhost:12405`, RustFS S3 API `http://127.0.0.1:12101`, RustFS 콘솔 `http://127.0.0.1:12105`로 접속합니다.
 
 ```bash
 ./scripts/start-live.sh
 ```
 
-이미 다른 로컬 프로젝트가 기본 포트를 사용 중이면 host port override 환경 변수만 바꿔 검증합니다. `docker-compose.yml`은 `${RUSTFS_HOST_PORT}`, `${API_HOST_PORT}`, `${MCP_HOST_PORT}`, `${FRONTEND_HOST_PORT}`(및 `${RUSTFS_CONSOLE_HOST_PORT}`)를 지원합니다.
-
-```bash
-RUSTFS_HOST_PORT=19003 \
-RUSTFS_CONSOLE_HOST_PORT=19004 \
-API_HOST_PORT=18000 \
-MCP_HOST_PORT=18010 \
-FRONTEND_HOST_PORT=13000 \
-./scripts/verify-docker-compose.sh
-```
-
-예를 들어 API 포트만 바꾸려면 `API_HOST_PORT=18000 ./scripts/verify-docker-compose.sh`처럼 단일 변수만 지정합니다.
+이 저장소의 로컬 포트는 이제 고정값으로 다룹니다. `docker-compose.yml`은 `${API_HOST_PORT}`, `${MCP_HOST_PORT}`, `${FRONTEND_HOST_PORT}`를 repo 서비스 포트로 읽고, RustFS용 `${RUSTFS_HOST_PORT}`/`${RUSTFS_CONSOLE_HOST_PORT}`는 선택형 `embedded-rustfs` profile에서만 사용합니다. 일반 개발·검증·라이브 실행에서는 `.env.example`의 고정값 API `12401`, MCP `12402`, Web `12405`, 외부 RustFS `12101`/`12105`를 유지합니다. 충돌이 나면 다른 프로세스를 정리한 뒤 같은 포트로 다시 올립니다.
 
 Compose에서 MCP 서버는 로컬 `stdio` 기본값과 달리 `streamable-http` transport로 실행하며,
-기본 포트 기준 `http://localhost:8010/mcp`로 접근합니다.
+기본 포트 기준 `http://localhost:12402/mcp`로 접근합니다.
 
 ---
 
@@ -363,12 +358,12 @@ T-061 이후 앱은 `DATABASE_URL`이 가리키는 PostgreSQL/PostGIS 서버에 
 
 ### 3. Docker / WSL2 환경 문제
 WSL2에서 `docker` 명령을 찾지 못하거나 컨테이너가 기동하지 못할 수 있습니다.
-- **해결책**: WSL2(Ubuntu) 안에서 Docker Engine을 설치하거나 Docker Desktop의 WSL backend 통합을 활성화하고, `docker` 명령이 PATH에 잡히는지 확인합니다. 빌드 캐시나 네트워크 문제로 이미지 빌드가 실패하면 `docker compose build --no-cache`로 재시도합니다. 기본 포트가 이미 점유된 경우 8절의 host port override 환경 변수(`API_HOST_PORT` 등)로 우회합니다.
+- **해결책**: WSL2(Ubuntu) 안에서 Docker Engine을 설치하거나 Docker Desktop의 WSL backend 통합을 활성화하고, `docker` 명령이 PATH에 잡히는지 확인합니다. 빌드 캐시나 네트워크 문제로 이미지 빌드가 실패하면 `docker compose build --no-cache`로 재시도합니다. 고정 포트가 이미 점유된 경우 점유 프로세스를 정리한 뒤 같은 포트로 다시 올립니다.
 
 ### 4. VWorld 타일 로드 실패 (403 Forbidden)
 지도가 나오지 않고 회색 배경만 출력되는 현상입니다.
-- **해결책**: VWorld 개발자 센터에 등록된 API 키의 사용 도메인 설정이 실제 접속 origin을 포함하는지 재차 점검하십시오. Compose 기동 시 Web은 고정 host port `http://localhost:9042`(및 필요 시 API `http://localhost:9041`)이며, 프론트엔드를 컨테이너 밖에서 단독 실행하면 `http://localhost:3000`입니다.
+- **해결책**: VWorld 개발자 센터에 등록된 API 키의 사용 도메인 설정이 실제 접속 origin을 포함하는지 재차 점검하십시오. Compose 기동 시 Web은 고정 host port `http://localhost:12405`(및 필요 시 API `http://localhost:12401`)이며, 프론트엔드를 컨테이너 밖에서 단독 실행하면 `http://localhost:3000`입니다.
 
 ### 5. RustFS 헬스체크 실패
 RustFS 컨테이너는 실행 중인데 앱에서 저장소 연결 실패가 발생할 수 있습니다.
-- **해결책**: `RUSTFS_ENDPOINT`가 S3 API 포트(`9003`)를 가리키는지 확인하고, 브라우저 콘솔 포트(`9004`)와 혼동하지 마십시오. 사용하는 RustFS 이미지에 따라 `/health`와 `/health/live` 중 실제 200 응답을 반환하는 경로를 `RUSTFS_HEALTH_PATH`에 지정합니다.
+- **해결책**: `RUSTFS_ENDPOINT`가 S3 API 포트(`12101`)를 가리키는지 확인하고, 브라우저 콘솔 포트(`12105`)와 혼동하지 마십시오. 사용하는 RustFS 이미지에 따라 `/health`와 `/health/live` 중 실제 200 응답을 반환하는 경로를 `RUSTFS_HEALTH_PATH`에 지정합니다.

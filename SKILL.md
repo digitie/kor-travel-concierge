@@ -20,18 +20,19 @@
 - **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용(Linux/WSL).
 - **Node.js**: Node.js 20+ LTS 사용.
 - **E2E 테스트**: Playwright를 **Windows 호스트**에서 실행해 실제 사용자에 가까운 브라우저 화면을 검증한다(ADR-23 예외).
+- **Codex 실행 위치**: 에이전트/Codex가 실행하는 명령은 `git` 명령과 Windows Playwright E2E를 제외하고 모두 WSL2(Ubuntu) bash에서 수행한다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행한다.
 
 ## 2. 빠른 시작
 
 ### 기본 실행 (단일 호스트 Docker Compose, Linux/WSL2 — ADR-18/ADR-23)
 ```bash
-docker compose up -d --build    # host API 9041 / Web 9042 (컨테이너 내부 8000/3000), rustfs, mcp
+docker compose up -d --build    # host API 12401 / MCP 12402 / Web 12405, 외부 RustFS 12101·12105 사용
 # 또는 thin 런처 (고정 포트 회수 후 기동)
 bash scripts/start-live.sh
 # smoke 검증 (기동 → health 확인 → RustFS 검증 → 정리)
 bash scripts/verify-docker-compose.sh
 ```
-기동 후 API는 `http://localhost:9041`, Web은 `http://localhost:9042`로 접속한다(host 고정 포트 → 컨테이너 내부 API `8000`·Web `3000`). `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 고정 포트 `9041`/`9042`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수해 재시작을 보장한다(포트 회수 패턴은 `python-krtour-map`에서 차용).
+기동 후 API는 `http://localhost:12401`, MCP는 `http://localhost:12402/mcp`, Web은 `http://localhost:12405`, 외부 RustFS는 S3 API `http://127.0.0.1:12101`과 콘솔 `http://127.0.0.1:12105`로 접속한다. `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 이 repo 소유 고정 포트 `12401`/`12402`/`12405`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수해 재시작을 보장한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 회수하지 않는다(포트 회수 패턴은 `python-krtour-map`에서 차용).
 
 REST API는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받는다. 브라우저는 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하고 BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부 호출자는 `X-API-Key`를 직접 보낸다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24).
 
@@ -41,7 +42,7 @@ cd backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-python main.py                  # API 8000
+DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent python main.py  # API 12401
 ```
 
 ### 프론트엔드 단독 실행

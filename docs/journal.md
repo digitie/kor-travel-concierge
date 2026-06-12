@@ -4,19 +4,40 @@
 
 ---
 
-## 2026-06-11: T-068 TripMate curated plan 소비 흐름 검증
+## 2026-06-12: T-069 완료 — 통합 검증과 운영 문서 정리
 
 - **담당자**: Codex
-- **결론**: `tripmate-agent`는 TripMate DB에 직접 붙거나 자동 curated plan 등록을 수행하지 않는다. YouTube 장소 후보는 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 공급되고, `python-krtour-map`이 `tripmate-agent-youtube` provider로 이를 pull해 `feature_id`와 최종 `feature_snapshot`을 만든다. TripMate curated plan/POI 작성 흐름은 이 feature를 수동 선택·저장하는 방식으로 유지한다.
+- **배경**: T-061~T-070으로 이어진 PostgreSQL/PostGIS 전환, YouTube metadata/analysis/export, `python-krtour-map` consumer, TripMate feature 연계 POI 소비 흐름을 실제 실행 경로 기준으로 한 번에 검증하고 문서 상태를 완료로 닫는다.
+- **작업 내용**:
+  - T-062 이후 `youtube_videos.channel_id` FK가 생긴 상태에서도 Windows host Playwright seed가 통과하도록 `tests/scripts/seed_e2e.py`가 `YoutubeChannel` stub을 함께 적재하게 보정했다.
+  - WSL Docker PostgreSQL/PostGIS disposable DB 3개(`tripmate_agent_t069`, `tripmate_agent_t069_compose`, `tripmate_agent_t069_e2e`)로 backend/unit/E2E/Compose 검증을 분리했다.
+  - `python-krtour-map`은 기존 merged consumer를 수정하지 않고 unit provider smoke와 running `tripmate-agent` 대상 live `/api/v1/features/snapshot` pull smoke만 수행했다.
+  - TripMate sibling repo는 기존 미커밋 변경을 건드리지 않고, feature 연계 POI와 notice plan POI schema/model이 `tripmate-agent-youtube` feature id/snapshot을 받아 snapshot fallback view까지 유지하는지 smoke로 확인했다. 이 과정에서 TripMate `trip_view_builder`가 non-UUID `feature_id`를 fresh fetch 대상으로 파싱하지 못한다는 경고가 출력됐지만, 현재 T-068에서 확정한 수동 선택 + 저장 snapshot fallback 경로는 정상 동작했다.
+- **검증**:
+  - feature export target: `tests/test_feature_export_api.py` → `9 passed`
+  - backend 전체: `python -m pytest` → `198 passed`
+  - backend compile: `python -m compileall app ..\scheduler ..\tripmate_mcp` → 통과
+  - shell/Compose 정합성: `bash -n scripts/verify-docker-compose.sh scripts/start-live.sh scripts/stop-fixed-ports.sh`, `docker compose config --quiet` → 통과
+  - frontend: `npm run lint`, `npm run type-check`, `npm run build` → 통과
+  - Docker Compose smoke: `SKIP_BUILD=1 bash scripts/verify-docker-compose.sh` with override ports → RustFS/API/frontend/MCP/RustFS object smoke 통과
+  - Windows host Playwright E2E: `npx playwright test` → `4 passed`
+  - `python-krtour-map`: `tests/unit/test_providers_tripmate_agent.py` → `9 passed`
+  - live pull smoke: running backend `http://0.0.0.0:18082` + WSL consumer transform → `live_pull_ok 1 f_global_p_5894e112b38c3e3a 5 월정리 해변`
+  - TripMate POI/notice plan smoke: schema/model/snapshot fallback → `tripmate_poi_notice_smoke_ok f_global_p_5894e112b38c3e3a 월정리 해변`
+
+## 2026-06-11: T-068 TripMate feature 연계 POI/curated plan 소비 흐름 검증
+
+- **담당자**: Codex
+- **결론**: `tripmate-agent`는 TripMate DB에 직접 붙거나 자동 POI/curated plan 등록을 수행하지 않는다. YouTube 장소 후보는 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 공급되고, `python-krtour-map`이 `tripmate-agent-youtube` provider로 이를 pull해 `feature_id`와 최종 `feature_snapshot`을 만든다. TripMate는 이 값을 자체 feature 연계 POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장하고, curated plan은 그 POI row들의 모음으로 구성한다.
 - **작업 내용**:
   - 공급자 정본 계약 문서 `docs/feature-export-api.md`를 추가했다. 계획 문서가 아니라 실제 API 계약의 기준 문서이며, top-level `{items,next_cursor,has_more}`, opaque cursor, `upsert`/`reject`/`tombstone`, `X-API-Key`, TripMate 소비 필드를 명문화했다.
   - `backend/tests/test_feature_export_api.py`의 ready 후보 fixture를 YouTube channel/playlist, 장소 설명, `category_code_suggestion`, 도로명 주소, Gemini URL evidence, VWorld/Kakao/Naver evidence까지 포함하도록 보강했다.
-  - 새 회귀 테스트가 TripMate curated plan/POI snapshot까지 이어지는 이름, 좌표, 8자리 카테고리 제안, marker 색상 기준(`P-13`), YouTube 영상·채널·재생목록 근거, transcript/Gemini evidence를 확인한다.
-  - `docs/youtube-feature-pipeline-plan.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md`, `CLAUDE.md`, `docs/tasks.md`를 자동 등록 없음·수동 선택 흐름 유지 기준으로 정렬했다.
+  - 새 회귀 테스트가 TripMate feature 연계 POI snapshot까지 이어지는 이름, 좌표, 8자리 카테고리 제안, marker 색상 기준(`P-13`), YouTube 영상·채널·재생목록 근거, transcript/Gemini evidence를 확인한다.
+  - `docs/youtube-feature-pipeline-plan.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md`, `CLAUDE.md`, `docs/tasks.md`를 자동 POI/curated plan 등록 없음·수동 선택 흐름 유지 기준으로 정렬했다.
 - **검증**:
-  - `TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_t068 backend/.venv/bin/python -m pytest -s backend/tests/test_feature_export_api.py` → `9 passed`
-- **다음 작업**:
-  - T-069 통합 검증과 운영 문서 정리.
+  - `TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_t068 backend/.venv/bin/python -m pytest -s backend/tests/test_feature_export_api.py` → `9 passed`
+- **후속 상태**:
+  - T-069 통합 검증과 운영 문서 정리에서 완료.
 
 ## 2026-06-11: T-067 `python-krtour-map` consumer 상태 확인 (이미 머지됨)
 
@@ -26,7 +47,7 @@
   - PR #347(T-217c/d/e), #345(T-217g): 제안 연동 합의·integration-map·RustFS·동기화 신선도 대시보드.
   - fetcher는 snapshot(full)·changes(incremental)를 opaque cursor와 `X-API-Key`로 pull한다.
 - **process 메모(반성)**: 본 세션에서 `python-krtour-map`의 **stale·divergent 로컬 main**(origin에 없는 로컬 커밋)에서 분기해 T-217a/b를 처음부터 중복 구현했다. PR 생성 시점에 conflict/CI 미발화로 확인하다 origin/main의 #346과 중복임을 발견하고 중복 PR(#352)을 닫고 브랜치를 삭제했다. **교훈**: 형제 repo 작업 착수 전 반드시 `git fetch origin` 후 `origin/main` 기준으로 분기하고 기존 구현/머지 여부를 먼저 확인한다.
-- **남은 일**: 실제 live pull smoke(running tripmate-agent ↔ krtour-map Dagster)는 T-069 통합 검증에서 수행.
+- **후속 상태**: 실제 live pull smoke(running tripmate-agent ↔ krtour-map)는 T-069 통합 검증에서 완료.
 
 ## 2026-06-11: T-070 후속 — 수동 `create_place` 경로 카테고리 코드 보강
 
@@ -35,7 +56,7 @@
   - T-070은 자동 지오코딩 확정 경로(`geocode_service`)만 `category_code_suggestion`을 채웠다. 검수 큐에서 사용자가 신규 장소를 만드는 수동 `create_place` 경로도 채우도록 보강했다.
   - **주입형 selector로 layering 유지**: `place_service.resolve_candidate`에 `category_code_selector` 파라미터를 추가했다. services 계층이 etl을 직접 import하지 않도록, 실제 Gemini 선택기는 composition root가 주입한다. `category_suggestion.make_default_selector()`(Gemini 키 없으면 `None`)가 `(name, category_label, description, address) -> code|None` callable을 만든다.
   - **composition root 배선**: REST `POST /api/v1/destinations/unmatched/{id}/resolve`(`routes.py`)와 MCP `resolve_candidate`(`tripmate_mcp/tools.py`)가 `make_default_selector()`를 주입한다. `create_place` 분기에서만 신규 장소에 코드를 채우고, `match_existing`은 기존 장소를 건드리지 않는다.
-- **검증**: `localhost:15434` disposable DB에서 backend 전체 pytest **197 passed**(신규 place_service selector 2건 포함), compileall(`tripmate_mcp` 포함), import 순환참조 없음(routes/MCP→etl 단방향).
+- **검증**: `localhost:5432` disposable DB에서 backend 전체 pytest **197 passed**(신규 place_service selector 2건 포함), compileall(`tripmate_mcp` 포함), import 순환참조 없음(routes/MCP→etl 단방향).
 
 ## 2026-06-11: T-070 feature export `category_code_suggestion` 채우기
 
@@ -46,7 +67,7 @@
   - **Gemini 선택기**: `app/etl/category_suggestion.py`가 복사된 카탈로그를 Gemini에 보여주고 장소명·카테고리 label·설명·주소를 근거로 8자리 코드 하나를 고르게 한다(`poi_extraction`과 동일한 주입형 `LlmCallable` 패턴). 결과는 카탈로그에 존재하는 코드로 검증하고, 알 수 없는 코드·분류 미지정(`00000000`)·호출 실패는 `None`(제안 없음)으로 둔다(자동 확정 금지).
   - **저장·노출**: `TravelPlace.category_code_suggestion`(`String(16)`) 컬럼과 migration `20260610_0006`를 추가했다. `geocode_service.apply_geocode_to_candidate`가 장소 확정 시 기존 제안이 없을 때 한 번 채우며(생략 시 Gemini 키 유무 기반 기본 선택기, 명시적 `None`이면 제안 비활성), `feature_export_service` payload의 `category_code_suggestion`이 이 값을 노출한다(기존 하드코딩 `null` 대체).
   - **layering**: 선택기는 etl 계층에 두고 services→etl 역의존을 피했다. `feature_id` 생성은 여전히 `python-krtour-map` 책임이며, 수동 `create_place` 경로 보강은 후속으로 남긴다.
-- **검증** (`localhost:15434` PostGIS disposable DB):
+- **검증** (`localhost:5432` PostGIS disposable DB):
   - Alembic `upgrade head`(→`0006`), `downgrade 20260610_0005` → `upgrade` round-trip
   - Alembic offline SQL(`0005:head --sql`)에 `category_code_suggestion` 포함 확인
   - backend 전체 pytest → **195 passed**(신규 `test_category_suggestion` 13건, geocode/feature-export 추가 케이스 포함)
@@ -60,7 +81,7 @@
   - **멱등 동기화**: `feature_export_service.sync_feature_exports`가 후보 상태로부터 ledger를 멱등 동기화한다. payload가 의미 있게 바뀐 export에만 `nextval`로 새 sequence를 부여해, 변화가 없으면 cursor가 안정적이다(반복 호출이 churn을 만들지 않음). 확정(`ready`/`exported` + matched place) 후보는 `upsert`, `ignored`/`rejected` 후보는 과거 export가 있을 때만 `reject`, 후보가 사라진 ledger row는 `tombstone`으로 전환한다.
   - **범용 수집 API**: `GET /api/v1/features/snapshot`(현재 활성 `upsert`만)과 `GET /api/v1/features/changes`(`upsert`/`reject`/`tombstone` 모두)를 추가했다. 응답 item은 `export_id`, `operation`, `candidate_id`, place/address/coordinate/category suggestion, YouTube video/channel/playlist evidence, transcript/Gemini evidence, `source_record`(provider `tripmate-agent-youtube`, `raw_payload_hash`), `updated_at`를 포함하고, 페이지는 opaque base64 cursor와 `next_cursor`/`has_more`로 노출한다. REST path에는 특정 consumer 이름을 넣지 않고 ADR-24 `X-API-Key` 인증을 그대로 적용한다.
   - **category code 보류**: `python-krtour-map` 8자리 category mapping 확정 전까지 `category_code_suggestion`은 `null`로 두고 `category_label`만 제안한다(`feature_id` 생성은 consumer 책임).
-- **검증** (`python-kraddr-geo` PostgreSQL/PostGIS 서버 `localhost:15434`, disposable DB):
+- **검증** (`python-kraddr-geo` PostgreSQL/PostGIS 서버 `localhost:5432`, disposable DB):
   - `DATABASE_URL=...tripmate_agent_alembic alembic upgrade head` → `20260610_0005`까지 적용, `downgrade 20260610_0004` → `upgrade head` round-trip 성공
   - Alembic offline SQL(`20260610_0004:head --sql`)에 `feature_exports` 포함 확인
   - T-066 타깃 pytest `tests/test_feature_export_api.py` → `7 passed`
@@ -79,11 +100,11 @@
   - **API/MCP 응답 보강**: FastAPI 검수 큐와 MCP candidate/mapping serializer가 provenance/evidence/export 필드를 반환한다.
   - **남은 확인 유지**: Google Places API 보강은 과금·저장 정책·라이선스 확인 전까지 구현하지 않았고, `python-krtour-map` 8자리 category mapping은 별도 작업으로 남겼다.
 - **검증**:
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head` → `20260610_0004` 적용
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_summarize.py backend/tests/test_etl_geocode_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_api.py backend/tests/test_mcp_tools.py` → `39 passed`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head` → `20260610_0004` 적용
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_summarize.py backend/tests/test_etl_geocode_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_api.py backend/tests/test_mcp_tools.py` → `39 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
   - `backend/.venv/bin/python -m compileall backend/app backend/tests tripmate_mcp backend/alembic scheduler`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -101,13 +122,13 @@
   - **scheduler 연결**: `video_analysis` handler가 T-063 placeholder를 넘어 `url_summary`와 `reconcile` pending run을 순서대로 실행한다. 실행 결과와 실패는 `youtube_video_analysis_runs`에 남기고, crawl_run 결과에는 실행·실패 건수를 요약한다.
   - **transcript summary 저장**: 기존 자막 기반 POI 추출 결과의 `summary`를 `youtube_videos.transcript_summary`에 저장해 reconcile 프롬프트의 입력으로 재사용한다.
 - **검증**:
-  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:15434`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py` → `21 passed`
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py` → `21 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
   - `backend/.venv/bin/python -m compileall backend/app/etl/video_analysis_service.py scheduler/worker.py backend/app/etl/summarize_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py`
   - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -125,13 +146,13 @@
   - **APScheduler persistent job store 적용**: 기본 scheduler 실행 경로에서 PostgreSQL SQLAlchemyJobStore를 사용해 `crawl-run-worker`와 `source-scan-enqueue` interval job 정의를 `apscheduler_jobs`에 저장한다. 실제 작업 상태와 payload는 계속 `crawl_runs`가 source of truth다.
   - **범용 REST API 명명 정리**: T-066 계획을 `/api/v1/features/snapshot`, `/api/v1/features/changes`, `feature_exports` ledger 기준으로 고쳐 REST path에서 특정 downstream 이름을 제거했다.
 - **검증**:
-  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:15434`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_scheduler_worker.py backend/tests/test_postgis_database.py` → `20 passed`
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `tripmate_agent_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_scheduler_worker.py backend/tests/test_postgis_database.py` → `20 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `168 passed`
   - APScheduler SQLAlchemyJobStore smoke에서 `apscheduler_jobs_smoke` 테이블 생성 확인 후 제거
   - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:15434/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/tripmate_agent_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -187,8 +208,8 @@
 - **작업 내용**:
   - **DB 전환 결정 문서화**: ADR-25를 추가해 SQLite + SpatiaLite에서 PostgreSQL + PostGIS로 전환하고, `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `tripmate_agent`를 쓰는 목표를 정리했다.
   - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `tripmate-agent`가 YouTube 장소 후보 provider가 되고, 범용 `/api/v1/features/*` API를 full/incremental 방식으로 제공해 downstream consumer가 feature로 승격하는 경계를 정리했다.
-  - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, 범용 feature export API, TripMate curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
-  - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, 범용 feature API, sibling repo consumer, TripMate curated plan 검증, 통합 검증 순서로 나눴다.
+  - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, 범용 feature export API, TripMate feature 연계 POI/curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
+  - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, 범용 feature API, sibling repo consumer, TripMate feature 연계 POI/curated plan 검증, 통합 검증 순서로 나눴다.
   - **아키텍처 정렬**: `docs/architecture.md` 상단에 2026-06-10 전환 기준을 추가하고, 목표 DB와 feature 공급 흐름을 최신 결정에 맞춰 보강했다.
 - **다음 작업**:
   - T-061 PostgreSQL/PostGIS 전환 및 Alembic bootstrap.
@@ -199,7 +220,7 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **BFF 프록시 도입 (P1-2)**: `NEXT_PUBLIC_*`는 빌드 시 브라우저 번들에 인라인되어 보안 경계가 못 되므로, 브라우저가 API 키를 더 이상 보내지 않도록 same-origin Next BFF(catch-all Route Handler `frontend/src/app/api/v1/[...path]/route.ts`)를 도입. BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다. 프록시 대상은 서버 전용 `BACKEND_ORIGIN`(Compose `http://api:8000`, 로컬 기본 `http://localhost:9041`).
+  - **BFF 프록시 도입 (P1-2)**: `NEXT_PUBLIC_*`는 빌드 시 브라우저 번들에 인라인되어 보안 경계가 못 되므로, 브라우저가 API 키를 더 이상 보내지 않도록 same-origin Next BFF(catch-all Route Handler `frontend/src/app/api/v1/[...path]/route.ts`)를 도입. BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다. 프록시 대상은 서버 전용 `BACKEND_ORIGIN`(Compose `http://api:8000`, 로컬 기본 `http://localhost:12401`).
   - **인증 환경 export 정상화 (P1-1)**: export 등 top-level navigation 다운로드는 fetch 헤더를 못 붙여 인증 환경에서 401이 발생했는데, BFF 경유로 키가 서버 사이드에서 주입되어 정상 동작한다.
   - **`NEXT_PUBLIC_API_KEY` 제거**: 해당 환경 변수를 삭제. `NEXT_PUBLIC_API_BASE_URL`은 기본 빈 값으로 두어 브라우저가 same-origin(`/api/v1`)으로 호출하게 하고, 백엔드 직접 호출 시에만 설정한다. 직접/외부(비-브라우저) 호출자는 여전히 `X-API-Key`를 직접 보낸다.
   - **문서 정렬**: `docs/decisions.md`(ADR-24 프론트엔드 연동·결과·보강 노트), `README.md`, `docs/dev-environment.md`, `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, `docs/architecture.md`, `docs/tasks.md`를 BFF 기준으로 정렬.
@@ -212,9 +233,9 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **결정 정정 (ADR-23/ADR-18)**: Compose host port를 표준 `8000`/`3000`으로 되돌린다는 이전 서술을 반전. host port는 고정 `9041`(API)/`9042`(Web)를 유지하고 컨테이너 내부는 `8000`/`3000`을 유지(host가 `9041→8000`, `9042→3000` 매핑)하는 것으로 문서를 정렬.
-  - **포트 회수 런처 추가**: `python-krtour-map` 프로젝트에서 차용한 `scripts/stop-fixed-ports.sh`를 도입. 고정 포트 `9041`/`9042`를 점유한 리스너(Linux/Docker/WSL/Windows)를 정리한다. `scripts/start-live.sh`는 `docker compose up -d --build` 이전에 이 회수 스크립트를 먼저 실행해 이전 기동이 포트를 점유한 상태에서도 재시작이 성공하도록 보강.
-  - **문서 정렬**: `docs/decisions.md`(ADR-23 결정·ADR-18 보강 노트), `docs/dev-environment.md`(§8 health check, start-live 설명, VWorld 도메인), `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/tasks.md`의 host 접속 포트와 라이브 런처 설명을 고정 `9041`/`9042` 기준으로 정렬. 컨테이너 내부 포트(`uvicorn --port 8000`, `next` 3000)와 E2E 포트(`18080`/`13100`)는 그대로 유지.
+  - **결정 정정 (ADR-23/ADR-18)**: Compose host port를 표준 `8000`/`3000`으로 되돌린다는 이전 서술을 반전. host port는 고정 `12401`(API)/`12405`(Web)를 유지하고 컨테이너 내부는 `8000`/`3000`을 유지(host가 `12401→8000`, `12405→3000` 매핑)하는 것으로 문서를 정렬.
+  - **포트 회수 런처 추가**: `python-krtour-map` 프로젝트에서 차용한 `scripts/stop-fixed-ports.sh`를 도입. 고정 포트 `12401`/`12405`를 점유한 리스너(Linux/Docker/WSL/Windows)를 정리한다. `scripts/start-live.sh`는 `docker compose up -d --build` 이전에 이 회수 스크립트를 먼저 실행해 이전 기동이 포트를 점유한 상태에서도 재시작이 성공하도록 보강.
+  - **문서 정렬**: `docs/decisions.md`(ADR-23 결정·ADR-18 보강 노트), `docs/dev-environment.md`(§8 health check, start-live 설명, VWorld 도메인), `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/tasks.md`의 host 접속 포트와 라이브 런처 설명을 고정 `12401`/`12405` 기준으로 정렬. 컨테이너 내부 포트(`uvicorn --port 8000`, `next` 3000)와 E2E 포트(`18080`/`13100`)는 그대로 유지.
 - **다음 작업**:
   - 현재 등록된 대기 작업 없음.
 
@@ -226,7 +247,7 @@
 - **작업 내용**:
   - **버저닝 (ADR-24)**: 모든 REST 엔드포인트를 `APIRouter(prefix="/api/v1")` 아래로 이동. 운영 점검용 `GET /health`와 루트 `GET /`는 버전 없이 유지. 향후 비호환 변경은 같은 패턴으로 `/api/v2`를 추가.
   - **인증 코드 (`X-API-Key`)**: `app/core/security.py`의 `require_api_key` 의존성을 라우터 전체에 적용. 설정 `APP_ENV`(기본 `local`)·`API_AUTH_ENABLED`(기본 false)·`API_KEYS`를 추가해 로컬(`local/test/e2e`)은 무인증 우회, 비-local은 유효 키를 강제(키 미설정 시 안전 측 401).
-  - **연동 정리**: `docker-compose.yml`이 `APP_ENV`/`API_AUTH_ENABLED`/`API_KEYS`를 전달(기본 로컬 친화). 브라우저는 same-origin Next BFF Route Handler(`/api/v1/*`) 경유로 호출하고 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입(키는 브라우저 비노출). E2E backend는 `APP_ENV=e2e`로 무인증. `main.py` 직접 실행은 host 고정 포트 `9041`에 바인딩(컨테이너 내부 uvicorn은 8000 유지, host `9041→8000` 매핑).
+  - **연동 정리**: `docker-compose.yml`이 `APP_ENV`/`API_AUTH_ENABLED`/`API_KEYS`를 전달(기본 로컬 친화). 브라우저는 same-origin Next BFF Route Handler(`/api/v1/*`) 경유로 호출하고 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입(키는 브라우저 비노출). E2E backend는 `APP_ENV=e2e`로 무인증. `main.py` 직접 실행은 host 고정 포트 `12401`에 바인딩(컨테이너 내부 uvicorn은 8000 유지, host `12401→8000` 매핑).
   - **검증**: backend pytest 전체 통과(신규 `test_api_auth.py` 6건 포함), `py_compile` 통과.
 - **다음 작업**:
   - 현재 등록된 대기 작업 없음.
@@ -241,7 +262,7 @@
   - **PowerShell 자산 제거**: `scripts/ensure-windows-ffmpeg.ps1`, `scripts/start-windows-live.ps1`, `scripts/verify-docker-compose.ps1`을 삭제.
   - **bash 스크립트 추가**: `scripts/verify-docker-compose.sh`(Compose 기동 → health 확인 → `verify_rustfs.py` → 정리)와 thin 런처 `scripts/start-live.sh`(`docker compose up --build`)를 추가.
   - **FFmpeg 단일 경로화**: `FFMPEG_PATH` 기본값을 `/usr/bin/ffmpeg`로 두고 `DOCKER_FFMPEG_PATH` 이원화를 제거. 컨테이너 이미지가 apt로 제공하는 경로만 사용.
-  - **host port 유지**: Compose 고정 host port `9041`(API)/`9042`(Web)를 유지(컨테이너 내부는 `8000`/`3000`이며 host가 `9041→8000`, `9042→3000`으로 매핑)하고, 더 이상 Windows 전용이 아닌 OS 중립 표준 host port로 정리. `docker-compose.yml`, `config.py`, `.env.example`의 API base URL·CORS 기본값을 고정 포트 기준으로 정렬.
+  - **host port 유지**: Compose 고정 host port `12401`(API)/`12405`(Web)를 유지(컨테이너 내부는 `8000`/`3000`이며 host가 `12401→8000`, `12405→3000`으로 매핑)하고, 더 이상 Windows 전용이 아닌 OS 중립 표준 host port로 정리. `docker-compose.yml`, `config.py`, `.env.example`의 API base URL·CORS 기본값을 고정 포트 기준으로 정렬.
   - **크로스 플랫폼 정리**: frontend `dev:live` 스크립트 제거, `.gitattributes`의 `*.ps1` CRLF 규칙 제거, frame extraction 테스트 stub의 Windows 경로 문자열을 Linux 경로로 교체. 단 E2E 런처(`tests/scripts/start-backend.mjs`·`start-frontend.mjs`)는 Windows 호스트에서 실행되므로 OS별 처리(venv interpreter 경로 해석, `taskkill` 자식 프로세스 트리 정리)를 유지한다(ADR-23 E2E 예외).
   - **문서 재작성**: `docs/dev-environment.md`를 "Linux/Docker(및 Windows WSL2) 개발 환경 구축"으로 전면 개편하고, `README.md`, `SKILL.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/decisions.md`(ADR-23 추가, ADR-6 supersede)를 bash/Docker/WSL2 기준으로 정렬.
   - **검증**: 편집한 backend Python `py_compile`, bash 스크립트 `bash -n` 구문 검사 통과. (Docker/npm 빌드는 호스트 가용성 문제로 실행하지 않음)
@@ -438,10 +459,10 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **Compose CORS override 복구**: `docker-compose.yml`의 `CORS_ALLOW_ORIGINS`가 `.env` 값을 우선하도록 바꾸고, 기본값에 Windows live Web 포트(`9042` 또는 `FRONTEND_HOST_PORT` override), 로컬 개발 `3000`, Compose smoke `13000`, Playwright E2E `13100` origin을 포함.
+  - **Compose CORS override 복구**: `docker-compose.yml`의 `CORS_ALLOW_ORIGINS`가 `.env` 값을 우선하도록 바꾸고, 기본값에 Windows live Web 포트(`12405` 또는 `FRONTEND_HOST_PORT` override), 로컬 개발 `3000`, Compose smoke `12405`, Playwright E2E `13100` origin을 포함.
   - **Windows live CORS 우선순위 정리**: `scripts\start-windows-live.ps1`도 현재 PowerShell 환경변수, `.env`, 기본값 순서로 `CORS_ALLOW_ORIGINS`를 적용하도록 변경.
   - **포트 종료 안전장치**: `Stop-PortOwner`가 포트 점유 프로세스의 command line 또는 executable path에서 현재 TripMate 워크트리 경로가 확인되는 경우에만 자동 종료하도록 보강.
-  - **명시 강제 옵션 추가**: 다른 프로세스가 `9041` 또는 `9042`를 점유하면 중단하고, 의도한 종료일 때만 `-ForcePortKill`을 명시하도록 안내.
+  - **명시 강제 옵션 추가**: 다른 프로세스가 `12401` 또는 `12405`를 점유하면 중단하고, 의도한 종료일 때만 `-ForcePortKill`을 명시하도록 안내.
   - **문서 갱신**: README, 개발 환경, 아키텍처, ADR 실행 계약, PR #30 추적 문서를 새 정책에 맞춤.
   - **검증**: Windows PowerShell parser 검증 통과. `docker compose --env-file .env config --quiet`, `CORS_ALLOW_ORIGINS='http://example.test' docker compose --env-file .env config`, 기본 compose config의 CORS origin 목록 확인 통과.
 - **다음 작업**:
@@ -566,9 +587,9 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **기준값 확인**: `python-kraddr-geo-codex`의 RustFS 운영 기준이 S3 API `9003`, console `9004`, 기본 credential `rustfsadmin`, 로컬 운영 주체 `kraddr-geo-rustfs`임을 확인.
+  - **기준값 확인**: `python-kraddr-geo-codex`의 RustFS 운영 기준이 S3 API `12101`, console `12105`, 기본 credential `rustfsadmin`, 로컬 운영 주체 `kraddr-geo-rustfs`임을 확인.
   - **로컬 credential 통일**: 현재 워크트리와 `tripmate-agent-live-test`의 `.env` RustFS credential을 `python-kraddr-geo` 기본값과 맞추고, 두 워크트리의 RustFS 블록이 동일한지 마스킹 diff로 확인.
-  - **설정 표면 정리**: `.env.example`, README, `SKILL.md`, Docker Compose, `Settings`, RustFS init/verify 스크립트, scaffold `etl/media.py`가 호스트 `http://127.0.0.1:9003`, Docker 내부 `http://rustfs:9000`, 단일 `krtour-map` 버킷, `features/` prefix, public base URL `http://127.0.0.1:9003/krtour-map`을 쓰도록 정리.
+  - **설정 표면 정리**: `.env.example`, README, `SKILL.md`, Docker Compose, `Settings`, RustFS init/verify 스크립트, scaffold `etl/media.py`가 호스트 `http://127.0.0.1:12101`, Docker 내부 `http://rustfs:9000`, 단일 `krtour-map` 버킷, `features/` prefix, public base URL `http://127.0.0.1:12101/krtour-map`을 쓰도록 정리.
   - **live-test 보강**: `tripmate-agent-live-test`에 빠져 있던 `RUSTFS_PUBLIC_BASE_URL`, `RUSTFS_DOCKER_ENDPOINT`, `RUSTFS_OBJECT_PREFIX`, `RUSTFS_REGION`과 관련 테스트 기대값을 반영.
   - **런타임 반영**: 실행 중이던 `tripmate-agent-rustfs-1`을 새 `.env` 기준으로 재생성해 컨테이너 credential도 `rustfsadmin`으로 맞춤.
   - **검증**: `docker compose --env-file .env config --quiet`, backend `.venv/bin/pytest --capture=no -q` 137건, `python3 -m compileall`, frontend `npm run lint`, `npm run type-check`, `npm run build`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` 객체 smoke, Playwright E2E 4건 통과.
@@ -584,7 +605,7 @@
   - **장소 생성 본수정**: `pipeline.run_harvest`가 적재한 `video_ids`를 반환하고, scheduler `harvest` handler가 신규 영상의 자막 추출, Gemini POI 요약, 지오코딩 적용 후처리를 이어 실행하도록 `postprocess_service`를 추가.
   - **장소 목록 반영 보장**: 후처리에서 확정 가능한 후보는 `travel_places`와 `video_place_mappings`까지 생성하고, 모호하거나 공급자 키가 없는 후보는 `needs_review`로 남기도록 구성.
   - **상세 상태 로그 연결**: 자막 추출, RustFS 저장, Gemini 보정, 후보 생성, 위치 보정, 확정 장소/검수 대기 집계를 scheduler reporter로 기록해 작업 상태 타임라인에 남기도록 연결.
-  - **RustFS 개발 설정 반영**: 로컬 venv/브라우저 기준 endpoint를 `http://127.0.0.1:9003`, Docker 내부 endpoint를 `http://rustfs:9000`, 단일 버킷을 `krtour-map`, object prefix를 `features`, 공개 URL 기준을 `http://127.0.0.1:9003/krtour-map`으로 정리. 로컬 `.env`에는 제공된 개발 접속값을 반영하고, 추적 문서에는 secret placeholder만 유지.
+  - **RustFS 개발 설정 반영**: 로컬 venv/브라우저 기준 endpoint를 `http://127.0.0.1:12101`, Docker 내부 endpoint를 `http://rustfs:9000`, 단일 버킷을 `krtour-map`, object prefix를 `features`, 공개 URL 기준을 `http://127.0.0.1:12101/krtour-map`으로 정리. 로컬 `.env`에는 제공된 개발 접속값을 반영하고, 추적 문서에는 secret placeholder만 유지.
   - **검증**: 관련 ETL/스케줄러 테스트 30건, backend pytest 137건, `compileall`, `docker compose --env-file .env config --quiet`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` smoke, Playwright E2E 4건 통과.
 - **다음 작업**:
   - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
@@ -627,7 +648,7 @@
   - **Web 기동 안정화**: Windows PowerShell 세션에서 `npm.cmd` 또는 `.cmd` 내부 `node` PATH 해석이 실패하는 환경을 확인하고, `scripts/start-windows-live.ps1`이 Windows Node.js 설치 경로를 직접 찾아 Next.js CLI를 `node.exe`로 실행하도록 보강.
   - **Gemini 설정 보정**: live `.env`의 `gemini-flash-latest` 값을 설정 화면에서 그대로 표시·저장할 수 있도록 Gemini 엔진 선택지에 추가.
   - **Input hydration 경고 제거**: SSR/클라이언트 style 속성이 달라지는 경고를 확인하고, 공용 `Input`을 native `input` 기반으로 단순화한 뒤 브라우저 주입 속성 차이를 hydration 경고에서 제외.
-  - **live test 정리**: API `9041`, Web `9042`, RustFS `9003/9004`, Gemini/YouTube/VWorld/Kakao 키 smoke, Playwright 화면 검증을 clean worktree와 Windows 프로세스 기준으로 재확인.
+  - **live test 정리**: API `12401`, Web `12405`, RustFS `12101/12105`, Gemini/YouTube/VWorld/Kakao 키 smoke, Playwright 화면 검증을 clean worktree와 Windows 프로세스 기준으로 재확인.
 - **다음 작업**:
   - 현재 등록된 대기 작업 없음.
 
@@ -653,8 +674,8 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **고정 포트 반영**: Windows live API 포트를 `9041`, Web 포트를 `9042`로 정하고 `.env.example`, backend 설정 fallback, frontend API fallback, Docker Compose host port 기본값을 갱신.
-  - **실행 스크립트 추가**: `scripts/start-windows-live.ps1`을 추가해 `9041`/`9042` 점유 리스너를 먼저 종료하고 RustFS/API/Web을 고정 포트로 띄우도록 구성.
+  - **고정 포트 반영**: Windows live API 포트를 `12401`, Web 포트를 `12405`로 정하고 `.env.example`, backend 설정 fallback, frontend API fallback, Docker Compose host port 기본값을 갱신.
+  - **실행 스크립트 추가**: `scripts/start-windows-live.ps1`을 추가해 `12401`/`12405` 점유 리스너를 먼저 종료하고 RustFS/API/Web을 고정 포트로 띄우도록 구성.
   - **문서 갱신**: README, 개발 환경 문서, 아키텍처, ADR-18, 에이전트 컨텍스트 문서에 Windows live 포트와 포트 점유 시 처리 방법을 반영.
 - **다음 작업**:
   - Windows 호스트에서 서버를 띄우고 live test를 진행한다.
@@ -797,13 +818,13 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **Compose 실행 계약 보강**: `.env`가 없어도 `docker compose config --quiet`가 통과하도록 optional `env_file`을 적용하고, 기본 포트가 이미 사용 중인 환경을 위해 `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT` override를 추가.
-  - **RustFS 네트워크 분리**: Windows 호스트 URL은 `localhost:9003/9004`, 컨테이너 내부 endpoint는 `http://rustfs:9000`으로 분리. RustFS 기본 버킷 환경 변수와 무기한 보존 정책을 Compose 공통 환경에 포함.
-  - **MCP Compose 실행**: 로컬 기본값은 `stdio`로 유지하고, Docker Compose에서는 `streamable-http` transport를 `0.0.0.0:8010/mcp`로 실행하도록 설정.
+  - **RustFS 네트워크 분리**: Windows 호스트 URL은 `localhost:12101/12105`, 컨테이너 내부 endpoint는 `http://rustfs:9000`으로 분리. RustFS 기본 버킷 환경 변수와 무기한 보존 정책을 Compose 공통 환경에 포함.
+  - **MCP Compose 실행**: 로컬 기본값은 `stdio`로 유지하고, Docker Compose에서는 `streamable-http` transport를 `0.0.0.0:12402/mcp`로 실행하도록 설정.
   - **시작 순서 보정**: API healthcheck를 추가하고 MCP/scheduler/frontend는 API healthy 이후 시작하도록 구성해 SQLite DDL race를 방지.
   - **DB 초기화 수정**: `aiosqlite` connect event에서 SpatiaLite extension loading을 `run_async` 경유로 수행하게 수정하고, 공간 컬럼 존재 검사에서 `scalar()`를 두 번 소비하던 버그를 수정.
   - **검증 자동화**: `scripts/verify-docker-compose.ps1`과 `scripts/verify_rustfs.py`를 추가. health, MCP port listening, RustFS 버킷 생성, smoke 객체 업로드·조회를 수행.
   - **빌드 최적화**: 루트와 프론트엔드 `.dockerignore`를 추가해 Docker build context를 root 6.47KB, frontend 1.34KB 수준으로 축소.
-  - **실행 검증**: 기존 로컬 서비스가 기본 포트를 사용 중이라 `19003/19004`, `18000`, `18010`, `13000`으로 override하여 `rustfs`, `api`, `mcp`, `scheduler`, `frontend` 전체 실행 확인. RustFS/API/frontend HTTP 200, MCP port listening, RustFS 3개 버킷 smoke 객체 업로드·조회, SQLite DB 파일 생성 확인.
+  - **실행 검증**: 기존 로컬 서비스가 기본 포트를 사용 중이라 `12101/12105`, `12401`, `12402`, `12405`으로 override하여 `rustfs`, `api`, `mcp`, `scheduler`, `frontend` 전체 실행 확인. RustFS/API/frontend HTTP 200, MCP port listening, RustFS 3개 버킷 smoke 객체 업로드·조회, SQLite DB 파일 생성 확인.
   - **제한 사항**: Windows PowerShell에서 Docker CLI가 PATH에 없어 PowerShell 래퍼는 preflight 실패 메시지까지만 확인. 같은 Docker engine에 대해 WSL Docker CLI로 Compose smoke를 완료.
   - **테스트**: backend pytest 105건, `npm run lint`, `npm run type-check`, `npm run build`, `docker compose config --quiet`, Docker Compose build/up/RustFS smoke 통과.
 - **다음 작업**:
@@ -1001,7 +1022,7 @@
     - `app/core/logging.py`: API 키 마스킹 헬퍼.
     - `app/models`, `app/services`, `app/api`: 구현 대상 명시한 패키지 스캐폴드. `main.py`를 팩토리 패턴 + 라우터 조립 구조로 리팩터링.
   - **누락 디렉토리 생성**: `mcp/`(server + 읽기/쓰기 도구 메타데이터), `scheduler/`(단일 실행자 루프), `etl/media.py`(RustFS 저장 계층) 신설.
-  - **Docker Compose 초안**: `frontend`, `api`, `mcp`, `scheduler`, `rustfs` 서비스와 SQLite/RustFS 데이터 볼륨, `Dockerfile.python`(공용 Python 이미지), `frontend/Dockerfile` 작성. RustFS는 별도 서비스로 분리(S3 API 9003, 콘솔 9004).
+  - **Docker Compose 초안**: `frontend`, `api`, `mcp`, `scheduler`, `rustfs` 서비스와 SQLite/RustFS 데이터 볼륨, `Dockerfile.python`(공용 Python 이미지), `frontend/Dockerfile` 작성. RustFS는 별도 서비스로 분리(S3 API 12101, 콘솔 12105).
   - **RustFS 버킷 초기화**: `scripts/init_rustfs_buckets.py`로 3개 버킷 멱등 생성 절차 정리.
   - **컴포넌트별 의존성 매니페스트**: `etl/requirements.txt`, `scheduler/requirements.txt`, `mcp/requirements.txt` 분리.
   - **프론트엔드 App Router 스캐폴드**: `src/app/layout.tsx`, `page.tsx`(`#destination-list`, `#vworld-map-container`), `settings/page.tsx`(`#gemini-engine-select` 등), `VWorldMap` 컴포넌트, Tailwind 설정 추가 — 기존 E2E 스펙의 타깃을 실재화.
@@ -1019,7 +1040,7 @@
 - **담당자**: Codex
 - **작업 내용**:
   - 후속 요구사항에 따라 받은 원본 동영상, 자막 파일, 전사 결과, 대표 프레임을 RustFS에 저장하는 계획을 추가.
-  - RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 로컬 Docker 서비스로 구동하며, S3 API `9003`, 콘솔 `9004` 포트를 기본 후보로 정리.
+  - RustFS는 애플리케이션 컨테이너에 내장하지 않고 별도 로컬 Docker 서비스로 구동하며, S3 API `12101`, 콘솔 `12105` 포트를 기본 후보로 정리.
   - 미디어 객체 보존 기간을 무기한으로 확정하고, DB 논리 삭제나 장소 매칭 실패만으로 RustFS 객체를 자동 삭제하지 않는 정책을 문서화.
   - `media_assets` 테이블을 추가해 RustFS 버킷, 객체 키, URI, 체크섬, 크기, 보존 정책을 저장하도록 데이터 모델 보강.
   - 지오코딩 결과가 없거나 모호한 장소를 `extracted_place_candidates`에 `needs_review` 상태로 남기고, 웹 UI와 MCP에서 사용자가 직접 장소명·주소·좌표·카테고리를 수정할 수 있게 계획 수정.

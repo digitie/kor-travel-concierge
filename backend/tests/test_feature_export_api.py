@@ -157,15 +157,15 @@ async def test_snapshot_surfaces_category_code_suggestion(client, session_factor
     assert item["place"]["category_code_suggestion"] == "01050100"
 
 
-async def test_snapshot_has_tripmate_curated_plan_inputs(client, session_factory):
-    """T-068: TripMate curated plan/POI snapshot까지 이어질 입력을 보존한다."""
+async def test_snapshot_has_tripmate_feature_linked_poi_inputs(client, session_factory):
+    """T-068: TripMate feature 연계 POI row까지 이어질 입력을 보존한다."""
     await _seed_ready_candidate(session_factory)
 
     resp = await client.get("/api/v1/features/snapshot")
     assert resp.status_code == 200
     item = resp.json()["items"][0]
 
-    tripmate_snapshot_source = {
+    krtour_feature_snapshot = {
         "name": item["place"]["name"],
         "coord": {
             "longitude": item["place"]["longitude"],
@@ -175,12 +175,17 @@ async def test_snapshot_has_tripmate_curated_plan_inputs(client, session_factory
         "marker_color": "P-13",
         "marker_icon": "krtour-map category mapping",
     }
-    assert tripmate_snapshot_source["name"] == "월정리 해변"
-    assert tripmate_snapshot_source["coord"] == {
+    tripmate_feature_linked_poi = {
+        "feature_id": "python-krtour-map-generated-feature-id",
+        "feature_snapshot": krtour_feature_snapshot,
+    }
+    assert tripmate_feature_linked_poi["feature_id"]
+    assert tripmate_feature_linked_poi["feature_snapshot"]["name"] == "월정리 해변"
+    assert tripmate_feature_linked_poi["feature_snapshot"]["coord"] == {
         "longitude": 126.7958,
         "latitude": 33.5563,
     }
-    assert tripmate_snapshot_source["category"] == "01050100"
+    assert tripmate_feature_linked_poi["feature_snapshot"]["category"] == "01050100"
 
     assert item["youtube"]["video_url"] == "https://www.youtube.com/watch?v=vid1"
     assert item["youtube"]["channel_id"] == "chan-vid1"

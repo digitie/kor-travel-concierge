@@ -127,7 +127,7 @@ async def test_media_asset_infinite_retention(session):
         asset_type=AssetType.FRAME,
         bucket="tripmate-frames",
         object_key="vid1/frame.jpg",
-        object_uri="http://localhost:9003/tripmate-frames/vid1/frame.jpg",
+        object_uri="http://localhost:12101/tripmate-frames/vid1/frame.jpg",
         size_bytes=1024,
         sha256="deadbeef",
     )

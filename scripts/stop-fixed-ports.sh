@@ -6,17 +6,16 @@
 # Windows 리스너(powershell.exe/taskkill.exe)를 모두 정리한다.
 #
 # 사용법: stop-fixed-ports.sh [PORT ...]
-# 인자가 없으면 TripMate 고정 포트(API 9041, Web 9042, RustFS 9003/9004, MCP 8010)를 쓴다.
+# 인자가 없으면 이 repo 고정 포트(API 12401, Web 12405, MCP 12402)를 쓴다.
+# RustFS 12101/12105는 별도 고정 Docker 서비스가 소유하므로 기본 회수 대상이 아니다.
 set -euo pipefail
 
 ports=("$@")
 if [[ "${#ports[@]}" -eq 0 ]]; then
   ports=(
-    "${API_HOST_PORT:-9041}"
-    "${FRONTEND_HOST_PORT:-9042}"
-    "${RUSTFS_HOST_PORT:-9003}"
-    "${RUSTFS_CONSOLE_HOST_PORT:-9004}"
-    "${MCP_HOST_PORT:-8010}"
+    "${API_HOST_PORT:-12401}"
+    "${FRONTEND_HOST_PORT:-12405}"
+    "${MCP_HOST_PORT:-12402}"
   )
 fi
 
