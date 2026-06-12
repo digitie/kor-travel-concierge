@@ -91,6 +91,8 @@ if [[ ! -f .env ]]; then
   echo ".env 파일이 없어 Compose 기본값과 코드 기본값으로 검증합니다."
 fi
 
+"${SCRIPT_DIR}/stop-fixed-ports.sh" "${API_HOST_PORT}" "${FRONTEND_HOST_PORT}" "${MCP_HOST_PORT}"
+
 compose config --quiet
 
 if [[ "${SKIP_BUILD}" != "1" ]]; then

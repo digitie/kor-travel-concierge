@@ -36,6 +36,16 @@ fi
 "${SCRIPT_DIR}/stop-fixed-ports.sh" \
   "${API_HOST_PORT}" "${FRONTEND_HOST_PORT}" "${MCP_HOST_PORT}"
 
+# 기본 실행은 외부 RustFS를 사용한다. 이전 profile 실행에서 남은 내장 RustFS
+# 컨테이너가 있으면 중지/제거하되 volume은 삭제하지 않는다.
+case ",${COMPOSE_PROFILES:-}," in
+  *,embedded-rustfs,*) ;;
+  *)
+    docker compose stop rustfs >/dev/null 2>&1 || true
+    docker compose rm -f rustfs >/dev/null 2>&1 || true
+    ;;
+esac
+
 # `up` 외 다른 compose 동작이 필요하면 인자로 넘긴다(예: down).
 docker compose up -d --build "$@"
 docker compose ps

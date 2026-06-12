@@ -520,13 +520,13 @@ T-014 통합 검증에서 Windows 호스트에는 이미 다른 로컬 프로젝
 ### 결정
 Docker Compose 실행 계약을 다음으로 확정한다.
 
-- RustFS 컨테이너 내부 포트는 S3 API `9000`, 콘솔 `9001`을 유지하고, 호스트 포트는 고정 `12101`, `12105`로 노출한다.
-- 앱 컨테이너의 `RUSTFS_ENDPOINT`는 `http://rustfs:9000`으로 override하고, 컨테이너 밖 Linux/WSL2에서 직접 실행하는 `.env` 기본값은 `http://127.0.0.1:12101`으로 둔다.
+- RustFS는 이 repo Compose의 기본 서비스가 아니라 별도 고정 Docker 서비스로 실행한다. 호스트 포트는 S3 API `12101`, 콘솔 `12105`로 고정하고, RustFS 컨테이너 자체의 내부 포트는 S3 API `9000`, 콘솔 `9001`을 유지한다.
+- 앱 컨테이너의 `RUSTFS_ENDPOINT`는 기본적으로 `http://host.docker.internal:12101`로 override하고, 컨테이너 밖 Linux/WSL2에서 직접 실행하는 `.env` 기본값은 `http://127.0.0.1:12101`으로 둔다. `http://rustfs:9000`은 선택형 `embedded-rustfs` profile에서만 사용한다.
 - 미디어 자산은 단일 `krtour-map` 버킷과 `features/` prefix를 사용한다. 공개 객체 URL은 `http://127.0.0.1:12101/krtour-map` 기준으로 조립한다.
 - API와 Web의 고정 포트는 각각 `12401`, `12405`다. Compose 내부 포트는 API `8000`, Web `3000`을 유지하되 host port 기본값을 `12401`, `12405`로 매핑한다.
 - Docker Compose의 `CORS_ALLOW_ORIGINS`는 `.env` 값을 우선하며, 기본값에는 Web 고정 포트 `12405`, 로컬 개발 `3000`, Playwright E2E `13100`의 `localhost`와 `127.0.0.1` origin을 포함한다.
-- `scripts/start-live.sh`는 고정 포트를 점유한 리스너(`12401`/`12402`/`12405`/`12101`/`12105`)를 기동 전에 정리한다.
-- `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT` 변수는 Compose 호환성을 위해 남기되, 일반 실행에서는 고정값을 유지한다.
+- `scripts/start-live.sh`는 이 repo가 소유한 고정 포트(`12401`/`12402`/`12405`)를 기동 전에 정리한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 기본 회수 대상이 아니다.
+- `RUSTFS_HOST_PORT`, `RUSTFS_CONSOLE_HOST_PORT`는 선택형 `embedded-rustfs` profile 호환성을 위해 남기고, `API_HOST_PORT`, `MCP_HOST_PORT`, `FRONTEND_HOST_PORT`는 repo 서비스 포트 변수로 남긴다. 일반 실행에서는 고정값을 유지한다.
 - Compose의 MCP 서버는 `streamable-http` transport를 사용하고 `0.0.0.0:12402/mcp`로 실행한다. 로컬 개발 기본값은 기존처럼 `stdio`로 유지한다.
 - API 서비스에 `/health` healthcheck를 두고, MCP/scheduler/frontend는 API healthy 이후 시작한다.
 - RustFS smoke 검증은 기본 버킷 생성과 객체 업로드·조회까지 수행하되, 무기한 보존 원칙에 따라 smoke 객체도 자동 삭제하지 않고 같은 key로 덮어쓴다.
@@ -726,14 +726,15 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 ### 결정
 - 실행/평가 환경은 **Linux Docker 전용**으로 한다. Windows 네이티브 실행 경로는 배제한다.
 - Windows 호스트 사용자는 **WSL2(Ubuntu) 안에서 Linux/Docker로 구동**한다. 모든 신규 스크립트·명령은 bash·Linux 기준으로 작성하고 PowerShell(`*.ps1`) 전용 자산은 제거하거나 bash로 대체한다.
-- 기본 실행은 단일 호스트 Docker Compose(ADR-18): `docker compose up -d --build`로 backend, frontend, rustfs, mcp를 띄운다. Compose **host port는 고정 `12401`(API)/`12402`(MCP)/`12405`(Web)/`12101`·`12105`(RustFS)를 유지**한다. 컨테이너 내부 포트는 API `8000`, Web `3000`, RustFS `9000/9001`을 유지하므로 host가 `12401→8000`, `12405→3000`, `12101→9000`, `12105→9001`로 매핑한다. 라이브 런처 `scripts/start-live.sh`는 기동 전 `scripts/stop-fixed-ports.sh`로 고정 포트를 점유한 리스너(Linux/Docker/WSL/Windows)를 정리해 재시작을 보장하며, 이 포트 회수 패턴은 `python-krtour-map` 프로젝트에서 차용했다.
+- 기본 실행은 단일 호스트 Docker Compose(ADR-18): `docker compose up -d --build`로 `api`/`mcp`/`scheduler`/`frontend`를 띄우고, RustFS는 외부 고정 Docker 서비스로 사용한다. Compose host port는 고정 `12401`(API)/`12402`(MCP)/`12405`(Web)을 유지하고, 외부 RustFS는 `12101`·`12105`를 유지한다. 컨테이너 내부 포트는 API `8000`, Web `3000`을 유지하므로 host가 `12401→8000`, `12405→3000`으로 매핑한다.
+- `scripts/start-live.sh`는 이 repo가 소유한 고정 포트(`12401`/`12402`/`12405`)를 기동 전에 정리한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 기본 회수 대상이 아니다.
 - FFmpeg은 컨테이너 이미지(`Dockerfile.python` apt)가 `/usr/bin/ffmpeg`로 제공한다. 호스트 자동 다운로드·경로 분기와 `DOCKER_FFMPEG_PATH` 이원화를 제거하고 단일 override 변수 `FFMPEG_PATH`(기본 `/usr/bin/ffmpeg`)만 둔다.
 - PowerShell 라이브/FFmpeg/검증 스크립트는 삭제하고, Compose smoke 검증은 bash `scripts/verify-docker-compose.sh`, 라이브 기동은 bash `scripts/start-live.sh`로 대체한다.
 - 이 결정은 `AGENTS.md`의 "Windows 호스트 직접 진행" 정책과 기존 DO-NOT #4("Windows 비호환 명령어 금지")를 뒤집는다. DO-NOT #4는 반대 방향(= bash/Linux 기준으로 작성, Windows 전용 분기 금지)으로 다시 쓴다.
 
 ### 근거
 - 실행 환경을 하나(Linux Docker)로 수렴하면 호스트 OS별 분기, 공급망 검증, 포트 점유 처리 같은 Windows 고유 복잡도를 제거할 수 있다.
-- ADR-18의 단일 호스트 Compose 계약이 이미 backend/frontend/rustfs/mcp/scheduler 전체를 포괄하므로, 동일 계약을 유일한 실행 경로로 강화하는 것이 자연스럽다.
+- ADR-18의 단일 호스트 Compose 계약은 `api`/`mcp`/`scheduler`/`frontend` 앱 런타임과 외부 RustFS 연계를 포괄하므로, 동일 계약을 유일한 실행 경로로 강화하는 것이 자연스럽다.
 - WSL2는 Windows에서 Linux/Docker를 그대로 구동하는 표준 경로이므로 Windows 사용자 경험도 끊기지 않는다.
 
 ### 결과 (긍정)

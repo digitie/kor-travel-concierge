@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-06-12: T-071 완료 — 고정 포트 계약 및 WSL 실행 위치 강제
+
+- **담당자**: Codex
+- **배경**: 사용자가 DB 표준 포트, RustFS 고정 포트, 이 repo API/MCP/Web 포트를 최종값으로 고정하고, Git과 Windows Playwright E2E를 제외한 모든 작업 명령을 WSL에서 수행하도록 요청했다.
+- **작업 내용**:
+  - PostgreSQL/PostGIS는 host `5432`, RustFS 외부 Docker 서비스는 S3 API `12101`·콘솔 `12105`, 이 repo 서비스는 API `12401`·MCP `12402`·Web UI `12405`로 정렬했다.
+  - 기본 Compose 실행은 `api`/`mcp`/`scheduler`/`frontend`만 띄우고, RustFS는 `http://host.docker.internal:12101` 외부 서비스를 사용한다. `embedded-rustfs` profile은 선택형으로 남겼다.
+  - `scripts/start-live.sh`와 `scripts/verify-docker-compose.sh`가 repo 소유 포트만 회수하도록 고쳤다. 기본 live 실행에서 이전 내장 RustFS 컨테이너가 남아 있으면 중지/제거하되 volume은 삭제하지 않는다.
+  - 문서와 ADR을 WSL 실행 위치 강제 규칙으로 정렬했다. 예외는 `git` 명령과 Windows host Playwright E2E뿐이며, `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색은 WSL에서 실행한다.
+  - 운영 DB `tripmate_agent`는 이미 현재 schema가 존재하지만 `alembic_version`이 없어 `alembic stamp head`로 `20260610_0006` 이력을 맞춘 뒤 `upgrade head` no-op을 확인했다.
+- **검증**:
+  - WSL backend: `python -m pytest -q backend/tests`, `python -m compileall backend/app backend/tests scheduler tripmate_mcp` → 통과
+  - WSL frontend: `npm run lint`, `npm run type-check`, `npm run build` → 통과
+  - WSL 정적/Compose: `bash -n`, `docker compose config --quiet`, `git diff --check` → 통과
+  - WSL Docker Compose smoke: 외부 RustFS health, API/Web health, MCP TCP, `verify_rustfs.py` 객체 저장 smoke → 통과
+  - Windows host Playwright E2E: `npx playwright test` → `4 passed`
+  - live Docker: `bash scripts/start-live.sh` 후 API `/health` `ok`, Web `12405`, MCP `12402`, RustFS `12101/health/live` 확인
+  - in-app browser: `http://127.0.0.1:12405/`에서 `경주 맛집`·최대 영상 수 `2`로 `수집 시작` 클릭 → 실행 큐 `1`, job_id `13`, 상태 `running`, progress `10%` 표시, console error/warn 없음.
+
 ## 2026-06-12: T-069 완료 — 통합 검증과 운영 문서 정리
 
 - **담당자**: Codex
