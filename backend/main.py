@@ -1,6 +1,6 @@
 """FastAPI 애플리케이션 엔트리포인트.
 
-설정 로더(`app.core.config`)와 API 라우터(`app.api`)를 조립한다. 무거운 ETL
+설정 로더(`ktc.core.config`)와 API 라우터(`ktc.api`)를 조립한다. 무거운 ETL
 작업은 직접 수행하지 않고, 라우터가 `crawl_runs` 작업만 생성한다.
 """
 
@@ -10,9 +10,9 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import router
-from app.core.config import get_settings
-from app.core.database import init_db
+from ktc.api import router
+from ktc.core.config import get_settings
+from ktc.core.database import init_db
 
 
 @asynccontextmanager
@@ -27,7 +27,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="krtour-ai-agent API",
+        title="kor-travel-concierge API",
         description="FastAPI Backend for YouTube Travel Curation with Gemini",
         version="0.1.0",
         lifespan=lifespan,
@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def read_root() -> dict[str, str]:
-        return {"message": "Welcome to krtour-ai-agent API", "status": "running"}
+        return {"message": "Welcome to kor-travel-concierge API", "status": "running"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -59,6 +59,6 @@ app = create_app()
 
 if __name__ == "__main__":
     # 실행 환경은 Linux Docker 전용이다. Compose는 컨테이너 내부에서
-    # `uvicorn main:app --host 0.0.0.0 --port 8000`으로 기동하고 host port 12401로
-    # 매핑한다. WSL2 등에서 직접 실행할 때는 고정 라이브 포트 12401을 사용한다.
-    uvicorn.run("main:app", host="0.0.0.0", port=12401, reload=True)
+    # `python -m ktc.cli api --host 0.0.0.0 --port 8000`으로 기동하고 host port 12601로
+    # 매핑한다. WSL2 등에서 직접 실행할 때는 고정 라이브 포트 12601을 사용한다.
+    uvicorn.run("main:app", host="0.0.0.0", port=12601, reload=True)

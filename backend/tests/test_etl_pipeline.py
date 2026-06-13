@@ -8,13 +8,13 @@ import httpx
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.etl import pipeline
-from app.etl.youtube_client import (
+from ktc.etl import pipeline
+from ktc.etl.youtube_client import (
     YouTubeApiError,
     YouTubeClient,
     YouTubeQuotaExceededError,
 )
-from app.models import SearchKeyword, SourceTarget, YoutubeChannel, YoutubeVideo
+from ktc.models import SearchKeyword, SourceTarget, YoutubeChannel, YoutubeVideo
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 

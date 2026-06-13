@@ -87,7 +87,7 @@
 - [x] **P2-6. heartbeat의 `contextlib.suppress(...Exception)`** (`#22`, T-048에서 후속 해소) — 하트비트 await의 모든 예외 삼킴. 좁히기.
   - 후속 처리: T-048에서 heartbeat task 취소 대기 경로를 `CancelledError`만 정상 종료로 처리하도록 바꾸고, 이미 실패한 heartbeat task의 예상 밖 예외는 `logger.exception`으로 남기도록 보강했다. 회귀 테스트로 heartbeat task 예외가 job 완료를 막지 않되 로그에 남는지 검증한다.
 - [x] **P2-7. engine 모델 설정의 단일 출처 부재** (`#28`, T-049에서 후속 해소) — frontend zod enum / backend `set_setting`(키만 검증) / `.env.example`·`config.py` 기본값이 제각각.
-  - 후속 처리: T-049에서 `backend/app/core/config.py`의 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 코드 단일 출처로 두고, settings API가 `gemini_engine_options`와 `gemini_engine_default`를 반환하도록 확장했다. `settings_service`는 모델 값을 검증하고, frontend 설정 화면은 API 옵션으로 select를 렌더링한다. POI 후처리와 Deep Research는 DB runtime 설정의 engine 값을 실제 Gemini 호출에 전달한다.
+  - 후속 처리: T-049에서 백엔드 설정 모듈의 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 코드 단일 출처로 두고, settings API가 `gemini_engine_options`와 `gemini_engine_default`를 반환하도록 확장했다. `settings_service`는 모델 값을 검증하고, frontend 설정 화면은 API 옵션으로 select를 렌더링한다. POI 후처리와 Deep Research는 DB runtime 설정의 engine 값을 실제 Gemini 호출에 전달한다.
 - [x] **P2-8. `_names_compatible` 부분일치 관대함** (`#23`, T-050에서 후속 해소) — 짧은 이름에서 false-positive 재사용 가능.
   - 후속 처리: T-050에서 이름 정규화 후 exact match는 유지하되, 포함 관계 alias는 짧은 쪽이 4자 이상이고 긴 쪽 대비 60% 이상인 경우에만 호환되도록 좁혔다. `카페` ↔ `월정리카페`, `성산` ↔ `성산일출봉` 같은 짧은 부분명은 검수 대기로 남기고, `월정리카페` ↔ `월정리카페본점` 같은 구체적 alias는 허용한다.
 
@@ -97,8 +97,8 @@
   - 후속 처리: T-051에서 남은 P3-2~P3-5 항목을 `docs/tasks.md` 대기 작업 T-052~T-055로 승격하고, `CLAUDE.md`의 다음 착수 대상도 T-052로 맞췄다.
 - [x] **P3-2.** `FFPROBE_PATH`가 config/.env/compose에 추가됐으나 백엔드 코드 미사용; frontend compose 서비스에 ffmpeg env 불필요 주입(#29). (`T-052`에서 후속 해소)
   - 후속 처리: T-052에서 backend runtime 설정과 Compose Python 공통 env는 `FFMPEG_PATH`만 유지하고, frontend compose 서비스의 FFmpeg/FFprobe env 주입을 제거했다. `FFPROBE_PATH`는 Windows live 사전 검증에서 `ffprobe -version`을 확인하기 위한 스크립트 관리 값으로만 문서화했다.
-- [x] **P3-3.** export 파일명 고정(`tripmate-places.*`) → 타임스탬프/필터 반영(#27). (`T-053`에서 후속 해소)
-  - 후속 처리: T-053에서 `/api/destinations/export` 응답 파일명을 `tripmate-places-{selected|all}-{내보낸개수}-sort-{정렬}-{UTC timestamp}.{확장자}` 형식으로 바꿔 선택/전체 범위, 실제 export 개수, 정렬 기준, 생성 시각을 반영했다.
+- [x] **P3-3.** export 파일명 고정(`kor-travel-concierge-places.*`) → 타임스탬프/필터 반영(#27). (`T-053`에서 후속 해소)
+  - 후속 처리: T-053에서 `/api/destinations/export` 응답 파일명을 `kor-travel-concierge-places-{selected|all}-{내보낸개수}-sort-{정렬}-{UTC timestamp}.{확장자}` 형식으로 바꿔 선택/전체 범위, 실제 export 개수, 정렬 기준, 생성 시각을 반영했다.
 - [x] **P3-4.** import 정렬, FK `ondelete` 명시, `TimestampMixin` 일관성 등 코드 위생(#7 외). (`T-054`에서 후속 해소)
   - 후속 처리: T-054에서 `place_service` import 순서를 정리하고, FK가 있는 모델의 `ForeignKey`에 기존 기본 동작과 같은 `ondelete="NO ACTION"`을 명시했다. `YoutubeVideo`는 `created_at`보다 마지막 수집 시각인 `crawled_at`이 도메인 상태라 `TimestampMixin` 대신 별도 컬럼을 유지한다는 주석을 남겼다.
 - [x] **P3-5.** `& py -3.10` 마이너 고정은 3.11/3.12-only 호스트에서 폴백 실패(정책은 "3.10+")(#26). (`T-055`에서 후속 해소)

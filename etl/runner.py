@@ -5,7 +5,7 @@ from geocode import geocode_address, enrich_destination_description
 
 def run_etl_pipeline():
     print("====================================================")
-    print("KRTour AI Agent ETL Pipeline 구동 시작")
+    print("Kor Travel Concierge ETL Pipeline 구동 시작")
     print("====================================================")
     
     # 1단계: 검색 키워드 분석 및 유튜브 영상 수집
@@ -34,7 +34,7 @@ def run_etl_pipeline():
             print(f"-> 최종 변환 성공: {dest['name']} | {dest['formatted_address']} | ({dest['latitude']}, {dest['longitude']})")
             
     print("\n====================================================")
-    print("KRTour AI Agent ETL Pipeline 구동 완료")
+    print("Kor Travel Concierge ETL Pipeline 구동 완료")
     print("====================================================")
 
 if __name__ == "__main__":

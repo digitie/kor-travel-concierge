@@ -1,4 +1,4 @@
-# KRTour AI Agent 프론트엔드 이미지 (초안)
+# Kor Travel Concierge 프론트엔드 이미지 (초안)
 FROM node:20-slim
 
 WORKDIR /app

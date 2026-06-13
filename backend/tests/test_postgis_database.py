@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
-from app.core.spatial import ensure_postgis_extension, sync_place_geometry
-from app.models import TravelPlace
+from ktc.core.spatial import ensure_postgis_extension, sync_place_geometry
+from ktc.models import TravelPlace
 
 
 def test_travel_place_declares_postgis_geometry():

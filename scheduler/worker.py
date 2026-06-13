@@ -23,20 +23,20 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import get_settings
-from app.core.database import async_session_factory, init_db
-from app.etl import deep_research_service, video_analysis_service
-from app.etl.pipeline import run_harvest
-from app.etl.postprocess_service import process_harvest_videos
-from app.etl.youtube_client import YouTubeClient
-from app.models import (
+from ktc.core.config import get_settings
+from ktc.core.database import async_session_factory, init_db
+from ktc.etl import deep_research_service, video_analysis_service
+from ktc.etl.pipeline import run_harvest
+from ktc.etl.postprocess_service import process_harvest_videos
+from ktc.etl.youtube_client import YouTubeClient
+from ktc.models import (
     CrawlRun,
     VideoAnalysisRunState,
     VideoAnalysisRunType,
     YoutubeVideo,
     YoutubeVideoAnalysisRun,
 )
-from app.services import crawl_run_service, place_service, source_scan_service
+from ktc.services import crawl_run_service, place_service, source_scan_service
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)

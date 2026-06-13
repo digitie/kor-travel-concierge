@@ -6,8 +6,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from app.etl import geocoding
-from app.etl.geocoding import (
+from ktc.etl import geocoding
+from ktc.etl.geocoding import (
     GeocodeCandidate,
     KakaoGeocoder,
     NaverGeocoder,

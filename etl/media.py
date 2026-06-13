@@ -20,10 +20,10 @@ load_dotenv()
 
 # asset_type -> (버킷 환경 변수, 기본 버킷명) 매핑
 _BUCKET_ENV_BY_ASSET_TYPE = {
-    "raw_video": ("RUSTFS_BUCKET_RAW_VIDEOS", "krtour-map"),
-    "subtitle": ("RUSTFS_BUCKET_SUBTITLES", "krtour-map"),
-    "transcript": ("RUSTFS_BUCKET_SUBTITLES", "krtour-map"),
-    "frame": ("RUSTFS_BUCKET_FRAMES", "krtour-map"),
+    "raw_video": ("RUSTFS_BUCKET_RAW_VIDEOS", "kor-travel-concierge"),
+    "subtitle": ("RUSTFS_BUCKET_SUBTITLES", "kor-travel-concierge"),
+    "transcript": ("RUSTFS_BUCKET_SUBTITLES", "kor-travel-concierge"),
+    "frame": ("RUSTFS_BUCKET_FRAMES", "kor-travel-concierge"),
 }
 
 
@@ -77,7 +77,7 @@ def store_media_asset(
     """
     endpoint = os.getenv("RUSTFS_ENDPOINT", "http://127.0.0.1:12101")
     public_base_url = os.getenv(
-        "RUSTFS_PUBLIC_BASE_URL", "http://127.0.0.1:12101/krtour-map"
+        "RUSTFS_PUBLIC_BASE_URL", "http://127.0.0.1:12101/kor-travel-concierge"
     ).rstrip("/")
     bucket = _bucket_for(asset_type)
     stored_object_key = _object_key_with_prefix(object_key)

@@ -3,7 +3,7 @@
 Docker Compose의 `api` 컨테이너 안에서 실행하는 것을 기본 전제로 한다.
 `RUSTFS_ENDPOINT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`, 기본 버킷 환경 변수를
 읽어 버킷 생성, 객체 업로드, 객체 조회를 확인한다. 기본 개발 구성은 단일
-`krtour-map` 버킷과 `features/` prefix를 사용한다. 무기한 보존 원칙에 따라 검증
+`kor-travel-concierge` 버킷과 `features/` prefix를 사용한다. 무기한 보존 원칙에 따라 검증
 객체는 삭제하지 않고 같은 key로 덮어쓴다.
 """
 
@@ -52,7 +52,7 @@ def main() -> int:
         region_name=os.environ.get("RUSTFS_REGION", "us-east-1"),
     )
 
-    body = f"krtour-ai-agent rustfs smoke {datetime.now(UTC).isoformat()}\n".encode()
+    body = f"kor-travel-concierge rustfs smoke {datetime.now(UTC).isoformat()}\n".encode()
     prefix = os.environ.get("RUSTFS_OBJECT_PREFIX", "").strip("/")
     key = f"{prefix}/healthcheck/t014-smoke.txt" if prefix else "healthcheck/t014-smoke.txt"
     for bucket in buckets:

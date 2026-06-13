@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from app.models import RunState, utcnow
-from app.services import crawl_run_service as svc
+from ktc.models import RunState, utcnow
+from ktc.services import crawl_run_service as svc
 
 
 async def test_create_and_get_run(session):

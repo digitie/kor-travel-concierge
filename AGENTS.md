@@ -7,7 +7,7 @@
 다음 항목만 영어를 유지한다 — 한글로 옮기면 의미가 변하거나 정확성이 깨지기 때문:
 
 - **코드 식별자**: 함수/타입/prop/이벤트/모듈 이름 (`useVWorldMap`, `TravelDestination`, `GeminiEngineSettings`, `'use client'`).
-- **명령어와 경로**: `npm run dev`, `poetry run uvicorn`, `F:\dev\krtour-ai-agent\frontend`, `pytest`.
+- **명령어와 경로**: `npm run dev`, `poetry run uvicorn`, `F:\dev\kor-travel-concierge\frontend`, `pytest`.
 - **외부 공식 용어**: Next.js, React, FastAPI, SQLAlchemy, PostgreSQL, PostGIS, SQLite3, SpatiaLite, Alembic, RustFS, Playwright, MapLibre GL JS, WMTS, REST API, Gemini API, ETL.
 - **벤더/제품명**: Google, Kakao, Naver, VWorld, YouTube, OpenAI.
 - **표준 keyword**: ADR, CHANGELOG, ISO 8601 날짜, semver 라벨(`Added`/`Changed`/`Removed`/`Fixed`/`Security`).
@@ -17,7 +17,7 @@
 
 ## 역할
 
-이 저장소(GitHub 저장소 이름 `krtour-ai-agent`)는 Gemini를 활용하여 YouTube의 여행 컨텐츠를 검색, 분석, 요약하고 정리하여 여행지 데이터를 구축하는 **지능형 여행 비서 애플리케이션**이다. 시스템은 다음 네 부분으로 구성된다:
+이 저장소(GitHub 저장소 이름 `kor-travel-concierge`)는 Gemini를 활용하여 YouTube의 여행 컨텐츠를 검색, 분석, 요약하고 정리하여 여행지 데이터를 구축하는 **지능형 여행 비서 애플리케이션**이다. 시스템은 다음 네 부분으로 구성된다:
 1. **Next.js & React 프론트엔드**: 수집된 데이터 조회, 검색 키워드 및 유튜버 CRUD, VWorld 지도 기반 위치 매핑, Gemini Deep Research 실행 및 설정 화면.
 2. **MCP 서버 UX**: AI 에이전트가 여행 데이터베이스를 조회하고 키워드/유튜버 CRUD, 보정, 병합, ETL 실행 트리거를 수행하는 읽기/쓰기 도구 표면.
 3. **FastAPI & SQLAlchemy 2.0 백엔드**: PostgreSQL + PostGIS 기반으로 비동기 API 엔드포인트와 도메인 로직을 서빙하며, schema 이력은 Alembic으로 관리한다.
@@ -27,7 +27,7 @@
 
 | 항목 | 값 |
 |------|----|
-| GitHub 저장소 이름 | `krtour-ai-agent` |
+| GitHub 저장소 이름 | `kor-travel-concierge` |
 | 프론트엔드 프레임워크 | Next.js (React 기반) |
 | 백엔드 프레임워크 | FastAPI (Python 기반) |
 | ORM / 데이터베이스 | SQLAlchemy 2.0 / PostgreSQL + PostGIS (`asyncpg`, Alembic) |
@@ -100,7 +100,7 @@
 ```bash
 # --- Linux / WSL2 (앱 런타임·백엔드·프론트엔드) ---
 # 단일 호스트 Docker Compose 통합 검증 (기본 실행 계약, ADR-18)
-docker compose up --build       # host API 12401 / MCP 12402 / Web 12405 / RustFS 12101·12105
+docker compose up --build       # host API 12601 / MCP 12602 / Web 12605 / RustFS 12101·12105
 # 또는 smoke 검증 스크립트
 bash scripts/verify-docker-compose.sh
 

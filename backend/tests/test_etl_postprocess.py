@@ -6,11 +6,11 @@ import json
 
 from sqlalchemy import select
 
-from app.etl.geocoding import GeocodeCandidate, GeocodeDecision
-from app.etl.media_store import InMemoryMediaStore
-from app.etl.postprocess_service import process_harvest_videos
-from app.etl.transcript import TranscriptResult, TranscriptSegment
-from app.models import (
+from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
+from ktc.etl.media_store import InMemoryMediaStore
+from ktc.etl.postprocess_service import process_harvest_videos
+from ktc.etl.transcript import TranscriptResult, TranscriptSegment
+from ktc.models import (
     CrawlStatus,
     ExtractedPlaceCandidate,
     MatchStatus,

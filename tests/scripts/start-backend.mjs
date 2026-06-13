@@ -12,13 +12,13 @@ const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
 const e2eDatabaseUrl =
-  process.env.KRTOUR_AI_AGENT_E2E_DATABASE_URL ??
-  process.env.KRTOUR_AI_AGENT_TEST_PG_DSN ??
+  process.env.KTC_E2E_DATABASE_URL ??
+  process.env.KTC_TEST_PG_DSN ??
   process.env.DATABASE_URL;
 
 if (!e2eDatabaseUrl) {
   throw new Error(
-    "E2E 실행에는 KRTOUR_AI_AGENT_E2E_DATABASE_URL 또는 KRTOUR_AI_AGENT_TEST_PG_DSN이 필요합니다.",
+    "E2E 실행에는 KTC_E2E_DATABASE_URL 또는 KTC_TEST_PG_DSN이 필요합니다.",
   );
 }
 
@@ -49,11 +49,11 @@ const child = spawn(
         `http://localhost:${frontendPort}`,
       ].join(","),
       RUSTFS_ENDPOINT: "http://127.0.0.1:12101",
-      RUSTFS_PUBLIC_BASE_URL: "http://127.0.0.1:12101/krtour-map",
+      RUSTFS_PUBLIC_BASE_URL: "http://127.0.0.1:12101/kor-travel-concierge",
       RUSTFS_CONSOLE_URL: "http://127.0.0.1:12105",
-      RUSTFS_BUCKET_RAW_VIDEOS: "krtour-map",
-      RUSTFS_BUCKET_SUBTITLES: "krtour-map",
-      RUSTFS_BUCKET_FRAMES: "krtour-map",
+      RUSTFS_BUCKET_RAW_VIDEOS: "kor-travel-concierge",
+      RUSTFS_BUCKET_SUBTITLES: "kor-travel-concierge",
+      RUSTFS_BUCKET_FRAMES: "kor-travel-concierge",
       RUSTFS_OBJECT_PREFIX: "features",
       RUSTFS_REGION: "us-east-1",
     },

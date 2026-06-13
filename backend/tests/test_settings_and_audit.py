@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services import audit_service, settings_service
+from ktc.services import audit_service, settings_service
 
 
 async def test_settings_upsert_and_get(session):

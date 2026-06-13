@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import Settings, get_settings
-from app.core.database import get_session
+from ktc.core.config import Settings, get_settings
+from ktc.core.database import get_session
 from main import app
 
 PROD_API_KEY = "secret-key-1"

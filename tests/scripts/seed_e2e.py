@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete
 
-from app.core.database import async_session_factory, init_db
-from app.models import (
+from ktc.core.database import async_session_factory, init_db
+from ktc.models import (
     AuditLog,
     CrawlRun,
     ExtractedPlaceCandidate,
@@ -127,9 +127,9 @@ async def main() -> None:
             asset_type="frame",
             video_id="e2e-video-1",
             storage_provider="rustfs",
-            bucket="krtour-map",
+            bucket="kor-travel-concierge",
             object_key="features/e2e-video-1/frame.jpg",
-            object_uri="http://127.0.0.1:12101/krtour-map/features/e2e-video-1/frame.jpg",
+            object_uri="http://127.0.0.1:12101/kor-travel-concierge/features/e2e-video-1/frame.jpg",
             content_type="image/jpeg",
             size_bytes=1024,
             retention_policy="infinite",

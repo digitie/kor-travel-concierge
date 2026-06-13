@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from app.etl import category_catalog, category_suggestion
+from ktc.etl import category_catalog, category_suggestion
 
 
 # --- 카탈로그 로더 ---

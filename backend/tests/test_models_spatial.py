@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import (
+from ktc.models import (
     AssetType,
     CrawlStatus,
     DescriptionReviewStatus,
@@ -125,9 +125,9 @@ async def test_candidate_defaults_to_needs_review(session):
 async def test_media_asset_infinite_retention(session):
     a = MediaAsset(
         asset_type=AssetType.FRAME,
-        bucket="krtour-frames",
+        bucket="ktc-frames",
         object_key="vid1/frame.jpg",
-        object_uri="http://localhost:12101/krtour-frames/vid1/frame.jpg",
+        object_uri="http://localhost:12101/ktc-frames/vid1/frame.jpg",
         size_bytes=1024,
         sha256="deadbeef",
     )

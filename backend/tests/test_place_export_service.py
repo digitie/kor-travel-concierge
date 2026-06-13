@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile
 
-from app.services.place_export_service import build_place_export
-from app.services.place_service import PlaceSourceMention, PlaceSummary
+from ktc.services.place_export_service import build_place_export
+from ktc.services.place_service import PlaceSourceMention, PlaceSummary
 
 
 def test_place_export_strips_invalid_xml_control_characters():

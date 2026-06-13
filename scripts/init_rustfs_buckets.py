@@ -1,7 +1,7 @@
 """RustFS 초기 버킷 생성 스크립트 (T-003).
 
 `.env`의 RustFS 설정을 읽어 미디어 버킷을 멱등하게 생성한다.
-기본 개발 구성은 단일 `krtour-map` 버킷과 `features/` prefix를 사용한다.
+기본 개발 구성은 단일 `kor-travel-concierge` 버킷과 `features/` prefix를 사용한다.
 
 버킷은 무기한 보존이며 lifecycle 만료 정책을 설정하지 않는다(ADR-15).
 
@@ -24,9 +24,9 @@ def main() -> int:
     access_key = os.getenv("RUSTFS_ACCESS_KEY", "")
     secret_key = os.getenv("RUSTFS_SECRET_KEY", "")
     buckets = list(dict.fromkeys([
-        os.getenv("RUSTFS_BUCKET_RAW_VIDEOS", "krtour-map"),
-        os.getenv("RUSTFS_BUCKET_SUBTITLES", "krtour-map"),
-        os.getenv("RUSTFS_BUCKET_FRAMES", "krtour-map"),
+        os.getenv("RUSTFS_BUCKET_RAW_VIDEOS", "kor-travel-concierge"),
+        os.getenv("RUSTFS_BUCKET_SUBTITLES", "kor-travel-concierge"),
+        os.getenv("RUSTFS_BUCKET_FRAMES", "kor-travel-concierge"),
     ]))
 
     if not access_key or not secret_key:

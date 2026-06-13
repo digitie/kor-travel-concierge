@@ -1,0 +1,66 @@
+"""백엔드 ETL 수집 파이프라인 패키지.
+
+scheduler 단일 실행자와 서비스 계층이 import해 사용한다(ADR-13).
+
+구현 완료(T-006 1단계 수집):
+    - youtube_client    : 공식 YouTube Data API v3 비동기 클라이언트
+    - keyword_expansion : Gemini 기반 파생 키워드(주입형 generator)
+    - ranking           : 업로드일·키워드 유사도·참여도 정규화 점수
+    - ingest_service    : video_id 멱등 upsert, 파생 키워드 저장, 채널 워터마크
+    - pipeline          : 수집 오케스트레이션(run_harvest)
+
+구현 완료(T-007 2단계 요약·POI):
+    - transcript        : 자막/전사 provider 체인(transcript-api→yt-dlp→whisper)
+    - poi_extraction    : Gemini JSON Schema POI 추출·재시도(주입형 llm)
+    - media_store       : RustFS 저장 추상화 + media_assets 기록
+    - summarize_service : 자막 저장→POI 추출→설명 보정본·후보 생성
+    - postprocess_service: 수집 영상→자막→POI→지오코딩 후처리 오케스트레이션
+
+구현 완료(T-008 3단계 지오코딩):
+    - geocoding         : VWorld 직접 client 호출, Kakao/Naver 보조 호출, 좌표 정규화, 429 백오프, 평가
+    - geocode_service   : 후보 적용(중복 재사용·주소 보강·needs_review 처리)
+
+구현 완료(T-009 대표 프레임):
+    - frame_extraction  : yt-dlp 스트림 URL 확보, FFmpeg Input Seeking, RustFS 저장
+
+구현 완료(T-035 Deep Research):
+    - deep_research_service: 장소 단위 Gemini Deep Research 실행·저장
+"""
+
+from ktc.etl import (
+    category_catalog,
+    category_suggestion,
+    deep_research_service,
+    frame_extraction,
+    geocode_service,
+    geocoding,
+    ingest_service,
+    keyword_expansion,
+    media_store,
+    pipeline,
+    poi_extraction,
+    postprocess_service,
+    ranking,
+    summarize_service,
+    transcript,
+    youtube_client,
+)
+
+__all__ = [
+    "youtube_client",
+    "keyword_expansion",
+    "ranking",
+    "ingest_service",
+    "pipeline",
+    "transcript",
+    "poi_extraction",
+    "media_store",
+    "summarize_service",
+    "postprocess_service",
+    "geocoding",
+    "geocode_service",
+    "category_catalog",
+    "category_suggestion",
+    "frame_extraction",
+    "deep_research_service",
+]

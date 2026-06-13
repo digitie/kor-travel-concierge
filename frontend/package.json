@@ -1,5 +1,5 @@
 {
-  "name": "krtour-ai-agent-frontend",
+  "name": "kor-travel-concierge-frontend",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "dev:live": "next dev --hostname 127.0.0.1 --port 12405",
+    "dev:live": "next dev --hostname 127.0.0.1 --port 12605",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

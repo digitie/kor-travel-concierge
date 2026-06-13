@@ -13,7 +13,7 @@ from zipfile import ZipFile
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.core.database import get_session
+from ktc.core.database import get_session
 from main import app
 
 
@@ -86,7 +86,7 @@ async def test_health(client):
 
 
 async def test_destinations_reflect_db(client, session_factory):
-    from app.models import (
+    from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExportStatus,
         MatchStatus,
@@ -150,7 +150,7 @@ async def test_destinations_reflect_db(client, session_factory):
 
 
 async def test_destination_export_formats(client, session_factory):
-    from app.models import TravelPlace, VideoPlaceMapping, YoutubeVideo
+    from ktc.models import TravelPlace, VideoPlaceMapping, YoutubeVideo
 
     async with session_factory() as s:
         video = YoutubeVideo(
@@ -189,7 +189,7 @@ async def test_destination_export_formats(client, session_factory):
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     assert re.fullmatch(
-        r'attachment; filename="tripmate-places-selected-1-sort-mention-count-\d{8}T\d{6}Z\.xlsx"',
+        r'attachment; filename="kor-travel-concierge-places-selected-1-sort-mention-count-\d{8}T\d{6}Z\.xlsx"',
         xlsx.headers["content-disposition"],
     )
     with ZipFile(BytesIO(xlsx.content)) as archive:
@@ -209,7 +209,7 @@ async def test_destination_export_formats(client, session_factory):
 
 
 async def test_destination_export_caps_limit_and_serializes_in_thread(client, monkeypatch):
-    from app.api import routes
+    from ktc.api import routes
 
     captured: dict[str, int] = {}
 
@@ -242,8 +242,8 @@ async def test_destination_export_caps_limit_and_serializes_in_thread(client, mo
 
 
 async def test_operations_endpoints_return_runs_audits_and_storage(client, session_factory):
-    from app.models import AssetType, MediaAsset
-    from app.services import audit_service, crawl_run_service
+    from ktc.models import AssetType, MediaAsset
+    from ktc.services import audit_service, crawl_run_service
 
     async with session_factory() as s:
         run = await crawl_run_service.create_run(
@@ -265,7 +265,7 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
             MediaAsset(
                 asset_type=AssetType.FRAME,
                 storage_provider="rustfs",
-                bucket="tripmate-frames",
+                bucket="ktc-frames",
                 object_key="frames/a.jpg",
                 object_uri="rustfs://frames/a.jpg",
                 size_bytes=10,
@@ -290,7 +290,7 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
 
 
 async def test_resolve_candidate_and_deep_research(client, session_factory):
-    from app.models import (
+    from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExportStatus,
         MatchStatus,

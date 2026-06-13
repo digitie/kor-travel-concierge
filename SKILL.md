@@ -1,4 +1,4 @@
-# SKILL — krtour-ai-agent 에이전트 매뉴얼
+# SKILL — kor-travel-concierge 에이전트 매뉴얼
 
 > 이 파일은 당신(AI 에이전트)이 작업을 시작하기 전 반드시 읽어야 한다.
 > Linux/Docker(및 Windows WSL2) 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
@@ -6,7 +6,7 @@
 
 ## 1. 정체성
 
-이 저장소(GitHub 저장소 이름 `krtour-ai-agent`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
+이 저장소(GitHub 저장소 이름 `kor-travel-concierge`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
 - **프론트엔드**: Next.js (App Router) + React. `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 연결하여 지도 시각화를 구현한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
 - **백엔드**: FastAPI + SQLAlchemy 2.0. DB는 PostgreSQL + PostGIS이며, `asyncpg`와 Alembic으로 schema를 관리한다.
@@ -26,13 +26,13 @@
 
 ### 기본 실행 (단일 호스트 Docker Compose, Linux/WSL2 — ADR-18/ADR-23)
 ```bash
-docker compose up -d --build    # host API 12401 / MCP 12402 / Web 12405, 외부 RustFS 12101·12105 사용
+docker compose up -d --build    # host API 12601 / MCP 12602 / Web 12605, 외부 RustFS 12101·12105 사용
 # 또는 thin 런처 (고정 포트 회수 후 기동)
 bash scripts/start-live.sh
 # smoke 검증 (기동 → health 확인 → RustFS 검증 → 정리)
 bash scripts/verify-docker-compose.sh
 ```
-기동 후 API는 `http://localhost:12401`, MCP는 `http://localhost:12402/mcp`, Web은 `http://localhost:12405`, 외부 RustFS는 S3 API `http://127.0.0.1:12101`과 콘솔 `http://127.0.0.1:12105`로 접속한다. `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 이 repo 소유 고정 포트 `12401`/`12402`/`12405`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수해 재시작을 보장한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 회수하지 않는다(포트 회수 패턴은 `python-krtour-map`에서 차용).
+기동 후 API는 `http://localhost:12601`, MCP는 `http://localhost:12602/mcp`, Web은 `http://localhost:12605`, 외부 RustFS는 S3 API `http://127.0.0.1:12101`과 콘솔 `http://127.0.0.1:12105`로 접속한다. `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 이 repo 소유 고정 포트 `12601`/`12602`/`12605`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수해 재시작을 보장한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 회수하지 않는다(포트 회수 패턴은 `python-krtour-map`에서 차용).
 
 REST API는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받는다. 브라우저는 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하고 BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부 호출자는 `X-API-Key`를 직접 보낸다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24).
 
@@ -42,7 +42,8 @@ cd backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent python main.py  # API 12401
+cd ..
+DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge ./ktcctl api  # API 12601
 ```
 
 ### 프론트엔드 단독 실행
@@ -78,8 +79,8 @@ npx playwright test
 ## 4. 자주 묻는 작업
 
 ### 데이터베이스 스키마 및 CRUD 추가
-- **위치**: `backend/app/models/`에 SQLAlchemy 2.0 스타일 모델 정의.
-- **설명**: CRUD 관련 엔드포인트는 `backend/app/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. T-061 이후 schema 변경은 Alembic migration을 함께 작성한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
+- **위치**: `backend/ktc/models/`에 SQLAlchemy 2.0 스타일 모델 정의.
+- **설명**: CRUD 관련 엔드포인트는 `backend/ktc/api/` 폴더 내에 배치하며, 스키마 검증은 Pydantic v2를 사용한다. T-061 이후 schema 변경은 Alembic migration을 함께 작성한다. 원본 미디어는 DB에 직접 넣지 않고 `media_assets`에 RustFS 객체 위치와 체크섬을 저장한다.
 - **장소 언급 소스**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지는 `video_place_mappings`와 `youtube_videos` 조인으로 계산한다. 같은 영상에서 같은 장소가 여러 구간에 반복 등장할 수 있으므로 `video_id`, `place_id` 조합은 unique로 가정하지 않는다.
 - **장소 export**: 선택 또는 전체 장소 내보내기는 `/api/v1/destinations/export`에서 처리한다. `xlsx`는 장소-언급 행 단위, `gpx`/`kml`은 장소 좌표와 소스 설명 중심으로 생성한다.
 
@@ -104,10 +105,10 @@ npx playwright test
   - HTTP I/O는 `httpx.AsyncClient`로 작성하고, 블로킹 라이브러리는 executor로 격리한다.
 
 ### RustFS 미디어 저장 구현
-- **위치**: `etl/` 저장소 계층 또는 `backend/app/services/storage/` 계층.
+- **위치**: `etl/` 저장소 계층 또는 `backend/ktc/services/storage/` 계층.
 - **설명**:
   - RustFS 접속 정보는 `RUSTFS_ENDPOINT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`로 주입한다.
-  - 기본 버킷은 단일 `krtour-map`이고, 객체 키는 `features/` prefix 아래에 저장한다.
+  - 기본 버킷은 단일 `kor-travel-concierge`이고, 객체 키는 `features/` prefix 아래에 저장한다.
   - 저장 후 `media_assets`에 `storage_provider`, `bucket`, `object_key`, `object_uri`, `sha256`, `size_bytes`, `retention_policy = infinite`를 기록한다.
   - RustFS는 별도 로컬 Docker 서비스로 실행하며 상태 확인은 `/health` 또는 `/health/live`를 사용한다.
 

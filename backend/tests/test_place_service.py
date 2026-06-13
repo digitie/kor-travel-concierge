@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from app.models import (
+from ktc.models import (
     ExtractedPlaceCandidate,
     MatchStatus,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeVideo,
 )
-from app.services import place_service as svc
+from ktc.services import place_service as svc
 
 
 def test_haversine_known_distance():

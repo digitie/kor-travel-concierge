@@ -6,7 +6,7 @@
 # Windows 사용자는 WSL2(Ubuntu) 안의 Docker Engine 또는 Docker Desktop WSL
 # backend에서 실행한다.
 #
-# 고정 host port: API 12401, Frontend 12405, MCP 12402.
+# 고정 host port: API 12601, Frontend 12605, MCP 12602.
 # RustFS 고정 포트 12101/12105는 외부 서비스가 소유하므로 이 스크립트가 회수하지 않는다.
 set -euo pipefail
 
@@ -22,9 +22,9 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-API_HOST_PORT="${API_HOST_PORT:-12401}"
-FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-12405}"
-MCP_HOST_PORT="${MCP_HOST_PORT:-12402}"
+API_HOST_PORT="${API_HOST_PORT:-12601}"
+FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-12605}"
+MCP_HOST_PORT="${MCP_HOST_PORT:-12602}"
 export API_HOST_PORT FRONTEND_HOST_PORT MCP_HOST_PORT
 
 if ! command -v docker >/dev/null 2>&1; then

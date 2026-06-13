@@ -6,23 +6,23 @@
 # 검증하고, 기본적으로 `docker compose down`으로 정리한다.
 #
 # host port는 아래 고정값을 기본으로 사용하고, 검증 동작만 환경 변수로 조정한다.
-#   PROJECT_NAME             Compose project 이름 (기본: krtour-ai-agent-verify)
+#   PROJECT_NAME             Compose project 이름 (기본: kor-travel-concierge-verify)
 #   RUSTFS_HOST_PORT         RustFS S3 API host port (기본: 12101)
 #   RUSTFS_CONSOLE_HOST_PORT RustFS 콘솔 host port (기본: 12105)
-#   API_HOST_PORT            FastAPI host port (기본: 12401)
-#   MCP_HOST_PORT            MCP host port (기본: 12402)
-#   FRONTEND_HOST_PORT       Next.js host port (기본: 12405)
+#   API_HOST_PORT            FastAPI host port (기본: 12601)
+#   MCP_HOST_PORT            MCP host port (기본: 12602)
+#   FRONTEND_HOST_PORT       Next.js host port (기본: 12605)
 #   SKIP_BUILD=1             이미지 빌드 단계 건너뛰기
 #   KEEP_RUNNING=1           검증 후 컨테이너를 내리지 않고 유지
 set -euo pipefail
 
-PROJECT_NAME="${PROJECT_NAME:-krtour-ai-agent-verify}"
+PROJECT_NAME="${PROJECT_NAME:-kor-travel-concierge-verify}"
 export RUSTFS_HOST_PORT="${RUSTFS_HOST_PORT:-12101}"
 export RUSTFS_CONSOLE_HOST_PORT="${RUSTFS_CONSOLE_HOST_PORT:-12105}"
 export RUSTFS_DOCKER_ENDPOINT="${RUSTFS_DOCKER_ENDPOINT:-http://host.docker.internal:${RUSTFS_HOST_PORT}}"
-export API_HOST_PORT="${API_HOST_PORT:-12401}"
-export MCP_HOST_PORT="${MCP_HOST_PORT:-12402}"
-export FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-12405}"
+export API_HOST_PORT="${API_HOST_PORT:-12601}"
+export MCP_HOST_PORT="${MCP_HOST_PORT:-12602}"
+export FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-12605}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 KEEP_RUNNING="${KEEP_RUNNING:-0}"
 

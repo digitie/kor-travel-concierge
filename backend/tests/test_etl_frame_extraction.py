@@ -7,8 +7,8 @@ import subprocess
 
 import pytest
 
-from app.etl import frame_extraction
-from app.etl.frame_extraction import (
+from ktc.etl import frame_extraction
+from ktc.etl.frame_extraction import (
     FrameExtractionError,
     build_frame_object_key,
     extract_and_store_frame,
@@ -18,8 +18,8 @@ from app.etl.frame_extraction import (
     select_stream_url,
     store_raw_media,
 )
-from app.etl.media_store import InMemoryMediaStore
-from app.models import (
+from ktc.etl.media_store import InMemoryMediaStore
+from ktc.models import (
     AssetType,
     MediaAsset,
     TravelPlace,
@@ -184,11 +184,11 @@ async def test_extract_and_store_frame_records_asset_and_mapping(session):
     assert result.timestamp_seconds == 65
     assert result.object_key == "v1/frames/frame_00_01_05_000.jpg"
     assert result.asset.asset_type == AssetType.FRAME
-    assert result.asset.bucket == "krtour-map"
+    assert result.asset.bucket == "kor-travel-concierge"
     assert result.asset.object_key == "features/v1/frames/frame_00_01_05_000.jpg"
     assert result.asset.video_id == video.video_id
     assert result.asset.place_id == place.place_id
-    assert ("krtour-map", result.asset.object_key) in store.objects
+    assert ("kor-travel-concierge", result.asset.object_key) in store.objects
 
     refreshed_mapping = await session.get(VideoPlaceMapping, mapping.id)
     assert refreshed_mapping.frame_asset_id == result.asset.id
@@ -226,9 +226,9 @@ async def test_store_raw_media_records_raw_video_asset(session):
     )
 
     assert asset.asset_type == AssetType.RAW_VIDEO
-    assert asset.bucket == "krtour-map"
+    assert asset.bucket == "kor-travel-concierge"
     assert asset.object_key == "features/vraw/raw/source.mp4"
-    assert ("krtour-map", asset.object_key) in store.objects
+    assert ("kor-travel-concierge", asset.object_key) in store.objects
     assert isinstance(asset, MediaAsset)
 
 
@@ -256,4 +256,4 @@ async def test_store_raw_media_stream_records_raw_video_asset(session):
     assert asset.object_key == "features/vstream/raw/source.mp4"
     assert asset.size_bytes == len(b"streamed-video-bytes")
     assert asset.sha256 == frame_extraction.media_store.sha256_hex(b"streamed-video-bytes")
-    assert store.objects[("krtour-map", asset.object_key)] == b"streamed-video-bytes"
+    assert store.objects[("kor-travel-concierge", asset.object_key)] == b"streamed-video-bytes"

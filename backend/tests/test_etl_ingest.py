@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.etl import ingest_service
-from app.models import YoutubeChannel, YoutubePlaylist, YoutubePlaylistVideo, YoutubeVideo
+from ktc.etl import ingest_service
+from ktc.models import YoutubeChannel, YoutubePlaylist, YoutubePlaylistVideo, YoutubeVideo
 
 
 def test_parse_published_at():

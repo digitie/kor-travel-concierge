@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from app.etl import video_analysis_service
-from app.models import (
+from ktc.etl import video_analysis_service
+from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExportStatus,
     MatchStatus,

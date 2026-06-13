@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from app.etl import poi_extraction
-from app.etl.poi_extraction import POIExtractionError, extract_pois
+from ktc.etl import poi_extraction
+from ktc.etl.poi_extraction import POIExtractionError, extract_pois
 
 _VALID_JSON = json.dumps(
     {

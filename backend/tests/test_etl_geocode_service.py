@@ -6,9 +6,9 @@ import json
 
 from sqlalchemy import select
 
-from app.etl.geocode_service import _names_compatible, apply_geocode_to_candidate
-from app.etl.geocoding import GeocodeCandidate, GeocodeDecision
-from app.models import (
+from ktc.etl.geocode_service import _names_compatible, apply_geocode_to_candidate
+from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
+from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExportStatus,
     MatchStatus,

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.etl import transcript
-from app.etl.transcript import TranscriptResult, TranscriptSegment, get_transcript
+from ktc.etl import transcript
+from ktc.etl.transcript import TranscriptResult, TranscriptSegment, get_transcript
 
 
 def _ok_provider(source):

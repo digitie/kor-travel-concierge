@@ -10,7 +10,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app.models import (
+from ktc.models import (
     CrawlRun,
     RunState,
     SourceTarget,
@@ -20,7 +20,7 @@ from app.models import (
     YoutubeVideoAnalysisRun,
     utcnow,
 )
-from app.services import crawl_run_service, settings_service
+from ktc.services import crawl_run_service, settings_service
 from scheduler import worker
 
 
@@ -45,14 +45,14 @@ async def _yielding_ok_handler(session, run):
 
 def test_scheduler_jobstore_url_converts_asyncpg_to_psycopg():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent"
+        "postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge"
     )
-    assert url == "postgresql+psycopg://addr:addr@localhost:5432/krtour_ai_agent"
+    assert url == "postgresql+psycopg://addr:addr@localhost:5432/kor_travel_concierge"
 
 
 def test_scheduler_jobstore_url_prefers_explicit_url():
     url = worker.scheduler_jobstore_url(
-        "postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent",
+        "postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge",
         "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs",
     )
     assert url == "postgresql+psycopg://addr:addr@localhost:5432/scheduler_jobs"

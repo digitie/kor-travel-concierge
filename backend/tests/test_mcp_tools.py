@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.models import (  # noqa: E402
+from ktc.models import (  # noqa: E402
     AuditLog,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -23,8 +23,8 @@ from app.models import (  # noqa: E402
     VideoPlaceMapping,
     YoutubeVideo,
 )
-from app.services import crawl_run_service  # noqa: E402
-from krtour_ai_mcp.tools import ToolRuntime, tool_metadata  # noqa: E402
+from ktc.services import crawl_run_service  # noqa: E402
+from ktc.mcp_server.tools import ToolRuntime, tool_metadata  # noqa: E402
 
 
 def _runtime(session_factory, *, write_enabled: bool = True) -> ToolRuntime:
@@ -163,9 +163,9 @@ async def test_merge_places_moves_mappings_and_deletes_source(session_factory):
             asset_type="frame",
             video_id=video.video_id,
             place_id=source.place_id,
-            bucket="krtour-frames",
+            bucket="ktc-frames",
             object_key="video-merge/frame.jpg",
-            object_uri="http://localhost:12101/krtour-frames/video-merge/frame.jpg",
+            object_uri="http://localhost:12101/ktc-frames/video-merge/frame.jpg",
         )
         session.add_all([mapping, asset])
         await session.commit()

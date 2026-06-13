@@ -7,11 +7,11 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.core.config import get_settings
-from app.etl import media_store, summarize_service
-from app.etl.media_store import InMemoryMediaStore, store_and_record
-from app.etl.transcript import TranscriptResult, TranscriptSegment
-from app.models import (
+from ktc.core.config import get_settings
+from ktc.etl import media_store, summarize_service
+from ktc.etl.media_store import InMemoryMediaStore, store_and_record
+from ktc.etl.transcript import TranscriptResult, TranscriptSegment
+from ktc.models import (
     AssetType,
     CrawlStatus,
     FeatureExportStatus,
@@ -24,9 +24,9 @@ from app.models import (
 
 @pytest.fixture(autouse=True)
 def rustfs_test_settings(monkeypatch):
-    monkeypatch.setenv("RUSTFS_BUCKET_RAW_VIDEOS", "krtour-raw-videos")
-    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "krtour-subtitles")
-    monkeypatch.setenv("RUSTFS_BUCKET_FRAMES", "krtour-frames")
+    monkeypatch.setenv("RUSTFS_BUCKET_RAW_VIDEOS", "ktc-raw-videos")
+    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "ktc-subtitles")
+    monkeypatch.setenv("RUSTFS_BUCKET_FRAMES", "ktc-frames")
     monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "")
     monkeypatch.setenv("RUSTFS_PUBLIC_BASE_URL", "")
     get_settings.cache_clear()
@@ -48,10 +48,10 @@ _LLM_JSON = json.dumps(
 
 
 def test_bucket_routing():
-    assert media_store.bucket_for(AssetType.TRANSCRIPT) == "krtour-subtitles"
-    assert media_store.bucket_for(AssetType.SUBTITLE) == "krtour-subtitles"
-    assert media_store.bucket_for(AssetType.FRAME) == "krtour-frames"
-    assert media_store.bucket_for(AssetType.RAW_VIDEO) == "krtour-raw-videos"
+    assert media_store.bucket_for(AssetType.TRANSCRIPT) == "ktc-subtitles"
+    assert media_store.bucket_for(AssetType.SUBTITLE) == "ktc-subtitles"
+    assert media_store.bucket_for(AssetType.FRAME) == "ktc-frames"
+    assert media_store.bucket_for(AssetType.RAW_VIDEO) == "ktc-raw-videos"
 
 
 async def test_store_and_record(session):
@@ -67,11 +67,11 @@ async def test_store_and_record(session):
         video_id="v1",
     )
     assert asset.id is not None
-    assert asset.bucket == "krtour-subtitles"
+    assert asset.bucket == "ktc-subtitles"
     assert asset.size_bytes == 5
     assert asset.sha256 == media_store.sha256_hex(b"hello")
     assert asset.retention_policy == "infinite"
-    assert ("krtour-subtitles", "v1/sub.txt") in store.objects
+    assert ("ktc-subtitles", "v1/sub.txt") in store.objects
 
     reused = await store_and_record(
         session,
@@ -87,7 +87,7 @@ async def test_store_and_record(session):
 
 async def test_store_and_record_applies_configured_prefix(session, monkeypatch):
     await _make_video(session)
-    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "krtour-map")
+    monkeypatch.setenv("RUSTFS_BUCKET_SUBTITLES", "kor-travel-concierge")
     monkeypatch.setenv("RUSTFS_OBJECT_PREFIX", "features")
     get_settings.cache_clear()
 
@@ -102,9 +102,9 @@ async def test_store_and_record_applies_configured_prefix(session, monkeypatch):
         video_id="v1",
     )
 
-    assert asset.bucket == "krtour-map"
+    assert asset.bucket == "kor-travel-concierge"
     assert asset.object_key == "features/v1/transcript.txt"
-    assert ("krtour-map", "features/v1/transcript.txt") in store.objects
+    assert ("kor-travel-concierge", "features/v1/transcript.txt") in store.objects
 
 
 async def _make_video(session):

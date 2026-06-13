@@ -1,0 +1,83 @@
+"""`youtube_videos` 모델.
+
+영상 설명 원문(`description_raw`)과 Gemini가 오탈자·문맥을 보정한 설명
+(`description_gemini_corrected`)을 분리 저장한다. Gemini 결과는 원문을 덮어쓰지
+않는다. (`docs/architecture.md` 4.4·6.3, ADR-16)
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from ktc.models.base import Base, utcnow
+
+
+class CrawlStatus(str, Enum):
+    DISCOVERED = "discovered"
+    SUMMARIZED = "summarized"
+    GEOCODED = "geocoded"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class YoutubeVideo(Base):
+    __tablename__ = "youtube_videos"
+
+    # 영상은 생성 시각보다 마지막 수집 시각이 도메인 상태라 `crawled_at`을 별도 유지한다.
+    video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("youtube_channels.channel_id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True,
+    )
+    channel_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    canonical_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    default_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tags_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engagement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # 영상 설명: 원문과 Gemini 보정본을 분리 저장한다.
+    description_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description_gemini_corrected: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description_gemini_corrected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    description_gemini_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gemini_url_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gemini_url_summary_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    gemini_url_summary_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gemini_url_summary_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    transcript_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_summary_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    reconciled_summary_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    crawl_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=CrawlStatus.DISCOVERED
+    )
+    crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )

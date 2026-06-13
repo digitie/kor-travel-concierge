@@ -1,8 +1,54 @@
 # JOURNAL — 작업 일지
 
-본 문서는 `krtour-ai-agent` 프로젝트의 작업 진행 역사를 역시간순으로 기록한다.
+본 문서는 `kor-travel-concierge` 프로젝트의 작업 진행 역사를 역시간순으로 기록한다.
 
 ---
+
+## 2026-06-14: T-074 완료 — 포트 대역을 통합 docker-manager 정책(126xx)으로 정렬
+
+- **담당자**: Claude
+- **배경**: `kor-travel-docker-manager`가 TripMate 계열 통합 로컬 인프라의 포트 정책(`docs/ports.md`, `config/docker-targets.yml`)을 정의하며, concierge에는 `conc` 대역 `12600-12699`(API `12601`, MCP `12602`, Web `12605`)가 배정되었다. 통합 스택은 이미 이 포트로 concierge를 빌드·기동하고 있었으나 concierge repo 자체 설정은 이전 `124xx` 값을 사용하고 있었다.
+- **작업 내용**:
+  - host 고정 포트를 API `12401→12601`(컨테이너 `8000`), MCP host `12402→12602`(컨테이너 내부 bind `12402`는 유지), Web `12405→12605`(컨테이너 `3000`)로 이관했다.
+  - 적용 파일: `.env.example`, `docker-compose.yml`, `backend/ktc/core/config.py`, `backend/ktc/cli.py`, `backend/main.py`, `frontend/package.json`, `frontend/src/app/api/v1/[...path]/route.ts`, `scripts/start-live.sh`·`stop-fixed-ports.sh`·`verify-docker-compose.sh`, `README.md`, `SKILL.md`, `AGENTS.md`, `docs/architecture.md`, `docs/dev-environment.md`, `CLAUDE.md`.
+  - 컨테이너 내부 MCP bind 포트(`MCP_PORT=12402`)와 참조 서비스 포트(PostgreSQL `5432`, RustFS `12101`/`12105`)는 이미 정책과 일치하여 유지했다.
+  - 이력 문서(과거 journal/decisions/tasks 항목과 `CLAUDE.md` T-027/T-056 완료 요약)는 당시 사실이므로 보존하고, 결정은 ADR-27로 기록해 ADR-18/ADR-23의 `124xx` 고정 포트 값을 대체했다.
+- **검증**: 전수 grep으로 host 포트 잔존 0건(컨테이너 bind `12402`와 이력 문서만 잔존), `docker compose config` 유효성, `kor-travel-docker-manager` `conc` 타깃 재빌드 기동 후 API `/health`·MCP `12602`·Web `12605` 확인.
+
+---
+
+## 2026-06-13: T-073 완료 — 배포명 및 Python import package 변경
+
+- **담당자**: Codex
+- **배경**: 사용자가 시스템 배포명을 `kor-travel-concierge`로 변경하고, GitHub 레포지토리명도 함께 변환하도록 요청했다.
+- **작업 내용**:
+  - 기존 백엔드 패키지를 `backend/ktc`로 이동하고 모든 내부 import를 `ktc.*`로 정렬했다.
+  - 기존 별도 MCP 구현은 `backend/ktc/mcp_server`로 편입하고 `mcp/server.py` 호환 래퍼가 `ktc.mcp_server.server`를 호출하도록 변경했다.
+  - 배포명, API title/root message, MCP server name, frontend/test package name, Docker/Compose 설명을 `kor-travel-concierge` 기준으로 맞췄다.
+  - 환경 변수 접두사는 `KTC_*`로 정리하고, 기본 DB 이름은 `kor_travel_concierge`, RustFS 기본 버킷과 공개 URL 기준은 `kor-travel-concierge`, feature provider는 `kor-travel-concierge-youtube`, 장소 export 파일명은 `kor-travel-concierge-places-*`로 바꿨다.
+  - 운영 CLI `ktcctl`을 추가하고 Docker Compose의 api/mcp/scheduler 실행도 같은 CLI 경로로 맞췄다.
+  - `docs/tasks.md`, `README.md`, `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, feature export 문서와 개발 환경 문서를 새 명칭 기준으로 갱신했다.
+- **검증**:
+  - GitHub REST API로 저장소명을 `digitie/kor-travel-concierge`로 변경하고, 로컬 `origin`도 `https://github.com/digitie/kor-travel-concierge.git`로 갱신했다.
+  - `git ls-remote --symref origin HEAD`와 `gh repo view digitie/kor-travel-concierge`로 원격 기본 브랜치 `main` 응답을 확인했다.
+  - WSL backend: `compileall`, `pytest -q backend/tests`, `ktc` import smoke → 통과
+  - WSL frontend: `npm run lint`, `npm run type-check`, `npm run build` → 통과
+  - WSL 정적/Compose: `docker compose config --quiet`, `git diff --check` → 통과
+  - Windows host Playwright E2E: `cd tests; npx playwright test` → `4 passed`
+  - 설정/문서 및 전체 tracked 파일에서 이전 프로젝트명, 이전 Python 패키지명, 이전 MCP 패키지명, 이전 export/mock bucket 명칭 잔여 검색 → 0건
+
+## 2026-06-13: T-072 보완 — GitHub 저장소명 및 잔여 코드베이스 명칭 정렬
+
+- **담당자**: Codex
+- **배경**: 사용자가 GitHub 레포지토리 이름도 당시 중간 명칭으로 변경하는 작업을 진행하도록 요청했다.
+- **작업 내용**:
+  - 로컬 Git `origin`이 당시 중간 명칭의 GitHub 저장소 URL을 가리키고, 원격 `HEAD`가 정상 응답하는 것을 확인했다.
+  - export 기본 파일명과 GPX/KML 생성자 명칭을 당시 중간 명칭 기준으로 정렬했다.
+  - 테스트 fixture의 mock RustFS 버킷명과 라이선스 copyright 명칭을 당시 기준으로 보정했다.
+  - 최신 문서의 MCP 패키지명 설명을 당시 실제 MCP 패키지와 맞췄다.
+- **검증**:
+  - `git ls-remote --symref origin HEAD` → `refs/heads/main`, 원격 응답 정상
+  - tracked 파일 기준 잔여 이전 프로젝트명과 이전 MCP 패키지명 활성 참조 검색
 
 ## 2026-06-12: T-071 완료 — 고정 포트 계약 및 WSL 실행 위치 강제
 
@@ -13,9 +59,9 @@
   - 기본 Compose 실행은 `api`/`mcp`/`scheduler`/`frontend`만 띄우고, RustFS는 `http://host.docker.internal:12101` 외부 서비스를 사용한다. `embedded-rustfs` profile은 선택형으로 남겼다.
   - `scripts/start-live.sh`와 `scripts/verify-docker-compose.sh`가 repo 소유 포트만 회수하도록 고쳤다. 기본 live 실행에서 이전 내장 RustFS 컨테이너가 남아 있으면 중지/제거하되 volume은 삭제하지 않는다.
   - 문서와 ADR을 WSL 실행 위치 강제 규칙으로 정렬했다. 예외는 `git` 명령과 Windows host Playwright E2E뿐이며, `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색은 WSL에서 실행한다.
-  - 운영 DB `krtour_ai_agent`는 이미 현재 schema가 존재하지만 `alembic_version`이 없어 `alembic stamp head`로 `20260610_0006` 이력을 맞춘 뒤 `upgrade head` no-op을 확인했다.
+  - 운영 DB `kor_travel_concierge`는 이미 현재 schema가 존재하지만 `alembic_version`이 없어 `alembic stamp head`로 `20260610_0006` 이력을 맞춘 뒤 `upgrade head` no-op을 확인했다.
 - **검증**:
-  - WSL backend: `python -m pytest -q backend/tests`, `python -m compileall backend/app backend/tests scheduler tripmate_mcp` → 통과
+  - WSL backend: `python -m pytest -q backend/tests`, `python -m compileall backend/ktc backend/tests scheduler ktc.mcp_server` → 통과
   - WSL frontend: `npm run lint`, `npm run type-check`, `npm run build` → 통과
   - WSL 정적/Compose: `bash -n`, `docker compose config --quiet`, `git diff --check` → 통과
   - WSL Docker Compose smoke: 외부 RustFS health, API/Web health, MCP TCP, `verify_rustfs.py` 객체 저장 smoke → 통과
@@ -29,44 +75,44 @@
 - **배경**: T-061~T-070으로 이어진 PostgreSQL/PostGIS 전환, YouTube metadata/analysis/export, `python-krtour-map` consumer, TripMate feature 연계 POI 소비 흐름을 실제 실행 경로 기준으로 한 번에 검증하고 문서 상태를 완료로 닫는다.
 - **작업 내용**:
   - T-062 이후 `youtube_videos.channel_id` FK가 생긴 상태에서도 Windows host Playwright seed가 통과하도록 `tests/scripts/seed_e2e.py`가 `YoutubeChannel` stub을 함께 적재하게 보정했다.
-  - WSL Docker PostgreSQL/PostGIS disposable DB 3개(`krtour_ai_agent_t069`, `krtour_ai_agent_t069_compose`, `krtour_ai_agent_t069_e2e`)로 backend/unit/E2E/Compose 검증을 분리했다.
-  - `python-krtour-map`은 기존 merged consumer를 수정하지 않고 unit provider smoke와 running `krtour-ai-agent` 대상 live `/api/v1/features/snapshot` pull smoke만 수행했다.
-  - TripMate sibling repo는 기존 미커밋 변경을 건드리지 않고, feature 연계 POI와 notice plan POI schema/model이 `krtour-ai-agent-youtube` feature id/snapshot을 받아 snapshot fallback view까지 유지하는지 smoke로 확인했다. 이 과정에서 TripMate `trip_view_builder`가 non-UUID `feature_id`를 fresh fetch 대상으로 파싱하지 못한다는 경고가 출력됐지만, 현재 T-068에서 확정한 수동 선택 + 저장 snapshot fallback 경로는 정상 동작했다.
+  - WSL Docker PostgreSQL/PostGIS disposable DB 3개(`kor_travel_concierge_t069`, `kor_travel_concierge_t069_compose`, `kor_travel_concierge_t069_e2e`)로 backend/unit/E2E/Compose 검증을 분리했다.
+  - `python-krtour-map`은 기존 merged consumer를 수정하지 않고 unit provider smoke와 running `kor-travel-concierge` 대상 live `/api/v1/features/snapshot` pull smoke만 수행했다.
+  - TripMate sibling repo는 기존 미커밋 변경을 건드리지 않고, feature 연계 POI와 notice plan POI schema/model이 `kor-travel-concierge-youtube` feature id/snapshot을 받아 snapshot fallback view까지 유지하는지 smoke로 확인했다. 이 과정에서 TripMate `trip_view_builder`가 non-UUID `feature_id`를 fresh fetch 대상으로 파싱하지 못한다는 경고가 출력됐지만, 현재 T-068에서 확정한 수동 선택 + 저장 snapshot fallback 경로는 정상 동작했다.
 - **검증**:
   - feature export target: `tests/test_feature_export_api.py` → `9 passed`
   - backend 전체: `python -m pytest` → `198 passed`
-  - backend compile: `python -m compileall app ..\scheduler ..\tripmate_mcp` → 통과
+  - backend compile: `python -m compileall app ..\scheduler ..\ktc.mcp_server` → 통과
   - shell/Compose 정합성: `bash -n scripts/verify-docker-compose.sh scripts/start-live.sh scripts/stop-fixed-ports.sh`, `docker compose config --quiet` → 통과
   - frontend: `npm run lint`, `npm run type-check`, `npm run build` → 통과
   - Docker Compose smoke: `SKIP_BUILD=1 bash scripts/verify-docker-compose.sh` with override ports → RustFS/API/frontend/MCP/RustFS object smoke 통과
   - Windows host Playwright E2E: `npx playwright test` → `4 passed`
-  - `python-krtour-map`: `tests/unit/test_providers_krtour_ai_agent.py` → `9 passed`
+  - `python-krtour-map`: `tests/unit/test_providers_kor_travel_concierge.py` → `9 passed`
   - live pull smoke: running backend `http://0.0.0.0:18082` + WSL consumer transform → `live_pull_ok 1 f_global_p_5894e112b38c3e3a 5 월정리 해변`
   - TripMate POI/notice plan smoke: schema/model/snapshot fallback → `tripmate_poi_notice_smoke_ok f_global_p_5894e112b38c3e3a 월정리 해변`
 
 ## 2026-06-11: T-068 TripMate feature 연계 POI/curated plan 소비 흐름 검증
 
 - **담당자**: Codex
-- **결론**: `krtour-ai-agent`는 TripMate DB에 직접 붙거나 자동 POI/curated plan 등록을 수행하지 않는다. YouTube 장소 후보는 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 공급되고, `python-krtour-map`이 `krtour-ai-agent-youtube` provider로 이를 pull해 `feature_id`와 최종 `feature_snapshot`을 만든다. TripMate는 이 값을 자체 feature 연계 POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장하고, curated plan은 그 POI row들의 모음으로 구성한다.
+- **결론**: `kor-travel-concierge`는 TripMate DB에 직접 붙거나 자동 POI/curated plan 등록을 수행하지 않는다. YouTube 장소 후보는 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 공급되고, `python-krtour-map`이 `kor-travel-concierge-youtube` provider로 이를 pull해 `feature_id`와 최종 `feature_snapshot`을 만든다. TripMate는 이 값을 자체 feature 연계 POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장하고, curated plan은 그 POI row들의 모음으로 구성한다.
 - **작업 내용**:
   - 공급자 정본 계약 문서 `docs/feature-export-api.md`를 추가했다. 계획 문서가 아니라 실제 API 계약의 기준 문서이며, top-level `{items,next_cursor,has_more}`, opaque cursor, `upsert`/`reject`/`tombstone`, `X-API-Key`, TripMate 소비 필드를 명문화했다.
   - `backend/tests/test_feature_export_api.py`의 ready 후보 fixture를 YouTube channel/playlist, 장소 설명, `category_code_suggestion`, 도로명 주소, Gemini URL evidence, VWorld/Kakao/Naver evidence까지 포함하도록 보강했다.
   - 새 회귀 테스트가 TripMate feature 연계 POI snapshot까지 이어지는 이름, 좌표, 8자리 카테고리 제안, marker 색상 기준(`P-13`), YouTube 영상·채널·재생목록 근거, transcript/Gemini evidence를 확인한다.
   - `docs/youtube-feature-pipeline-plan.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md`, `CLAUDE.md`, `docs/tasks.md`를 자동 POI/curated plan 등록 없음·수동 선택 흐름 유지 기준으로 정렬했다.
 - **검증**:
-  - `TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_t068 backend/.venv/bin/python -m pytest -s backend/tests/test_feature_export_api.py` → `9 passed`
+  - `KTC_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_t068 backend/.venv/bin/python -m pytest -s backend/tests/test_feature_export_api.py` → `9 passed`
 - **후속 상태**:
   - T-069 통합 검증과 운영 문서 정리에서 완료.
 
 ## 2026-06-11: T-067 `python-krtour-map` consumer 상태 확인 (이미 머지됨)
 
 - **담당자**: Claude
-- **결론**: T-067(krtour-map가 T-066 API를 pull해 `FeatureBundle`로 변환)은 `python-krtour-map` origin/main에 **이미 구현·머지**되어 있다. krtour-ai-agent 측 코드 변경은 없다.
-  - PR #346(T-217a/b/f): `krtour-ai-agent-youtube` provider 변환(`krtour_ai_agent_items_to_bundles`, `make_feature_id`, `SourceRecord`/`SourceLink`에 YouTube payload·confidence·primary source role), Dagster fetcher 경로 `/api/v1/features/*` 중립화, `reject`/`tombstone` → feature `status='inactive'` 전환.
+- **결론**: T-067(krtour-map가 T-066 API를 pull해 `FeatureBundle`로 변환)은 `python-krtour-map` origin/main에 **이미 구현·머지**되어 있다. kor-travel-concierge 측 코드 변경은 없다.
+  - PR #346(T-217a/b/f): `kor-travel-concierge-youtube` provider 변환(`kor_travel_concierge_items_to_bundles`, `make_feature_id`, `SourceRecord`/`SourceLink`에 YouTube payload·confidence·primary source role), Dagster fetcher 경로 `/api/v1/features/*` 중립화, `reject`/`tombstone` → feature `status='inactive'` 전환.
   - PR #347(T-217c/d/e), #345(T-217g): 제안 연동 합의·integration-map·RustFS·동기화 신선도 대시보드.
   - fetcher는 snapshot(full)·changes(incremental)를 opaque cursor와 `X-API-Key`로 pull한다.
 - **process 메모(반성)**: 본 세션에서 `python-krtour-map`의 **stale·divergent 로컬 main**(origin에 없는 로컬 커밋)에서 분기해 T-217a/b를 처음부터 중복 구현했다. PR 생성 시점에 conflict/CI 미발화로 확인하다 origin/main의 #346과 중복임을 발견하고 중복 PR(#352)을 닫고 브랜치를 삭제했다. **교훈**: 형제 repo 작업 착수 전 반드시 `git fetch origin` 후 `origin/main` 기준으로 분기하고 기존 구현/머지 여부를 먼저 확인한다.
-- **후속 상태**: 실제 live pull smoke(running krtour-ai-agent ↔ krtour-map)는 T-069 통합 검증에서 완료.
+- **후속 상태**: 실제 live pull smoke(running kor-travel-concierge ↔ krtour-map)는 T-069 통합 검증에서 완료.
 
 ## 2026-06-11: T-070 후속 — 수동 `create_place` 경로 카테고리 코드 보강
 
@@ -74,16 +120,16 @@
 - **작업 내용**:
   - T-070은 자동 지오코딩 확정 경로(`geocode_service`)만 `category_code_suggestion`을 채웠다. 검수 큐에서 사용자가 신규 장소를 만드는 수동 `create_place` 경로도 채우도록 보강했다.
   - **주입형 selector로 layering 유지**: `place_service.resolve_candidate`에 `category_code_selector` 파라미터를 추가했다. services 계층이 etl을 직접 import하지 않도록, 실제 Gemini 선택기는 composition root가 주입한다. `category_suggestion.make_default_selector()`(Gemini 키 없으면 `None`)가 `(name, category_label, description, address) -> code|None` callable을 만든다.
-  - **composition root 배선**: REST `POST /api/v1/destinations/unmatched/{id}/resolve`(`routes.py`)와 MCP `resolve_candidate`(`tripmate_mcp/tools.py`)가 `make_default_selector()`를 주입한다. `create_place` 분기에서만 신규 장소에 코드를 채우고, `match_existing`은 기존 장소를 건드리지 않는다.
-- **검증**: `localhost:5432` disposable DB에서 backend 전체 pytest **197 passed**(신규 place_service selector 2건 포함), compileall(`tripmate_mcp` 포함), import 순환참조 없음(routes/MCP→etl 단방향).
+  - **composition root 배선**: REST `POST /api/v1/destinations/unmatched/{id}/resolve`(`routes.py`)와 MCP `resolve_candidate`(`ktc.mcp_server/tools.py`)가 `make_default_selector()`를 주입한다. `create_place` 분기에서만 신규 장소에 코드를 채우고, `match_existing`은 기존 장소를 건드리지 않는다.
+- **검증**: `localhost:5432` disposable DB에서 backend 전체 pytest **197 passed**(신규 place_service selector 2건 포함), compileall(`ktc.mcp_server` 포함), import 순환참조 없음(routes/MCP→etl 단방향).
 
 ## 2026-06-11: T-070 feature export `category_code_suggestion` 채우기
 
 - **담당자**: Claude
 - **작업 내용**:
-  - **카테고리 코드표 복사**: `python-krtour-map`의 `krtour.map.category`(8자리 `AABBCCDD`, 144개)를 `backend/app/data/place_category_codes.json`으로 복사하고 provenance/동기화 기준(2026-05-25)·복사 사유를 헤더에 남겼다. 런타임에 `python-krtour-map`을 참조하면 provider↔consumer 순환참조가 되므로 복사로 끊는다(2026-06-11 결정). 카테고리는 거의 바뀌지 않아 복사본 drift는 수용 가능하다고 판단하며, 변경 시 JSON을 재동기화한다.
-  - **카탈로그 로더**: `app/etl/category_catalog.py`가 JSON을 읽어 `is_known_code`/`label_for`/`selectable_categories`/`prompt_catalog`를 제공한다.
-  - **Gemini 선택기**: `app/etl/category_suggestion.py`가 복사된 카탈로그를 Gemini에 보여주고 장소명·카테고리 label·설명·주소를 근거로 8자리 코드 하나를 고르게 한다(`poi_extraction`과 동일한 주입형 `LlmCallable` 패턴). 결과는 카탈로그에 존재하는 코드로 검증하고, 알 수 없는 코드·분류 미지정(`00000000`)·호출 실패는 `None`(제안 없음)으로 둔다(자동 확정 금지).
+  - **카테고리 코드표 복사**: `python-krtour-map`의 `krtour.map.category`(8자리 `AABBCCDD`, 144개)를 `backend/ktc/data/place_category_codes.json`으로 복사하고 provenance/동기화 기준(2026-05-25)·복사 사유를 헤더에 남겼다. 런타임에 `python-krtour-map`을 참조하면 provider↔consumer 순환참조가 되므로 복사로 끊는다(2026-06-11 결정). 카테고리는 거의 바뀌지 않아 복사본 drift는 수용 가능하다고 판단하며, 변경 시 JSON을 재동기화한다.
+  - **카탈로그 로더**: `ktc/etl/category_catalog.py`가 JSON을 읽어 `is_known_code`/`label_for`/`selectable_categories`/`prompt_catalog`를 제공한다.
+  - **Gemini 선택기**: `ktc/etl/category_suggestion.py`가 복사된 카탈로그를 Gemini에 보여주고 장소명·카테고리 label·설명·주소를 근거로 8자리 코드 하나를 고르게 한다(`poi_extraction`과 동일한 주입형 `LlmCallable` 패턴). 결과는 카탈로그에 존재하는 코드로 검증하고, 알 수 없는 코드·분류 미지정(`00000000`)·호출 실패는 `None`(제안 없음)으로 둔다(자동 확정 금지).
   - **저장·노출**: `TravelPlace.category_code_suggestion`(`String(16)`) 컬럼과 migration `20260610_0006`를 추가했다. `geocode_service.apply_geocode_to_candidate`가 장소 확정 시 기존 제안이 없을 때 한 번 채우며(생략 시 Gemini 키 유무 기반 기본 선택기, 명시적 `None`이면 제안 비활성), `feature_export_service` payload의 `category_code_suggestion`이 이 값을 노출한다(기존 하드코딩 `null` 대체).
   - **layering**: 선택기는 etl 계층에 두고 services→etl 역의존을 피했다. `feature_id` 생성은 여전히 `python-krtour-map` 책임이며, 수동 `create_place` 경로 보강은 후속으로 남긴다.
 - **검증** (`localhost:5432` PostGIS disposable DB):
@@ -96,12 +142,12 @@
 
 - **담당자**: Claude
 - **작업 내용**:
-  - **`feature_exports` export ledger 추가**: `extracted_place_candidates`를 출처로 삼는 export ledger 모델(`app/models/feature_export.py`)과 Alembic migration `20260610_0005`를 추가했다. `export_id`(`ytpc_{candidate_id}`), 증가 cursor용 `sequence`(전용 PostgreSQL sequence `feature_export_sequence`), `operation`(`upsert`/`reject`/`tombstone`), `export_state`, `payload_json`, `payload_hash`(`sha256:` prefix), `last_exported_at`, `rejection_reason`, `created_at`/`updated_at`를 보존하고 `(export_state, updated_at, export_id)`·`sequence` unique·`candidate_id` unique·`payload_json` GIN 인덱스를 둔다.
+  - **`feature_exports` export ledger 추가**: `extracted_place_candidates`를 출처로 삼는 export ledger 모델(`ktc/models/feature_export.py`)과 Alembic migration `20260610_0005`를 추가했다. `export_id`(`ytpc_{candidate_id}`), 증가 cursor용 `sequence`(전용 PostgreSQL sequence `feature_export_sequence`), `operation`(`upsert`/`reject`/`tombstone`), `export_state`, `payload_json`, `payload_hash`(`sha256:` prefix), `last_exported_at`, `rejection_reason`, `created_at`/`updated_at`를 보존하고 `(export_state, updated_at, export_id)`·`sequence` unique·`candidate_id` unique·`payload_json` GIN 인덱스를 둔다.
   - **멱등 동기화**: `feature_export_service.sync_feature_exports`가 후보 상태로부터 ledger를 멱등 동기화한다. payload가 의미 있게 바뀐 export에만 `nextval`로 새 sequence를 부여해, 변화가 없으면 cursor가 안정적이다(반복 호출이 churn을 만들지 않음). 확정(`ready`/`exported` + matched place) 후보는 `upsert`, `ignored`/`rejected` 후보는 과거 export가 있을 때만 `reject`, 후보가 사라진 ledger row는 `tombstone`으로 전환한다.
-  - **범용 수집 API**: `GET /api/v1/features/snapshot`(현재 활성 `upsert`만)과 `GET /api/v1/features/changes`(`upsert`/`reject`/`tombstone` 모두)를 추가했다. 응답 item은 `export_id`, `operation`, `candidate_id`, place/address/coordinate/category suggestion, YouTube video/channel/playlist evidence, transcript/Gemini evidence, `source_record`(provider `krtour-ai-agent-youtube`, `raw_payload_hash`), `updated_at`를 포함하고, 페이지는 opaque base64 cursor와 `next_cursor`/`has_more`로 노출한다. REST path에는 특정 consumer 이름을 넣지 않고 ADR-24 `X-API-Key` 인증을 그대로 적용한다.
+  - **범용 수집 API**: `GET /api/v1/features/snapshot`(현재 활성 `upsert`만)과 `GET /api/v1/features/changes`(`upsert`/`reject`/`tombstone` 모두)를 추가했다. 응답 item은 `export_id`, `operation`, `candidate_id`, place/address/coordinate/category suggestion, YouTube video/channel/playlist evidence, transcript/Gemini evidence, `source_record`(provider `kor-travel-concierge-youtube`, `raw_payload_hash`), `updated_at`를 포함하고, 페이지는 opaque base64 cursor와 `next_cursor`/`has_more`로 노출한다. REST path에는 특정 consumer 이름을 넣지 않고 ADR-24 `X-API-Key` 인증을 그대로 적용한다.
   - **category code 보류**: `python-krtour-map` 8자리 category mapping 확정 전까지 `category_code_suggestion`은 `null`로 두고 `category_label`만 제안한다(`feature_id` 생성은 consumer 책임).
 - **검증** (`python-kraddr-geo` PostgreSQL/PostGIS 서버 `localhost:5432`, disposable DB):
-  - `DATABASE_URL=...krtour_ai_agent_alembic alembic upgrade head` → `20260610_0005`까지 적용, `downgrade 20260610_0004` → `upgrade head` round-trip 성공
+  - `DATABASE_URL=...kor_travel_concierge_alembic alembic upgrade head` → `20260610_0005`까지 적용, `downgrade 20260610_0004` → `upgrade head` round-trip 성공
   - Alembic offline SQL(`20260610_0004:head --sql`)에 `feature_exports` 포함 확인
   - T-066 타깃 pytest `tests/test_feature_export_api.py` → `7 passed`
   - backend 전체 pytest → `178 passed`
@@ -119,11 +165,11 @@
   - **API/MCP 응답 보강**: FastAPI 검수 큐와 MCP candidate/mapping serializer가 provenance/evidence/export 필드를 반환한다.
   - **남은 확인 유지**: Google Places API 보강은 과금·저장 정책·라이선스 확인 전까지 구현하지 않았고, `python-krtour-map` 8자리 category mapping은 별도 작업으로 남겼다.
 - **검증**:
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head` → `20260610_0004` 적용
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_summarize.py backend/tests/test_etl_geocode_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_api.py backend/tests/test_mcp_tools.py` → `39 passed`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head` → `20260610_0004` 적용
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test KTC_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_summarize.py backend/tests/test_etl_geocode_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_api.py backend/tests/test_mcp_tools.py` → `39 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
-  - `backend/.venv/bin/python -m compileall backend/app backend/tests tripmate_mcp backend/alembic scheduler`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `backend/.venv/bin/python -m compileall backend/ktc backend/tests ktc.mcp_server backend/alembic scheduler`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -136,18 +182,18 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **공식 지원 범위 재확인**: Gemini API video understanding 문서를 2026-06-10 기준 확인했다. 공개 YouTube URL은 preview 기능이며 REST payload에서는 `file_data.file_uri`로 전달한다. 실제 Gemini 호출 smoke는 API 키와 할당량을 쓰지 않기 위해 이번 PR에서는 수행하지 않았다.
-  - **URL summary 서비스 추가**: `backend/app/etl/video_analysis_service.py`를 추가해 YouTube URL 직접 분석 프롬프트, Gemini REST payload, JSON Schema 응답 파싱, `youtube_video_analysis_runs` 상태 전이를 한 곳에 모았다.
+  - **URL summary 서비스 추가**: `backend/ktc/etl/video_analysis_service.py`를 추가해 YouTube URL 직접 분석 프롬프트, Gemini REST payload, JSON Schema 응답 파싱, `youtube_video_analysis_runs` 상태 전이를 한 곳에 모았다.
   - **reconcile 절차 추가**: transcript 기반 후보와 URL summary를 Gemini에 다시 비교 요청한다. 충돌·낮은 신뢰도·불확실 후보는 자동 확정하지 않고 `extracted_place_candidates.match_status = needs_review`와 `review_note`에 남긴다.
   - **scheduler 연결**: `video_analysis` handler가 T-063 placeholder를 넘어 `url_summary`와 `reconcile` pending run을 순서대로 실행한다. 실행 결과와 실패는 `youtube_video_analysis_runs`에 남기고, crawl_run 결과에는 실행·실패 건수를 요약한다.
   - **transcript summary 저장**: 기존 자막 기반 POI 추출 결과의 `summary`를 `youtube_videos.transcript_summary`에 저장해 reconcile 프롬프트의 입력으로 재사용한다.
 - **검증**:
-  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `krtour_ai_agent_test` DB 생성 및 PostGIS extension 확인
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py` → `21 passed`
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `kor_travel_concierge_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test KTC_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py` → `21 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `171 passed`
-  - `backend/.venv/bin/python -m compileall backend/app/etl/video_analysis_service.py scheduler/worker.py backend/app/etl/summarize_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py`
-  - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `backend/.venv/bin/python -m compileall backend/ktc/etl/video_analysis_service.py scheduler/worker.py backend/ktc/etl/summarize_service.py backend/tests/test_etl_video_analysis.py backend/tests/test_scheduler_worker.py`
+  - `backend/.venv/bin/python -m compileall backend/ktc scheduler backend/tests tests/scripts`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -165,13 +211,13 @@
   - **APScheduler persistent job store 적용**: 기본 scheduler 실행 경로에서 PostgreSQL SQLAlchemyJobStore를 사용해 `crawl-run-worker`와 `source-scan-enqueue` interval job 정의를 `apscheduler_jobs`에 저장한다. 실제 작업 상태와 payload는 계속 `crawl_runs`가 source of truth다.
   - **범용 REST API 명명 정리**: T-066 계획을 `/api/v1/features/snapshot`, `/api/v1/features/changes`, `feature_exports` ledger 기준으로 고쳐 REST path에서 특정 downstream 이름을 제거했다.
 - **검증**:
-  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `krtour_ai_agent_test` DB 생성 및 PostGIS extension 확인
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test TRIPMATE_AGENT_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_scheduler_worker.py backend/tests/test_postgis_database.py` → `20 passed`
+  - `python-kraddr-geo` PostgreSQL/PostGIS 서버(`localhost:5432`)에 disposable `kor_travel_concierge_test` DB 생성 및 PostGIS extension 확인
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test KTC_TEST_PG_DSN=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests/test_scheduler_worker.py backend/tests/test_postgis_database.py` → `20 passed`
   - 같은 실제 PostGIS DSN으로 `PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -s backend/tests` → `168 passed`
   - APScheduler SQLAlchemyJobStore smoke에서 `apscheduler_jobs_smoke` 테이블 생성 확인 후 제거
-  - `backend/.venv/bin/python -m compileall backend/app scheduler backend/tests tests/scripts`
-  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/krtour_ai_agent_test backend/.venv/bin/alembic upgrade head --sql`
+  - `backend/.venv/bin/python -m compileall backend/ktc scheduler backend/tests tests/scripts`
+  - `DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge_test backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `git diff --check`
 - **다음 작업**:
@@ -189,7 +235,7 @@
   - **재생목록 provenance 저장**: playlist에서 발견한 영상은 `youtube_playlist_videos`에 위치, playlist item id, 추가·관측 시각을 남긴다.
   - **분석 이력 기반 준비**: URL summary와 transcript reconcile 작업을 `youtube_video_analysis_runs`에 저장할 수 있도록 run type/state, input asset, summary JSONB, confidence, 오류 필드를 마련했다.
 - **검증**:
-  - `backend/.venv/bin/python -m compileall backend/app backend/tests tests/scripts`
+  - `backend/.venv/bin/python -m compileall backend/ktc backend/tests tests/scripts`
   - `backend/.venv/bin/alembic upgrade head --sql`
   - `backend/.venv/bin/python -m pytest -s backend/tests/test_etl_ingest.py backend/tests/test_etl_pipeline.py` → `7 passed, 14 skipped`
   - `docker compose config --quiet`
@@ -204,15 +250,15 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **DB runtime 전환**: `backend/app/core/database.py`에서 SQLite/SpatiaLite connect event와 경량 `schema_migrations` registry를 제거하고, `asyncpg` 기반 PostgreSQL async engine으로 전환했다.
+  - **DB runtime 전환**: `backend/ktc/core/database.py`에서 SQLite/SpatiaLite connect event와 경량 `schema_migrations` registry를 제거하고, `asyncpg` 기반 PostgreSQL async engine으로 전환했다.
   - **PostGIS 모델 보강**: `travel_places.geom geometry(Point, 4326)`를 ORM 모델에 추가하고, `sync_place_geometry`를 `ST_SetSRID(ST_MakePoint(...), 4326)` 기준으로 교체했다. 반경 검색은 `ST_DWithin`과 geography 거리 계산으로 바꿨다.
   - **작업 claim 보강**: `crawl_runs` claim을 PostgreSQL `FOR UPDATE SKIP LOCKED` 기준으로 정리했다.
   - **Alembic 도입**: `alembic.ini`, `backend/alembic/env.py`, 초기 migration `20260610_0001_postgres_postgis_bootstrap.py`를 추가했다. migration에는 PostGIS extension, 초기 테이블, GiST/FK/composite index를 포함했다.
   - **환경 정렬**: `.env.example`, local `.env`, Docker Compose, Dockerfile, E2E backend launcher를 PostgreSQL/PostGIS 기준으로 바꿨다. repo 내부 PostgreSQL 컨테이너는 추가하지 않고 `python-kraddr-geo` 서버를 외부 DB로 바라본다.
-  - **테스트 경계 정리**: backend pytest fixture는 `TRIPMATE_AGENT_TEST_PG_DSN`이 있을 때 disposable PostGIS DB를 만들고, 없으면 DB 테스트를 skip한다.
+  - **테스트 경계 정리**: backend pytest fixture는 `KTC_TEST_PG_DSN`이 있을 때 disposable PostGIS DB를 만들고, 없으면 DB 테스트를 skip한다.
 - **검증**:
   - `backend/.venv/bin/python -m pip install -r backend/requirements.txt`
-  - `backend/.venv/bin/python -m compileall backend/app backend/tests tests/scripts`
+  - `backend/.venv/bin/python -m compileall backend/ktc backend/tests tests/scripts`
   - `backend/.venv/bin/alembic upgrade head --sql`
   - `docker compose config --quiet`
   - `backend/.venv/bin/python -m pytest -s backend/tests` → `58 passed, 101 skipped`
@@ -225,8 +271,8 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **DB 전환 결정 문서화**: ADR-25를 추가해 SQLite + SpatiaLite에서 PostgreSQL + PostGIS로 전환하고, `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `krtour_ai_agent`를 쓰는 목표를 정리했다.
-  - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `krtour-ai-agent`가 YouTube 장소 후보 provider가 되고, 범용 `/api/v1/features/*` API를 full/incremental 방식으로 제공해 downstream consumer가 feature로 승격하는 경계를 정리했다.
+  - **DB 전환 결정 문서화**: ADR-25를 추가해 SQLite + SpatiaLite에서 PostgreSQL + PostGIS로 전환하고, `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `kor_travel_concierge`를 쓰는 목표를 정리했다.
+  - **YouTube feature 공급 계약 문서화**: ADR-26을 추가해 `kor-travel-concierge`가 YouTube 장소 후보 provider가 되고, 범용 `/api/v1/features/*` API를 full/incremental 방식으로 제공해 downstream consumer가 feature로 승격하는 경계를 정리했다.
   - **구현 로드맵 추가**: `docs/youtube-feature-pipeline-plan.md`에 YouTube channel/video/playlist 정규 테이블, `source_scan` job, Gemini YouTube URL 요약과 transcript 비교, 범용 feature export API, TripMate feature 연계 POI/curated plan 소비 흐름, 재확인 필요 사항을 상세히 작성했다.
   - **백로그 분할**: `docs/tasks.md`에 T-061~T-069를 대기 작업으로 추가해 DB 전환, YouTube metadata schema, 주기 scan, Gemini reconcile, 후보 보강, 범용 feature API, sibling repo consumer, TripMate feature 연계 POI/curated plan 검증, 통합 검증 순서로 나눴다.
   - **아키텍처 정렬**: `docs/architecture.md` 상단에 2026-06-10 전환 기준을 추가하고, 목표 DB와 feature 공급 흐름을 최신 결정에 맞춰 보강했다.
@@ -239,7 +285,7 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **BFF 프록시 도입 (P1-2)**: `NEXT_PUBLIC_*`는 빌드 시 브라우저 번들에 인라인되어 보안 경계가 못 되므로, 브라우저가 API 키를 더 이상 보내지 않도록 same-origin Next BFF(catch-all Route Handler `frontend/src/app/api/v1/[...path]/route.ts`)를 도입. BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다. 프록시 대상은 서버 전용 `BACKEND_ORIGIN`(Compose `http://api:8000`, 로컬 기본 `http://localhost:12401`).
+  - **BFF 프록시 도입 (P1-2)**: `NEXT_PUBLIC_*`는 빌드 시 브라우저 번들에 인라인되어 보안 경계가 못 되므로, 브라우저가 API 키를 더 이상 보내지 않도록 same-origin Next BFF(catch-all Route Handler `frontend/src/ktc/api/v1/[...path]/route.ts`)를 도입. BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다. 프록시 대상은 서버 전용 `BACKEND_ORIGIN`(Compose `http://api:8000`, 로컬 기본 `http://localhost:12401`).
   - **인증 환경 export 정상화 (P1-1)**: export 등 top-level navigation 다운로드는 fetch 헤더를 못 붙여 인증 환경에서 401이 발생했는데, BFF 경유로 키가 서버 사이드에서 주입되어 정상 동작한다.
   - **`NEXT_PUBLIC_API_KEY` 제거**: 해당 환경 변수를 삭제. `NEXT_PUBLIC_API_BASE_URL`은 기본 빈 값으로 두어 브라우저가 same-origin(`/api/v1`)으로 호출하게 하고, 백엔드 직접 호출 시에만 설정한다. 직접/외부(비-브라우저) 호출자는 여전히 `X-API-Key`를 직접 보낸다.
   - **문서 정렬**: `docs/decisions.md`(ADR-24 프론트엔드 연동·결과·보강 노트), `README.md`, `docs/dev-environment.md`, `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, `docs/architecture.md`, `docs/tasks.md`를 BFF 기준으로 정렬.
@@ -265,7 +311,7 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **버저닝 (ADR-24)**: 모든 REST 엔드포인트를 `APIRouter(prefix="/api/v1")` 아래로 이동. 운영 점검용 `GET /health`와 루트 `GET /`는 버전 없이 유지. 향후 비호환 변경은 같은 패턴으로 `/api/v2`를 추가.
-  - **인증 코드 (`X-API-Key`)**: `app/core/security.py`의 `require_api_key` 의존성을 라우터 전체에 적용. 설정 `APP_ENV`(기본 `local`)·`API_AUTH_ENABLED`(기본 false)·`API_KEYS`를 추가해 로컬(`local/test/e2e`)은 무인증 우회, 비-local은 유효 키를 강제(키 미설정 시 안전 측 401).
+  - **인증 코드 (`X-API-Key`)**: `ktc/core/security.py`의 `require_api_key` 의존성을 라우터 전체에 적용. 설정 `APP_ENV`(기본 `local`)·`API_AUTH_ENABLED`(기본 false)·`API_KEYS`를 추가해 로컬(`local/test/e2e`)은 무인증 우회, 비-local은 유효 키를 강제(키 미설정 시 안전 측 401).
   - **연동 정리**: `docker-compose.yml`이 `APP_ENV`/`API_AUTH_ENABLED`/`API_KEYS`를 전달(기본 로컬 친화). 브라우저는 same-origin Next BFF Route Handler(`/api/v1/*`) 경유로 호출하고 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입(키는 브라우저 비노출). E2E backend는 `APP_ENV=e2e`로 무인증. `main.py` 직접 실행은 host 고정 포트 `12401`에 바인딩(컨테이너 내부 uvicorn은 8000 유지, host `12401→8000` 매핑).
   - **검증**: backend pytest 전체 통과(신규 `test_api_auth.py` 6건 포함), `py_compile` 통과.
 - **다음 작업**:
@@ -308,7 +354,7 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **import 정렬**: `place_service`의 표준 라이브러리 import와 `app.models` import 순서를 정리.
+  - **import 정렬**: `place_service`의 표준 라이브러리 import와 `ktc.models` import 순서를 정리.
   - **FK delete 정책 명시**: FK가 있는 모델의 `ForeignKey`에 현재 기본 동작과 같은 `ondelete="NO ACTION"`을 명시하고, legacy `video_place_mappings` 재생성 SQL도 같은 선언으로 맞춤.
   - **TimestampMixin 예외 사유 기록**: `YoutubeVideo`는 생성 시각보다 마지막 수집 시각이 도메인 상태라 `crawled_at`을 유지한다는 주석을 추가.
   - **회귀 테스트 추가**: 모델 FK 메타데이터와 legacy rebuild SQL의 delete 정책을 테스트로 검증.
@@ -377,7 +423,7 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **backend 단일 출처 추가**: `backend/app/core/config.py`에 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 정의하고 `Settings.GEMINI_ENGINE_VERSION` 기본값도 이를 사용하도록 정리.
+  - **backend 단일 출처 추가**: `backend/ktc/core/config.py`에 `GEMINI_ENGINE_OPTIONS`와 `GEMINI_ENGINE_VERSION_DEFAULT`를 정의하고 `Settings.GEMINI_ENGINE_VERSION` 기본값도 이를 사용하도록 정리.
   - **settings 검증 강화**: `settings_service`가 `gemini_engine_version` 값을 허용 모델 목록으로 검증하고, `/api/settings` 응답에 `gemini_engine_options`와 `gemini_engine_default`를 포함하도록 확장.
   - **frontend 하드코딩 제거**: 설정 화면의 Zod enum과 `SelectItem` 하드코딩을 제거하고 API가 내려주는 모델 옵션으로 select를 렌더링.
   - **실제 호출 연결**: POI 후처리와 Deep Research가 DB runtime 설정의 Gemini engine 값을 `make_gemini_llm(model=...)`에 전달하도록 연결.
@@ -453,7 +499,7 @@
   - **playlist 증분 중단**: playlist harvest에서 항목의 영상 공개 시각이 target watermark 이하가 되는 지점에서 pagination을 중단하도록 변경.
   - **기존 channel 경로 유지**: channel harvest는 기존처럼 DB의 최신 영상 `published_at` watermark로 uploads playlist pagination을 중단하고, source target crawl 시각도 함께 갱신.
   - **문서 갱신**: 아키텍처와 ADR, PR #30 추적 문서를 target별 watermark 기준으로 갱신.
-  - **검증**: keyword `publishedAfter` 전달과 playlist pagination 중단 테스트 추가. `backend/tests/test_etl_pipeline.py`, backend 전체 pytest, `python3 -m compileall backend/app backend/tests`, `git diff --check` 통과.
+  - **검증**: keyword `publishedAfter` 전달과 playlist pagination 중단 테스트 추가. `backend/tests/test_etl_pipeline.py`, backend 전체 pytest, `python3 -m compileall backend/ktc backend/tests`, `git diff --check` 통과.
 - **다음 작업**:
   - PR #30 P2-3 `next-env.d.ts` 생성물 추적 정리를 T-045로 승격해 처리한다.
 
@@ -468,7 +514,7 @@
   - **XML 문자 정제**: XLSX inline string, GPX name/desc, KML name/description에 들어가는 문자열에서 XML 1.0 불법 제어문자를 제거한 뒤 escape하도록 보강.
   - **테스트 보강**: API route가 limit을 clamp하고 직렬화를 별도 thread에서 실행하는지 확인하는 테스트와, XLSX/GPX/KML XML sanitizer 단위 테스트를 추가.
   - **PR #30 추적 갱신**: `docs/pr-review-2026-06.md`의 P2-1 항목을 T-043 후속 해소로 표시.
-  - **검증**: 관련 export 테스트, backend 전체 pytest, `python3 -m compileall backend/app backend/tests`, `git diff --check` 통과.
+  - **검증**: 관련 export 테스트, backend 전체 pytest, `python3 -m compileall backend/ktc backend/tests`, `git diff --check` 통과.
 - **다음 작업**:
   - PR #30 P2-2 증분 수집 미완 항목을 T-044로 승격해 처리한다.
 
@@ -607,11 +653,11 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **기준값 확인**: `python-kraddr-geo-codex`의 RustFS 운영 기준이 S3 API `12101`, console `12105`, 기본 credential `rustfsadmin`, 로컬 운영 주체 `kraddr-geo-rustfs`임을 확인.
-  - **로컬 credential 통일**: 현재 워크트리와 `krtour-ai-agent-live-test`의 `.env` RustFS credential을 `python-kraddr-geo` 기본값과 맞추고, 두 워크트리의 RustFS 블록이 동일한지 마스킹 diff로 확인.
-  - **설정 표면 정리**: `.env.example`, README, `SKILL.md`, Docker Compose, `Settings`, RustFS init/verify 스크립트, scaffold `etl/media.py`가 호스트 `http://127.0.0.1:12101`, Docker 내부 `http://rustfs:9000`, 단일 `krtour-map` 버킷, `features/` prefix, public base URL `http://127.0.0.1:12101/krtour-map`을 쓰도록 정리.
-  - **live-test 보강**: `krtour-ai-agent-live-test`에 빠져 있던 `RUSTFS_PUBLIC_BASE_URL`, `RUSTFS_DOCKER_ENDPOINT`, `RUSTFS_OBJECT_PREFIX`, `RUSTFS_REGION`과 관련 테스트 기대값을 반영.
-  - **런타임 반영**: 실행 중이던 `krtour-ai-agent-rustfs-1`을 새 `.env` 기준으로 재생성해 컨테이너 credential도 `rustfsadmin`으로 맞춤.
-  - **검증**: `docker compose --env-file .env config --quiet`, backend `.venv/bin/pytest --capture=no -q` 137건, `python3 -m compileall`, frontend `npm run lint`, `npm run type-check`, `npm run build`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` 객체 smoke, Playwright E2E 4건 통과.
+  - **로컬 credential 통일**: 현재 워크트리와 `kor-travel-concierge-live-test`의 `.env` RustFS credential을 `python-kraddr-geo` 기본값과 맞추고, 두 워크트리의 RustFS 블록이 동일한지 마스킹 diff로 확인.
+  - **설정 표면 정리**: `.env.example`, README, `SKILL.md`, Docker Compose, `Settings`, RustFS init/verify 스크립트, scaffold `etl/media.py`가 호스트 `http://127.0.0.1:12101`, Docker 내부 `http://rustfs:9000`, 단일 `kor-travel-concierge` 버킷, `features/` prefix, public base URL `http://127.0.0.1:12101/kor-travel-concierge`를 쓰도록 정리.
+  - **live-test 보강**: `kor-travel-concierge-live-test`에 빠져 있던 `RUSTFS_PUBLIC_BASE_URL`, `RUSTFS_DOCKER_ENDPOINT`, `RUSTFS_OBJECT_PREFIX`, `RUSTFS_REGION`과 관련 테스트 기대값을 반영.
+  - **런타임 반영**: 실행 중이던 `kor-travel-concierge-rustfs-1`을 새 `.env` 기준으로 재생성해 컨테이너 credential도 `rustfsadmin`으로 맞춤.
+  - **검증**: `docker compose --env-file .env config --quiet`, backend `.venv/bin/pytest --capture=no -q` 137건, `python3 -m compileall`, frontend `npm run lint`, `npm run type-check`, `npm run build`, RustFS `kor-travel-concierge/features/healthcheck/t014-smoke.txt` 객체 smoke, Playwright E2E 4건 통과.
 - **다음 작업**:
   - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
 
@@ -624,8 +670,8 @@
   - **장소 생성 본수정**: `pipeline.run_harvest`가 적재한 `video_ids`를 반환하고, scheduler `harvest` handler가 신규 영상의 자막 추출, Gemini POI 요약, 지오코딩 적용 후처리를 이어 실행하도록 `postprocess_service`를 추가.
   - **장소 목록 반영 보장**: 후처리에서 확정 가능한 후보는 `travel_places`와 `video_place_mappings`까지 생성하고, 모호하거나 공급자 키가 없는 후보는 `needs_review`로 남기도록 구성.
   - **상세 상태 로그 연결**: 자막 추출, RustFS 저장, Gemini 보정, 후보 생성, 위치 보정, 확정 장소/검수 대기 집계를 scheduler reporter로 기록해 작업 상태 타임라인에 남기도록 연결.
-  - **RustFS 개발 설정 반영**: 로컬 venv/브라우저 기준 endpoint를 `http://127.0.0.1:12101`, Docker 내부 endpoint를 `http://rustfs:9000`, 단일 버킷을 `krtour-map`, object prefix를 `features`, 공개 URL 기준을 `http://127.0.0.1:12101/krtour-map`으로 정리. 로컬 `.env`에는 제공된 개발 접속값을 반영하고, 추적 문서에는 secret placeholder만 유지.
-  - **검증**: 관련 ETL/스케줄러 테스트 30건, backend pytest 137건, `compileall`, `docker compose --env-file .env config --quiet`, RustFS `krtour-map/features/healthcheck/t014-smoke.txt` smoke, Playwright E2E 4건 통과.
+  - **RustFS 개발 설정 반영**: 로컬 venv/브라우저 기준 endpoint를 `http://127.0.0.1:12101`, Docker 내부 endpoint를 `http://rustfs:9000`, 단일 버킷을 `kor-travel-concierge`, object prefix를 `features`, 공개 URL 기준을 `http://127.0.0.1:12101/kor-travel-concierge`로 정리. 로컬 `.env`에는 제공된 개발 접속값을 반영하고, 추적 문서에는 secret placeholder만 유지.
+  - **검증**: 관련 ETL/스케줄러 테스트 30건, backend pytest 137건, `compileall`, `docker compose --env-file .env config --quiet`, RustFS `kor-travel-concierge/features/healthcheck/t014-smoke.txt` smoke, Playwright E2E 4건 통과.
 - **다음 작업**:
   - PR #30 리뷰 종합 문서의 P0 후속 항목을 task로 승격해 순차 처리한다.
 
@@ -763,7 +809,7 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **MCP 안전 기본값**: `.env.example`과 `Settings.MCP_WRITE_ENABLED` 기본값을 `false`로 조정. 쓰기 검증·운영 허용 시에만 `.env`에서 `true`로 명시하도록 README와 개발 환경 문서를 갱신.
-  - **RustFS 보존 설명 보강**: `subtitle`/`transcript` 자산이 `tripmate-subtitles` 버킷을 공유한다는 점과 `MEDIA_RETENTION_POLICY`가 `media_assets.retention_policy`의 전역 기본값이라는 점을 명시.
+  - **RustFS 보존 설명 보강**: `subtitle`/`transcript` 자산이 `ktc-subtitles` 버킷을 공유한다는 점과 `MEDIA_RETENTION_POLICY`가 `media_assets.retention_policy`의 전역 기본값이라는 점을 명시.
   - **ADR 정합성 보정**: ADR-9의 YouTube 수집 원칙을 ADR-11의 공식 YouTube Data API 우선 정책과 맞추고, `yt-dlp`는 자막·대표 프레임 구간에만 격리한다고 정리.
   - **문서·빌드 위생**: README 환경 변수 예시를 `dotenv` 블록으로 바꾸고, MIT `LICENSE` 파일을 추가. frontend Dockerfile은 lockfile 기준 재현 설치를 위해 `npm ci`를 사용하도록 변경.
 - **다음 작업**:
@@ -792,7 +838,7 @@
 - **담당자**: Codex
 - **작업 내용**:
   - **의미론적 검색 검토**: sqlite-vec와 SQLite Vec1의 virtual table 기반 vector search를 검토. 현재 검색 품질 병목이 확인되지 않았고 extension 안정성·Windows/Docker 검증 비용이 남아 있어 기본 의존성 도입은 보류.
-  - **PostgreSQL/PostGIS 전환 기준 수립**: 확정 장소 100,000건, 영상-장소 매핑 1,000,000건, 반경 검색 p95 500ms 초과, 최근 7일 `database is locked` 재시도 10회 이상을 전환 검토 트리거로 문서화. 전환 시 변경 범위는 `app.core.spatial`과 `app.services.place_service` 중심으로 제한.
+  - **PostgreSQL/PostGIS 전환 기준 수립**: 확정 장소 100,000건, 영상-장소 매핑 1,000,000건, 반경 검색 p95 500ms 초과, 최근 7일 `database is locked` 재시도 10회 이상을 전환 검토 트리거로 문서화. 전환 시 변경 범위는 `ktc.core.spatial`과 `ktc.services.place_service` 중심으로 제한.
   - **멀티 워커 후보 정리**: 현재는 APScheduler 단일 실행자를 유지. PostgreSQL 전환 이후 pending 대기 작업 최고 연령 5분 초과가 3회 연속 관측되거나 단일 worker가 24시간 내 신규 영상 처리량을 소화하지 못하면 PgQueuer를 1순위로 검토. APScheduler + PostgreSQL advisory lock은 여러 scheduler 프로세스 중 단일 leader 보장이 필요할 때만 보조 후보로 둠.
   - **ADR 추가**: `docs/decisions.md`에 ADR-20을 추가하고, `docs/architecture.md`의 대규모 전환 후보 표를 수치 트리거 중심으로 갱신.
   - **wrapper 최소화 유지**: 의미론적 검색이나 queue 전환도 실제 병목 전까지 optional feature 또는 별도 ADR로만 다루며, 선제 adapter/wrapper 계층은 추가하지 않는 원칙을 명시.
@@ -888,13 +934,13 @@
 
 - **담당자**: Codex
 - **작업 내용**:
-  - **패키지 구조 정리**: 외부 MCP SDK 패키지 이름과 로컬 `mcp/` 디렉터리 이름 충돌을 피하기 위해 실제 구현을 `tripmate_mcp` 패키지로 분리. `mcp/server.py`는 기존 Docker Compose 명령을 보존하는 호환 래퍼로 유지.
-  - **FastMCP 서버 등록**: `tripmate_mcp.server.build_server`가 FastMCP 인스턴스를 만들고, `MCP_WRITE_ENABLED`에 따라 읽기/쓰기 도구를 등록.
+  - **패키지 구조 정리**: 외부 MCP SDK 패키지 이름과 로컬 `mcp/` 디렉터리 이름 충돌을 피하기 위해 실제 구현을 `ktc.mcp_server` 패키지로 분리. `mcp/server.py`는 기존 Docker Compose 명령을 보존하는 호환 래퍼로 유지.
+  - **FastMCP 서버 등록**: `ktc.mcp_server.server.build_server`가 FastMCP 인스턴스를 만들고, `MCP_WRITE_ENABLED`에 따라 읽기/쓰기 도구를 등록.
   - **읽기 도구**: `get_harvest_status`, `search_existing_places`, `get_place_detail` 구현. 작업 상태 JSON, 장소 검색 결과, 영상 매핑·대표 프레임·후보 근거를 반환.
   - **쓰기 도구**: `harvest_travel_destinations`, `correct_place`, `merge_places`, `trigger_deep_research`, `review_unmatched_place`, `resolve_place_candidate` 구현.
   - **검증/감사/멱등성**: 모든 쓰기 도구에 Pydantic 입력 스키마, 필수 `idempotency_key`, `audit_logs` 기록, 동일 멱등 키 재호출 시 기존 결과 반환 적용.
   - **도메인 서비스 보강**: `place_service`에 장소 검색, 상세 조회 보조, 수동 보정, 중복 병합, 후보 검수 메타데이터 기록, 후보 해결(기존 장소 매칭·신규 장소 생성·제외)을 추가.
-  - **실행 구조**: `Dockerfile.python`이 `tripmate_mcp` 패키지를 복사하도록 갱신하고, MCP 서버는 시작 시 `init_db()` 후 설정된 transport로 실행.
+  - **실행 구조**: `Dockerfile.python`이 `ktc.mcp_server` 패키지를 복사하도록 갱신하고, MCP 서버는 시작 시 `init_db()` 후 설정된 transport로 실행.
   - **테스트**: MCP runtime 단위 테스트 10건 추가. 전체 백엔드 pytest 103건 통과.
 - **다음 작업**:
   - T-012: Next.js 프론트엔드 스택 정비. Tailwind CSS, shadcn/ui, React Hook Form, Zod, TanStack Query를 실제 화면과 연결한다.
@@ -940,8 +986,8 @@
   - **frame_extraction**: POI 시작 타임스탬프(`HH:MM:SS`, `MM:SS`, 초)를 파싱하고 5~10초 오프셋을 더해 대표 프레임 추출 시각을 계산.
   - **yt-dlp 연동**: `resolve_stream_url_ytdlp`를 지연 import 방식으로 구현하고, `select_stream_url`이 직접 URL 또는 최고 해상도 video format URL을 선택하도록 구현.
   - **FFmpeg Input Seeking**: `extract_jpeg_with_ffmpeg`에서 `-ss`를 `-i` 앞에 둔 명령으로 JPEG를 stdout 추출. 테스트에서는 runner 주입으로 실제 FFmpeg 바이너리 없이 명령 계약 검증.
-  - **RustFS 저장**: 추출한 JPEG를 `AssetType.FRAME`으로 `tripmate-frames` 버킷에 저장하고 `media_assets`에 URI·체크섬·크기·무기한 보존 정책 기록. `mapping_id`가 주어지면 `video_place_mappings.frame_asset_id`에 연결.
-  - **원본 미디어 보존 helper**: 이미 확보한 원본 동영상 또는 오디오 bytes를 `AssetType.RAW_VIDEO`로 `tripmate-raw-videos` 버킷에 저장하는 `store_raw_media` 추가.
+  - **RustFS 저장**: 추출한 JPEG를 `AssetType.FRAME`으로 `ktc-frames` 버킷에 저장하고 `media_assets`에 URI·체크섬·크기·무기한 보존 정책 기록. `mapping_id`가 주어지면 `video_place_mappings.frame_asset_id`에 연결.
+  - **원본 미디어 보존 helper**: 이미 확보한 원본 동영상 또는 오디오 bytes를 `AssetType.RAW_VIDEO`로 `ktc-raw-videos` 버킷에 저장하는 `store_raw_media` 추가.
   - **테스트**: 타임스탬프 파싱, object key sanitize, stream URL 선택, FFmpeg 명령 순서, 실패 처리, frame asset 저장·mapping 연결, raw media 저장까지 검증. 전체 백엔드 pytest 82건 통과.
 - **다음 작업**:
   - T-010: APScheduler 단일 실행자가 `crawl_runs.pending` 작업을 claim하고 T-006~T-009 파이프라인을 실행하도록 연결.
@@ -959,7 +1005,7 @@
   - 루트 `etl/geocode.py`에 정규 구현 위치 명시.
   - **테스트**: 어댑터 파싱, 백오프 재시도/포기, 좌표 정규화, 평가 분기(no_result/single/ambiguous/disambiguated), 적용 영속화(매칭 생성·중복 재사용·needs_review 유지·VWorld 보강)까지 pytest 72건 통과.
 - **다음 작업**:
-  - T-009: `yt-dlp` 스트림 URL + FFmpeg Input Seeking 대표 프레임 추출, RustFS `tripmate-frames` 저장.
+  - T-009: `yt-dlp` 스트림 URL + FFmpeg Input Seeking 대표 프레임 추출, RustFS `ktc-frames` 저장.
 
 ---
 
@@ -982,7 +1028,7 @@
 
 - **담당자**: Claude
 - **작업 내용**:
-  - scheduler가 import해 실행할 수 있도록 비동기 수집 파이프라인을 `backend/app/etl/` 패키지로 구현.
+  - scheduler가 import해 실행할 수 있도록 비동기 수집 파이프라인을 `backend/ktc/etl/` 패키지로 구현.
   - **youtube_client**: 공식 `search.list`/`playlistItems.list`/`channels.list`/`videos.list`를 감싸는 `httpx.AsyncClient` 주입형 클라이언트. 엔드포인트별 쿼터 비용 누적(`search`=100 등). 비공식 검색 크롤러 미사용(ADR-11).
   - **keyword_expansion**: 시드 키워드 + 계절 맥락 → 파생 키워드 생성. 실제 Gemini 호출은 주입형 `generator` 콜러블로 분리하고 키 없이도 결정론적 폴백으로 동작(T-007에서 Gemini 연결). 중복·시드 제거.
   - **ranking**: 업로드 최신성(반감기 지수 감쇠), 키워드 유사도(Jaccard), 조회수 대비 참여도를 정규화한 합성 점수.
@@ -1003,7 +1049,7 @@
     - `travel_places`: `description`/`gemini_enriched_description`/`description_review_status` 분리.
     - `extracted_place_candidates`: `match_status`(기본 `needs_review`) + 검수자·검수 시각·검수 메모.
     - `media_assets`: RustFS 버킷·객체 키·URI·체크섬·크기·무기한 보존 정책.
-  - **공간 컬럼 관리(ADR-17)**: `app/core/spatial.py`가 `travel_places.geom` Point(4326)와 R-Tree 공간 인덱스를 ORM 밖 SpatiaLite DDL로 멱등 관리. `mod_spatialite` 미로드 환경에서는 graceful skip. `init_db`에 연결.
+  - **공간 컬럼 관리(ADR-17)**: `ktc/core/spatial.py`가 `travel_places.geom` Point(4326)와 R-Tree 공간 인덱스를 ORM 밖 SpatiaLite DDL로 멱등 관리. `mod_spatialite` 미로드 환경에서는 graceful skip. `init_db`에 연결.
   - **저장소 계층 캡슐화**: `place_service`에 근접 검색(`find_places_within_radius`)·중복 후보(`find_duplicate_candidates`)를 경위도 bounding box + Haversine으로 구현. 공간 함수 호출을 한곳에 모아 PostGIS 전환 시 `ST_DWithin` 대체가 쉽도록 함.
   - **API 연동**: `/api/destinations`(확정 장소)·`/api/destinations/unmatched`(needs_review 검수 큐)를 실제 DB 조회로 연결.
   - **의사결정**: ADR-17 추가(공간 컬럼 ORM 밖 관리·저장소 계층 캡슐화·geoalchemy2 미도입).
@@ -1035,11 +1081,11 @@
 - **담당자**: Claude
 - **작업 내용**:
   - 문서(`architecture.md`, `decisions.md`, `tasks.md`)와 실제 코드 사이의 갭을 점검하고, 코드 구현(T-004 이후)에 진입할 수 있도록 스캐폴딩을 보완.
-  - **백엔드 구조화**: `backend/app/` 패키지 도입.
-    - `app/core/config.py`: `.env.example`의 모든 환경 변수를 1:1로 매핑한 `pydantic-settings` 기반 `Settings` 로더. (T-003: 환경 변수 이름 동기화 완료)
-    - `app/core/database.py`: SQLAlchemy 2.0 + `aiosqlite` async 엔진, SpatiaLite 확장 로드와 WAL 모드 적용 지점 정의.
-    - `app/core/logging.py`: API 키 마스킹 헬퍼.
-    - `app/models`, `app/services`, `app/api`: 구현 대상 명시한 패키지 스캐폴드. `main.py`를 팩토리 패턴 + 라우터 조립 구조로 리팩터링.
+  - **백엔드 구조화**: `backend/ktc/` 패키지 도입.
+    - `ktc/core/config.py`: `.env.example`의 모든 환경 변수를 1:1로 매핑한 `pydantic-settings` 기반 `Settings` 로더. (T-003: 환경 변수 이름 동기화 완료)
+    - `ktc/core/database.py`: SQLAlchemy 2.0 + `aiosqlite` async 엔진, SpatiaLite 확장 로드와 WAL 모드 적용 지점 정의.
+    - `ktc/core/logging.py`: API 키 마스킹 헬퍼.
+    - `ktc/models`, `ktc/services`, `ktc/api`: 구현 대상 명시한 패키지 스캐폴드. `main.py`를 팩토리 패턴 + 라우터 조립 구조로 리팩터링.
   - **누락 디렉토리 생성**: `mcp/`(server + 읽기/쓰기 도구 메타데이터), `scheduler/`(단일 실행자 루프), `etl/media.py`(RustFS 저장 계층) 신설.
   - **Docker Compose 초안**: `frontend`, `api`, `mcp`, `scheduler`, `rustfs` 서비스와 SQLite/RustFS 데이터 볼륨, `Dockerfile.python`(공용 Python 이미지), `frontend/Dockerfile` 작성. RustFS는 별도 서비스로 분리(S3 API 12101, 콘솔 12105).
   - **RustFS 버킷 초기화**: `scripts/init_rustfs_buckets.py`로 3개 버킷 멱등 생성 절차 정리.
@@ -1119,7 +1165,7 @@
 
 - **담당자**: AI 에이전트 (Antigravity 2.0)
 - **작업 내용**:
-  - `krtour-ai-agent` 프로젝트의 기본 골격을 `maplibre-vworld-js`와 완벽히 호환되는 한글 문서 및 구조로 초기화.
+  - `kor-travel-concierge` 프로젝트의 기본 골격을 `maplibre-vworld-js`와 완벽히 호환되는 한글 문서 및 구조로 초기화.
   - 루트 디렉토리에 핵심 정보 파일 작성:
     - [README.md](../README.md): 프로젝트 개요, 시스템 흐름도, 퀵스타트 명령어 및 도큐먼트 링크 제공.
     - [AGENTS.md](../AGENTS.md): 한글 문서 원칙, 보존 식별자 규칙, Windows 개발 정책 및 DO NOT 룰 설정.
@@ -1132,7 +1178,7 @@
     - [tasks.md](tasks.md): 로드맵 백로그 구성 (T-001 ~ T-009).
     - [dev-environment.md](dev-environment.md): Windows 호스트 전용 Python 가상환경 구축, node_modules 설치, Playwright 브라우저 연동 매뉴얼 작성.
   - Git 초기화 및 origin 설정:
-    - `main` 브랜치 최초 생성 및 `.gitignore`, `.gitattributes` 커밋 후 원격 저장소(`https://github.com/digitie/krtour-ai-agent`)에 푸시 완료.
+    - `main` 브랜치 최초 생성 및 `.gitignore`, `.gitattributes` 커밋 후 원격 저장소(`https://github.com/digitie/kor-travel-concierge`)에 푸시 완료.
     - 현재는 `feature/project-bootstrap` 기능 브랜치에서 셋업 작업 진행 중.
 - **다음 작업**:
   - `frontend/`, `backend/`, `etl/`, `tests/` 각각의 뼈대 설정 파일 배치 및 디렉토리 트리 구축 (T-003).

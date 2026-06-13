@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.core.database import get_session
+from ktc.core.database import get_session
 from main import app
 
 
@@ -34,7 +34,7 @@ async def _seed_ready_candidate(
     candidate_name: str | None = None,
 ):
     """확정(`ready`) 후보 1건과 연결 장소/영상/채널을 시드한다."""
-    from app.models import (
+    from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExportStatus,
         MatchStatus,
@@ -137,13 +137,13 @@ async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factor
     assert item["youtube"]["video_summary"] == "월정리 방문"
     assert item["evidence"]["timestamp_start"] == "00:03:12"
     assert item["evidence"]["confidence_score"] == 0.86
-    assert item["source_record"]["provider"] == "krtour-ai-agent-youtube"
+    assert item["source_record"]["provider"] == "kor-travel-concierge-youtube"
     assert item["source_record"]["source_entity_id"] == str(candidate_id)
     assert item["source_record"]["raw_payload_hash"].startswith("sha256:")
 
 
 async def test_snapshot_surfaces_category_code_suggestion(client, session_factory):
-    from app.models import TravelPlace
+    from ktc.models import TravelPlace
 
     _, place_id = await _seed_ready_candidate(session_factory)
     async with session_factory() as s:
@@ -196,7 +196,7 @@ async def test_snapshot_has_tripmate_feature_linked_poi_inputs(client, session_f
 
 
 async def test_snapshot_excludes_pending_candidate(client, session_factory):
-    from app.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
 
     async with session_factory() as s:
         s.add(
@@ -238,7 +238,7 @@ async def test_changes_is_stable_without_data_change(client, session_factory):
 
 
 async def test_changes_emits_reject_after_export(client, session_factory):
-    from app.models import ExtractedPlaceCandidate, FeatureExportStatus, MatchStatus
+    from ktc.models import ExtractedPlaceCandidate, FeatureExportStatus, MatchStatus
 
     candidate_id, _ = await _seed_ready_candidate(session_factory)
 
@@ -295,7 +295,7 @@ async def test_invalid_cursor_returns_400(client, session_factory):
 
 
 async def test_changes_emits_upsert_on_payload_change(client, session_factory):
-    from app.models import TravelPlace
+    from ktc.models import TravelPlace
 
     candidate_id, place_id = await _seed_ready_candidate(session_factory)
 

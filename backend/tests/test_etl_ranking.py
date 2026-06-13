@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from app.etl import ranking
-from app.etl.keyword_expansion import generate_derived_keywords
+from ktc.etl import ranking
+from ktc.etl.keyword_expansion import generate_derived_keywords
 
 
 def test_current_season():
