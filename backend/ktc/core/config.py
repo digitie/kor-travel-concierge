@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 GEMINI_ENGINE_VERSION_DEFAULT = "gemini-2.0-flash"
 GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
     GEMINI_ENGINE_VERSION_DEFAULT,
+    "gemini-2.5-flash",
     "gemini-flash-latest",
     "gemini-1.5-flash",
     "gemini-1.5-pro",
