@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-15: T-082 완료 — feature export `source_entity_id` 불변성 계약 테스트 (이슈 #84)
+
+- **배경**: kor-travel-map concierge loader 검증 §5의 producer-side 권장(P-01 후속). consumer의 inactivate 매칭이 `source_record.source_entity_id`로 조인하므로, 한 후보의 upsert·reject/tombstone export가 동일 id를 가져야 reject/tombstone가 기적재 feature를 찾는다.
+- **수정**: `backend/tests/test_feature_export_api.py`에 회귀 테스트 추가 — 한 후보를 upsert export → reject 전환 → reject export 했을 때 두 export의 `source_record.source_entity_id`가 byte 동일(`== str(candidate.id)`)함을 단언. 기존 `_build_payload`가 모든 operation에서 `str(candidate.id)`로 직렬화하는 불변성을 고정(회귀 방지). 코드 변경 없음(test-only).
+- **검증**: backend pytest는 PostgreSQL/PostGIS disposable DB(WSL/Docker)에서 실행 — 기존 `test_changes_emits_reject_after_export`와 동일 전환 패턴.
+
 ## 2026-06-15: T-081 완료 — feature export `limit` 범위 검증(422) 추가 (이슈 #82)
 
 - **배경**: `python-kor-travel-map`의 kor-travel-concierge loader conformance 검증(P-01)에서 발견된 producer-side 입력 검증 갭. loader 측 계약 정합(필드/스케일/operation lifecycle)은 모두 OK로 확인됐다.
