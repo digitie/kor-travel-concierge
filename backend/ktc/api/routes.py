@@ -62,6 +62,13 @@ class HarvestJob(BaseModel):
     state: str
 
 
+class TranscriptRequest(BaseModel):
+    """자막 작업 생성 요청(선택적 부분집합)."""
+
+    # 비우면 harvest 수집 결과 전체를 처리한다. 주면 그 부분집합만 처리한다(예: 품질 시험).
+    video_ids: list[str] | None = None
+
+
 class RunStatusLog(BaseModel):
     """작업 상태 상세 로그 1건."""
 
@@ -184,12 +191,15 @@ async def get_harvest_status(
 
 @router.post("/harvest/{job_id}/transcript", response_model=HarvestJob)
 async def start_transcript(
-    job_id: int, session: AsyncSession = Depends(get_session)
+    job_id: int,
+    payload: TranscriptRequest | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> HarvestJob:
     """수집 완료된 harvest 영상에 자막/후처리 작업을 별도로 생성한다.
 
     `skip_transcript`로 수집만 끝낸 harvest의 `video_ids`를 받아 `transcript`
     job_type crawl_run을 만든다. 자막 생성 전 사용자 확인 단계를 보장한다.
+    요청 body에 `video_ids`를 주면 수집 결과의 부분집합만 처리한다(예: 품질 시험).
     """
     source = await crawl_run_service.get_run(session, job_id)
     if source is None:
@@ -199,11 +209,20 @@ async def start_transcript(
             status_code=400, detail="transcript는 harvest 작업에만 생성할 수 있다"
         )
     result = json.loads(source.result_json) if source.result_json else {}
-    video_ids = result.get("video_ids") or []
-    if not video_ids:
+    collected = result.get("video_ids") or []
+    if not collected:
         raise HTTPException(
             status_code=400, detail="수집된 영상이 없어 자막 작업을 만들 수 없다"
         )
+    if payload is not None and payload.video_ids:
+        collected_set = set(collected)
+        video_ids = [v for v in payload.video_ids if v in collected_set]
+        if not video_ids:
+            raise HTTPException(
+                status_code=400, detail="요청한 video_ids가 수집 결과에 없습니다"
+            )
+    else:
+        video_ids = collected
     run = await crawl_run_service.create_run(
         session,
         job_type="transcript",
