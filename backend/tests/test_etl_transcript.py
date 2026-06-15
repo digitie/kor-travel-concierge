@@ -54,6 +54,33 @@ def test_lazy_providers_return_none_without_libs():
     assert transcript.transcribe_via_whisper("vid") is None
 
 
+def test_fetch_via_transcript_api_supports_new_instance_api(monkeypatch):
+    """youtube-transcript-api 1.x(.fetch) 경로를 지원한다(이슈 #76)."""
+    import sys
+    import types
+
+    class _Fetched:
+        def to_raw_data(self):
+            return [
+                {"start": 0.0, "text": "제주 카멜리아힐"},
+                {"start": 12.0, "text": "수국 명소"},
+            ]
+
+    class _NewApi:  # get_transcript 없음 → 신 API 경로로 분기
+        def fetch(self, video_id, languages=None):
+            return _Fetched()
+
+    fake_mod = types.ModuleType("youtube_transcript_api")
+    fake_mod.YouTubeTranscriptApi = _NewApi
+    monkeypatch.setitem(sys.modules, "youtube_transcript_api", fake_mod)
+
+    result = transcript.fetch_via_transcript_api("vid")
+    assert result is not None
+    assert result.source == "transcript_api"
+    assert [s.text for s in result.segments] == ["제주 카멜리아힐", "수국 명소"]
+    assert result.segments[1].start == 12.0
+
+
 async def test_get_transcript_async():
     result = await transcript.get_transcript_async(
         "vid", providers=(_ok_provider("transcript_api"),)

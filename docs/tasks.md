@@ -18,6 +18,8 @@
 
 ## 완료
 
+- [x] **T-078**: 자막 fetch 복구(youtube-transcript-api 1.x) — `fetch_via_transcript_api`가 제거된 정적 `get_transcript`를 호출해 모든 자막 추출이 즉시 실패(→ `travel_places` 0)하던 버그를, 1.x 인스턴스 `.fetch()`+`.to_raw_data()` 경로(구버전 호환 포함)로 수정. 신 API 회귀 테스트 추가, `transcript` pytest 통과. yt-dlp/whisper 폴백은 여전히 stub(후속). (이슈 #76, 2026-06-15)
+
 - [x] **T-077**: transcript 부분집합 처리 — `POST /api/v1/harvest/{job_id}/transcript`에 선택적 `video_ids`(`TranscriptRequest`) 추가. 주면 수집 결과의 부분집합만 자막/POI/지오코딩 처리(수집에 없는 id는 400), 비우면 전체 처리. 전체 실행 전 1개 영상으로 품질/비용 시험 가능. (이슈 #74, 2026-06-15)
 
 - [x] **T-076**: 자막생성 게이팅 + UI progress — 수집과 자막 생성을 분리해 사용자가 자막 전에 확인하도록 했다. backend: `HarvestRequest.skip_transcript`(수집만 실행), `POST /api/v1/harvest/{job_id}/transcript`(수집된 `video_ids`로 `transcript` 작업 생성), scheduler `transcript_handler`(자막/POI/지오코딩 + status-log progress). frontend: `HarvestConsole`이 수집을 skip_transcript로 시작 → 완료 시 "자막 생성 시작" 확인 버튼 → transcript 진행바·현재 메시지·상세 로그 표시, `lib/api.startTranscript` 추가. worker/api pytest(신규 테스트 포함)·frontend lint·type-check 통과. (이슈 #72, 2026-06-15)

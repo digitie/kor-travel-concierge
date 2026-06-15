@@ -55,13 +55,34 @@ TranscriptProvider = Callable[[str], "TranscriptResult | None"]
 def fetch_via_transcript_api(
     video_id: str, *, languages: tuple[str, ...] = ("ko", "en")
 ) -> TranscriptResult | None:
-    """youtube-transcript-api로 자막을 확보한다 (지연 import)."""
+    """youtube-transcript-api로 자막을 확보한다 (지연 import).
+
+    youtube-transcript-api 1.x는 정적 `get_transcript`를 제거하고 인스턴스
+    `fetch`로 바꿨다. 두 API를 모두 지원한다(구버전 우선 호환).
+    """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
     except ImportError:
         return None
     try:
-        raw = YouTubeTranscriptApi.get_transcript(video_id, languages=list(languages))
+        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+            # 구버전(<1.0) 정적 API
+            raw = YouTubeTranscriptApi.get_transcript(  # type: ignore[attr-defined]
+                video_id, languages=list(languages)
+            )
+        else:
+            # 신버전(>=1.0) 인스턴스 API: fetch() → FetchedTranscript
+            fetched = YouTubeTranscriptApi().fetch(video_id, languages=list(languages))
+            if hasattr(fetched, "to_raw_data"):
+                raw = fetched.to_raw_data()
+            else:
+                raw = [
+                    {
+                        "start": getattr(snippet, "start", 0.0),
+                        "text": getattr(snippet, "text", ""),
+                    }
+                    for snippet in fetched
+                ]
     except Exception:
         return None
     segments = [
