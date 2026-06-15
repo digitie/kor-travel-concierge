@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,19 @@ const args = [
   "--port",
   frontendPort,
 ];
+
+// E2E는 hermetic하게 clean 캐시로 시작한다. 리네임/포트 churn이나 느린 파일시스템에서
+// stale Turbopack `.next` 캐시가 손상되면 dev 서버가 panic("Next.js package not found")
+// 후 페이지 reload loop에 빠져 E2E가 전부 실패한다(이슈 #70). 기동 직전 정리한다.
+const nextCacheDir = path.join(frontendDir, ".next");
+try {
+  rmSync(nextCacheDir, { recursive: true, force: true });
+  console.log(`[start-frontend] cleared stale Next cache: ${nextCacheDir}`);
+} catch (error) {
+  console.warn(
+    `[start-frontend] failed to clear ${nextCacheDir}: ${error?.message ?? error}`,
+  );
+}
 
 const child = spawn(
   command,

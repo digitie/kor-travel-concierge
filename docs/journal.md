@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-15: T-075 완료 — E2E 안정화: 기동 시 stale Next/Turbopack 캐시 정리 (이슈 #70)
+
+- **담당자**: Claude
+- **배경**: Windows 호스트 Playwright E2E(ADR-23 예외)가 4개 스펙 모두 실패. 페이지가 수십 번 reload loop에 빠지고 설정 select가 `disabled`로 고정. 백엔드/BFF/API는 전부 200 정상이었고, 원인은 프론트 dev 서버였다.
+- **근본 원인**: 리네임(T-073)·포트(T-074) 변경 churn과 느린 `F:` 드라이브가 겹쳐 `frontend/.next`(Turbopack) 캐시가 손상 → `FATAL ... Next.js package not found` panic → HMR 실패 → 페이지 무한 리로드 → 전 스펙 실패.
+- **작업 내용**: `tests/scripts/start-frontend.mjs`가 dev 기동 직전 `frontend/.next`를 정리하도록 보강(hermetic clean 캐시 시작). 이슈 #70 등록.
+- **검증**: `.next` 정리 후 즉시 4/4 통과(11.1s) 확인, 이어 수정된 런처(기동 시 자동 정리)로 재실행해 4/4 통과(40.0s, 클린 컴파일 포함). 디스포저블 `kor_travel_concierge_test` DB 대상이라 라이브 DB는 무관.
+
+---
+
 ## 2026-06-14: T-074 완료 — 포트 대역을 통합 docker-manager 정책(126xx)으로 정렬
 
 - **담당자**: Claude
