@@ -18,6 +18,8 @@
 
 ## 완료
 
+- [x] **T-076**: 자막생성 게이팅 + UI progress — 수집과 자막 생성을 분리해 사용자가 자막 전에 확인하도록 했다. backend: `HarvestRequest.skip_transcript`(수집만 실행), `POST /api/v1/harvest/{job_id}/transcript`(수집된 `video_ids`로 `transcript` 작업 생성), scheduler `transcript_handler`(자막/POI/지오코딩 + status-log progress). frontend: `HarvestConsole`이 수집을 skip_transcript로 시작 → 완료 시 "자막 생성 시작" 확인 버튼 → transcript 진행바·현재 메시지·상세 로그 표시, `lib/api.startTranscript` 추가. worker/api pytest(신규 테스트 포함)·frontend lint·type-check 통과. (이슈 #72, 2026-06-15)
+
 - [x] **T-075**: E2E 안정화 — Windows 호스트 Playwright E2E가 stale `frontend/.next`(Turbopack) 캐시 손상으로 `Next.js package not found` panic → 페이지 reload loop → 4개 스펙 전부 실패하던 문제를, `tests/scripts/start-frontend.mjs`가 dev 기동 직전 `.next`를 정리하도록 보강해 해결(hermetic clean 캐시 시작). 백엔드/BFF/API는 정상이었고 원인은 프론트 dev 서버였다. 수정된 런처로 4/4 통과 재검증. (이슈 #70, 2026-06-15)
 
 - [x] **T-074**: 포트 대역을 통합 docker-manager 정책(126xx)으로 정렬 — `kor-travel-docker-manager`의 `docs/ports.md`/`config/docker-targets.yml` 포트 정책에 맞춰 concierge host 포트를 API `12401→12601`(컨테이너 `8000`), MCP host `12402→12602`(컨테이너 내부 bind `12402` 유지), Web `12405→12605`(컨테이너 `3000`)로 이관했다. `.env.example`, `docker-compose.yml`, `config.py`, `cli.py`, `main.py`, frontend(`package.json`·BFF route), `scripts/*.sh`, `README`/`SKILL`/`AGENTS`/`architecture`/`dev-environment`/`CLAUDE` 문서를 갱신했다. 컨테이너 내부 MCP bind와 참조 서비스 포트(PostgreSQL `5432`, RustFS `12101`/`12105`)는 정책과 일치하여 유지했다. 결정은 ADR-27로 기록했고 이력 문서는 보존했다. docker-manager `conc` 타깃 재빌드 기동으로 검증했다. (2026-06-14)

@@ -50,6 +50,9 @@ class HarvestRequest(BaseModel):
     channel_id: str | None = None
     playlist_id: str | None = None
     max_videos: int = 20
+    # True면 영상 수집만 수행하고 자막/POI/지오코딩(자막 생성)은 건너뛴다. 사용자가
+    # 자막 생성 전에 확인 단계를 거칠 수 있도록 별도 `transcript` 작업으로 분리한다.
+    skip_transcript: bool = False
 
 
 class HarvestJob(BaseModel):
@@ -177,6 +180,48 @@ async def get_harvest_status(
         last_error=run.last_error,
         result=json.loads(run.result_json) if run.result_json else None,
     )
+
+
+@router.post("/harvest/{job_id}/transcript", response_model=HarvestJob)
+async def start_transcript(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> HarvestJob:
+    """수집 완료된 harvest 영상에 자막/후처리 작업을 별도로 생성한다.
+
+    `skip_transcript`로 수집만 끝낸 harvest의 `video_ids`를 받아 `transcript`
+    job_type crawl_run을 만든다. 자막 생성 전 사용자 확인 단계를 보장한다.
+    """
+    source = await crawl_run_service.get_run(session, job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if source.job_type != "harvest":
+        raise HTTPException(
+            status_code=400, detail="transcript는 harvest 작업에만 생성할 수 있다"
+        )
+    result = json.loads(source.result_json) if source.result_json else {}
+    video_ids = result.get("video_ids") or []
+    if not video_ids:
+        raise HTTPException(
+            status_code=400, detail="수집된 영상이 없어 자막 작업을 만들 수 없다"
+        )
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="transcript",
+        source=RunSource.WEB,
+        target_type=source.target_type,
+        target_id=source.target_id,
+        payload={"video_ids": video_ids, "source_job_id": job_id},
+        commit=False,
+    )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="transcript.create",
+        target_type="crawl_run",
+        target_id=str(run.id),
+        payload={"source_job_id": job_id, "video_count": len(video_ids)},
+    )
+    return HarvestJob(job_id=str(run.id), state=run.state)
 
 
 @router.get("/runs")

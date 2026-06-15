@@ -307,6 +307,67 @@ async def test_harvest_handler_runs_postprocess_after_video_ingest(monkeypatch, 
     assert result["postprocess"]["matched_places"] == 1
 
 
+async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, session):
+    called = {"postprocess": False}
+
+    async def fake_run_harvest(session, client, **kwargs):
+        return {
+            "inserted": 2,
+            "video_ids": ["v1", "v2"],
+            "target_type": "keyword",
+            "target_id": "제주 6월 여행",
+        }
+
+    async def fake_process_harvest_videos(session, **kwargs):
+        called["postprocess"] = True
+        return {"processed_videos": 2}
+
+    monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
+    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="harvest",
+        source="web",
+        target_type="keyword",
+        target_id="제주 6월 여행",
+        payload={"query": "제주 6월 여행", "max_videos": 2, "skip_transcript": True},
+    )
+    claimed = await crawl_run_service.claim_next_pending(session)
+
+    result = await worker.harvest_handler(session, claimed)
+
+    assert called["postprocess"] is False
+    assert result["transcript_skipped"] is True
+    assert result["video_ids"] == ["v1", "v2"]
+    assert "postprocess" not in result
+
+
+async def test_transcript_handler_processes_collected_video_ids(monkeypatch, session):
+    captured = {}
+
+    async def fake_process_harvest_videos(session, **kwargs):
+        captured.update(kwargs)
+        return {"processed_videos": 2, "matched_places": 1}
+
+    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="transcript",
+        source="web",
+        target_type="keyword",
+        target_id="제주 6월 여행",
+        payload={"video_ids": ["v1", "v2"], "source_job_id": 1},
+    )
+    claimed = await crawl_run_service.claim_next_pending(session)
+
+    result = await worker.transcript_handler(session, claimed)
+
+    assert captured["video_ids"] == ["v1", "v2"]
+    assert captured["limit"] == 2
+    assert result["video_ids"] == ["v1", "v2"]
+    assert result["postprocess"]["matched_places"] == 1
+
+
 async def test_run_once_executes_deep_research_default_handler(
     monkeypatch, session, session_factory
 ):

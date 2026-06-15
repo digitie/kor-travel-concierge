@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-15: T-076 완료 — 자막생성 게이팅 + UI progress (이슈 #72)
+
+- **담당자**: Claude
+- **배경**: 자막 생성(자막·POI·지오코딩)은 비용/시간이 큰 단계인데, 기존엔 `harvest` 한 crawl_run이 수집 직후 자동으로 자막까지 실행했다. 사용자가 자막 생성 전에 진행 여부를 확인할 수 있어야 한다.
+- **작업 내용 (backend)**:
+  - `HarvestRequest.skip_transcript` 플래그 추가. `harvest_handler`가 이 플래그면 `process_harvest_videos`(자막)를 건너뛰고 `transcript_skipped`/`video_ids`만 반환.
+  - 신규 엔드포인트 `POST /api/v1/harvest/{job_id}/transcript`: 수집된 `video_ids`로 `transcript` job_type crawl_run 생성.
+  - scheduler에 `transcript_handler` 추가·등록 → `process_harvest_videos`로 자막/장소 추출 실행(단계별 status-log progress).
+- **작업 내용 (frontend)**: `HarvestConsole`이 수집을 `skip_transcript`로 시작하고, 수집 완료 시 "자막 생성 시작" 확인 버튼을 노출. 클릭하면 transcript 작업을 만들고 진행바·현재 메시지·자막 상세 로그를 polling으로 표시. `lib/api`에 `startTranscript` 추가.
+- **검증**: backend compile/import, `test_scheduler_worker`(skip_transcript·transcript_handler 신규 테스트 포함)+`test_api` pytest 통과, frontend lint+type-check 통과.
+
+---
+
 ## 2026-06-15: T-075 완료 — E2E 안정화: 기동 시 stale Next/Turbopack 캐시 정리 (이슈 #70)
 
 - **담당자**: Claude
