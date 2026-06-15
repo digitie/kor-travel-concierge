@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  FileTextIcon,
   Loader2Icon,
   PlayIcon,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import {
   getHarvestStatus,
   listRunQueue,
   startHarvest,
+  startTranscript,
   type CrawlRunSummary,
   type HarvestStatus,
   type HarvestTargetType,
@@ -65,6 +67,7 @@ type HarvestFormValues = z.infer<typeof harvestFormSchema>;
 
 export function HarvestConsole() {
   const [jobId, setJobId] = useState<string | null>(null);
+  const [transcriptJobId, setTranscriptJobId] = useState<string | null>(null);
   const form = useForm<HarvestFormValues>({
     resolver: zodResolver(harvestFormSchema),
     defaultValues: {
@@ -82,6 +85,14 @@ export function HarvestConsole() {
     mutationFn: startHarvest,
     onSuccess: (job) => {
       setJobId(job.job_id);
+      setTranscriptJobId(null);
+    },
+  });
+
+  const transcriptMutation = useMutation({
+    mutationFn: startTranscript,
+    onSuccess: (job) => {
+      setTranscriptJobId(job.job_id);
     },
   });
 
@@ -89,6 +100,15 @@ export function HarvestConsole() {
     queryKey: ["harvest-status", jobId],
     queryFn: () => getHarvestStatus(jobId as string),
     enabled: Boolean(jobId),
+    refetchInterval: (query) => {
+      const data = query.state.data as HarvestStatus | undefined;
+      return data?.state === "pending" || data?.state === "running" ? 1_500 : false;
+    },
+  });
+  const transcriptStatusQuery = useQuery({
+    queryKey: ["transcript-status", transcriptJobId],
+    queryFn: () => getHarvestStatus(transcriptJobId as string),
+    enabled: Boolean(transcriptJobId),
     refetchInterval: (query) => {
       const data = query.state.data as HarvestStatus | undefined;
       return data?.state === "pending" || data?.state === "running" ? 1_500 : false;
@@ -105,6 +125,21 @@ export function HarvestConsole() {
   const statusLogs = status?.status_logs ?? [];
   const queueRuns = runQueueQuery.data ?? [];
 
+  const harvestResult = (status?.result ?? null) as
+    | { transcript_skipped?: boolean; video_ids?: string[] }
+    | null;
+  const collectedVideoIds = harvestResult?.video_ids ?? [];
+  const transcriptReady =
+    status?.state === "done" &&
+    harvestResult?.transcript_skipped === true &&
+    collectedVideoIds.length > 0;
+  const transcriptStatus = transcriptStatusQuery.data;
+  const transcriptTone = useMemo(
+    () => statusBadgeVariant(transcriptStatus?.state),
+    [transcriptStatus?.state],
+  );
+  const transcriptLogs = transcriptStatus?.status_logs ?? [];
+
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
       <header className="flex flex-col gap-1">
@@ -116,7 +151,9 @@ export function HarvestConsole() {
 
       <form
         className="flex flex-col gap-5"
-        onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+        onSubmit={form.handleSubmit((values) =>
+          mutation.mutate({ ...values, skipTranscript: true }),
+        )}
       >
         <FieldGroup>
           <Field data-invalid={Boolean(form.formState.errors.targetType)}>
@@ -269,6 +306,122 @@ export function HarvestConsole() {
           <p className="text-sm text-destructive">{statusQuery.error.message}</p>
         ) : null}
       </section>
+
+      {transcriptReady || transcriptJobId ? (
+        <section className="flex flex-col gap-3 border-t pt-5" aria-live="polite">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-medium">자막 생성</h2>
+            {transcriptJobId && transcriptStatus ? (
+              <Badge variant={transcriptTone.variant}>
+                {transcriptTone.icon}
+                {transcriptStatus.state}
+              </Badge>
+            ) : null}
+          </div>
+
+          {transcriptReady && !transcriptJobId ? (
+            <div className="flex flex-col gap-3 rounded-md border bg-muted/30 p-3 text-sm">
+              <p>
+                영상 <span className="font-medium">{collectedVideoIds.length}</span>개
+                수집을 완료했습니다. 자막 생성을 진행할까요?
+              </p>
+              <p className="text-xs text-muted-foreground">
+                자막 생성은 시간이 걸릴 수 있으며, 진행하면 자막·장소 추출·지오코딩이 실행됩니다.
+              </p>
+              <Button
+                type="button"
+                onClick={() => transcriptMutation.mutate(jobId as string)}
+                disabled={transcriptMutation.isPending}
+              >
+                {transcriptMutation.isPending ? (
+                  <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <FileTextIcon data-icon="inline-start" />
+                )}
+                자막 생성 시작
+              </Button>
+            </div>
+          ) : null}
+
+          {transcriptJobId ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2 text-sm">
+                <StatusRow label="자막 job_id" value={transcriptJobId} />
+                <StatusRow
+                  label="progress"
+                  value={
+                    transcriptStatus
+                      ? `${Math.round(transcriptStatus.progress * 100)}%`
+                      : "-"
+                  }
+                />
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{
+                    width: `${Math.round((transcriptStatus?.progress ?? 0) * 100)}%`,
+                  }}
+                />
+              </div>
+              <StatusRow
+                label="현재"
+                value={
+                  transcriptStatus?.current_message ?? "자막 작업을 준비 중입니다."
+                }
+                wrap
+              />
+              <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium">자막 상세 로그</p>
+                  <span className="text-xs text-muted-foreground">
+                    {transcriptLogs.length}건
+                  </span>
+                </div>
+                {transcriptLogs.length > 0 ? (
+                  <ol className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+                    {transcriptLogs.map((log, index) => (
+                      <li
+                        key={`${log.timestamp}-${index}`}
+                        className="grid grid-cols-[4.5rem_1fr_auto] gap-2 text-xs"
+                      >
+                        <span className="text-muted-foreground">
+                          {formatLogTime(log.timestamp)}
+                        </span>
+                        <span
+                          className={`${logToneClass(log.level)} min-w-0 break-words`}
+                        >
+                          {log.message}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {log.progress === null
+                            ? ""
+                            : `${Math.round(log.progress * 100)}%`}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    아직 자막 로그가 없습니다.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {transcriptMutation.error ? (
+            <p className="text-sm text-destructive">
+              {transcriptMutation.error.message}
+            </p>
+          ) : null}
+          {transcriptStatusQuery.error ? (
+            <p className="text-sm text-destructive">
+              {transcriptStatusQuery.error.message}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }

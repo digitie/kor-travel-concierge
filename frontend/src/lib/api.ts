@@ -19,6 +19,8 @@ export type StartHarvestInput = {
   targetType: HarvestTargetType;
   targetValue: string;
   maxVideos: number;
+  // true면 영상 수집만 하고 자막 생성은 건너뛴다(자막 전 확인 게이팅).
+  skipTranscript?: boolean;
 };
 
 export type HarvestJob = {
@@ -158,6 +160,7 @@ function harvestPayload(input: StartHarvestInput) {
     channel_id: input.targetType === "channel" ? input.targetValue : undefined,
     playlist_id: input.targetType === "playlist" ? input.targetValue : undefined,
     max_videos: input.maxVideos,
+    skip_transcript: input.skipTranscript ?? false,
   };
 }
 
@@ -199,6 +202,12 @@ export async function startHarvest(input: StartHarvestInput): Promise<HarvestJob
 
 export async function getHarvestStatus(jobId: string): Promise<HarvestStatus> {
   return requestJson<HarvestStatus>(`/api/v1/harvest/${jobId}`);
+}
+
+export async function startTranscript(jobId: string): Promise<HarvestJob> {
+  return requestJson<HarvestJob>(`/api/v1/harvest/${jobId}/transcript`, {
+    method: "POST",
+  });
 }
 
 export async function listDestinations(

@@ -151,6 +151,14 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             max_videos=_max_videos_from_payload(payload),
             status_reporter=report_status,
         )
+        if payload.get("skip_transcript"):
+            collected = harvest_summary.get("video_ids") or []
+            await report_status(
+                f"영상 {len(collected)}개 수집을 완료했습니다. "
+                "자막 생성은 확인 후 별도 작업으로 실행됩니다.",
+                1.0,
+            )
+            return {**harvest_summary, "transcript_skipped": True}
         postprocess_summary = await process_harvest_videos(
             session,
             video_ids=harvest_summary.get("video_ids") or [],
@@ -158,6 +166,32 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             status_reporter=report_status,
         )
         return {**harvest_summary, "postprocess": postprocess_summary}
+
+
+async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
+    """수집 완료된 영상에 자막·POI·지오코딩 후처리를 적용하는 handler.
+
+    `harvest`에서 `skip_transcript`로 수집만 끝낸 뒤, 사용자 확인을 거쳐 생성되는
+    `transcript` 작업을 처리한다(자막 생성 게이팅).
+    """
+    payload = load_payload(run)
+    video_ids = [str(v) for v in (payload.get("video_ids") or [])]
+    if not video_ids:
+        raise ValueError("transcript 작업에는 video_ids가 필요하다")
+
+    async def report_status(message: str, progress: float | None = None) -> None:
+        await crawl_run_service.append_status_log(
+            session, run.id, message, progress=progress
+        )
+
+    await report_status("자막·장소 추출 작업을 시작합니다.", 0.05)
+    postprocess_summary = await process_harvest_videos(
+        session,
+        video_ids=video_ids,
+        limit=len(video_ids),
+        status_reporter=report_status,
+    )
+    return {"video_ids": video_ids, "postprocess": postprocess_summary}
 
 
 async def deep_research_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
@@ -394,6 +428,7 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
 
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "harvest": harvest_handler,
+    "transcript": transcript_handler,
     "deep_research": deep_research_handler,
     "source_scan": source_scan_handler,
     "video_analysis": video_analysis_handler,
