@@ -18,6 +18,8 @@
 
 ## 완료
 
+- [x] **T-075**: E2E 안정화 — Windows 호스트 Playwright E2E가 stale `frontend/.next`(Turbopack) 캐시 손상으로 `Next.js package not found` panic → 페이지 reload loop → 4개 스펙 전부 실패하던 문제를, `tests/scripts/start-frontend.mjs`가 dev 기동 직전 `.next`를 정리하도록 보강해 해결(hermetic clean 캐시 시작). 백엔드/BFF/API는 정상이었고 원인은 프론트 dev 서버였다. 수정된 런처로 4/4 통과 재검증. (이슈 #70, 2026-06-15)
+
 - [x] **T-074**: 포트 대역을 통합 docker-manager 정책(126xx)으로 정렬 — `kor-travel-docker-manager`의 `docs/ports.md`/`config/docker-targets.yml` 포트 정책에 맞춰 concierge host 포트를 API `12401→12601`(컨테이너 `8000`), MCP host `12402→12602`(컨테이너 내부 bind `12402` 유지), Web `12405→12605`(컨테이너 `3000`)로 이관했다. `.env.example`, `docker-compose.yml`, `config.py`, `cli.py`, `main.py`, frontend(`package.json`·BFF route), `scripts/*.sh`, `README`/`SKILL`/`AGENTS`/`architecture`/`dev-environment`/`CLAUDE` 문서를 갱신했다. 컨테이너 내부 MCP bind와 참조 서비스 포트(PostgreSQL `5432`, RustFS `12101`/`12105`)는 정책과 일치하여 유지했다. 결정은 ADR-27로 기록했고 이력 문서는 보존했다. docker-manager `conc` 타깃 재빌드 기동으로 검증했다. (2026-06-14)
 
 - [x] **T-073**: 배포명 및 파이썬 임포트명 변경 — 시스템 배포명과 GitHub 저장소명을 `kor-travel-concierge`로 변경하고, Python import package를 `ktc`로 정렬했다. 기존 백엔드 패키지는 `backend/ktc`로 이동하고, 기존 별도 MCP 구현은 `ktc.mcp_server` 하위 패키지로 편입했다. 모든 내부 import 경로를 `ktc.*`로 바꾸고, 환경 변수 접두사는 `KTC_*`, 기본 DB 이름은 `kor_travel_concierge`, RustFS 기본 버킷과 공개 URL 기준은 `kor-travel-concierge`, feature provider는 `kor-travel-concierge-youtube`, export 파일명은 `kor-travel-concierge-places-*`로 정렬했다. 운영 CLI는 `ktcctl`로 추가하고 Docker Compose의 api/mcp/scheduler 실행도 같은 CLI 경로로 맞췄다. Docker/Compose/프론트엔드·테스트 package 명칭과 주요 문서를 새 배포명 기준으로 갱신했다. 설정·문서·변수 전수 검색 후 Windows host Playwright E2E `4 passed`를 재확인했다. (2026-06-13)
