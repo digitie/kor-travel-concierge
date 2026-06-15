@@ -13,11 +13,11 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
+from ktc.etl.gemini_client import GeminiRequestError, post_generate_content
 from ktc.models import TravelPlace
 from ktc.services import settings_service
 
@@ -119,29 +119,25 @@ def make_gemini_llm(
         raise ValueError("GEMINI_API_KEY가 필요하다")
 
     def call(prompt: str) -> str:
-        response = requests.post(
-            f"{GEMINI_API_BASE_URL}/models/{resolved_model}:generateContent",
-            headers={
-                "Content-Type": "application/json",
-                "X-goog-api-key": resolved_key,
-            },
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": RESPONSE_JSON_SCHEMA,
-                },
-            },
-            timeout=timeout_seconds,
-        )
         try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
+            data = post_generate_content(
+                api_key=resolved_key,
+                model=resolved_model,
+                body={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "responseSchema": RESPONSE_JSON_SCHEMA,
+                    },
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        except GeminiRequestError as exc:
             raise DeepResearchError(
                 "Gemini Deep Research 호출 실패"
-                f"(status={response.status_code}, model={resolved_model})"
+                f"(status={exc.status_code}, model={resolved_model})"
             ) from exc
-        return _extract_gemini_text(response.json())
+        return _extract_gemini_text(data)
 
     return call
 

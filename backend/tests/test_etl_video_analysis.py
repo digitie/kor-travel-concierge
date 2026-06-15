@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ktc.etl import video_analysis_service
+from ktc.etl import gemini_client, video_analysis_service
 from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -196,7 +196,7 @@ def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(video_analysis_service.requests, "post", fake_post)
+    monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
     llm = video_analysis_service.make_gemini_youtube_url_llm(
         api_key="gemini-key",

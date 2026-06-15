@@ -14,11 +14,10 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-import requests
-
 from ktc.core.config import get_settings
 from ktc.etl import category_catalog
-from ktc.etl.poi_extraction import GEMINI_API_BASE_URL, _extract_gemini_text
+from ktc.etl.gemini_client import post_generate_content
+from ktc.etl.poi_extraction import _extract_gemini_text
 
 # llm 시그니처: (prompt) -> JSON 문자열
 LlmCallable = Callable[[str], str]
@@ -117,23 +116,19 @@ def make_gemini_category_llm(
         raise ValueError("GEMINI_API_KEY가 필요하다")
 
     def call(prompt: str) -> str:
-        response = requests.post(
-            f"{GEMINI_API_BASE_URL}/models/{resolved_model}:generateContent",
-            headers={
-                "Content-Type": "application/json",
-                "X-goog-api-key": resolved_key,
-            },
-            json={
+        data = post_generate_content(
+            api_key=resolved_key,
+            model=resolved_model,
+            body={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "responseMimeType": "application/json",
                     "responseSchema": RESPONSE_JSON_SCHEMA,
                 },
             },
-            timeout=timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
-        response.raise_for_status()
-        return _extract_gemini_text(response.json())
+        return _extract_gemini_text(data)
 
     return call
 

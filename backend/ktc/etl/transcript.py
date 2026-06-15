@@ -96,31 +96,169 @@ def fetch_via_transcript_api(
     )
 
 
-def fetch_via_ytdlp(video_id: str) -> TranscriptResult | None:
-    """yt-dlp 자막 추출 폴백 (지연 import).
+def _parse_vtt(content: str) -> list[TranscriptSegment]:
+    """WebVTT 자막 텍스트를 TranscriptSegment 리스트로 파싱한다.
 
-    실제 다운로드/파싱 구현은 환경 의존이 커서 라이브러리 가용 여부만 확인하고,
-    파싱 책임은 호출자 제공 훅으로 위임할 수 있게 둔다. 기본은 None.
+    cue 시작 시각과 텍스트를 모으고, 인라인 태그(`<...>`)를 제거하며, 자동 자막의
+    연속 중복 라인을 합친다.
+    """
+    import re
+
+    tag_re = re.compile(r"<[^>]+>")
+    time_re = re.compile(r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->")
+    segments: list[TranscriptSegment] = []
+    start: float | None = None
+    texts: list[str] = []
+
+    def commit() -> None:
+        nonlocal start, texts
+        if start is not None:
+            joined = " ".join(
+                t for t in (tag_re.sub("", x).strip() for x in texts) if t
+            )
+            if joined:
+                segments.append(TranscriptSegment(start=start, text=joined))
+        start, texts = None, []
+
+    for raw in content.splitlines():
+        line = raw.rstrip()
+        match = time_re.search(line)
+        if match:
+            commit()
+            h, mi, s, ms = (int(match.group(i)) for i in range(1, 5))
+            start = h * 3600 + mi * 60 + s + ms / 1000.0
+            texts = []
+        elif start is not None:
+            stripped = line.strip()
+            if stripped == "":
+                commit()
+            elif stripped != "WEBVTT" and not stripped.isdigit():
+                texts.append(line)
+    commit()
+
+    deduped: list[TranscriptSegment] = []
+    for seg in segments:
+        if deduped and deduped[-1].text == seg.text:
+            continue
+        deduped.append(seg)
+    return deduped
+
+
+def fetch_via_ytdlp(
+    video_id: str, *, languages: tuple[str, ...] = ("ko", "en")
+) -> TranscriptResult | None:
+    """yt-dlp로 자막(수동/자동)을 내려받아 파싱하는 폴백 (지연 import).
+
+    youtube-transcript-api가 막히거나 형식이 바뀌어도 yt-dlp는 자동 자막을 받을 수
+    있는 경우가 많다. 자막이 비활성화된 영상은 None.
     """
     try:
-        import yt_dlp  # type: ignore  # noqa: F401
+        import yt_dlp  # type: ignore
     except ImportError:
         return None
-    # Placeholder: 자막 파일 다운로드 → VTT/SRT 파싱은 운영 환경에서 보강한다.
-    return None
+    import tempfile
+    from pathlib import Path
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    with tempfile.TemporaryDirectory() as tmp:
+        opts = {
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": list(languages),
+            "subtitlesformat": "vtt",
+            "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+            "ignoreerrors": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception:
+            return None
+        vtt_path: "Path | None" = None
+        for lang in languages:
+            matches = sorted(Path(tmp).glob(f"*.{lang}*.vtt"))
+            if matches:
+                vtt_path = matches[0]
+                break
+        if vtt_path is None:
+            any_vtt = sorted(Path(tmp).glob("*.vtt"))
+            vtt_path = any_vtt[0] if any_vtt else None
+        if vtt_path is None:
+            return None
+        segments = _parse_vtt(vtt_path.read_text(encoding="utf-8", errors="ignore"))
+    if not segments:
+        return None
+    return TranscriptResult(
+        video_id=video_id, source="yt-dlp", language=languages[0], segments=segments
+    )
 
 
-def transcribe_via_whisper(video_id: str) -> TranscriptResult | None:
-    """faster-whisper 로컬 전사 최종 폴백 (지연 import).
+def transcribe_via_whisper(
+    video_id: str, *, languages: tuple[str, ...] = ("ko", "en")
+) -> TranscriptResult | None:
+    """faster-whisper 로컬 전사 최종 폴백 (지연 import, 환경 플래그로 opt-in).
 
-    오디오 다운로드와 전사는 CPU 집약·블로킹이므로 호출자는 프로세스풀에서 실행할
-    수 있다. 라이브러리 미설치 시 None.
+    오디오 다운로드(yt-dlp)와 전사(faster-whisper)는 CPU 집약·블로킹·모델 다운로드를
+    수반하므로 기본 비활성(`TRANSCRIPT_WHISPER_ENABLED`)으로 둔다. 자막이 없는
+    영상까지 커버하려면 운영에서 명시적으로 켠다.
     """
+    import os
+
+    if os.getenv("TRANSCRIPT_WHISPER_ENABLED", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
     try:
-        import faster_whisper  # type: ignore  # noqa: F401
+        import yt_dlp  # type: ignore
+        from faster_whisper import WhisperModel  # type: ignore
     except ImportError:
         return None
-    return None
+    import tempfile
+    from pathlib import Path
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+    segments: list[TranscriptSegment] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        opts = {
+            "format": "bestaudio/best",
+            "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+            "postprocessors": [
+                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
+            ],
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception:
+            return None
+        audio = next(iter(sorted(Path(tmp).glob("*.mp3"))), None) or next(
+            iter(sorted(Path(tmp).glob("*"))), None
+        )
+        if audio is None:
+            return None
+        try:
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            whisper_segments, _info = model.transcribe(str(audio))
+            segments = [
+                TranscriptSegment(start=float(seg.start), text=seg.text.strip())
+                for seg in whisper_segments
+                if seg.text and seg.text.strip()
+            ]
+        except Exception:
+            return None
+    if not segments:
+        return None
+    return TranscriptResult(
+        video_id=video_id, source="whisper", language=languages[0], segments=segments
+    )
 
 
 # 기본 폴백 체인

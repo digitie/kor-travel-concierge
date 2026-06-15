@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-15: T-080 완료 — ETL 견고화: Gemini 503 재시도 + 자막 폴백 + 키워드 Gemini 연동 (이슈 #80)
+
+- **배경**: live 운영에서 (1) Gemini POI 호출이 503(과부하)으로 간헐 실패, (2) yt-dlp/whisper 자막 폴백이 미구현 stub, (3) keyword expansion이 Gemini 키가 있어도 템플릿 폴백만 사용하던 잔여 기술부채.
+- **Gemini 503 대책**: 공용 `ktc/etl/gemini_client.post_generate_content`(타임아웃/연결오류/429/5xx 지수 백오프 재시도, 비재시도 4xx 즉시 전파)를 추가하고 POI/deep_research/category/video_analysis(×2) 5개 호출부를 모두 이 헬퍼로 전환.
+- **자막 폴백 구현**: `fetch_via_ytdlp`(yt-dlp 자막 다운로드 + WebVTT 파싱, 태그 제거·중복 병합), `transcribe_via_whisper`(faster-whisper 오디오 전사, `TRANSCRIPT_WHISPER_ENABLED`/`WHISPER_MODEL_SIZE` env로 opt-in) 실제 구현. transcript_api → yt-dlp → whisper 순.
+- **키워드 Gemini 연동**: `make_gemini_keyword_generator`/`default_keyword_generator` 추가, `run_harvest`가 키 있으면 Gemini로 파생 검색어 생성(실패 시 템플릿 안전 폴백).
+- **검증**: 신규 재시도/파서/키워드 회귀 테스트 추가, 영향 받은 ETL+scheduler pytest 77건 통과. compile/import OK.
+
+---
+
 ## 2026-06-15: T-079 완료 — Gemini 엔진 옵션에 gemini-2.5-flash 추가 (이슈 #78)
 
 - **배경**: live POI 추출에서 `gemini-flash-latest`(thinking)는 60s 타임아웃, `gemini-2.0-flash`는 429(키 쿼터). 사용자가 `gemini-2.5-flash` 사용을 요청.

@@ -14,7 +14,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.etl import ingest_service, ranking
-from ktc.etl.keyword_expansion import KeywordGenerator, generate_derived_keywords
+from ktc.etl.keyword_expansion import (
+    KeywordGenerator,
+    default_keyword_generator,
+    generate_derived_keywords,
+)
 from ktc.etl.youtube_client import YouTubeClient
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
@@ -352,7 +356,10 @@ async def run_harvest(
             f'Gemini에서 검색어 "{seed_keyword}"를 보정 중입니다.',
             0.18,
         )
-        derived = generate_derived_keywords(seed_keyword, season, generator=generator)
+        keyword_generator = generator or default_keyword_generator()
+        derived = generate_derived_keywords(
+            seed_keyword, season, generator=keyword_generator
+        )
         await ingest_service.persist_derived_keywords(
             session, seed=seed_keyword, derived=derived, season=season
         )
