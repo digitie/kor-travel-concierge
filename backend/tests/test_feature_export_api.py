@@ -331,3 +331,38 @@ async def test_features_changes_rejects_out_of_range_limit(client):
     assert too_small.status_code == 422
     too_large = await client.get("/api/v1/features/changes?limit=501")
     assert too_large.status_code == 422
+
+
+async def test_source_entity_id_stable_across_upsert_and_reject(client, session_factory):
+    """이슈 #84 — 한 후보(candidate.id)의 upsert export와 reject export가 동일한
+    ``source_record.source_entity_id``를 가져야 한다.
+
+    consumer(kor-travel-map)의 inactivate 매칭이 이 id로 조인하므로, operation에 따라
+    값이 달라지면 reject/tombstone가 기적재 feature를 못 찾아 silent하게 실패한다.
+    reject/tombstone는 동일 직렬화 경로를 공유하므로 reject 케이스로 대표 검증한다.
+    """
+    from ktc.models import ExtractedPlaceCandidate, FeatureExportStatus, MatchStatus
+
+    candidate_id, _ = await _seed_ready_candidate(session_factory)
+
+    # upsert export의 source_entity_id를 잡는다.
+    first = await client.get("/api/v1/features/changes")
+    upsert_items = first.json()["items"]
+    assert upsert_items[0]["operation"] == "upsert"
+    upsert_entity_id = upsert_items[0]["source_record"]["source_entity_id"]
+    cursor = first.json()["next_cursor"]
+
+    # 같은 후보를 검수 제외(reject)로 전환한다.
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        candidate.match_status = MatchStatus.IGNORED.value
+        candidate.feature_export_status = FeatureExportStatus.REJECTED.value
+        await s.commit()
+
+    changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    reject_items = changes.json()["items"]
+    assert reject_items[0]["operation"] == "reject"
+    reject_entity_id = reject_items[0]["source_record"]["source_entity_id"]
+
+    # upsert와 reject export가 동일한 source_entity_id(= str(candidate.id))를 가져야 한다.
+    assert upsert_entity_id == reject_entity_id == str(candidate_id)
