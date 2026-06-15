@@ -87,3 +87,21 @@ async def test_get_transcript_async():
     )
     assert result is not None
     assert result.source == "transcript_api"
+
+
+def test_parse_vtt_extracts_segments_strips_tags_and_dedupes():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:03.000\n"
+        "안녕하세요 제주입니다\n\n"
+        "00:00:03.000 --> 00:00:05.000\n"
+        "안녕하세요 제주입니다\n\n"
+        "00:00:05.500 --> 00:00:08.000\n"
+        "<c>카멜리아힐</c>에 왔어요\n"
+    )
+    segs = transcript._parse_vtt(vtt)
+    assert len(segs) == 2  # 연속 중복 cue 병합
+    assert segs[0].start == 1.0
+    assert segs[0].text == "안녕하세요 제주입니다"
+    assert segs[1].start == 5.5
+    assert segs[1].text == "카멜리아힐에 왔어요"  # 인라인 태그 제거

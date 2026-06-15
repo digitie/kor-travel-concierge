@@ -18,6 +18,8 @@
 
 ## 완료
 
+- [x] **T-080**: ETL 견고화 — (1) Gemini 503 대책: 공용 `gemini_client.post_generate_content`(지수 백오프 재시도)로 5개 Gemini 호출부 전환. (2) 자막 폴백 실제 구현: `fetch_via_ytdlp`(yt-dlp VTT 파싱), `transcribe_via_whisper`(faster-whisper, env opt-in). (3) keyword expansion 실제 Gemini 연동(`make_gemini_keyword_generator`/`default_keyword_generator`, 실패 시 템플릿 폴백). 회귀 테스트 추가, ETL+scheduler pytest 77건 통과. (이슈 #80, 2026-06-15)
+
 - [x] **T-079**: Gemini 엔진 옵션에 `gemini-2.5-flash` 추가 — `GEMINI_ENGINE_OPTIONS`에 포함해 런타임 설정에서 선택 가능하게 함(설정 검증 400 해소). api/scheduler 재빌드로 적용. (이슈 #78, 2026-06-15)
 
 - [x] **T-078**: 자막 fetch 복구(youtube-transcript-api 1.x) — `fetch_via_transcript_api`가 제거된 정적 `get_transcript`를 호출해 모든 자막 추출이 즉시 실패(→ `travel_places` 0)하던 버그를, 1.x 인스턴스 `.fetch()`+`.to_raw_data()` 경로(구버전 호환 포함)로 수정. 신 API 회귀 테스트 추가, `transcript` pytest 통과. yt-dlp/whisper 폴백은 여전히 stub(후속). (이슈 #76, 2026-06-15)

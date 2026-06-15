@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ktc.etl import poi_extraction
+from ktc.etl import gemini_client, poi_extraction
 from ktc.etl.poi_extraction import POIExtractionError, extract_pois
 
 _VALID_JSON = json.dumps(
@@ -105,7 +105,7 @@ def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(poi_extraction.requests, "post", fake_post)
+    monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
     llm = poi_extraction.make_gemini_llm(
         api_key="gemini-key",

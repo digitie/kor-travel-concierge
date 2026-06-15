@@ -8,8 +8,12 @@ generator를 연결한다.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
+from ktc.core.config import get_settings
+from ktc.etl.gemini_client import post_generate_content
+from ktc.etl.poi_extraction import _extract_gemini_text
 from ktc.etl.ranking import SEASON_KO
 
 # generator 시그니처: (seed_keyword, season) -> list[str]
@@ -37,3 +41,66 @@ def generate_derived_keywords(
         seen.add(kw)
         result.append(kw)
     return result
+
+
+_DERIVED_KEYWORDS_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"keywords": {"type": "array", "items": {"type": "string"}}},
+    "required": ["keywords"],
+}
+
+
+def make_gemini_keyword_generator(
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    timeout_seconds: float = 30.0,
+) -> KeywordGenerator:
+    """시드+계절로 파생 검색어를 만드는 Gemini generator.
+
+    어떤 이유로든 실패하면(키 없음/일시 오류/파싱 실패) 결정론적 템플릿 폴백을
+    반환해, keyword expansion이 harvest 전체를 막지 않게 한다.
+    """
+    settings = get_settings()
+    resolved_key = api_key or settings.GEMINI_API_KEY
+    resolved_model = model or settings.GEMINI_ENGINE_VERSION
+
+    def generate(seed: str, season: str) -> list[str]:
+        if not resolved_key:
+            return _fallback_generator(seed, season)
+        season_ko = SEASON_KO.get(season, "")
+        prompt = (
+            f'여행 검색 시드 키워드 "{seed}"(계절 맥락: {season_ko})에 대해 '
+            "YouTube에서 여행지·맛집·명소를 잘 찾을 수 있는 한국어 파생 검색어 "
+            "2~3개를 제안하라. 시드 의미를 유지하되 지나치게 일반적이지 않게 하라. "
+            "반드시 주어진 JSON Schema에 맞는 JSON만 출력하라."
+        )
+        try:
+            data = post_generate_content(
+                api_key=resolved_key,
+                model=resolved_model,
+                body={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "responseSchema": _DERIVED_KEYWORDS_SCHEMA,
+                    },
+                },
+                timeout_seconds=timeout_seconds,
+            )
+            parsed = json.loads(_extract_gemini_text(data))
+            keywords = parsed.get("keywords") or []
+            cleaned = [str(kw).strip() for kw in keywords if str(kw).strip()]
+            return cleaned or _fallback_generator(seed, season)
+        except Exception:
+            # keyword expansion은 best-effort: 실패 시 템플릿으로 안전 폴백한다.
+            return _fallback_generator(seed, season)
+
+    return generate
+
+
+def default_keyword_generator() -> KeywordGenerator | None:
+    """Gemini 키가 있으면 Gemini generator, 없으면 None(→ 템플릿 폴백)."""
+    if not get_settings().GEMINI_API_KEY:
+        return None
+    return make_gemini_keyword_generator()
