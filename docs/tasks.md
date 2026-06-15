@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [x] **T-081**: feature export `limit` 범위 검증 — `GET /api/v1/features/{snapshot,changes}`의 `limit`에 `Query(ge=1, le=FEATURE_EXPORT_LIMIT_MAX)` 바운드를 추가해 범위 밖 입력을 silent clamp 대신 422로 거부한다(`normalize_limit`은 방어적 유지). 범위 밖 → 422 회귀 테스트 2종. kor-travel-map concierge loader 검증 P-01 후속. (이슈 #82, 2026-06-15)
 - [x] **T-080**: ETL 견고화 — (1) Gemini 503 대책: 공용 `gemini_client.post_generate_content`(지수 백오프 재시도)로 5개 Gemini 호출부 전환. (2) 자막 폴백 실제 구현: `fetch_via_ytdlp`(yt-dlp VTT 파싱), `transcribe_via_whisper`(faster-whisper, env opt-in). (3) keyword expansion 실제 Gemini 연동(`make_gemini_keyword_generator`/`default_keyword_generator`, 실패 시 템플릿 폴백). 회귀 테스트 추가, ETL+scheduler pytest 77건 통과. (이슈 #80, 2026-06-15)
 
 - [x] **T-079**: Gemini 엔진 옵션에 `gemini-2.5-flash` 추가 — `GEMINI_ENGINE_OPTIONS`에 포함해 런타임 설정에서 선택 가능하게 함(설정 검증 400 해소). api/scheduler 재빌드로 적용. (이슈 #78, 2026-06-15)

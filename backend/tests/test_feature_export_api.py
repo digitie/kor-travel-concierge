@@ -314,3 +314,20 @@ async def test_changes_emits_upsert_on_payload_change(client, session_factory):
     assert items[0]["operation"] == "upsert"
     assert items[0]["place"]["name"] == "월정리 해수욕장"
     assert items[0]["export_id"] == f"ytpc_{candidate_id}"
+
+
+async def test_features_snapshot_rejects_out_of_range_limit(client):
+    """P-01 (이슈 #82) — limit이 [1, FEATURE_EXPORT_LIMIT_MAX] 밖이면 silent clamp가
+    아니라 명시적 422로 거부한다."""
+    too_small = await client.get("/api/v1/features/snapshot?limit=0")
+    assert too_small.status_code == 422
+    too_large = await client.get("/api/v1/features/snapshot?limit=501")
+    assert too_large.status_code == 422
+
+
+async def test_features_changes_rejects_out_of_range_limit(client):
+    """P-01 (이슈 #82) — changes endpoint도 동일하게 범위 밖 limit을 422로 거부한다."""
+    too_small = await client.get("/api/v1/features/changes?limit=0")
+    assert too_small.status_code == 422
+    too_large = await client.get("/api/v1/features/changes?limit=501")
+    assert too_large.status_code == 422

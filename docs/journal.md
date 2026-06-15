@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-15: T-081 완료 — feature export `limit` 범위 검증(422) 추가 (이슈 #82)
+
+- **배경**: `python-kor-travel-map`의 kor-travel-concierge loader conformance 검증(P-01)에서 발견된 producer-side 입력 검증 갭. loader 측 계약 정합(필드/스케일/operation lifecycle)은 모두 OK로 확인됐다.
+- **문제**: `GET /api/v1/features/{snapshot,changes}`의 `limit`이 바운드 없는 plain int라, 범위 밖 값을 `feature_export_service.normalize_limit`이 조용히 clamp(`max(1, min(limit, 500))`)했다.
+- **수정**: 두 endpoint의 `limit`에 `Query(ge=1, le=FEATURE_EXPORT_LIMIT_MAX)`를 추가해 범위 밖 입력을 명시적 **422**로 거부한다. `normalize_limit`은 방어적으로 유지. 범위 밖 → 422 회귀 테스트 2종 추가(`backend/tests/test_feature_export_api.py`).
+- **영향 없음**: 현재 유일 consumer(kor-travel-map)는 limit을 `[1,500]`으로만 보낸다(settings `Field(ge=1, le=500)`).
+- **검증**: backend pytest는 PostgreSQL/PostGIS disposable DB(WSL/Docker)에서 실행한다 — 변경은 표준 FastAPI Query 바운드이며 범위 밖 → 422 회귀 테스트로 고정.
+
 ## 2026-06-15: T-080 완료 — ETL 견고화: Gemini 503 재시도 + 자막 폴백 + 키워드 Gemini 연동 (이슈 #80)
 
 - **배경**: live 운영에서 (1) Gemini POI 호출이 503(과부하)으로 간헐 실패, (2) yt-dlp/whisper 자막 폴백이 미구현 stub, (3) keyword expansion이 Gemini 키가 있어도 템플릿 폴백만 사용하던 잔여 기술부채.
