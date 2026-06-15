@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-15: T-078 완료 — 자막 fetch 복구: youtube-transcript-api 1.x 호환 (이슈 #76)
+
+- **담당자**: Claude
+- **증상**: `제주 6월 여행` 수집(job 565) 후 1개 영상 자막 시험에서 모든 영상이 "자막을 찾지 못해" 즉시(~10ms) 실패 → `travel_places` 0개.
+- **근본 원인**: `fetch_via_transcript_api`가 `YouTubeTranscriptApi.get_transcript`(정적)를 호출하는데, 설치된 `youtube-transcript-api>=0.6.2`가 1.x로 해석되어 `get_transcript` 제거됨 → `AttributeError` → None. yt-dlp/whisper 폴백은 미구현 stub이라 폴백도 없었다.
+- **수정**: `fetch_via_transcript_api`를 1.x 인스턴스 `.fetch()`+`.to_raw_data()` 경로로 갱신(구 `get_transcript`도 호환). 검증: 신 API로 `jBHdf2BpdTU` 22 segments 정상 fetch(일부 영상은 `TranscriptsDisabled`=실제 자막 없음). 신 API 경로 회귀 테스트 추가.
+- **후속(선택)**: `fetch_via_ytdlp` 실제 구현으로 자막 비활성·차단 영상 커버리지 보강.
+
+---
+
 ## 2026-06-15: T-077 완료 — transcript 부분집합 처리(품질 시험) (이슈 #74)
 
 - **담당자**: Claude
