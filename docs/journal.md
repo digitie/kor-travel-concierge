@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-15: T-079 완료 — Gemini 엔진 옵션에 gemini-2.5-flash 추가 (이슈 #78)
+
+- **배경**: live POI 추출에서 `gemini-flash-latest`(thinking)는 60s 타임아웃, `gemini-2.0-flash`는 429(키 쿼터). 사용자가 `gemini-2.5-flash` 사용을 요청.
+- **작업**: `config.py`의 `GEMINI_ENGINE_OPTIONS`에 `gemini-2.5-flash` 추가(설정 검증 통과). api/scheduler 모두 이 목록으로 DB 모델값을 검증하므로 둘 다 재빌드 필요.
+
+---
+
 ## 2026-06-15: T-078 완료 — 자막 fetch 복구: youtube-transcript-api 1.x 호환 (이슈 #76)
 
 - **담당자**: Claude
