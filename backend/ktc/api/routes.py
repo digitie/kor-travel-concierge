@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -523,7 +523,11 @@ async def get_rustfs_status(
 @router.get("/features/snapshot")
 async def features_snapshot(
     cursor: str | None = None,
-    limit: int = feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+    limit: int = Query(
+        default=feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+        ge=1,
+        le=feature_export_service.FEATURE_EXPORT_LIMIT_MAX,
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """현재 활성 feature 후보를 full snapshot으로 노출한다.
@@ -547,7 +551,11 @@ async def features_snapshot(
 @router.get("/features/changes")
 async def features_changes(
     cursor: str | None = None,
-    limit: int = feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+    limit: int = Query(
+        default=feature_export_service.FEATURE_EXPORT_LIMIT_DEFAULT,
+        ge=1,
+        le=feature_export_service.FEATURE_EXPORT_LIMIT_MAX,
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """`upsert`/`reject`/`tombstone` 변경을 incremental로 노출한다."""
