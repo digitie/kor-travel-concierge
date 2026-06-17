@@ -64,3 +64,4 @@ Thumbs.db
 
 # Local tooling / scratch directory
 .local/
+.claude/settings.local.json

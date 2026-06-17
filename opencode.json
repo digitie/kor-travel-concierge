@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "paths": [".opencode/skills"]
+  },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-playwright"],
+      "enabled": true,
+      "environment": {
+        "PLAYWRIGHT_HEADLESS": "true"
+      }
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "enabled": true
+    },
+    "codegraph": {
+      "type": "local",
+      "command": ["npx", "-y", "@colbymchenry/codegraph", "serve", "--mcp"],
+      "enabled": true,
+      "cwd": "F:\\dev\\kor-travel-concierge-opencode"
+    },
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "F:\\dev\\kor-travel-concierge-opencode"],
+      "enabled": true
+    }
+  }
+}
