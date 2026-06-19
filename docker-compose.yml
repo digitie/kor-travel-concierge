@@ -3,20 +3,31 @@
 # api·mcp·scheduler는 같은 외부 PostgreSQL/PostGIS DB를 사용한다(ADR-25).
 # RustFS는 고정 host port 12101/12105의 별도 Docker 서비스를 사용한다(ADR-15).
 
+# env_file 경로는 APP_ENV_FILE로 덮어쓸 수 있다(기본 .env). prod에서 .env를 복사하지 않고
+# 띄우려면: APP_ENV_FILE=.env.production docker compose --env-file .env.production up -d --build
+# (--env-file은 ${...} 보간 소스만 바꾸므로, 컨테이너로 들어가는 비밀 키는 이 env_file 경로가 결정한다.)
 x-app-env-file: &app-env-file
-  - path: .env
+  - path: ${APP_ENV_FILE:-.env}
     required: false
 
 x-python-env: &python-env
   DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:5432/kor_travel_concierge}
-  NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-12601}
+  # 브라우저는 same-origin BFF로 호출하므로 보통 비워 둔다. 미설정(unset)이면 로컬
+  # host 포트가 백엔드 CORS에 추가되고, .env에서 명시적 빈 값으로 두면 추가되지 않는다
+  # (`-` 사용: 빈 값은 그대로 빈 값). prod .env는 이 값을 빈 값으로 둔다.
+  NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL-http://localhost:${API_HOST_PORT:-12601}}
   CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-12605},http://127.0.0.1:${FRONTEND_HOST_PORT:-12605},http://localhost:3000,http://127.0.0.1:3000,http://localhost:13100,http://127.0.0.1:13100}
   RUSTFS_ENABLED: "true"
   # RustFS는 이 repo Compose 밖의 고정 Docker 서비스(12101/12105)를 사용한다.
+  # 백엔드 boto3 연결은 같은 호스트 내부 경로(host.docker.internal:12101)를 쓴다(prod 포함).
   RUSTFS_ENDPOINT: ${RUSTFS_DOCKER_ENDPOINT:-http://host.docker.internal:12101}
+  # 공개 객체/미디어 URL. prod에서는 .env에서 공개 S3 도메인으로 override 한다.
   RUSTFS_PUBLIC_BASE_URL: ${RUSTFS_PUBLIC_BASE_URL:-http://127.0.0.1:12101/kor-travel-concierge}
-  # 콘솔은 사용자가 호스트(또는 WSL2) 브라우저에서 여는 공개 URL이다.
-  RUSTFS_CONSOLE_URL: http://127.0.0.1:12105
+  # 콘솔은 사용자가 브라우저에서 여는 공개 URL이다. prod에서는 .env에서 override 한다.
+  RUSTFS_CONSOLE_URL: ${RUSTFS_CONSOLE_URL:-http://127.0.0.1:12105}
+  # TLS 종단 리버스 프록시 뒤에서 X-Forwarded-* 헤더를 신뢰할 IP. prod에서는 .env에서 "*"로 둔다.
+  # uvicorn이 os.environ["FORWARDED_ALLOW_IPS"]를 직접 읽는다(앱 코드 변경 불필요).
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
   RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
   RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
   RUSTFS_BUCKET_RAW_VIDEOS: ${RUSTFS_BUCKET_RAW_VIDEOS:-kor-travel-concierge}

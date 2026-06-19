@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# 단일 호스트 Docker Compose smoke 검증 (Linux / WSL2)
+# 단일 호스트 Docker Compose smoke 검증 — 개발(dev) 환경 (Linux / WSL2)
 #
-# Compose를 빌드·기동하고 RustFS·API·Frontend health와 MCP 포트를 확인한 뒤
+# dev는 prod와 같은 고정 12xxx 포트를 쓰되 내부 주소 127.0.0.1로 검증한다.
+# (prod 공식 도메인 운영은 kor-travel-docker-manager — ADR-27/ADR-28.)
+# Compose를 빌드·기동하고 RustFS·API·Frontend health와 MCP 포트를 127.0.0.1로 확인한 뒤
 # `api` 컨테이너 안에서 `scripts/verify_rustfs.py`로 RustFS 버킷/객체 저장을
 # 검증하고, 기본적으로 `docker compose down`으로 정리한다.
+#
+# 고정 포트가 이미 사용 중이면 stop-fixed-ports.sh가 강제 종료 여부를 묻는다. 무인(CI)
+# 실행에서 점유 포트를 묻지 않고 회수하려면 FORCE_KILL_PORTS=1을 준다(없으면 안전 중지).
 #
 # host port는 아래 고정값을 기본으로 사용하고, 검증 동작만 환경 변수로 조정한다.
 #   PROJECT_NAME             Compose project 이름 (기본: kor-travel-concierge-verify)
@@ -27,7 +32,8 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 KEEP_RUNNING="${KEEP_RUNNING:-0}"
 
 if [[ -z "${NEXT_PUBLIC_API_BASE_URL:-}" ]]; then
-  export NEXT_PUBLIC_API_BASE_URL="http://localhost:${API_HOST_PORT}"
+  # dev 검증은 내부 주소 127.0.0.1을 사용한다.
+  export NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:${API_HOST_PORT}"
 fi
 
 # 저장소 루트로 이동 (이 스크립트는 scripts/ 아래에 있다)
@@ -101,10 +107,11 @@ fi
 
 compose up -d api mcp scheduler frontend
 
-wait_http "http://localhost:${RUSTFS_HOST_PORT}/health/live"
-wait_http "http://localhost:${API_HOST_PORT}/health"
-wait_http "http://localhost:${FRONTEND_HOST_PORT}"
-wait_tcp "localhost" "${MCP_HOST_PORT}"
+# dev 검증은 내부 주소 127.0.0.1 + 고정 12xxx 포트로 확인한다.
+wait_http "http://127.0.0.1:${RUSTFS_HOST_PORT}/health/live"
+wait_http "http://127.0.0.1:${API_HOST_PORT}/health"
+wait_http "http://127.0.0.1:${FRONTEND_HOST_PORT}"
+wait_tcp "127.0.0.1" "${MCP_HOST_PORT}"
 
 compose exec -T api python /app/scripts/verify_rustfs.py
 compose ps

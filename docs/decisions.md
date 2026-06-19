@@ -971,3 +971,25 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - **결과 (긍정)**: 통합 docker-manager 스택과 concierge 단독 `docker compose`가 동일한 포트 계약을 사용한다. 대역 충돌 없이 geo/map/pinvi 등 형제 서비스와 공존한다.
 - **결과 (부정)**: 과거 문서·이력에 남은 `124xx` 참조와 새 `126xx`가 공존한다(이력은 의도적으로 보존). 외부에서 `124xx`를 가정한 사용자 설정/북마크는 갱신이 필요하다.
 - **관련**: ADR-18, ADR-23을 보강·대체한다. 포트 정책 출처는 `kor-travel-docker-manager`의 `docs/ports.md`.
+
+---
+
+## ADR-28: 프로덕션 공개 도메인 노출(리버스 프록시 + TLS)과 도메인 비밀 유지
+
+- **상태**: 채택 (2026-06-20)
+- **맥락**: 외부 노출 배포에서 다섯 개의 공개 서비스 도메인(Web, REST API, MCP, RustFS S3 API, RustFS 콘솔)을 쓴다. 실제 도메인 값은 외부에 노출하지 않아야 하고(git 커밋 금지), 앱은 기존 단일 호스트 Docker Compose 고정 포트(API `12601`, MCP `12602`, Web `12605`, RustFS `12101`/`12105`, ADR-27)를 그대로 유지한 채 prod에서 그 도메인으로 동작해야 한다. 앱 설정은 이미 CORS(`CORS_ALLOW_ORIGINS`), 인증(`APP_ENV`/`API_KEYS`, ADR-24), RustFS 공개 URL(`RUSTFS_PUBLIC_BASE_URL`/`RUSTFS_CONSOLE_URL`, ADR-15), BFF origin(`BACKEND_ORIGIN`, ADR-24)이 전부 환경변수 기반이라 앱 코드 변경 없이 prod 구성이 가능하다.
+- **결정**:
+  - **dev/prod 오케스트레이션 구분**: 별도 지시가 없으면 이 repo의 실행/스크립트는 **dev**를 의미한다. dev는 여기에서 직접(`scripts/start-live.sh`/`docker compose`/`ktcctl`) 띄우고 **내부 주소 `127.0.0.1` + 고정 12xxx 포트**로 접속한다. **prod**는 **`kor-travel-docker-manager`**가 도커를 올리고 **공식 도메인**을 적용한다(포트 정책 단일 출처도 docker-manager, ADR-27). prod도 같은 12xxx host 포트를 쓰되 공식 도메인 + TLS 프록시로 노출한다(포트 번호 동일, 접속 주소만 다름).
+  - **dev 기동 안전장치**: `scripts/start-live.sh`/`stop-fixed-ports.sh`는 고정 포트가 이미 사용 중이면 **새 포트로 바꾸지 않고**, prod 인스턴스 유무와 무관하게 강제 종료 여부를 사용자에게 묻는다. 거부하면(또는 비대화형이고 `FORCE_KILL_PORTS=1` 미설정) 종료 코드로 빠져 기동을 중지하고 떠 있는 인스턴스를 보존한다. dev 검증/접속 주소는 `127.0.0.1`로 통일한다.
+  - **토폴로지**: 단일 호스트 앞에 TLS 종단 **리버스 프록시(Caddy 권장, `deploy/Caddyfile`)**를 두고, 공개 도메인 5개를 Host 기반으로 고정 host port에 라우팅한다. 앱/Compose는 포트 계약(ADR-27)을 바꾸지 않는다. 다섯 도메인이 같은 IP를 공유하므로 Host 기반 프록시는 필수다.
+  - **env_file 경로 override**: compose `env_file` 경로를 `${APP_ENV_FILE:-.env}`로 두어, 복사 없이 `APP_ENV_FILE=.env.production`으로 prod env를 주입할 수 있게 한다(`--env-file`은 `${...}` 보간 소스만 바꾸고 컨테이너 비밀 키는 `env_file:`이 결정하므로, 둘을 함께 지정해야 한다).
+    - `<web>` → `127.0.0.1:12605`, `<api>` → `12601`, `<mcp>` → `12602`(streamable-http `/mcp`, SSE 버퍼링 off), `<s3-api>` → `12101`, `<s3-console>` → `12105`.
+  - **RustFS 도메인 매핑**: `s3-api.<...>` = S3 API/공개 객체 URL(`RUSTFS_PUBLIC_BASE_URL`), `s3.<...>` = 관리 콘솔(`RUSTFS_CONSOLE_URL`). 백엔드 boto3 연결(`RUSTFS_ENDPOINT`/`RUSTFS_DOCKER_ENDPOINT`)은 같은 호스트 내부 경로(`host.docker.internal:12101`)를 유지해 프록시/TLS를 우회한다.
+  - **same-origin BFF 유지**: 브라우저는 공개 API 도메인을 직접 호출하지 않는다. `NEXT_PUBLIC_API_BASE_URL`은 비워 두고(상대 경로) Next BFF가 컨테이너 내부 `http://api:8000`으로 프록시하며 `X-API-Key`를 주입한다. 따라서 공개 Web 도메인이 무엇이든 프론트는 그대로 동작한다.
+  - **인증 강제**: prod는 `APP_ENV=production`(+선택적으로 `API_AUTH_ENABLED=true`)와 `API_KEYS`를 설정하고, BFF의 `BACKEND_API_KEY`를 그중 하나와 동일하게 둔다(ADR-24).
+  - **프록시 헤더**: TLS 종단 뒤에서 `FORWARDED_ALLOW_IPS=*`를 설정한다. uvicorn이 `os.environ["FORWARDED_ALLOW_IPS"]`를 직접 읽고 `proxy_headers`가 기본 활성이라 앱 코드 변경이 없다.
+  - **도메인 비밀 유지**: 실제 공개 도메인/비밀은 git에 커밋하지 않는다. 커밋 파일(`.env.example`, `deploy/Caddyfile`, 문서)에는 placeholder/`{$ENV}`만 둔다. 실제 값은 gitignore된 `.env`(또는 `.env.production`)에만 둔다. Caddy는 `--envfile`로 같은 파일에서 도메인을 읽는다.
+  - **MCP 노출 보안**: MCP는 앱 자체 인증이 없다. `deploy/Caddyfile`은 MCP 도메인에 `basic_auth`를 **기본 ON**으로 두고, `MCP_BASIC_AUTH_HASH`(`caddy hash-password` bcrypt)를 주입하지 않으면 커밋된 **잠금 기본 해시**가 적용되어 Caddy는 정상 기동하되 아무도 인증할 수 없다(익명 노출 방지, fail-safe). `MCP_WRITE_ENABLED=false`도 유지한다. 잠금 기본 해시는 폐기된 무작위 비밀번호의 bcrypt 값이라 커밋해도 안전하다.
+- **결과 (긍정)**: 앱 코드 변경 없이 환경변수 + 프록시 설정만으로 prod 도메인 운영이 가능하다. 실제 도메인이 git/공개 산출물에 남지 않는다. 로컬/E2E는 기존 무인증·localhost 동작을 그대로 유지한다.
+- **결과 (부정)**: 프록시(TLS, 동적 DNS A 레코드, 80/443 개방)는 repo 밖 인프라 책임이다. 실제 도메인이 gitignore된 두 곳(`.env`와, 필요 시 Caddy envfile)에 나뉘어 들어갈 수 있다. RustFS `s3`/`s3-api` 역할 매핑을 반대로 두면 미디어 링크/콘솔 링크가 깨진다.
+- **관련**: ADR-24(인증), ADR-27(포트), ADR-15(RustFS), ADR-18/ADR-23(Compose/실행 모델)을 prod 노출 관점에서 보강한다.
