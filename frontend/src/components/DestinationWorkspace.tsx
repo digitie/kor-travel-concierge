@@ -671,7 +671,7 @@ function progressBarClass(state: string) {
     return "h-full rounded-full bg-destructive";
   }
   if (state === "done") {
-    return "h-full rounded-full bg-emerald-600";
+    return "h-full rounded-full bg-success";
   }
   return "h-full rounded-full bg-primary";
 }

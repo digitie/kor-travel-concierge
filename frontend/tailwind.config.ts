@@ -1,16 +1,8 @@
 import type { Config } from "tailwindcss";
-import tailwindcssAnimate from "tailwindcss-animate";
 
-function cssVariableColor(name: string): string {
-  const resolveColor = ({ opacityValue }: { opacityValue?: string }) => {
-    if (opacityValue === undefined) {
-      return `var(${name})`;
-    }
-    return `color-mix(in oklab, var(${name}) calc(${opacityValue} * 100%), transparent)`;
-  };
-  return resolveColor as unknown as string;
-}
-
+// Tailwind CSS v4. globals.css의 `@config`로 로드된다. v4는 `var(--x)` 색상 값에
+// opacity modifier(`bg-primary/80` 등)를 color-mix로 자동 처리하므로 별도 helper가 필요 없다.
+// animation 유틸리티는 globals.css의 `@import "tw-animate-css"`가 제공한다.
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
@@ -22,53 +14,92 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       colors: {
-        background: cssVariableColor("--background"),
-        foreground: cssVariableColor("--foreground"),
+        background: "var(--background)",
+        foreground: "var(--foreground)",
         card: {
-          DEFAULT: cssVariableColor("--card"),
-          foreground: cssVariableColor("--card-foreground"),
+          DEFAULT: "var(--card)",
+          foreground: "var(--card-foreground)",
         },
         popover: {
-          DEFAULT: cssVariableColor("--popover"),
-          foreground: cssVariableColor("--popover-foreground"),
+          DEFAULT: "var(--popover)",
+          foreground: "var(--popover-foreground)",
         },
         primary: {
-          DEFAULT: cssVariableColor("--primary"),
-          foreground: cssVariableColor("--primary-foreground"),
+          DEFAULT: "var(--primary)",
+          foreground: "var(--primary-foreground)",
         },
         secondary: {
-          DEFAULT: cssVariableColor("--secondary"),
-          foreground: cssVariableColor("--secondary-foreground"),
+          DEFAULT: "var(--secondary)",
+          foreground: "var(--secondary-foreground)",
         },
         muted: {
-          DEFAULT: cssVariableColor("--muted"),
-          foreground: cssVariableColor("--muted-foreground"),
+          DEFAULT: "var(--muted)",
+          foreground: "var(--muted-foreground)",
         },
         accent: {
-          DEFAULT: cssVariableColor("--accent"),
-          foreground: cssVariableColor("--accent-foreground"),
+          DEFAULT: "var(--accent)",
+          foreground: "var(--accent-foreground)",
         },
         destructive: {
-          DEFAULT: cssVariableColor("--destructive"),
-          foreground: cssVariableColor("--destructive-foreground"),
+          DEFAULT: "var(--destructive)",
+          foreground: "var(--destructive-foreground)",
         },
-        border: cssVariableColor("--border"),
-        input: cssVariableColor("--input"),
-        ring: cssVariableColor("--ring"),
+        border: "var(--border)",
+        input: "var(--input)",
+        ring: "var(--ring)",
         sidebar: {
-          DEFAULT: cssVariableColor("--sidebar"),
-          foreground: cssVariableColor("--sidebar-foreground"),
-          primary: cssVariableColor("--sidebar-primary"),
-          "primary-foreground": cssVariableColor("--sidebar-primary-foreground"),
-          accent: cssVariableColor("--sidebar-accent"),
-          "accent-foreground": cssVariableColor("--sidebar-accent-foreground"),
-          border: cssVariableColor("--sidebar-border"),
-          ring: cssVariableColor("--sidebar-ring"),
+          DEFAULT: "var(--sidebar)",
+          foreground: "var(--sidebar-foreground)",
+          primary: "var(--sidebar-primary)",
+          "primary-foreground": "var(--sidebar-primary-foreground)",
+          accent: "var(--sidebar-accent)",
+          "accent-foreground": "var(--sidebar-accent-foreground)",
+          border: "var(--sidebar-border)",
+          ring: "var(--sidebar-ring)",
         },
+        // --- StyleSeed/geo semantic 토큰 (docs/DESIGN-RULES.md). 새 UI는 이 토큰을 먼저 쓴다. ---
+        text: {
+          strong: "var(--text-strong)",
+          primary: "var(--text-primary)",
+          secondary: "var(--text-secondary)",
+          tertiary: "var(--text-tertiary)",
+          disabled: "var(--text-disabled)",
+        },
+        surface: {
+          page: "var(--surface-page)",
+          card: "var(--surface-card)",
+          subtle: "var(--surface-subtle)",
+          muted: "var(--surface-muted)",
+          row: "var(--surface-row)",
+        },
+        ink: "var(--text-strong)",
+        line: "var(--line)",
+        brand: {
+          DEFAULT: "var(--brand)",
+          ink: "var(--brand-ink)",
+          tint: "var(--brand-tint)",
+        },
+        info: "var(--info)",
+        success: "var(--ok)",
+        warn: "var(--warn)",
+        danger: "var(--danger)",
+      },
+      boxShadow: {
+        card: "var(--shadow-card)",
+        "card-hover": "var(--shadow-card-hover)",
+        button: "var(--shadow-button)",
+        modal: "var(--shadow-modal)",
+      },
+      transitionTimingFunction: {
+        default: "var(--ease-default)",
+      },
+      transitionDuration: {
+        fast: "var(--duration-fast)",
+        normal: "var(--duration-normal)",
       },
     },
   },
-  plugins: [tailwindcssAnimate],
+  plugins: [],
 };
 
 export default config;

@@ -169,10 +169,12 @@ function syncMarkerElement(
   element.style.height = selected ? "18px" : "14px";
   element.style.borderRadius = "9999px";
   element.style.border = "2px solid #ffffff";
-  element.style.backgroundColor = selected ? "#111827" : "#2563eb";
+  // DESIGN-RULES 1: 선택 상태는 단일 accent(brand #0f766e), 비선택은 차분한 secondary(#667085).
+  element.style.backgroundColor = selected ? "#0f766e" : "#667085";
+  // 선택 ring은 brand(포커스 ring과 동일 계열), drop shadow는 중립(색 없는 그림자).
   element.style.boxShadow = selected
-    ? "0 0 0 3px rgba(17, 24, 39, 0.22), 0 8px 18px rgba(15, 23, 42, 0.28)"
-    : "0 6px 14px rgba(37, 99, 235, 0.26)";
+    ? "0 0 0 3px rgba(15, 118, 110, 0.24), 0 8px 18px rgba(15, 23, 42, 0.22)"
+    : "0 6px 14px rgba(15, 23, 42, 0.18)";
   element.style.cursor = "pointer";
   element.style.transform = selected ? "translateY(-2px)" : "translateY(0)";
   element.style.transition = "background-color 150ms ease, transform 150ms ease, box-shadow 150ms ease";
@@ -187,7 +189,7 @@ function buildVWorldStyle(key: string): maplibregl.StyleSpecification {
         {
           id: "fallback-background",
           type: "background",
-          paint: { "background-color": "#e5e7eb" },
+          paint: { "background-color": "#e8edf3" },
         },
       ],
     };

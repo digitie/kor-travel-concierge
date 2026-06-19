@@ -1,46 +1,80 @@
+@import "tailwindcss";
+@import "tw-animate-css";
 @import "maplibre-gl/dist/maplibre-gl.css";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@config "../../tailwind.config.ts";
+
+/* geo UI는 light 전용 운영 콘솔이다. dark:는 OS prefers-color-scheme가 아니라 .dark 클래스
+   하위에서만 적용한다(현재 토글 없음 → 항상 light). */
+@custom-variant dark (&:is(.dark *));
 
 @layer base {
   .theme {
     --font-heading: var(--font-sans);
   }
   :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    /* --- StyleSeed 기반 semantic 토큰 (kor-travel-geo-ui docs/DESIGN-RULES.md 이식).
+       단일 accent(brand), 5단계 text, surface/status/shadow/motion 토큰을 단일 출처로 둔다. --- */
+    --surface-page: #f8fafb;
+    --surface-card: #ffffff;
+    --surface-subtle: #f3f6fa;
+    --surface-muted: #e8edf3;
+    --surface-row: #fafbfc;
+    --brand-tint: #e7f4f2;
+    --text-strong: #172033;
+    --text-primary: #344054;
+    --text-secondary: #667085;
+    --text-tertiary: #7a8597;
+    --text-disabled: #98a2b3;
+    --line: #d8dee8;
+    --brand: #0f766e;
+    --brand-ink: #084c48;
+    --info: #1d4ed8;
+    --warn: #b45309;
+    --danger: #b42318;
+    --ok: #15803d;
+    --shadow-card: 0 1px 3px rgb(15 23 42 / 4%);
+    --shadow-card-hover: 0 2px 4px rgb(15 23 42 / 8%);
+    --shadow-button: 0 1px 3px rgb(15 23 42 / 6%);
+    --shadow-modal: 0 8px 24px rgb(15 23 42 / 12%);
+    --duration-fast: 120ms;
+    --duration-normal: 200ms;
+    --ease-default: cubic-bezier(0.2, 0, 0, 1);
+
+    /* --- shadcn 토큰을 위 semantic 값에 매핑한다(단일 accent = brand). --- */
+    --background: var(--surface-page);
+    --foreground: var(--text-strong);
+    --card: var(--surface-card);
+    --card-foreground: var(--text-strong);
+    --popover: var(--surface-card);
+    --popover-foreground: var(--text-strong);
+    --primary: var(--brand);
+    --primary-foreground: #ffffff;
+    --secondary: var(--surface-subtle);
+    --secondary-foreground: var(--text-strong);
+    --muted: var(--surface-subtle);
+    --muted-foreground: var(--text-secondary);
+    --accent: var(--surface-muted);
+    --accent-foreground: var(--text-strong);
+    --destructive: var(--danger);
+    --destructive-foreground: #ffffff;
+    --border: var(--line);
+    --input: var(--line);
+    --ring: var(--brand);
+    --chart-1: var(--brand);
+    --chart-2: var(--info);
+    --chart-3: var(--ok);
+    --chart-4: var(--warn);
+    --chart-5: var(--danger);
+    /* DESIGN-RULES: 카드 반경 8px. shadcn rounded-lg = var(--radius). */
+    --radius: 0.5rem;
+    --sidebar: var(--surface-subtle);
+    --sidebar-foreground: var(--text-strong);
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: var(--surface-muted);
+    --sidebar-accent-foreground: var(--text-strong);
+    --sidebar-border: var(--line);
+    --sidebar-ring: var(--brand);
   }
   .dark {
     --background: oklch(0.145 0 0);
@@ -85,5 +119,17 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* DESIGN-RULES 9: prefers-reduced-motion에서 animation/transition을 사실상 비활성화한다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
