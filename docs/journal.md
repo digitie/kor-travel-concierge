@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-20: T-084 완료 — `kor-travel-geo` UI 지침 채택 + Tailwind v4 전환 (ADR-29)
+
+- **배경**: 사용자 지시로 형제 프로젝트 `kor-travel-geo`의 UI 지침(`kor-travel-geo-ui/docs/DESIGN-RULES.md`, StyleSeed 기반)을 concierge 프런트에 **그대로** 따르고, 빌드 엔진을 **Tailwind v4**로 전환했다. 기존 프런트는 stock shadcn `base-nova` neutral(무채색) 테마였다.
+- **디자인 시스템 이식**:
+  - `src/app/globals.css` `:root`에 geo semantic 토큰을 단일 출처로 추가(단일 accent `--brand` teal `#0f766e`, 5단계 `--text-*`, `--surface-*`, status, `--shadow-*` 4/6/8/12%, `--duration-*`/`--ease-default`). shadcn 토큰(`--background/--primary/--border/--ring`…)을 brand 팔레트에 매핑 → 기존 컴포넌트가 자동으로 brand+light 채택. `--radius: 0.5rem`(8px 카드). `prefers-reduced-motion` 비활성 규칙 추가.
+  - `tailwind.config.ts`에 `text.*/surface.*/brand/info/success/warn/danger` + `shadow-card|button|modal`, `duration-fast|normal`, `ease-default` 토큰 추가.
+  - primitive 정렬: `button/input/label/badge/select`에 44px touch(`min-h-11`), 8px radius, 약한 shadow, named motion, label은 12px·`tracking-[0.05em]`·uppercase, brand focus ring.
+  - 하드코딩 색 치환: progress `emerald`→`success`, 로그 tone `emerald/amber`→`success/warn`, settings toast `green`→`success`, VWorldMap marker(`#111827/#2563eb`)→선택=brand·비선택=secondary, 색 없는 중립 그림자, fallback bg→surface-muted.
+  - `frontend/docs/DESIGN-RULES.md`를 정본으로 추가.
+- **Tailwind v3.4 → v4 전환**: `@tailwindcss/postcss` + `@import "tailwindcss"`, 기존 JS config는 `@config "../../tailwind.config.ts"`로 유지하되 v3 전용 `cssVariableColor`(opacity callback)을 제거(v4 native opacity). `tailwindcss-animate` → `tw-animate-css`(`@import`). `@custom-variant dark (&:is(.dark *))`로 light 전용. `autoprefixer`는 postcss config에서 제거(v4 내장).
+- **검증**: `npm run lint`/`type-check`/`build`(Next 16 + Turbopack, v4) 모두 통과. `next start` + Playwright로 `/settings`(brand 저장 버튼·uppercase label·44px select)와 `/`(brand 버튼·uppercase 섹션 라벨·8px 카드·brand 선택 카드·`done` success 진행률·KPI metric)을 실제 렌더로 시각 확인. v3 빌드도 사전 통과(엔진만 v4로 교체).
+- **참고**: geo-ui 자체는 아직 v3. `hono` advisory는 shadcn CLI(devDep) 전이 의존으로 본 작업과 무관(런타임 미배포).
+
 ## 2026-06-20: T-083 완료 — 프로덕션 공개 도메인 구성(리버스 프록시 + TLS), 도메인 비밀 유지 (ADR-28)
 
 - **배경**: 외부 노출 prod에서 5개 공개 도메인(Web, REST API, MCP, RustFS S3 API, RustFS 콘솔)으로 동작해야 한다. 단, 실제 도메인은 외부에 노출하지 않고(git 커밋 금지) gitignore된 `.env`(또는 `.env.production`)에만 둔다.

@@ -993,3 +993,19 @@ T-012 이후 `npm audit`은 Next 14 / `eslint-config-next` 계열 transitive 취
 - **결과 (긍정)**: 앱 코드 변경 없이 환경변수 + 프록시 설정만으로 prod 도메인 운영이 가능하다. 실제 도메인이 git/공개 산출물에 남지 않는다. 로컬/E2E는 기존 무인증·localhost 동작을 그대로 유지한다.
 - **결과 (부정)**: 프록시(TLS, 동적 DNS A 레코드, 80/443 개방)는 repo 밖 인프라 책임이다. 실제 도메인이 gitignore된 두 곳(`.env`와, 필요 시 Caddy envfile)에 나뉘어 들어갈 수 있다. RustFS `s3`/`s3-api` 역할 매핑을 반대로 두면 미디어 링크/콘솔 링크가 깨진다.
 - **관련**: ADR-24(인증), ADR-27(포트), ADR-15(RustFS), ADR-18/ADR-23(Compose/실행 모델)을 prod 노출 관점에서 보강한다.
+
+---
+
+## ADR-29: `kor-travel-geo` UI 지침(StyleSeed) 채택과 Tailwind v4 전환
+
+- **상태**: 채택 (2026-06-20)
+- **맥락**: 프런트엔드는 stock shadcn `base-nova` neutral(oklch 무채색) 테마였고, accent·semantic 토큰·운영 콘솔 규칙이 없었다. 사용자가 형제 프로젝트 `kor-travel-geo`(`kor-travel-geo-ui/docs/DESIGN-RULES.md`)의 UI 지침을 **그대로 따르고**, 빌드 엔진을 **Tailwind v4**로 바꾸도록 요청했다. 지침의 원본은 StyleSeed(`styleseed-demo.vercel.app/llms.txt`) 해석본으로 단일 accent, 의미 토큰, 카드 구조, 낮은 그림자, 일관된 모션을 강조한다.
+- **결정**:
+  - **디자인 시스템 이식**: geo-ui의 semantic 토큰을 `src/app/globals.css` `:root`에 단일 출처로 둔다 — 단일 accent `--brand`(teal `#0f766e`), 5단계 `--text-*`, `--surface-*`, status(`--ok/--warn/--danger/--info`), `--shadow-*`(4/6/8/12%), `--duration-*`/`--ease-default`. shadcn 토큰(`--background/--primary/--border/--ring` 등)을 이 brand 팔레트에 매핑해 기존 컴포넌트가 자동으로 brand+light를 채택한다. `tailwind.config.ts`에 `text.*/surface.*/brand/info/success/warn/danger`와 `shadow-card|button|modal`, `duration-fast|normal`, `ease-default` 토큰을 추가한다.
+  - **primitive 규칙 정렬**: `button/input/label/badge/select`를 DESIGN-RULES에 맞춘다 — 44px touch(`min-h-11`), 8px radius(`--radius: 0.5rem`), 약한 shadow, named motion 토큰, label은 12px·`tracking-[0.05em]`·uppercase, focus ring은 brand.
+  - **하드코딩 색 제거**: 페이지/컴포넌트의 잔여 hex/raw color(`emerald/amber/green`, map marker `#111827/#2563eb`)를 `success/warn/brand` 등 semantic으로 치환한다. 선택 marker는 단일 accent(brand), 그림자는 색 없는 중립으로 둔다.
+  - **Tailwind v3.4 → v4 전환**: PostCSS는 `@tailwindcss/postcss`, CSS는 `@import "tailwindcss"`. 기존 JS config는 `@config "../../tailwind.config.ts"`로 유지하되, v3 전용 `cssVariableColor`(opacity callback) helper를 제거한다(v4는 `var()` 색상에 opacity modifier를 color-mix로 native 처리). animation은 `tailwindcss-animate` 대신 `tw-animate-css`(`@import`)를 쓴다. `@custom-variant dark (&:is(.dark *))`로 `dark:`를 클래스 기준으로 좁혀 OS dark-mode와 무관하게 **light 전용**으로 둔다(geo는 light 운영 콘솔).
+  - **정본 문서**: `frontend/docs/DESIGN-RULES.md`를 concierge 프런트의 디자인 규칙 정본으로 추가한다.
+- **결과 (긍정)**: geo와 동일한 디자인 언어(brand teal·light surface·uppercase label·dot+text status·낮은 그림자)를 단일 토큰 출처로 적용했다. `npm run build`/`lint`/`type-check` 통과, 설정·메인 화면을 실제 렌더로 시각 검증했다. 빌드 엔진은 v4로 현대화했다.
+- **결과 (부정)**: geo-ui 자체는 아직 Tailwind v3(`@tailwind` directives)이라 엔진 버전은 다르다(클래스 규칙·토큰은 동일하게 맞춤). dark 테마는 비활성(light 전용). shadcn CLI(devDep) 전이 의존 `hono` advisory는 런타임 미배포·기존 항목으로 본 작업과 무관하다.
+- **관련**: ADR-14(프런트 스택: shadcn/ui·Tailwind·RHF·Zod·TanStack)를 디자인 시스템·Tailwind v4 관점에서 보강한다.

@@ -65,3 +65,6 @@ Thumbs.db
 # Local tooling / scratch directory
 .local/
 .claude/settings.local.json
+
+# Playwright MCP screenshot/snapshot artifacts
+.playwright-mcp/

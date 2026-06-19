@@ -500,10 +500,10 @@ function formatLogTime(value: string) {
 
 function logToneClass(level: string) {
   if (level === "success") {
-    return "text-emerald-700";
+    return "text-success";
   }
   if (level === "warning") {
-    return "text-amber-700";
+    return "text-warn";
   }
   if (level === "error") {
     return "text-destructive";

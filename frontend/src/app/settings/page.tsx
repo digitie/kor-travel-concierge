@@ -152,7 +152,7 @@ export default function SettingsPage() {
         </p>
       ) : null}
       {saved ? (
-        <div id="success-toast" role="status" className="text-sm text-green-600">
+        <div id="success-toast" role="status" className="text-sm text-success">
           설정이 저장되었습니다.
         </div>
       ) : null}
