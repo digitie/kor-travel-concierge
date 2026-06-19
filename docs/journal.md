@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-06-20: T-083 완료 — 프로덕션 공개 도메인 구성(리버스 프록시 + TLS), 도메인 비밀 유지 (ADR-28)
+
+- **배경**: 외부 노출 prod에서 5개 공개 도메인(Web, REST API, MCP, RustFS S3 API, RustFS 콘솔)으로 동작해야 한다. 단, 실제 도메인은 외부에 노출하지 않고(git 커밋 금지) gitignore된 `.env`(또는 `.env.production`)에만 둔다.
+- **핵심 발견**: 앱은 이미 CORS/인증/RustFS 공개 URL/BFF origin/프록시 헤더가 전부 환경변수 기반이라 **백엔드/프론트 코드 변경이 없다**. prod 도메인 인지는 env + 리버스 프록시로만 처리한다. uvicorn은 `FORWARDED_ALLOW_IPS` env를 직접 읽으므로 CLI 변경도 불필요.
+- **수정**:
+  - `docker-compose.yml`: 하드코딩돼 있던 `RUSTFS_CONSOLE_URL`(127.0.0.1)을 `${RUSTFS_CONSOLE_URL:-...}`로 env-driven 전환, `NEXT_PUBLIC_API_BASE_URL`도 env-driven, `FORWARDED_ALLOW_IPS`(기본 `127.0.0.1`) 전달 추가. 로컬 기본 동작 불변.
+  - `.env.example`: "프로덕션(외부 노출) 배포 예시" 섹션 추가(APP_ENV/API_KEYS/BACKEND_API_KEY/CORS/RustFS 공개 URL/FORWARDED_ALLOW_IPS/Caddy 도메인). **placeholder만**, 실제 도메인 없음.
+  - `.env.production`(gitignore): 실제 도메인 + `APP_ENV=production` + 생성한 강한 `API_KEYS`/`BACKEND_API_KEY` + `s3-api`=공개 객체/`s3`=콘솔 매핑 + `MCP_WRITE_ENABLED=false`로 즉시 배포 가능한 prod env.
+  - `deploy/Caddyfile`(커밋): Caddy `{$ENV}` 치환 기반 자동 TLS 프록시 샘플. 5개 도메인→고정 포트, MCP는 `flush_interval -1`(SSE off)·`basic_auth` **기본 ON**(미설정 시 커밋된 잠금 기본 해시로 fail-safe). **실제 도메인 없음**(`--envfile`로 `.env`에서 주입).
+  - 문서: `docs/dev-environment.md` §11 prod + dev/prod 구분, ADR-28, `docs/tasks.md`, `CLAUDE.md` 현황/ADR 인덱스 갱신.
+- **dev/prod 구분(사용자 지시 반영)**: prod는 `kor-travel-docker-manager`가 공식 도메인으로 올리고, dev는 여기에서 `127.0.0.1` + 같은 고정 12xxx 포트로 띄운다. 별도 지시가 없으면 dev를 의미한다.
+  - 개발 스크립트 개선: `scripts/stop-fixed-ports.sh`를 "점유 시 새 포트로 바꾸지 않고 강제 종료 여부를 묻고, 거부하면 코드 3으로 중지(비대화형은 `FORCE_KILL_PORTS=1` 없으면 안전 중지)"로 재작성. `scripts/start-live.sh`는 거부 시 깔끔히 중지 + 기동 후 `127.0.0.1`/12xxx dev 주소 배너 출력. `verify-docker-compose.sh` health 체크/`NEXT_PUBLIC_API_BASE_URL`을 `127.0.0.1`로 통일.
+- **RustFS 매핑 결정(사용자 확인)**: `s3-api.<base>`=S3 API/공개 객체 URL(`RUSTFS_PUBLIC_BASE_URL`), `s3.<base>`=콘솔(`RUSTFS_CONSOLE_URL`). 백엔드 boto3 연결은 내부 `host.docker.internal:12101` 유지.
+- **자체 검증 워크플로(3 렌즈→반박 검증, 8 에이전트)로 발견·수정**:
+  1. (medium) Caddyfile MCP `basic_auth`가 주석이라 MCP 읽기 도구가 익명 공개됨 → basic_auth 기본 ON + 잠금 기본 해시(fail-safe) + `.env(.example/.production)`에 `MCP_BASIC_AUTH_USER/HASH` 추가.
+  2. (medium) 문서의 `docker compose --env-file .env.production` 대안이 `env_file: .env` 하드코딩 탓에 비밀 키를 누락 → compose `env_file` 경로를 `${APP_ENV_FILE:-.env}`로 override 가능하게 하고 문서를 `cp` 또는 `APP_ENV_FILE=... --env-file ...`로 정정.
+  3. (low) Caddyfile `MCP_BASIC_AUTH_*` 변수 출처 미정의 → 두 env 파일에 문서화.
+- **검증**: `docker compose config`(기본·prod env)로 substitution 유효성 확인, 커밋 산출물에 실제 도메인 미포함 grep 확인, bcrypt 해시 검증, bash 구문(`bash -n`) 확인. 실제 도메인 라이브 TLS 검증은 인프라(동적 DNS A 레코드·80/443 개방) 준비 후 수행한다.
+
 ## 2026-06-15: T-082 완료 — feature export `source_entity_id` 불변성 계약 테스트 (이슈 #84)
 
 - **배경**: kor-travel-map concierge loader 검증 §5의 producer-side 권장(P-01 후속). consumer의 inactivate 매칭이 `source_record.source_entity_id`로 조인하므로, 한 후보의 upsert·reject/tombstone export가 동일 id를 가져야 reject/tombstone가 기적재 feature를 찾는다.

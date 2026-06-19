@@ -1,0 +1,55 @@
+# ==============================================================================
+# Kor Travel Concierge — 프로덕션 리버스 프록시 (Caddy, 자동 TLS)
+# ==============================================================================
+# 이 파일에는 실제 공개 도메인이 들어 있지 않다. 도메인/이메일은 gitignore된
+# .env(.production)에서 환경변수로 주입한다(외부 노출 방지).
+#
+# 실행 예:
+#   caddy run --config deploy/Caddyfile --envfile .env.production
+#   # 또는 도메인 5개 + CADDY_TLS_EMAIL을 export 한 뒤: caddy run --config deploy/Caddyfile
+#
+# 전제: 5개 공개 도메인의 A/AAAA 레코드(동적 DNS)가 이 호스트를 가리키고,
+# 80/443 포트가 외부에 열려 있어야 자동 TLS(Let's Encrypt)가 동작한다. 앱은 기존
+# 고정 host port(12601/12602/12605, RustFS 12101/12105) 그대로 띄운다.
+# `*.localhost` 기본값은 Caddy 내부 CA로 로컬에서 프록시 모양을 검증할 때 쓴다.
+
+{
+	email {$CADDY_TLS_EMAIL:admin@localhost}
+}
+
+# --- Web (Next.js + same-origin BFF) ---
+{$CONCIERGE_WEB_DOMAIN:web.localhost} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:12605
+}
+
+# --- REST API (/api/v1). X-API-Key 인증은 백엔드 앱이 처리한다(APP_ENV=production). ---
+{$CONCIERGE_API_DOMAIN:api.localhost} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:12601
+}
+
+# --- MCP (streamable-http, 경로 /mcp). SSE/스트리밍 버퍼링을 끈다. ---
+# MCP는 앱 자체 인증이 없으므로 프록시에서 basic_auth로 보호한다(기본 ON, 익명 노출 방지).
+# 운영 자격증명: `caddy hash-password`로 만든 bcrypt 해시를 MCP_BASIC_AUTH_HASH로 주입한다
+# (.env.production 참고). 해시를 주입하지 않으면 아래 "잠금 기본 해시"가 적용되어 Caddy는
+# 정상 기동하되 아무도 인증할 수 없다(평문 비밀번호 미상). 즉 기본값은 fail-safe(잠김)다.
+# 추가로 .env에 MCP_WRITE_ENABLED=false를 유지해 쓰기 도구를 끈다.
+{$CONCIERGE_MCP_DOMAIN:mcp.localhost} {
+	basic_auth {
+		{$MCP_BASIC_AUTH_USER:mcp} {$MCP_BASIC_AUTH_HASH:$2b$12$Y4ch6oLpIRg/Ns94xQ7bdOzhw1iJaMesTS3xmNydeILudIh04SLOm}
+	}
+	reverse_proxy 127.0.0.1:12602 {
+		flush_interval -1
+	}
+}
+
+# --- RustFS S3 API / 공개 객체 (미디어 다운로드) ---
+{$CONCIERGE_S3_API_DOMAIN:s3-api.localhost} {
+	reverse_proxy 127.0.0.1:12101
+}
+
+# --- RustFS 관리 콘솔 ---
+{$CONCIERGE_S3_CONSOLE_DOMAIN:s3.localhost} {
+	reverse_proxy 127.0.0.1:12105
+}
