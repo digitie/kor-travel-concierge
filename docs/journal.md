@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-20: T-091 완료 — whisper 폴백 활성화 재실행 + VWorld 지도 키 반영
+
+- **whisper 폴백 활성화**: T-090에서 `youtube-transcript-api` 차단으로 채널·키워드가 0건이던 문제를, `.env`/`.env.production`에 `TRANSCRIPT_WHISPER_ENABLED=true`·`WHISPER_MODEL_SIZE=base`를 더해 faster-whisper 오디오 전사 폴백으로 해결. `.env.example`에 기본 false로 문서화. 코드/이미지 변경 없음(이미 faster-whisper 의존·whisper 경로 존재), env+재시작만으로 적용.
+- **재실행 결과**: 깨끗한 DB로 UI E2E(10영상×3소스) 재실행. 자막 확보 영상 3/27 → **11/27**, 지오코딩 장소 **13개(전부 지오코딩)**. **전과 0건이던 키워드(제주 7개)·채널(6개) 소스가 whisper 전사로 장소 추출 성공**. 플레이리스트는 이번 배치에서 captions+오디오 모두 rate-limit으로 0건(가용성 변동성). `docs/e2e-report-2026-06-20-ui-whisper.md`.
+- **VWorld 지도 키 반영**: UI 컨테이너가 `NEXT_PUBLIC_VWORLD_SERVICE_KEY`를 docker-manager의 `NEXT_PUBLIC_VWORLD_API_KEY`에서 읽는데 미설정 → 지도 "키 없음". docker-manager `.env`에 키 추가 후 UI 컨테이너만 재시작해 지도 렌더링 정상화(백엔드 지오코딩 키는 정상이었음, 운영 api/scheduler 무중단).
+- **정리**: 실행 후 concierge를 운영 dev DB로 복원, e2e DB 삭제.
+
 ## 2026-06-20: T-090 완료 — UI 레벨 수집 E2E(10영상×3소스, 깨끗한 DB)
 
 - **배경**: PR #91 머지 후, 5영상이 아니라 10영상으로 **웹 UI를 브라우저로 직접 조작**하는 UI 레벨 E2E를 재실행 요청. dev DB는 3소스가 이미 수집돼 증분 harvest가 0건이라, 사용자 선택에 따라 깨끗한 DB(`kor_travel_concierge_e2e`)로 실행.
