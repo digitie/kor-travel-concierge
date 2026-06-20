@@ -10,10 +10,13 @@ from typing import Any
 
 from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from ktc.models.base import Base, TimestampMixin
 from ktc.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
+
+# Gemini 타임스탬프 컬럼 길이(16자 제한 truncation 버그 대응, 라이브 E2E 발견).
+TIMESTAMP_FIELD_LEN = 64
 
 
 class VideoPlaceMapping(TimestampMixin, Base):
@@ -55,8 +58,12 @@ class VideoPlaceMapping(TimestampMixin, Base):
     )
     ai_summary: Mapped[str] = mapped_column(Text, nullable=False)
     speaker_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    timestamp_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    timestamp_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    timestamp_start: Mapped[str | None] = mapped_column(
+        String(TIMESTAMP_FIELD_LEN), nullable=True
+    )
+    timestamp_end: Mapped[str | None] = mapped_column(
+        String(TIMESTAMP_FIELD_LEN), nullable=True
+    )
     provider_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
@@ -71,3 +78,10 @@ class VideoPlaceMapping(TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+
+    @validates("timestamp_start", "timestamp_end")
+    def _clip_timestamp(self, _key: str, value: str | None) -> str | None:
+        """비정상적으로 긴 Gemini 타임스탬프를 컬럼 길이로 방어적 클립한다."""
+        if value is not None and len(value) > TIMESTAMP_FIELD_LEN:
+            return value[:TIMESTAMP_FIELD_LEN]
+        return value

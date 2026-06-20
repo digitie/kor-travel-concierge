@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-20: T-089 완료 — POI 타임스탬프 VARCHAR(16) truncation 버그 수정
+
+- **배경**: T-088 라이브 E2E에서 키워드 harvest가 `extracted_place_candidates.timestamp_start/end`(및 `video_place_mappings` 동일 컬럼) `varchar(16)`에 Gemini의 16자 초과 타임스탬프(예: "00:22:00 - 00:35:00")를 적재하다 `StringDataRightTruncationError`로 작업 전체가 롤백·실패했다.
+- **수정**: 두 모델의 `timestamp_start/end`를 `String(64)`로 넓히고, `@validates`로 64자 초과 값을 방어적 클립한다(provider 무관 모든 적재 경로 보호). Alembic migration `20260620_0007`로 실제 DB 컬럼도 `VARCHAR(64)`로 확장. raw/보정 분리(ADR-16) 불변.
+- **검증**: 클립 회귀 테스트 4종(`test_models_timestamp_clip.py`, DB 불필요) + PostGIS 테스트 DB로 models_spatial/poi/place_service 통과, compileall. fresh DB는 `init_db` create_all로 `VARCHAR(64)` 스키마 생성됨을 확인.
+
 ## 2026-06-20: T-088 완료 — 라이브 수집 E2E(3소스×5영상) 실행 및 리포트
 
 - **배경**: 사용자 요청으로 채널 `@빵이네tv`, 플레이리스트 `PLXQvmY7fb6woRMSD8cgk10UIJRt9nmuXl`, 키워드 `제주도 가족여행` 각 5개 영상에 대해 실제 YouTube·Gemini·VWorld API를 호출하는 라이브 harvest E2E를 실행했다.
