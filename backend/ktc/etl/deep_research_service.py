@@ -16,8 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ktc.core.config import get_settings
-from ktc.etl.gemini_client import GeminiRequestError, post_generate_content
+from ktc.etl import llm_client
 from ktc.models import TravelPlace
 from ktc.services import settings_service
 
@@ -105,59 +104,38 @@ def parse_deep_research(payload: str) -> DeepResearchResult:
     return result
 
 
+def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
+    """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 Deep Research `LlmCallable`을 만든다."""
+
+    def call(prompt: str) -> str:
+        try:
+            return llm_client.complete_json(
+                runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
+            )
+        except llm_client.LlmRequestError as exc:
+            raise DeepResearchError(
+                "Deep Research 호출 실패"
+                f"(status={exc.status_code}, model={runtime.model})"
+            ) from exc
+
+    return call
+
+
 def make_gemini_llm(
     *,
     api_key: str | None = None,
     model: str | None = None,
     timeout_seconds: float = 60.0,
 ) -> LlmCallable:
-    """Gemini REST API를 호출하는 production `LlmCallable`을 만든다."""
-    settings = get_settings()
-    resolved_key = api_key or settings.GEMINI_API_KEY
-    resolved_model = model or settings.GEMINI_ENGINE_VERSION
-    if not resolved_key:
+    """`.env`/인자 기반 production `LlmCallable` (BACK-COMPAT shim → make_llm)."""
+    from dataclasses import replace
+
+    runtime = llm_client.LlmRuntime.from_settings(model=model)
+    if api_key:
+        runtime = replace(runtime, gemini_api_key=api_key)
+    if not (runtime.gemini_api_key or runtime.is_deepseek):
         raise ValueError("GEMINI_API_KEY가 필요하다")
-
-    def call(prompt: str) -> str:
-        try:
-            data = post_generate_content(
-                api_key=resolved_key,
-                model=resolved_model,
-                body={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseSchema": RESPONSE_JSON_SCHEMA,
-                    },
-                },
-                timeout_seconds=timeout_seconds,
-            )
-        except GeminiRequestError as exc:
-            raise DeepResearchError(
-                "Gemini Deep Research 호출 실패"
-                f"(status={exc.status_code}, model={resolved_model})"
-            ) from exc
-        return _extract_gemini_text(data)
-
-    return call
-
-
-def _extract_gemini_text(payload: dict[str, Any]) -> str:
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        raise DeepResearchError("Gemini 응답에 candidates가 없다")
-    content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
-    parts = content.get("parts") if isinstance(content, dict) else None
-    if not isinstance(parts, list):
-        raise DeepResearchError("Gemini 응답에 content.parts가 없다")
-    texts = [
-        part.get("text")
-        for part in parts
-        if isinstance(part, dict) and part.get("text")
-    ]
-    if not texts:
-        raise DeepResearchError("Gemini 응답 text가 비어 있다")
-    return "\n".join(str(text) for text in texts)
+    return make_llm(runtime)
 
 
 async def research_place(
@@ -175,8 +153,8 @@ async def research_place(
         f"{place.name} Deep Research 프롬프트를 구성했습니다.",
         0.25,
     )
-    gemini_model = await settings_service.get_gemini_engine_version(session)
-    resolved_llm = llm or make_gemini_llm(model=gemini_model)
+    runtime = await settings_service.get_llm_runtime(session)
+    resolved_llm = llm or make_llm(runtime)
     request_prompt = build_prompt(place, prompt=prompt, max_sources=max_sources)
 
     await _report(

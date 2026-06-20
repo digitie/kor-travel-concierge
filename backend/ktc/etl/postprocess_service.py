@@ -74,8 +74,9 @@ async def process_harvest_videos(
         await _report(status_reporter, "장소 추출 대상 신규 동영상이 없습니다.", None)
         return summary
 
-    gemini_model = await settings_service.get_gemini_engine_version(session)
-    resolved_llm = llm or poi_extraction.make_gemini_llm(model=gemini_model)
+    runtime = await settings_service.get_llm_runtime(session)
+    gemini_model = runtime.model
+    resolved_llm = llm or poi_extraction.make_llm(runtime)
     resolved_transcript_fetcher = transcript_fetcher or _default_transcript_fetcher
     async with httpx.AsyncClient(timeout=30.0) as http_client:
         owned_geocode_context = await _make_geocode_context(

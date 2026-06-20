@@ -18,7 +18,7 @@ async def test_settings_upsert_and_get(session):
 
 
 async def test_settings_rejects_unknown_gemini_engine(session):
-    with pytest.raises(ValueError, match="지원하지 않는 Gemini 엔진 버전"):
+    with pytest.raises(ValueError, match="지원하지 않는 AI 엔진"):
         await settings_service.set_setting(
             session,
             "gemini_engine_version",

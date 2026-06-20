@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-06-20: T-085 완료 — AI 엔진 다중 provider + 사전 프롬프트 + JSON + 느린 재시도 (ADR-30)
+
+- **배경**: 그동안 ETL·Deep Research의 LLM 호출이 Gemini 단일 provider(ADR-3)에 묶여 있었다. 사용자가 (1) DeepSeek V4를 대안 provider로 추가하고 웹 설정에서 엔진을 전환, (2) 모든 AI 프롬프트 앞에 편집 가능한 공통 지침(사전 프롬프트) 적용, (3) 두 provider 모두 안정적 JSON 출력, (4) 외부 LLM 429/일시 오류에 사람처럼 충분히 느리게 재시도하도록 요청했다.
+- **수정**:
+  - **DeepSeek provider 디스패치**: `ktc/etl/deepseek_client.py`(OpenAI 호환 chat completion + JSON mode, `base_url=https://api.deepseek.com`), `ktc/etl/llm_client.py`(provider 디스패치 `complete_json` + `LlmRuntime` + 사전 프롬프트 prepend) 추가. `config.py`에 `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`, `DEEPSEEK_ENGINE_OPTIONS`, 통합 `LLM_ENGINE_OPTIONS`, `is_deepseek_model` 추가. 모델은 `deepseek-v4-flash`/`deepseek-v4-pro`.
+  - **웹 설정**: `/settings`에서 엔진을 Gemini/DeepSeek로 전환하고 DeepSeek API 키 저장(평문 미노출, 감사 로그 마스킹).
+  - **사전 프롬프트**: 모든 AI 프롬프트 앞에 붙는 사용자 편집 지침을 런타임 설정 `ai_preprompt`(`system_settings`)로 두고 기본 예제 `AI_PREPROMPT_DEFAULT` 제공. 기본값은 "코드펜스 없이 JSON만" 강조.
+  - **JSON 출력**: Gemini는 기존 `responseSchema`, DeepSeek는 `response_format=json_object` + 스키마를 프롬프트에 첨부.
+  - **느린 재시도**: `LLM_RETRY_*` env(base 15s, max 90s, jitter 0.3, 4회)와 `gemini_client.human_like_retry_delay`를 Gemini·DeepSeek 공용으로 추가. 기존 2/4/8초 백오프를 충분히 늦은 사람 유사 지연으로 교체.
+  - **키 비밀 유지**: `.env`/`.env.production`(gitignore)에 `DEEPSEEK_API_KEY=sk-...`, `.env.example`에는 placeholder만. git·감사 로그에 평문 미노출.
+- **검증**: provider 디스패치·JSON mode·사전 프롬프트 prepend·재시도 지연 동작을 단위 테스트와 설정 검증으로 확인. DeepSeek 실제 키 라이브 호출은 키·과금을 쓰지 않기 위해 fake LLM로 상태 전이만 검증.
+
+## 2026-06-20: T-086 완료 — 한국어 에러 복구 UI 이식 (kor-travel-geo PR #391)
+
+- **배경**: Next App Router 기본 오류 화면은 영어·정보 부족이라 운영 콘솔 사용자가 복구 행동을 고르기 어려웠다. 형제 프로젝트 `kor-travel-geo` PR #391의 에러 복구 UI를 동등하게 이식하기로 했다.
+- **수정**: `frontend/src/app/error.tsx`, `global-error.tsx`, `components/layout/AppErrorPanel.tsx`, `lib/error-recovery.ts`를 추가했다. chunk/RSC/network 런타임 오류는 같은 pathname에서 1회만 hard reload하고(루프 방지), 반복 실패 시 재시도/이전 화면/오류 정보를 한국어로 제공한다. Tailwind + shadcn으로 적용해 기존 디자인 토큰(ADR-29)과 일관되게 맞췄다.
+- **검증**: lint/type-check/build 통과, 오류 유발 시 1회 reload·반복 실패 패널 표시 동작을 확인.
+
 ## 2026-06-20: T-084 완료 — `kor-travel-geo` UI 지침 채택 + Tailwind v4 전환 (ADR-29)
 
 - **배경**: 사용자 지시로 형제 프로젝트 `kor-travel-geo`의 UI 지침(`kor-travel-geo-ui/docs/DESIGN-RULES.md`, StyleSeed 기반)을 concierge 프런트에 **그대로** 따르고, 빌드 엔진을 **Tailwind v4**로 전환했다. 기존 프런트는 stock shadcn `base-nova` neutral(무채색) 테마였다.

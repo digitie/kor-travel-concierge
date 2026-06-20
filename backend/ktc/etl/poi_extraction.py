@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from ktc.core.config import get_settings
-from ktc.etl.gemini_client import GeminiRequestError, post_generate_content
+from ktc.etl import llm_client
 
 # llm 시그니처: (prompt) -> JSON 문자열
 LlmCallable = Callable[[str], str]
@@ -117,40 +117,35 @@ def extract_pois(
     raise POIExtractionError(f"POI 추출 파싱 실패: {last_error}")
 
 
+def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
+    """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 POI 추출 `LlmCallable`을 만든다."""
+
+    def call(prompt: str) -> str:
+        try:
+            return llm_client.complete_json(
+                runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
+            )
+        except llm_client.LlmRequestError as exc:
+            raise POIExtractionError(
+                f"POI 추출 호출 실패(status={exc.status_code}, model={runtime.model})"
+            ) from exc
+
+    return call
+
+
 def make_gemini_llm(
     *,
     api_key: str | None = None,
     model: str | None = None,
     timeout_seconds: float = 60.0,
 ) -> LlmCallable:
-    """Gemini REST API를 호출하는 production `LlmCallable`을 만든다."""
-    settings = get_settings()
-    resolved_key = api_key or settings.GEMINI_API_KEY
-    resolved_model = model or settings.GEMINI_ENGINE_VERSION
-    if not resolved_key:
+    """`.env`/인자 기반 production `LlmCallable` (BACK-COMPAT shim → make_llm)."""
+    runtime = llm_client.LlmRuntime.from_settings(model=model)
+    if api_key:
+        runtime = replace(runtime, gemini_api_key=api_key)
+    if not (runtime.gemini_api_key or runtime.is_deepseek):
         raise ValueError("GEMINI_API_KEY가 필요하다")
-
-    def call(prompt: str) -> str:
-        try:
-            data = post_generate_content(
-                api_key=resolved_key,
-                model=resolved_model,
-                body={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseSchema": RESPONSE_JSON_SCHEMA,
-                    },
-                },
-                timeout_seconds=timeout_seconds,
-            )
-        except GeminiRequestError as exc:
-            raise POIExtractionError(
-                f"Gemini POI 추출 호출 실패(status={exc.status_code}, model={resolved_model})"
-            ) from exc
-        return _extract_gemini_text(data)
-
-    return call
+    return make_llm(runtime)
 
 
 def _extract_gemini_text(payload: dict[str, Any]) -> str:

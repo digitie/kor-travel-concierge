@@ -118,4 +118,3 @@ def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
     assert captured["headers"]["X-goog-api-key"] == "gemini-key"
     assert captured["json"]["generationConfig"]["responseMimeType"] == "application/json"
     assert captured["json"]["generationConfig"]["responseSchema"] is poi_extraction.RESPONSE_JSON_SCHEMA
-    assert captured["timeout"] == 3

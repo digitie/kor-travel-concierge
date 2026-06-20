@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## 목표
+
+`kor-travel-concierge`는 YouTube 여행 콘텐츠에서 여행지(POI) 정보를 추출·저장하고 외부에 공급하는 서비스다.
+
+1. **수집·추출·저장**: 사용자가 지정한 키워드·플레이리스트·사용자 입력을 바탕으로 YouTube를 검색하고, 동영상·자막·동영상 정보를 확인해 여행 관련 장소 정보를 추출·저장한다. 1회 추출과 사용자가 설정한 주기의 반복 추출을 모두 지원하며, 동영상 원본도 저장한다.
+2. **AI + 외부 API 보강**: 키워드 정제, 자막 정리, 자막에서의 POI 추출은 AI agent의 도움을 받고, 외부 API(지오코딩 등)로 정보를 수정·보완한다.
+3. **외부 공급**: REST API를 통해 외부에서 저장된 여행 정보를 가져갈 수 있다.
+
 ## Think Before Coding
 
 - 요청이 모호할 때는 해석을 조용히 정하지 말 것
@@ -97,7 +105,7 @@
 1. `CLAUDE.md` — 현재 작업과 잔존 부채
 2. `SKILL.md` — 에이전트 매뉴얼 및 Linux/Docker 개발 팁
 3. `docs/architecture.md` — 전체 시스템 아키텍처 및 ETL 데이터 흐름
-4. `docs/decisions.md` — ADR-1 ~ ADR-26
+4. `docs/decisions.md` — ADR-1 ~ ADR-30 (핵심 ADR 본문 + 말미 이력·대체 요약)
 5. `docs/tasks.md` — T-NNN 백로그
 
 ## 지시 우선순위

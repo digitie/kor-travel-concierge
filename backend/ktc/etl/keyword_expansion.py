@@ -12,8 +12,7 @@ import json
 from collections.abc import Callable
 
 from ktc.core.config import get_settings
-from ktc.etl.gemini_client import post_generate_content
-from ktc.etl.poi_extraction import _extract_gemini_text
+from ktc.etl import llm_client
 from ktc.etl.ranking import SEASON_KO
 
 # generator 시그니처: (seed_keyword, season) -> list[str]
@@ -50,24 +49,14 @@ _DERIVED_KEYWORDS_SCHEMA: dict = {
 }
 
 
-def make_gemini_keyword_generator(
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    timeout_seconds: float = 30.0,
-) -> KeywordGenerator:
-    """시드+계절로 파생 검색어를 만드는 Gemini generator.
+def make_llm(runtime: llm_client.LlmRuntime) -> KeywordGenerator:
+    """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 시드+계절 파생 검색어 generator를 만든다.
 
     어떤 이유로든 실패하면(키 없음/일시 오류/파싱 실패) 결정론적 템플릿 폴백을
     반환해, keyword expansion이 harvest 전체를 막지 않게 한다.
     """
-    settings = get_settings()
-    resolved_key = api_key or settings.GEMINI_API_KEY
-    resolved_model = model or settings.GEMINI_ENGINE_VERSION
 
     def generate(seed: str, season: str) -> list[str]:
-        if not resolved_key:
-            return _fallback_generator(seed, season)
         season_ko = SEASON_KO.get(season, "")
         prompt = (
             f'여행 검색 시드 키워드 "{seed}"(계절 맥락: {season_ko})에 대해 '
@@ -76,19 +65,10 @@ def make_gemini_keyword_generator(
             "반드시 주어진 JSON Schema에 맞는 JSON만 출력하라."
         )
         try:
-            data = post_generate_content(
-                api_key=resolved_key,
-                model=resolved_model,
-                body={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseSchema": _DERIVED_KEYWORDS_SCHEMA,
-                    },
-                },
-                timeout_seconds=timeout_seconds,
+            payload = llm_client.complete_json(
+                runtime, prompt, response_schema=_DERIVED_KEYWORDS_SCHEMA
             )
-            parsed = json.loads(_extract_gemini_text(data))
+            parsed = json.loads(payload)
             keywords = parsed.get("keywords") or []
             cleaned = [str(kw).strip() for kw in keywords if str(kw).strip()]
             return cleaned or _fallback_generator(seed, season)
@@ -97,6 +77,24 @@ def make_gemini_keyword_generator(
             return _fallback_generator(seed, season)
 
     return generate
+
+
+def make_gemini_keyword_generator(
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    timeout_seconds: float = 30.0,
+) -> KeywordGenerator:
+    """`.env`/인자 기반 production generator (BACK-COMPAT shim → make_llm)."""
+    from dataclasses import replace
+
+    runtime = llm_client.LlmRuntime.from_settings(model=model)
+    if api_key:
+        runtime = replace(runtime, gemini_api_key=api_key)
+    if not (runtime.gemini_api_key or runtime.is_deepseek):
+        # 키가 없으면 Gemini 경로를 호출하지 않고 템플릿 폴백으로 안전하게 둔다.
+        return _fallback_generator
+    return make_llm(runtime)
 
 
 def default_keyword_generator() -> KeywordGenerator | None:

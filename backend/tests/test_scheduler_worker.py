@@ -386,11 +386,11 @@ async def test_run_once_executes_deep_research_default_handler(
 
     captured_model = {}
 
-    def fake_make_gemini_llm(*, model=None, **kwargs):
-        captured_model["model"] = model
+    def fake_make_llm(runtime):
+        captured_model["model"] = runtime.model
         return fake_llm
 
-    monkeypatch.setattr(worker.deep_research_service, "make_gemini_llm", fake_make_gemini_llm)
+    monkeypatch.setattr(worker.deep_research_service, "make_llm", fake_make_llm)
     place = TravelPlace(
         name="감천문화마을",
         description="부산 사하구의 골목 여행지",
