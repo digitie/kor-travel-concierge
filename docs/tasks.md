@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [x] **T-093**: prod 배포 + Next 프로덕션 빌드 전환 — T-092(PR #96)를 별도 LAN prod 호스트(SSH)에 소스 rsync(.env 제외)+UI 재빌드로 배포. prod UI가 Next dev 모드(`npm run dev`)라 원격 접속 시 hydration이 안 돼 인터랙티브 전체가 멈춰 있던 것을 발견(dev=옵션3, prod=0), prod 전용 `docker-compose.override.yml`로 `next build`+`next start` 전환(dev는 npm run dev 유지). 실 도메인에서 select 개방·모바일 native select·VWorld 지도 렌더 검증. (2026-06-21)
 - [x] **T-092**: 모바일(삼성 인터넷) Select 미동작 수정 — Base UI Select가 터치(coarse pointer)에서 동작 안 하던 문제를, 공유 `Select`가 coarse pointer에서 OS 네이티브 `<select>`로 폴백하도록 수정(데스크톱은 Base UI 유지, 호출부 무변경 자동 적용). lint/type-check/build 통과, Playwright 터치 컨텍스트로 native 렌더·선택 연동 검증. (2026-06-20)
 - [x] **T-091**: whisper 폴백 활성화 재실행 + VWorld 지도 키 반영 — `.env`/`.env.production`에 `TRANSCRIPT_WHISPER_ENABLED=true`·`WHISPER_MODEL_SIZE=base`(.env.example 문서화). 깨끗한 DB UI E2E 재실행: 자막 3/27→11/27, 지오코딩 장소 13(전부). 전과 0건이던 키워드(제주 7)·채널(6) 소스가 whisper 전사로 추출 성공. 플레이리스트는 이번 배치 rate-limit으로 0(가용성 변동성). VWorld: docker-manager `.env`에 `NEXT_PUBLIC_VWORLD_API_KEY` 추가+UI 재시작으로 지도 렌더링 정상화. dev DB 복원·e2e DB 삭제. `docs/e2e-report-2026-06-20-ui-whisper.md`. (2026-06-20)
 - [x] **T-090**: UI 레벨 수집 E2E(10영상×3소스, 깨끗한 DB) — Playwright로 웹 UI 직접 조작(폼→"수집 시작"→"자막 생성 시작"). T-089 수정 빌드로 재배포, 깨끗한 `kor_travel_concierge_e2e`에서 27영상 수집. UI 2단계 플로우 검증 + T-089 버그 수정 검증(키워드 정상 완료). 플레이리스트 9개 장소 전부 지오코딩. 채널·키워드는 자막 가용성(youtube-transcript-api 차단 추정, whisper 미활성) 때문에 0건 — transcript 비면 POI 스킵. 권장: description 단독 POI 또는 whisper 폴백. 실행 후 dev DB 복원·e2e DB 삭제. `docs/e2e-report-2026-06-20-ui-10videos.md`. (2026-06-20)

@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-21: T-093 완료 — prod 배포 + Next 프로덕션 빌드 전환
+
+- **배경**: T-092(모바일 Select native 폴백, PR #96)을 머지·dev 반영했으나 `concierge.digitie.mywire.org`는 "그대로"였다. 진단 결과 공개 도메인은 dev 머신이 아니라 **별도 LAN prod 호스트(SSH)**가 서빙하며, 이 세션의 재배포는 dev 인스턴스(12605)만 갱신했음을 확인(prod는 `docker save|ssh load` 이미지 운영, 소스 트리 부재).
+- **배포**: 사용자 승인 하에 prod 호스트로 concierge 소스를 rsync(`.env*` 제외로 prod 설정 보존)하고 concierge-ui 이미지를 prod에서 재빌드.
+- **핵심 발견**: prod UI가 **Next dev 모드(`npm run dev`)**로 떠 있어, 도메인/프록시 원격 접속 시 HMR WebSocket 실패와 함께 **hydration이 안 돼 모든 인터랙티브 컴포넌트가 멈춰** 있었다(같은 코드인데 dev=select 옵션 3 개방, prod=0). 즉 prod의 "Select 미동작"은 모바일 터치 버그가 아니라 prod React 비활성 상태였다.
+- **수정**: prod 전용 `docker-compose.override.yml`로 concierge-ui를 **프로덕션 빌드(`next build` + `next start`)**로 전환(dev 로컬은 override 없이 `npm run dev` 유지). 프로덕션 빌드는 HMR WS 비의존이라 프록시 뒤에서 정상 hydration.
+- **검증(실 도메인)**: 데스크톱 select 정상 개방, 모바일 터치에서 native `<select>` 렌더+선택 연동(채널→placeholder 전환), VWorld 지도 렌더(키 baked). 사용자 보고 이슈 해소.
+- **후속(권장)**: prod 전용 override 대신 docker-manager 베이스 compose에 UI 모드 env 토글을 두면 재현성↑. docker-manager `docs/prod-deployment.md`에 prod 프로덕션 모드 절차 기록.
+
 ## 2026-06-20: T-092 완료 — 모바일(삼성 인터넷) Select 미동작 수정 (native 폴백)
 
 - **증상**: 삼성 인터넷 모바일에서 수집 폼의 "대상 유형" 등 Select 드롭다운이 선택 안 됨. 원인은 Base UI(`@base-ui/react/select`) 커스텀 팝업이 모바일 터치(coarse pointer)에서 동작하지 않는 문제(데스크톱 마우스에선 정상).
