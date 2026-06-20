@@ -435,18 +435,42 @@ DEFAULT_HANDLERS: dict[str, JobHandler] = {
 }
 
 
-async def _heartbeat_loop(
+async def _run_handler_with_session(
+    session_factory: async_sessionmaker[AsyncSession],
+    run: CrawlRun,
+    handler: JobHandler,
+) -> None:
+    """handler를 자체 세션에서 실행하고 완료 상태까지 기록한다(취소 가능한 실행 단위)."""
+    async with session_factory() as session:
+        await crawl_run_service.append_status_log(
+            session, run.id, "작업 실행 환경을 준비 중입니다.", progress=0.1
+        )
+        fresh_run = await crawl_run_service.get_run(session, run.id)
+        if fresh_run is None:
+            raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
+        result = await handler(session, fresh_run)
+        await crawl_run_service.append_status_log(
+            session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
+        )
+        await crawl_run_service.mark_done(session, run.id, result=result)
+
+
+async def _heartbeat_and_cancel_watch(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: int,
     *,
     interval_seconds: float,
+    on_cancel: Callable[[], None],
 ) -> None:
-    """장시간 작업 중 heartbeat를 주기적으로 갱신한다."""
+    """heartbeat를 주기 갱신하고 `cancel_requested` 신호를 폴링해 작업을 협조적 취소한다."""
     while True:
         await asyncio.sleep(interval_seconds)
         try:
             async with session_factory() as session:
                 await crawl_run_service.heartbeat(session, run_id)
+                if await crawl_run_service.is_cancel_requested(session, run_id):
+                    on_cancel()
+                    return
         except Exception as exc:  # pragma: no cover - DB 상태에 따라 메시지가 달라진다.
             logger.warning("crawl_run heartbeat 갱신 실패(run_id=%s): %s", run_id, exc)
 
@@ -458,7 +482,12 @@ async def execute_run(
     handlers: Mapping[str, JobHandler] | None = None,
     heartbeat_interval_seconds: float | None = None,
 ) -> None:
-    """claim된 작업 1건을 실행하고 완료/실패 상태를 기록한다."""
+    """claim된 작업 1건을 실행하고 완료/실패/취소 상태를 기록한다.
+
+    handler는 별도 task로 실행하고, heartbeat watcher가 `cancel_requested`를 폴링해
+    중지 요청 시 handler task를 취소한다. 협조적 취소는 `failed`가 아니라 `cancelled`로
+    마감한다.
+    """
     handler = (handlers or DEFAULT_HANDLERS).get(run.job_type)
     if handler is None:
         async with session_factory() as session:
@@ -473,29 +502,41 @@ async def execute_run(
         if heartbeat_interval_seconds is not None
         else settings.SCHEDULER_HEARTBEAT_INTERVAL_SECONDS
     )
-    heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(session_factory, run.id, interval_seconds=heartbeat_interval)
+
+    handler_task = asyncio.create_task(
+        _run_handler_with_session(session_factory, run, handler)
+    )
+    cancel_state = {"requested": False}
+
+    def _request_handler_cancel() -> None:
+        cancel_state["requested"] = True
+        handler_task.cancel()
+
+    watch_task = asyncio.create_task(
+        _heartbeat_and_cancel_watch(
+            session_factory,
+            run.id,
+            interval_seconds=heartbeat_interval,
+            on_cancel=_request_handler_cancel,
+        )
     )
     try:
-        async with session_factory() as session:
-            await crawl_run_service.append_status_log(
-                session, run.id, "작업 실행 환경을 준비 중입니다.", progress=0.1
-            )
-            fresh_run = await crawl_run_service.get_run(session, run.id)
-            if fresh_run is None:
-                raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
-            result = await handler(session, fresh_run)
-            await crawl_run_service.append_status_log(
-                session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
-            )
-            await crawl_run_service.mark_done(session, run.id, result=result)
+        await handler_task
+    except asyncio.CancelledError:
+        if cancel_state["requested"]:
+            async with session_factory() as session:
+                await crawl_run_service.mark_cancelled(session, run.id)
+        else:
+            # 외부(스케줄러 종료 등) 취소는 handler를 정리하고 그대로 전파한다.
+            handler_task.cancel()
+            raise
     except Exception as exc:
         async with session_factory() as session:
             await crawl_run_service.mark_failed(session, run.id, error=str(exc))
     finally:
-        heartbeat_task.cancel()
+        watch_task.cancel()
         try:
-            await heartbeat_task
+            await watch_task
         except asyncio.CancelledError:
             pass
         except Exception:

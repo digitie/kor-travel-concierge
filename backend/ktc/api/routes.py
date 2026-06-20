@@ -21,8 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
 from ktc.core.security import require_api_key
-from ktc.etl import category_suggestion
-from ktc.models import MediaAsset, RunSource
+from ktc.etl import category_suggestion, source_resolve
+from ktc.etl.youtube_client import YouTubeClient
+from ktc.models import MediaAsset, RunSource, RunState
 from ktc.services import (
     audit_service,
     crawl_run_service,
@@ -30,6 +31,7 @@ from ktc.services import (
     place_export_service,
     place_service,
     settings_service,
+    source_scan_service,
 )
 
 # REST API는 버전 프리픽스(`/api/v1`) 아래에 노출한다. 새 버전이 필요하면 동일한
@@ -47,12 +49,16 @@ class HarvestRequest(BaseModel):
     """수집 시작 요청 본문."""
 
     query: str | None = None
+    # channel_id는 `UC...` ID뿐 아니라 채널명/@handle/채널 URL을 받아 백엔드가 표준 ID로 해석한다.
     channel_id: str | None = None
+    # playlist_id는 `PL...` ID뿐 아니라 재생목록/시청 URL을 받아 백엔드가 `list=` ID로 해석한다.
     playlist_id: str | None = None
     max_videos: int = 20
     # True면 영상 수집만 수행하고 자막/POI/지오코딩(자막 생성)은 건너뛴다. 사용자가
     # 자막 생성 전에 확인 단계를 거칠 수 있도록 별도 `transcript` 작업으로 분리한다.
     skip_transcript: bool = False
+    # 양수면 즉시 1회 수집과 함께 해당 분 간격의 반복 수집 대상(source_target)으로 등록한다.
+    repeat_interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
 
 
 class HarvestJob(BaseModel):
@@ -138,14 +144,57 @@ async def start_harvest(
 ) -> HarvestJob:
     """수집 작업을 `crawl_runs`에 생성하고 `job_id`를 반환한다.
 
-    채널/재생목록/검색어 중 하나를 target으로 기록한다.
+    채널/재생목록/검색어 중 하나를 target으로 기록한다. 채널명/@handle/URL과
+    재생목록 URL은 표준 ID(`UC...`/`PL...`)로 해석해 저장한다. `repeat_interval_minutes`가
+    있으면 반복 수집 대상(source_target)으로도 등록한다.
     """
+    canonical_channel: str | None = None
+    canonical_playlist: str | None = None
+
     if payload.channel_id:
-        target_type, target_id = "channel", payload.channel_id
+        kind, _value = source_resolve.parse_channel_input(payload.channel_id)
+        if kind == "id":
+            canonical_channel = _value
+        else:
+            settings = get_settings()
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as http_client:
+                    client = YouTubeClient(
+                        api_key=settings.YOUTUBE_API_KEY, http_client=http_client
+                    )
+                    canonical_channel = await source_resolve.resolve_channel_id(
+                        client, payload.channel_id
+                    )
+            except Exception as exc:  # noqa: BLE001 - 해석 실패를 400으로 노출
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"채널을 해석하지 못했습니다: {exc}",
+                ) from exc
+        if not canonical_channel:
+            raise HTTPException(
+                status_code=400,
+                detail=f"채널을 찾을 수 없습니다: {payload.channel_id}",
+            )
+        target_type, target_id = "channel", canonical_channel
     elif payload.playlist_id:
-        target_type, target_id = "playlist", payload.playlist_id
+        canonical_playlist = source_resolve.parse_playlist_id(payload.playlist_id)
+        if not canonical_playlist:
+            raise HTTPException(
+                status_code=400,
+                detail=f"재생목록 URL/ID를 인식할 수 없습니다: {payload.playlist_id}",
+            )
+        target_type, target_id = "playlist", canonical_playlist
     else:
+        if not payload.query:
+            raise HTTPException(
+                status_code=400,
+                detail="검색어/채널/재생목록 중 하나를 입력하세요",
+            )
         target_type, target_id = "keyword", payload.query
+
+    run_payload = payload.model_dump()
+    run_payload["channel_id"] = canonical_channel
+    run_payload["playlist_id"] = canonical_playlist
 
     run = await crawl_run_service.create_run(
         session,
@@ -153,16 +202,24 @@ async def start_harvest(
         source=RunSource.WEB,
         target_type=target_type,
         target_id=target_id,
-        payload=payload.model_dump(),
+        payload=run_payload,
         commit=False,
     )
+    if payload.repeat_interval_minutes:
+        await source_scan_service.upsert_recurring_target(
+            session,
+            target_type=target_type,
+            source_value=target_id,
+            display_name=target_id,
+            scan_interval_minutes=payload.repeat_interval_minutes,
+        )
     await audit_service.record(
         session,
         actor_type="web",
         action="harvest.create",
         target_type="crawl_run",
         target_id=str(run.id),
-        payload=payload.model_dump(),
+        payload=run_payload,
     )
     return HarvestJob(job_id=str(run.id), state=run.state)
 
@@ -273,6 +330,117 @@ async def list_runs(
         }
         for run in runs
     ]
+
+
+@router.post("/runs/{job_id}/stop")
+async def stop_run(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """작업을 중지한다.
+
+    `pending`이면 즉시 `cancelled`로 마감하고, `running`이면 협조적 중지 신호를 건다
+    (실행자가 곧 `cancelled`로 마감). 이미 종료된 작업은 400.
+    """
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    prev_state = run.state
+    if run.state == RunState.PENDING:
+        await crawl_run_service.cancel_pending(session, job_id)
+        new_state = RunState.CANCELLED.value
+    elif run.state == RunState.RUNNING:
+        await crawl_run_service.request_cancel(session, job_id)
+        new_state = run.state
+    else:
+        raise HTTPException(
+            status_code=400, detail="이미 종료된 작업은 중지할 수 없습니다"
+        )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="run.stop",
+        target_type="crawl_run",
+        target_id=str(job_id),
+        payload={"prev_state": prev_state},
+    )
+    return {"job_id": str(job_id), "state": new_state}
+
+
+@router.post("/runs/{job_id}/restart")
+async def restart_run(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """작업을 같은 입력으로 다시 enqueue한다(새 crawl_run 생성)."""
+    source = await crawl_run_service.get_run(session, job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    payload = json.loads(source.payload_json) if source.payload_json else None
+    run = await crawl_run_service.create_run(
+        session,
+        job_type=source.job_type,
+        source=RunSource.WEB,
+        target_type=source.target_type,
+        target_id=source.target_id,
+        payload=payload,
+        commit=False,
+    )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="run.restart",
+        target_type="crawl_run",
+        target_id=str(run.id),
+        payload={"source_job_id": job_id},
+    )
+    return {"job_id": str(run.id), "state": run.state}
+
+
+def _source_target_dict(target: Any) -> dict[str, Any]:
+    return {
+        "id": target.id,
+        "target_type": target.target_type,
+        "source_value": target.source_value,
+        "display_name": target.display_name,
+        "is_active": target.is_active,
+        "scan_interval_minutes": target.scan_interval_minutes,
+        "next_crawl_at": target.next_crawl_at.isoformat()
+        if target.next_crawl_at
+        else None,
+        "last_crawled_at": target.last_crawled_at.isoformat()
+        if target.last_crawled_at
+        else None,
+        "last_scan_at": target.last_scan_at.isoformat() if target.last_scan_at else None,
+        "scan_failure_count": target.scan_failure_count,
+        "last_scan_error": target.last_scan_error,
+        "created_at": target.created_at.isoformat() if target.created_at else None,
+    }
+
+
+@router.get("/source-targets")
+async def list_source_targets(
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """반복 수집(스캔 주기) 활성 대상 목록을 반환한다."""
+    targets = await source_scan_service.list_recurring_targets(session)
+    return [_source_target_dict(target) for target in targets]
+
+
+@router.delete("/source-targets/{target_id}")
+async def delete_source_target(
+    target_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """반복 수집 대상을 비활성화한다(watermark 보존)."""
+    target = await source_scan_service.deactivate_target(session, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="source target not found")
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="source_target.deactivate",
+        target_type="source_target",
+        target_id=str(target_id),
+    )
+    return {"status": "ok"}
 
 
 @router.get("/audit-logs")

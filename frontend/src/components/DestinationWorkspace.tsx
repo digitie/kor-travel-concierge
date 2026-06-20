@@ -8,6 +8,10 @@ import {
   DownloadIcon,
   FlaskConicalIcon,
   MapPinIcon,
+  RepeatIcon,
+  RotateCcwIcon,
+  SquareIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -15,13 +19,17 @@ import { z } from "zod";
 
 import {
   buildDestinationExportUrl,
+  deleteSourceTarget,
   getRustfsStatus,
   listAuditLogs,
   listDestinations,
   listRunQueue,
   listRuns,
+  listSourceTargets,
   listUnmatchedCandidates,
   resolveCandidate,
+  restartRun,
+  stopRun,
   triggerDeepResearch,
   type AuditLogSummary,
   type CrawlRunSummary,
@@ -30,6 +38,7 @@ import {
   type DestinationSummary,
   type PlaceSourceVideo,
   type RustfsStatus,
+  type SourceTargetSummary,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -114,6 +123,31 @@ export function DestinationWorkspace() {
     queryFn: getRustfsStatus,
     refetchInterval: 15_000,
   });
+  const sourceTargetsQuery = useQuery({
+    queryKey: ["source-targets"],
+    queryFn: listSourceTargets,
+    refetchInterval: 15_000,
+  });
+
+  const stopRunMutation = useMutation({
+    mutationFn: stopRun,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-queue"] });
+    },
+  });
+  const restartRunMutation = useMutation({
+    mutationFn: restartRun,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-queue"] });
+    },
+  });
+  const deleteTargetMutation = useMutation({
+    mutationFn: deleteSourceTarget,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["source-targets"] }),
+  });
 
   const places = useMemo(() => destinationsQuery.data ?? [], [destinationsQuery.data]);
   const selectedPlace = useMemo(
@@ -181,33 +215,39 @@ export function DestinationWorkspace() {
 
   return (
     <div className="flex h-full min-h-screen flex-col bg-background">
-      <div className="min-h-[24rem] flex-1 border-b">
-        <VWorldMap
-          places={places}
-          selectedPlaceId={selectedPlace?.place_id ?? null}
-          onSelectPlace={setSelectedPlaceId}
-        />
+      {/* 지도 + 장소(지도 옆) */}
+      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[1.6fr_1fr]">
+        <div className="min-h-[22rem] border-b lg:border-b-0 lg:border-r">
+          <VWorldMap
+            places={places}
+            selectedPlaceId={selectedPlace?.place_id ?? null}
+            onSelectPlace={setSelectedPlaceId}
+          />
+        </div>
+        <div className="flex min-h-[22rem] flex-col overflow-y-auto">
+          <DestinationList
+            places={places}
+            selectedPlace={selectedPlace}
+            isLoading={destinationsQuery.isLoading}
+            onSelect={setSelectedPlaceId}
+            onDeepResearch={(placeId) => deepResearchMutation.mutate(placeId)}
+            isResearching={deepResearchMutation.isPending}
+            researchError={deepResearchMutation.error?.message ?? null}
+            sort={destinationSort}
+            onSortChange={setDestinationSort}
+            exportFormat={exportFormat}
+            onExportFormatChange={setExportFormat}
+            selectedExportIds={selectedExportIdSet}
+            selectedExportCount={selectedVisibleExportIds.length}
+            isAllSelected={isAllSelected}
+            onToggleExportSelection={toggleExportSelection}
+            onToggleAllExportSelection={toggleAllExportSelection}
+            onExport={exportPlaces}
+          />
+        </div>
       </div>
-      <div className="grid max-h-[46rem] grid-cols-1 overflow-y-auto md:grid-cols-[1.05fr_1fr_1.15fr]">
-        <DestinationList
-          places={places}
-          selectedPlace={selectedPlace}
-          isLoading={destinationsQuery.isLoading}
-          onSelect={setSelectedPlaceId}
-          onDeepResearch={(placeId) => deepResearchMutation.mutate(placeId)}
-          isResearching={deepResearchMutation.isPending}
-          researchError={deepResearchMutation.error?.message ?? null}
-          sort={destinationSort}
-          onSortChange={setDestinationSort}
-          exportFormat={exportFormat}
-          onExportFormatChange={setExportFormat}
-          selectedExportIds={selectedExportIdSet}
-          selectedExportCount={selectedVisibleExportIds.length}
-          isAllSelected={isAllSelected}
-          onToggleExportSelection={toggleExportSelection}
-          onToggleAllExportSelection={toggleAllExportSelection}
-          onExport={exportPlaces}
-        />
+      {/* 검수 큐 · 반복 작업 · 운영 (아래, 작은 목록) */}
+      <div className="grid max-h-[26rem] grid-cols-1 overflow-y-auto border-t md:grid-cols-3">
         <ReviewQueue
           candidates={candidates}
           selectedCandidate={selectedCandidate}
@@ -219,12 +259,21 @@ export function DestinationWorkspace() {
             queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
           }}
         />
+        <RecurringPanel
+          targets={sourceTargetsQuery.data ?? []}
+          errorMessage={sourceTargetsQuery.error?.message ?? null}
+          onDelete={(id) => deleteTargetMutation.mutate(id)}
+          isDeleting={deleteTargetMutation.isPending}
+        />
         <OperationsPanel
           runs={runsQuery.data ?? []}
           queueRuns={runQueueQuery.data ?? []}
           audits={auditQuery.data ?? []}
           rustfs={rustfsQuery.data}
           errorMessage={operationError}
+          onStop={(jobId) => stopRunMutation.mutate(jobId)}
+          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+          isMutating={stopRunMutation.isPending || restartRunMutation.isPending}
         />
       </div>
     </div>
@@ -473,7 +522,7 @@ function ReviewQueue({
   return (
     <section
       aria-label="검수 큐"
-      className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r"
+      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
     >
       <PanelHeader title="검수 큐" count={candidates.length} />
       {errorMessage ? (
@@ -481,7 +530,7 @@ function ReviewQueue({
           {errorMessage}
         </p>
       ) : null}
-      <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+      <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
         {candidates.map((candidate) => (
           <button
             key={candidate.id}
@@ -580,18 +629,24 @@ function OperationsPanel({
   audits,
   rustfs,
   errorMessage,
+  onStop,
+  onRestart,
+  isMutating,
 }: {
   runs: CrawlRunSummary[];
   queueRuns: CrawlRunSummary[];
   audits: AuditLogSummary[];
   rustfs: RustfsStatus | undefined;
   errorMessage: string | null;
+  onStop: (jobId: string) => void;
+  onRestart: (jobId: string) => void;
+  isMutating: boolean;
 }) {
   const failedRuns = runs.filter((run) => run.state === "failed").length;
   const totalObjects = rustfs?.assets.reduce((sum, asset) => sum + asset.count, 0) ?? 0;
 
   return (
-    <section aria-label="운영 패널" className="flex flex-col gap-4 p-4">
+    <section aria-label="운영 패널" className="flex flex-col gap-3 p-3">
       <PanelHeader title="운영" count={runs.length} />
       {errorMessage ? (
         <p role="alert" className="text-xs text-destructive">
@@ -603,63 +658,276 @@ function OperationsPanel({
         <Metric label="객체" value={totalObjects.toString()} />
         <Metric label="RustFS" value={rustfs?.health.ok ? "OK" : "확인"} />
       </div>
-      <div className="flex flex-col gap-2 border-t pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-medium">실행 큐</p>
+      <div className="flex flex-col gap-1.5 border-t pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium">실행 큐</p>
           <Badge variant="outline">{queueRuns.length}</Badge>
         </div>
         {queueRuns.length > 0 ? (
-          queueRuns.map((run) => <RunStatusCard key={run.job_id} run={run} />)
+          queueRuns.map((run) => (
+            <RunControlCard
+              key={run.job_id}
+              run={run}
+              onStop={onStop}
+              onRestart={onRestart}
+              isMutating={isMutating}
+            />
+          ))
         ) : (
-          <p className="rounded-lg border p-3 text-xs text-muted-foreground">
+          <p className="rounded-lg border p-2 text-xs text-muted-foreground">
             실행 중이거나 대기 중인 작업이 없습니다.
           </p>
         )}
       </div>
-      <div className="flex flex-col gap-2">
-        <p className="text-sm font-medium">최근 작업</p>
-        {runs.slice(0, 5).map((run) => <RunStatusCard key={run.job_id} run={run} />)}
+      <div className="flex flex-col gap-1.5 border-t pt-3">
+        <p className="text-xs font-medium">최근 작업</p>
+        {runs.length > 0 ? (
+          runs.slice(0, 6).map((run) => (
+            <RunControlCard
+              key={run.job_id}
+              run={run}
+              onStop={onStop}
+              onRestart={onRestart}
+              isMutating={isMutating}
+            />
+          ))
+        ) : (
+          <p className="text-xs text-muted-foreground">작업 없음</p>
+        )}
       </div>
-      <div className="flex flex-col gap-2 border-t pt-4">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <DatabaseIcon className="size-4 text-muted-foreground" />
+      <details className="border-t pt-3">
+        <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+          <DatabaseIcon className="size-3.5 text-muted-foreground" />
           MCP/웹 쓰기 로그
+        </summary>
+        <div className="mt-2 flex flex-col gap-1">
+          {audits.slice(0, 6).map((audit) => (
+            <div
+              key={audit.id}
+              className="flex items-center justify-between gap-3 text-xs"
+            >
+              <span className="truncate">{audit.action}</span>
+              <span className="text-muted-foreground">{audit.actor_type}</span>
+            </div>
+          ))}
         </div>
-        {audits.slice(0, 5).map((audit) => (
-          <div key={audit.id} className="flex items-center justify-between gap-3 text-xs">
-            <span className="truncate">{audit.action}</span>
-            <span className="text-muted-foreground">{audit.actor_type}</span>
-          </div>
-        ))}
-      </div>
+      </details>
     </section>
   );
 }
 
-function RunStatusCard({ run }: { run: CrawlRunSummary }) {
+// 최근/큐 작업 카드: 클릭하면 상세 로그를 펼치고 중지/재시작할 수 있다.
+function RunControlCard({
+  run,
+  onStop,
+  onRestart,
+  isMutating,
+}: {
+  run: CrawlRunSummary;
+  onStop: (jobId: string) => void;
+  onRestart: (jobId: string) => void;
+  isMutating: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isActive = run.state === "pending" || run.state === "running";
+  const isTerminal =
+    run.state === "done" || run.state === "failed" || run.state === "cancelled";
+
   return (
-    <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs">
+      <button
+        type="button"
+        className="flex items-center justify-between gap-2 text-left"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
         <span className="truncate font-medium">{runLabel(run)}</span>
         <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
           {run.state}
         </Badge>
-      </div>
+      </button>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div
           className={progressBarClass(run.state)}
           style={{ width: `${Math.round(run.progress * 100)}%` }}
         />
       </div>
-      <p className="line-clamp-2 text-xs text-muted-foreground">
+      <p className="line-clamp-1 text-muted-foreground">
         {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
       </p>
+      {expanded ? (
+        <div className="flex flex-col gap-2 border-t pt-2">
+          {run.last_error ? (
+            <p className="break-words text-destructive">{run.last_error}</p>
+          ) : null}
+          <ol className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {run.status_logs.length > 0 ? (
+              run.status_logs.slice(-12).map((log, index) => (
+                <li
+                  key={`${log.timestamp}-${index}`}
+                  className="grid grid-cols-[3.5rem_1fr] gap-1"
+                >
+                  <span className="text-muted-foreground">
+                    {formatRunTime(log.timestamp)}
+                  </span>
+                  <span className="min-w-0 break-words">{log.message}</span>
+                </li>
+              ))
+            ) : (
+              <li className="text-muted-foreground">상세 로그 없음</li>
+            )}
+          </ol>
+          <div className="flex gap-2">
+            {isActive ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={isMutating}
+                onClick={() => onStop(run.job_id)}
+              >
+                <SquareIcon data-icon="inline-start" />
+                중지
+              </Button>
+            ) : null}
+            {isTerminal ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={isMutating}
+                onClick={() => onRestart(run.job_id)}
+              >
+                <RotateCcwIcon data-icon="inline-start" />
+                재시작
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+// 반복 수집(source_target) 패널: 활성 반복 작업 목록 + 상태 + 삭제.
+function RecurringPanel({
+  targets,
+  errorMessage,
+  onDelete,
+  isDeleting,
+}: {
+  targets: SourceTargetSummary[];
+  errorMessage: string | null;
+  onDelete: (id: number) => void;
+  isDeleting: boolean;
+}) {
+  return (
+    <section
+      aria-label="반복 작업"
+      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+          <RepeatIcon className="size-4 text-muted-foreground" />
+          반복 작업
+        </h2>
+        <Badge variant="secondary">{targets.length}</Badge>
+      </div>
+      {errorMessage ? (
+        <p role="alert" className="text-xs text-destructive">
+          {errorMessage}
+        </p>
+      ) : null}
+      {targets.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {targets.map((target) => (
+            <div
+              key={target.id}
+              className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium">
+                  {target.display_name ?? target.source_value}
+                </span>
+                <Badge variant="outline">{targetTypeLabel(target.target_type)}</Badge>
+              </div>
+              <p className="truncate text-muted-foreground">{target.source_value}</p>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">
+                  {intervalLabel(target.scan_interval_minutes)} · 다음{" "}
+                  {formatRunTime(target.next_crawl_at)}
+                </span>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={isDeleting}
+                  onClick={() => onDelete(target.id)}
+                  aria-label={`${target.display_name ?? target.source_value} 반복 삭제`}
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  삭제
+                </Button>
+              </div>
+              {target.last_scan_error ? (
+                <p className="break-words text-destructive">
+                  {target.last_scan_error}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+          반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
+        </p>
+      )}
+    </section>
   );
 }
 
 function runLabel(run: CrawlRunSummary) {
   return [run.job_type, run.target_id].filter(Boolean).join(" · ");
+}
+
+function formatRunTime(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function targetTypeLabel(type: string) {
+  if (type === "channel") {
+    return "채널";
+  }
+  if (type === "playlist") {
+    return "재생목록";
+  }
+  if (type === "keyword") {
+    return "검색어";
+  }
+  if (type === "video") {
+    return "영상";
+  }
+  return type;
+}
+
+function intervalLabel(minutes: number | null) {
+  if (!minutes) {
+    return "-";
+  }
+  if (minutes % 1440 === 0) {
+    return `${minutes / 1440}일`;
+  }
+  if (minutes % 60 === 0) {
+    return `${minutes / 60}시간`;
+  }
+  return `${minutes}분`;
 }
 
 function latestRunLog(run: CrawlRunSummary) {

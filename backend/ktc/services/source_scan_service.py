@@ -235,6 +235,73 @@ async def scan_due_targets(
     }
 
 
+async def upsert_recurring_target(
+    session: AsyncSession,
+    *,
+    target_type: str,
+    source_value: str,
+    display_name: str | None = None,
+    scan_interval_minutes: int,
+    now: datetime | None = None,
+) -> SourceTarget:
+    """반복 수집 대상을 등록/갱신한다.
+
+    즉시 1회 수집은 별도 one-shot harvest가 처리하므로, 주기 스캔은 interval 이후에
+    시작하도록 `next_crawl_at`을 `now + interval`로 둔다.
+    """
+    scan_now = _as_utc(now)
+    interval = max(1, int(scan_interval_minutes))
+    stmt = select(SourceTarget).where(
+        SourceTarget.target_type == target_type,
+        SourceTarget.source_value == source_value,
+    )
+    result = await session.execute(stmt)
+    target = result.scalar_one_or_none()
+    if target is None:
+        target = SourceTarget(target_type=target_type, source_value=source_value)
+        session.add(target)
+    target.is_active = True
+    target.scan_interval_minutes = interval
+    if display_name:
+        target.display_name = display_name
+    elif not target.display_name:
+        target.display_name = source_value
+    target.next_crawl_at = scan_now + timedelta(minutes=interval)
+    target.scan_failure_count = 0
+    target.last_scan_error = None
+    await session.commit()
+    await session.refresh(target)
+    return target
+
+
+async def list_recurring_targets(session: AsyncSession) -> list[SourceTarget]:
+    """반복 수집(스캔 주기 설정)이 활성화된 대상 목록을 최신순으로 반환한다."""
+    stmt = (
+        select(SourceTarget)
+        .where(
+            SourceTarget.is_active.is_(True),
+            SourceTarget.scan_interval_minutes.is_not(None),
+        )
+        .order_by(SourceTarget.id.desc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def deactivate_target(
+    session: AsyncSession, target_id: int
+) -> SourceTarget | None:
+    """반복 수집 대상을 비활성화한다(watermark `last_crawled_at`은 보존)."""
+    target = await session.get(SourceTarget, target_id)
+    if target is None:
+        return None
+    target.is_active = False
+    target.scan_interval_minutes = None
+    target.next_crawl_at = None
+    await session.commit()
+    return target
+
+
 async def ensure_source_scan_run(
     session: AsyncSession,
     *,

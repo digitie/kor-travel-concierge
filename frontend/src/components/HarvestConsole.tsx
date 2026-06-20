@@ -43,15 +43,33 @@ import {
 
 const targetLabels: Record<HarvestTargetType, string> = {
   keyword: "검색어",
-  channel: "채널 ID",
-  playlist: "재생목록 ID",
+  channel: "채널명 또는 URL",
+  playlist: "재생목록 URL",
 };
 
 const targetPlaceholders: Record<HarvestTargetType, string> = {
   keyword: "예: 부산 맛집",
-  channel: "예: UCxxxxxxxx",
-  playlist: "예: PLxxxxxxxx",
+  channel: "예: @빵이네tv · youtube.com/@... · 채널 URL · UC...",
+  playlist: "예: youtube.com/playlist?list=... · PL...",
 };
+
+// 반복 검색 간격 선택지(분).
+const repeatIntervalOptions: { value: number; label: string }[] = [
+  { value: 30, label: "30분" },
+  { value: 60, label: "1시간" },
+  { value: 180, label: "3시간" },
+  { value: 360, label: "6시간" },
+  { value: 720, label: "12시간" },
+  { value: 1440, label: "1일" },
+  { value: 10080, label: "1주" },
+];
+
+function repeatIntervalLabel(value: number): string {
+  return (
+    repeatIntervalOptions.find((option) => option.value === value)?.label ??
+    `${value}분`
+  );
+}
 
 const harvestFormSchema = z.object({
   targetType: z.enum(["keyword", "channel", "playlist"]),
@@ -61,6 +79,8 @@ const harvestFormSchema = z.object({
     .int("정수로 입력하세요.")
     .min(1, "최소 1개 이상 입력하세요.")
     .max(50, "한 번에 최대 50개까지 요청할 수 있습니다."),
+  repeat: z.boolean(),
+  repeatIntervalMinutes: z.coerce.number().int().min(1),
 });
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
@@ -74,11 +94,18 @@ export function HarvestConsole() {
       targetType: "keyword",
       targetValue: "부산 맛집",
       maxVideos: 10,
+      repeat: false,
+      repeatIntervalMinutes: 1440,
     },
   });
   const targetType = useWatch({
     control: form.control,
     name: "targetType",
+  });
+  const repeat = useWatch({ control: form.control, name: "repeat" });
+  const repeatIntervalMinutes = useWatch({
+    control: form.control,
+    name: "repeatIntervalMinutes",
   });
 
   const mutation = useMutation({
@@ -152,7 +179,13 @@ export function HarvestConsole() {
       <form
         className="flex flex-col gap-5"
         onSubmit={form.handleSubmit((values) =>
-          mutation.mutate({ ...values, skipTranscript: true }),
+          mutation.mutate({
+            ...values,
+            skipTranscript: true,
+            repeatIntervalMinutes: values.repeat
+              ? values.repeatIntervalMinutes
+              : null,
+          }),
         )}
       >
         <FieldGroup>
@@ -209,6 +242,58 @@ export function HarvestConsole() {
             />
             <FieldDescription>1-50</FieldDescription>
             <FieldError errors={[form.formState.errors.maxVideos]} />
+          </Field>
+
+          <Field>
+            <label
+              htmlFor="harvest-repeat"
+              className="flex items-center gap-2 text-sm font-medium"
+            >
+              <input
+                id="harvest-repeat"
+                type="checkbox"
+                className="size-4 rounded border"
+                checked={repeat}
+                onChange={(event) =>
+                  form.setValue("repeat", event.target.checked, {
+                    shouldDirty: true,
+                  })
+                }
+              />
+              반복 검색
+            </label>
+            {repeat ? (
+              <div className="mt-2 flex flex-col gap-1.5">
+                <FieldLabel htmlFor="harvest-repeat-interval">반복 간격</FieldLabel>
+                <Select
+                  value={String(repeatIntervalMinutes)}
+                  onValueChange={(value) =>
+                    form.setValue("repeatIntervalMinutes", Number(value), {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    })
+                  }
+                >
+                  <SelectTrigger id="harvest-repeat-interval" className="w-full">
+                    <SelectValue>
+                      {repeatIntervalLabel(Number(repeatIntervalMinutes))}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {repeatIntervalOptions.map((option) => (
+                        <SelectItem key={option.value} value={String(option.value)}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  체크 시 선택한 간격으로 자동 반복 수집합니다.
+                </FieldDescription>
+              </div>
+            ) : null}
           </Field>
         </FieldGroup>
 
