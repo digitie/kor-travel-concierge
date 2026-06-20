@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [x] **T-090**: UI 레벨 수집 E2E(10영상×3소스, 깨끗한 DB) — Playwright로 웹 UI 직접 조작(폼→"수집 시작"→"자막 생성 시작"). T-089 수정 빌드로 재배포, 깨끗한 `kor_travel_concierge_e2e`에서 27영상 수집. UI 2단계 플로우 검증 + T-089 버그 수정 검증(키워드 정상 완료). 플레이리스트 9개 장소 전부 지오코딩. 채널·키워드는 자막 가용성(youtube-transcript-api 차단 추정, whisper 미활성) 때문에 0건 — transcript 비면 POI 스킵. 권장: description 단독 POI 또는 whisper 폴백. 실행 후 dev DB 복원·e2e DB 삭제. `docs/e2e-report-2026-06-20-ui-10videos.md`. (2026-06-20)
 - [x] **T-089**: POI 타임스탬프 `VARCHAR(16)` truncation 버그 수정 — T-088 E2E에서 발견. `extracted_place_candidates`/`video_place_mappings`의 `timestamp_start/end`를 `String(64)`로 확장 + `@validates` 방어적 클립(모든 적재 경로 보호), Alembic migration `20260620_0007`. 클립 회귀 테스트 4종 + PostGIS 테스트 DB로 models/poi/place_service 통과. (2026-06-20)
 - [x] **T-088**: 라이브 수집 E2E(3소스×5영상) 실행 및 리포트 — 채널 `@빵이네tv`/플레이리스트/키워드 `제주도 가족여행` 각 5영상에 실제 YouTube·Gemini·VWorld 호출. 기존 docker-manager 인스턴스(12601, Gemini 2.5 Flash) 사용. 채널·플레이리스트 ✅(장소 16·21, 전부 지오코딩), 키워드 ❌(`extracted_place_candidates.timestamp_start/end` `varchar(16)` truncation 버그로 88.6%에서 실패). 성공 2소스 37개 장소 좌표·주소 확보. `docs/e2e-report-2026-06-20-live-harvest.md` 작성. 버그 수정(컬럼 확장+정규화+per-video 트랜잭션)은 별도 PR 제안. (2026-06-20)
 

@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-20: T-090 완료 — UI 레벨 수집 E2E(10영상×3소스, 깨끗한 DB)
+
+- **배경**: PR #91 머지 후, 5영상이 아니라 10영상으로 **웹 UI를 브라우저로 직접 조작**하는 UI 레벨 E2E를 재실행 요청. dev DB는 3소스가 이미 수집돼 증분 harvest가 0건이라, 사용자 선택에 따라 깨끗한 DB(`kor_travel_concierge_e2e`)로 실행.
+- **실행**: T-089 버그 수정 반영 빌드로 concierge 재배포(같은 12601/12605). Playwright로 폼 입력(대상 유형·값·최대 10) → "수집 시작" → "자막 생성 시작". 채널 10·플레이리스트 7·키워드 10 = **27영상 수집**, 자막 작업 3건 모두 완료.
+- **결과**: UI 2단계 플로우 end-to-end 검증. **T-089 버그 수정 검증** — 직전에 truncation으로 실패하던 키워드 소스가 정상 완료. 플레이리스트는 9개 장소 추출·전부 지오코딩(부산 명소). 채널·키워드는 0건.
+- **한계**: 27개 중 3개 영상만 유효 자막 확보(`youtube-transcript-api` rate-limit/차단 추정, whisper 폴백 미활성). 자막이 비면 POI 단계가 스킵돼 채널·키워드 0건. 영상 설명은 있으나 현 파이프라인은 transcript 없으면 건너뜀.
+- **권장**: transcript 비어도 description 단독 POI 추출(#91 데이터 흐름 활용) 또는 whisper 폴백 활성화.
+- **정리**: 실행 후 concierge를 운영 dev DB로 복원, e2e DB 삭제. 산출물 `docs/e2e-report-2026-06-20-ui-10videos.md`.
+
 ## 2026-06-20: T-089 완료 — POI 타임스탬프 VARCHAR(16) truncation 버그 수정
 
 - **배경**: T-088 라이브 E2E에서 키워드 harvest가 `extracted_place_candidates.timestamp_start/end`(및 `video_place_mappings` 동일 컬럼) `varchar(16)`에 Gemini의 16자 초과 타임스탬프(예: "00:22:00 - 00:35:00")를 적재하다 `StringDataRightTruncationError`로 작업 전체가 롤백·실패했다.
