@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-20: T-088 완료 — 라이브 수집 E2E(3소스×5영상) 실행 및 리포트
+
+- **배경**: 사용자 요청으로 채널 `@빵이네tv`, 플레이리스트 `PLXQvmY7fb6woRMSD8cgk10UIJRt9nmuXl`, 키워드 `제주도 가족여행` 각 5개 영상에 대해 실제 YouTube·Gemini·VWorld API를 호출하는 라이브 harvest E2E를 실행했다.
+- **실행**: 포트 정책상 기존 `kor-travel-docker-manager` 인스턴스(host 12601, Gemini 2.5 Flash)를 종료하지 않고 그대로 사용. `POST /api/v1/harvest`로 3개 job(2026/2027/2028) 생성, 전체 파이프라인(수집→자막→Gemini POI→지오코딩) 완주를 폴링.
+- **결과**: 채널 ✅(영상5·후보30·장소16, 16/16 지오코딩), 플레이리스트 ✅(영상5·후보44·장소21, 21/21 지오코딩), 키워드 ❌(88.6%에서 실패). 성공 2소스에서 **37개 장소를 전부 좌표·주소까지 확보**.
+- **버그 발견**: `extracted_place_candidates.timestamp_start/end`(및 `video_place_mappings` 동일 컬럼)가 `varchar(16)`인데 Gemini가 16자 초과 타임스탬프를 반환해 키워드 job이 truncation 오류로 롤백·실패. 컬럼 확장(varchar(32)/text) + 적재 전 정규화 + per-video 트랜잭션 경계 재검토를 권장(별도 PR 제안).
+- **산출물**: `docs/e2e-report-2026-06-20-live-harvest.md`.
+
 ## 2026-06-20: T-085 완료 — AI 엔진 다중 provider + 사전 프롬프트 + JSON + 느린 재시도 (ADR-30)
 
 - **배경**: 그동안 ETL·Deep Research의 LLM 호출이 Gemini 단일 provider(ADR-3)에 묶여 있었다. 사용자가 (1) DeepSeek V4를 대안 provider로 추가하고 웹 설정에서 엔진을 전환, (2) 모든 AI 프롬프트 앞에 편집 가능한 공통 지침(사전 프롬프트) 적용, (3) 두 provider 모두 안정적 JSON 출력, (4) 외부 LLM 429/일시 오류에 사람처럼 충분히 느리게 재시도하도록 요청했다.
