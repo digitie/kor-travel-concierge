@@ -6,7 +6,138 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+// DESIGN-RULES 5·9: trigger 공통 스타일 — Base UI trigger와 모바일 native fallback이 공유한다.
+const selectTriggerBaseClassName =
+  "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-default)] outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground data-[size=default]:min-h-11 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] [&>[data-slot=select-value]]:line-clamp-1 [&>[data-slot=select-value]]:flex [&>[data-slot=select-value]]:items-center [&>[data-slot=select-value]]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+
+// 터치(coarse pointer) 기기 여부. SSR/첫 렌더는 false(데스크톱 Base UI)로 두고,
+// 마운트 후 갱신해 hydration 불일치를 피한다.
+function useCoarsePointer() {
+  const [coarse, setCoarse] = React.useState(false)
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return
+    const mq = window.matchMedia("(pointer: coarse)")
+    const update = () => setCoarse(mq.matches)
+    update()
+    mq.addEventListener?.("change", update)
+    return () => mq.removeEventListener?.("change", update)
+  }, [])
+  return coarse
+}
+
+type NativeItem = { value: string; label: React.ReactNode; disabled?: boolean }
+
+// Select 자식 트리에서 SelectItem(값·라벨)을 재귀 수집한다.
+function collectNativeItems(
+  children: React.ReactNode,
+  acc: NativeItem[] = []
+): NativeItem[] {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return
+    const props = child.props as Record<string, unknown>
+    if (child.type === SelectItem) {
+      acc.push({
+        value: String(props.value ?? ""),
+        label: props.children as React.ReactNode,
+        disabled: Boolean(props.disabled),
+      })
+    } else if (props.children) {
+      collectNativeItems(props.children as React.ReactNode, acc)
+    }
+  })
+  return acc
+}
+
+// 호출부 SelectTrigger의 className/aria-invalid를 native select에 그대로 전달하기 위해 추출한다.
+function findTriggerProps(
+  children: React.ReactNode
+): { className?: string; "aria-invalid"?: boolean } {
+  let found: { className?: string; "aria-invalid"?: boolean } = {}
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child) || found.className !== undefined) return
+    const props = child.props as Record<string, unknown>
+    if (child.type === SelectTrigger) {
+      found = {
+        className: (props.className as string) ?? "",
+        "aria-invalid": Boolean(props["aria-invalid"]),
+      }
+    } else if (props.children) {
+      const nested = findTriggerProps(props.children as React.ReactNode)
+      if (nested.className !== undefined) found = nested
+    }
+  })
+  return found
+}
+
+// 모바일/터치 fallback: OS 네이티브 picker라 Samsung Internet 등 모든 모바일 브라우저에서 동작한다.
+function NativeSelect({
+  value,
+  onValueChange,
+  items,
+  triggerClassName,
+  ariaInvalid,
+  disabled,
+}: {
+  value: string
+  onValueChange: (value: string) => void
+  items: NativeItem[]
+  triggerClassName?: string
+  ariaInvalid?: boolean
+  disabled?: boolean
+}) {
+  return (
+    <div className={cn("relative w-full", triggerClassName)}>
+      <select
+        data-slot="select-native"
+        value={value}
+        disabled={disabled}
+        aria-invalid={ariaInvalid}
+        onChange={(event) => onValueChange(event.currentTarget.value)}
+        className={cn(
+          selectTriggerBaseClassName,
+          "w-full cursor-pointer appearance-none bg-transparent pr-9"
+        )}
+      >
+        {items.map((item) => (
+          <option key={item.value} value={item.value} disabled={item.disabled}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDownIcon className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  )
+}
+
+// 데스크톱(fine pointer)은 Base UI Select, 터치 기기는 native <select>로 렌더링한다.
+// 제네릭을 유지해 호출부의 value 타입 추론(onValueChange 파라미터)을 보존한다.
+function Select<Value>(props: SelectPrimitive.Root.Props<Value>) {
+  const coarse = useCoarsePointer()
+  const { value, onValueChange, children, disabled } = props
+  if (
+    coarse &&
+    value !== undefined &&
+    !Array.isArray(value) &&
+    typeof onValueChange === "function"
+  ) {
+    const items = collectNativeItems(children)
+    if (items.length > 0) {
+      const trigger = findTriggerProps(children)
+      const emit = onValueChange as unknown as (next: string) => void
+      return (
+        <NativeSelect
+          value={String(value)}
+          onValueChange={(next) => emit(next)}
+          items={items}
+          triggerClassName={trigger.className}
+          ariaInvalid={trigger["aria-invalid"]}
+          disabled={Boolean(disabled)}
+        />
+      )
+    }
+  }
+  return <SelectPrimitive.Root {...props} />
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
@@ -40,11 +171,7 @@ function SelectTrigger({
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       data-size={size}
-      className={cn(
-        // DESIGN-RULES 5·9: default trigger는 44px touch target + named motion 토큰.
-        "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-default)] outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground data-[size=default]:min-h-11 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] [&>[data-slot=select-value]]:line-clamp-1 [&>[data-slot=select-value]]:flex [&>[data-slot=select-value]]:items-center [&>[data-slot=select-value]]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
+      className={cn(selectTriggerBaseClassName, className)}
       {...props}
     >
       {children}

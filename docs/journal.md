@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-20: T-092 완료 — 모바일(삼성 인터넷) Select 미동작 수정 (native 폴백)
+
+- **증상**: 삼성 인터넷 모바일에서 수집 폼의 "대상 유형" 등 Select 드롭다운이 선택 안 됨. 원인은 Base UI(`@base-ui/react/select`) 커스텀 팝업이 모바일 터치(coarse pointer)에서 동작하지 않는 문제(데스크톱 마우스에선 정상).
+- **수정**: 공유 `Select` 컴포넌트(`components/ui/select.tsx`)가 **coarse pointer 기기에서 OS 네이티브 `<select>`로 폴백**하도록 변경. `useCoarsePointer`(matchMedia, SSR-safe)로 분기하고, 자식 트리에서 `SelectItem`(값·라벨)을 재귀 추출해 native `<option>`으로 렌더링한다. trigger 공통 스타일을 상수로 추출해 Base UI/native가 공유. 데스크톱(fine pointer)은 Base UI 유지. 호출부(HarvestConsole/DestinationWorkspace/settings) 3곳 코드 변경 없이 자동 적용.
+- **검증**: lint/type-check/production build 통과. Playwright 터치 컨텍스트(`hasTouch`)에서 native `<select>` 렌더·옵션 3종 추출·`onValueChange` 연동(채널 선택 시 입력 placeholder 전환) 확인. 데스크톱 fine pointer는 Base UI 정상 동작 회귀 확인. UI 컨테이너 재빌드·재시작으로 배포(api/scheduler 무중단).
+
 ## 2026-06-20: T-091 완료 — whisper 폴백 활성화 재실행 + VWorld 지도 키 반영
 
 - **whisper 폴백 활성화**: T-090에서 `youtube-transcript-api` 차단으로 채널·키워드가 0건이던 문제를, `.env`/`.env.production`에 `TRANSCRIPT_WHISPER_ENABLED=true`·`WHISPER_MODEL_SIZE=base`를 더해 faster-whisper 오디오 전사 폴백으로 해결. `.env.example`에 기본 false로 문서화. 코드/이미지 변경 없음(이미 faster-whisper 의존·whisper 경로 존재), env+재시작만으로 적용.
