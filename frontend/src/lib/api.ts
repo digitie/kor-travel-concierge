@@ -21,6 +21,23 @@ export type StartHarvestInput = {
   maxVideos: number;
   // true면 영상 수집만 하고 자막 생성은 건너뛴다(자막 전 확인 게이팅).
   skipTranscript?: boolean;
+  // 설정하면 해당 분 간격으로 반복 수집(source_target 등록).
+  repeatIntervalMinutes?: number | null;
+};
+
+export type SourceTargetSummary = {
+  id: number;
+  target_type: HarvestTargetType | string;
+  source_value: string;
+  display_name: string | null;
+  is_active: boolean;
+  scan_interval_minutes: number | null;
+  next_crawl_at: string | null;
+  last_crawled_at: string | null;
+  last_scan_at: string | null;
+  scan_failure_count: number;
+  last_scan_error: string | null;
+  created_at: string | null;
 };
 
 export type HarvestJob = {
@@ -171,6 +188,7 @@ function harvestPayload(input: StartHarvestInput) {
     playlist_id: input.targetType === "playlist" ? input.targetValue : undefined,
     max_videos: input.maxVideos,
     skip_transcript: input.skipTranscript ?? false,
+    repeat_interval_minutes: input.repeatIntervalMinutes ?? undefined,
   };
 }
 
@@ -329,4 +347,29 @@ export async function triggerDeepResearch(
       body: JSON.stringify({ max_sources: 8 }),
     },
   );
+}
+
+// 반복 수집(source_target) 목록/삭제 + 작업 중지/재시작.
+export async function listSourceTargets(): Promise<SourceTargetSummary[]> {
+  return requestJson<SourceTargetSummary[]>("/api/v1/source-targets");
+}
+
+export async function deleteSourceTarget(
+  id: number,
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(`/api/v1/source-targets/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function stopRun(jobId: string): Promise<HarvestJob> {
+  return requestJson<HarvestJob>(`/api/v1/runs/${jobId}/stop`, {
+    method: "POST",
+  });
+}
+
+export async function restartRun(jobId: string): Promise<HarvestJob> {
+  return requestJson<HarvestJob>(`/api/v1/runs/${jobId}/restart`, {
+    method: "POST",
+  });
 }

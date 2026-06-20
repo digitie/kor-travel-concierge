@@ -115,7 +115,7 @@ async def test_execute_run_logs_heartbeat_task_exception(
     async def broken_heartbeat_loop(*args, **kwargs):
         raise RuntimeError("heartbeat task boom")
 
-    monkeypatch.setattr(worker, "_heartbeat_loop", broken_heartbeat_loop)
+    monkeypatch.setattr(worker, "_heartbeat_and_cancel_watch", broken_heartbeat_loop)
     caplog.set_level(logging.ERROR, logger=worker.logger.name)
     run = await crawl_run_service.create_run(
         session, job_type="harvest", source="web", target_type="keyword", target_id="부산"
@@ -132,6 +132,31 @@ async def test_execute_run_logs_heartbeat_task_exception(
     assert refreshed.state == RunState.DONE
     assert "crawl_run heartbeat task 종료 중 예외" in caplog.text
     assert "heartbeat task boom" in caplog.text
+
+
+async def test_execute_run_cooperative_cancel(session, session_factory):
+    """cancel_requested가 걸린 running 작업은 watcher가 협조적 취소해 cancelled로 마감한다."""
+
+    async def slow_handler(_session, _run):
+        await asyncio.sleep(30)
+        return {}
+
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="web", target_type="keyword", target_id="부산"
+    )
+    # 실행 중 중지 신호를 시뮬레이션: claim되면 running 전이 후 watcher가 신호를 본다.
+    await crawl_run_service.request_cancel(session, run.id)
+
+    executed_id = await worker.run_once(
+        session_factory,
+        handlers={"harvest": slow_handler},
+        heartbeat_interval_seconds=0.05,
+    )
+
+    assert executed_id == run.id
+    refreshed = await _fresh_run(session_factory, run.id)
+    assert refreshed.state == RunState.CANCELLED
+    assert refreshed.cancel_requested is True
 
 
 async def test_run_once_marks_failed_for_unknown_job_type(session, session_factory):

@@ -52,6 +52,115 @@ async def test_harvest_status_404(client):
     assert resp.status_code == 404
 
 
+async def _run_by_job_id(client, job_id: str) -> dict:
+    runs = await client.get("/api/v1/runs?limit=10")
+    return next(r for r in runs.json() if r["job_id"] == job_id)
+
+
+async def test_harvest_channel_url_resolves_to_id(client):
+    cid = "UCnV8h6ZzQnLoFBFXqHGtxBg"
+    resp = await client.post(
+        "/api/v1/harvest",
+        json={"channel_id": f"https://www.youtube.com/channel/{cid}", "max_videos": 3},
+    )
+    assert resp.status_code == 200
+    run = await _run_by_job_id(client, resp.json()["job_id"])
+    assert run["target_type"] == "channel"
+    assert run["target_id"] == cid
+
+
+async def test_harvest_playlist_url_resolves_to_id(client):
+    pid = "PLXQvmY7fb6woRMSD8cgk10UIJRt9nmuXl"
+    resp = await client.post(
+        "/api/v1/harvest",
+        json={"playlist_id": f"https://www.youtube.com/playlist?list={pid}", "max_videos": 3},
+    )
+    assert resp.status_code == 200
+    run = await _run_by_job_id(client, resp.json()["job_id"])
+    assert run["target_type"] == "playlist"
+    assert run["target_id"] == pid
+
+
+async def test_harvest_unrecognized_playlist_url_400(client):
+    resp = await client.post(
+        "/api/v1/harvest", json={"playlist_id": "https://example.com/no-list", "max_videos": 3}
+    )
+    assert resp.status_code == 400
+
+
+async def test_recurring_source_target_lifecycle(client):
+    cid = "UCnV8h6ZzQnLoFBFXqHGtxBg"
+    resp = await client.post(
+        "/api/v1/harvest",
+        json={"channel_id": cid, "max_videos": 3, "repeat_interval_minutes": 60},
+    )
+    assert resp.status_code == 200
+
+    listing = await client.get("/api/v1/source-targets")
+    assert listing.status_code == 200
+    targets = listing.json()
+    assert len(targets) == 1
+    target = targets[0]
+    assert target["target_type"] == "channel"
+    assert target["source_value"] == cid
+    assert target["scan_interval_minutes"] == 60
+    assert target["is_active"] is True
+    assert target["next_crawl_at"] is not None
+
+    deleted = await client.delete(f"/api/v1/source-targets/{target['id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "ok"
+    assert (await client.get("/api/v1/source-targets")).json() == []
+
+
+async def test_stop_pending_run_cancels(client):
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = resp.json()["job_id"]
+    stop = await client.post(f"/api/v1/runs/{job_id}/stop")
+    assert stop.status_code == 200
+    assert stop.json()["state"] == "cancelled"
+    status = await client.get(f"/api/v1/harvest/{job_id}")
+    assert status.json()["state"] == "cancelled"
+
+
+async def test_stop_running_run_sets_cancel_requested(client, session):
+    from ktc.models import CrawlRun, RunState
+
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = int(resp.json()["job_id"])
+    run = await session.get(CrawlRun, job_id)
+    run.state = RunState.RUNNING
+    await session.commit()
+
+    stop = await client.post(f"/api/v1/runs/{job_id}/stop")
+    assert stop.status_code == 200
+    assert stop.json()["state"] == "running"
+    await session.refresh(run)
+    assert run.cancel_requested is True
+    assert run.state == "running"
+
+
+async def test_stop_terminal_run_400(client, session):
+    from ktc.models import CrawlRun, RunState
+
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = int(resp.json()["job_id"])
+    run = await session.get(CrawlRun, job_id)
+    run.state = RunState.DONE
+    await session.commit()
+    stop = await client.post(f"/api/v1/runs/{job_id}/stop")
+    assert stop.status_code == 400
+
+
+async def test_restart_run_creates_new_run(client):
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = resp.json()["job_id"]
+    restart = await client.post(f"/api/v1/runs/{job_id}/restart")
+    assert restart.status_code == 200
+    assert restart.json()["job_id"] != job_id
+    assert restart.json()["state"] == "pending"
+
+
 async def test_settings_roundtrip(client):
     resp = await client.post("/api/v1/settings", json={"gemini_engine_version": "gemini-1.5-pro"})
     assert resp.status_code == 200

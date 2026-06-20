@@ -139,6 +139,34 @@ class YouTubeClient:
             {"part": "snippet,statistics,contentDetails", "id": ids},
         )
 
+    async def channels_list_by_handle(self, handle: str) -> dict[str, Any]:
+        """`@handle`로 채널을 조회한다 (channels.list forHandle, 쿼터 1)."""
+        return await self._get(
+            "channels",
+            {"part": "snippet,contentDetails", "forHandle": handle},
+        )
+
+    async def channels_list_by_username(self, username: str) -> dict[str, Any]:
+        """legacy username으로 채널을 조회한다 (channels.list forUsername, 쿼터 1)."""
+        return await self._get(
+            "channels",
+            {"part": "snippet,contentDetails", "forUsername": username},
+        )
+
+    async def search_channels(
+        self, query: str, *, max_results: int = 1
+    ) -> dict[str, Any]:
+        """채널명으로 채널을 검색한다 (search.list type=channel, 쿼터 100)."""
+        return await self._get(
+            "search",
+            {
+                "part": "snippet",
+                "type": "channel",
+                "q": query,
+                "maxResults": _clamp_max_results(max_results),
+            },
+        )
+
     async def playlists_list(self, playlist_ids: str | list[str]) -> dict[str, Any]:
         """재생목록 snippet/contentDetails 조회 (쿼터 1)."""
         ids = ",".join(playlist_ids) if isinstance(playlist_ids, list) else playlist_ids

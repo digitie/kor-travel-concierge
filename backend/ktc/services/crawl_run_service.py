@@ -218,6 +218,59 @@ async def mark_failed(session: AsyncSession, run_id: int, *, error: str) -> None
     await session.commit()
 
 
+async def cancel_pending(session: AsyncSession, run_id: int) -> CrawlRun | None:
+    """아직 claim되지 않은 `pending` 작업을 즉시 취소한다."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return None
+    run.state = RunState.CANCELLED
+    run.finished_at = utcnow()
+    _append_log_to_run(
+        run, "사용자 요청으로 대기 중 작업을 취소했습니다.", level="warning"
+    )
+    await session.commit()
+    return run
+
+
+async def request_cancel(session: AsyncSession, run_id: int) -> CrawlRun | None:
+    """실행 중 작업에 협조적 중지 신호(`cancel_requested`)를 건다."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return None
+    run.cancel_requested = True
+    _append_log_to_run(
+        run,
+        "사용자 요청으로 작업 중지를 요청했습니다. 곧 중지됩니다.",
+        level="warning",
+    )
+    await session.commit()
+    return run
+
+
+async def is_cancel_requested(session: AsyncSession, run_id: int) -> bool:
+    """실행자가 폴링하는 협조적 중지 신호 여부."""
+    result = await session.execute(
+        select(CrawlRun.cancel_requested).where(CrawlRun.id == run_id)
+    )
+    return bool(result.scalar())
+
+
+async def mark_cancelled(
+    session: AsyncSession,
+    run_id: int,
+    *,
+    message: str = "사용자 요청으로 작업을 중지했습니다.",
+) -> None:
+    """실행 중 협조적 취소된 작업을 `cancelled`로 마감한다(실패 아님)."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return
+    run.state = RunState.CANCELLED
+    run.finished_at = utcnow()
+    _append_log_to_run(run, message, level="warning")
+    await session.commit()
+
+
 async def requeue_stale(
     session: AsyncSession,
     *,

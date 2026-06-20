@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-21: T-094 완료 — 수집 입력 유연화 + 반복 수집 + 작업 제어 + UI 재구성
+
+- **채널/재생목록 입력 해석**: harvest의 `channel_id`가 채널명/@handle/채널 URL/`UC...`를, `playlist_id`가 `PL...`/재생목록·시청 URL을 받아 표준 ID로 해석한다. `ktc/etl/source_resolve.py`(순수 파서 `parse_channel_input`/`parse_playlist_id` + API 해석 `resolve_channel_id`), `youtube_client`에 `forHandle`/`forUsername`/`search type=channel` 추가. `start_harvest`에서 해석 후 표준 ID로 run/target 저장(해석 실패는 400). 라이브 검증: 채널 URL→UC, 채널명 "빵이네tv"→UC(search), 재생목록 URL→PL.
+- **반복 수집**: `HarvestRequest.repeat_interval_minutes`가 있으면 1회 즉시 수집과 함께 `source_target`(scan_interval_minutes, is_active, next_crawl_at=now+interval)로 등록 → 기존 source_scan이 주기 enqueue. `GET /source-targets`(활성·interval 있는 반복 대상), `DELETE /source-targets/{id}`(비활성화, watermark 보존). 프런트는 “반복 검색” 체크박스 + 간격(30분~1주) 선택.
+- **작업 중지/재시작**: `RunState.CANCELLED` + `cancel_requested` 컬럼 추가(migration `20260621_0008`; 기존 DB는 alembic_version 없어 직접 ALTER). `POST /runs/{id}/stop`(pending→cancelled, running→협조적 취소 신호), `POST /runs/{id}/restart`(같은 입력 새 run). worker `execute_run`을 handler task + heartbeat/cancel watcher로 리팩터링해 `cancel_requested` 폴링 시 handler를 취소하고 `cancelled`로 마감(외부 취소는 전파).
+- **UI 재구성**: 장소 목록을 지도 옆(상단 2열)으로, 검수 큐·반복 작업·운영을 하단의 작은 3열로 재배치. **반복 작업 패널**(타입/간격/다음 실행 + 삭제), **최근 작업/실행 큐 카드 클릭 시 상세 로그 펼침 + 중지/재시작** 버튼. `lib/api.ts`에 `SourceTargetSummary`/`listSourceTargets`/`deleteSourceTarget`/`stopRun`/`restartRun` 추가.
+- **검증**: backend 244 pytest 통과·compileall, frontend lint/type-check/build 통과, dev 스택 재빌드 후 Playwright로 레이아웃·폼·반복 등록/삭제·작업 중지/재시작·채널명 해석을 실 도메인 데이터로 확인. prod SSH 접속정보는 gitignore된 `docs/prod-access.local.md`에만 저장.
+
 ## 2026-06-21: T-093 완료 — prod 배포 + Next 프로덕션 빌드 전환
 
 - **배경**: T-092(모바일 Select native 폴백, PR #96)을 머지·dev 반영했으나 `concierge.digitie.mywire.org`는 "그대로"였다. 진단 결과 공개 도메인은 dev 머신이 아니라 **별도 LAN prod 호스트(SSH)**가 서빙하며, 이 세션의 재배포는 dev 인스턴스(12605)만 갱신했음을 확인(prod는 `docker save|ssh load` 이미지 운영, 소스 트리 부재).

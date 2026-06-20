@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ktc.models.base import Base, TimestampMixin
@@ -23,6 +23,8 @@ class RunState(str, Enum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+    # 사용자 요청으로 중지된 작업. pending이면 claim 전에, running이면 협조적 취소로 전이한다.
+    CANCELLED = "cancelled"
 
 
 class RunSource(str, Enum):
@@ -65,6 +67,10 @@ class CrawlRun(TimestampMixin, Base):
     )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 실행 중 작업에 대한 협조적 중지 신호. 실행자(heartbeat watcher)가 폴링해 작업을 취소한다.
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
         return f"<CrawlRun id={self.id} job={self.job_type} state={self.state}>"
