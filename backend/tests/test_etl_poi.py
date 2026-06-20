@@ -7,7 +7,7 @@ import json
 import pytest
 
 from ktc.etl import gemini_client, poi_extraction
-from ktc.etl.poi_extraction import POIExtractionError, extract_pois
+from ktc.etl.poi_extraction import POIExtractionError, build_prompt, extract_pois
 
 _VALID_JSON = json.dumps(
     {
@@ -118,3 +118,42 @@ def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
     assert captured["headers"]["X-goog-api-key"] == "gemini-key"
     assert captured["json"]["generationConfig"]["responseMimeType"] == "application/json"
     assert captured["json"]["generationConfig"]["responseSchema"] is poi_extraction.RESPONSE_JSON_SCHEMA
+
+
+def test_build_prompt_embeds_description_and_extraction_instruction():
+    description = "협재 해수욕장과 한담 해안산책로를 영상 설명에 적어 둠"
+    prompt = build_prompt(
+        timestamped_transcript="[00:10] 협재 해수욕장 도착",
+        description_raw=description,
+    )
+    # 영상 설명 원문이 프롬프트에 그대로 포함되어야 한다.
+    assert "[영상 설명 원문]" in prompt
+    assert description in prompt
+    # 자막뿐 아니라 영상 설명에서도 장소를 추출하라는 지시가 있어야 한다.
+    assert "영상 설명 원문 양쪽에 등장하는 장소(POI)를 모두 추출" in prompt
+    assert "영상 설명에만 적혀 있고 자막에는 없는 장소도" in prompt
+    # 기존 보정 지시는 유지된다(ADR-16 원문/보정 분리).
+    assert "영상 설명의 오탈자·문맥을 보정" in prompt
+
+
+def test_build_prompt_handles_missing_description():
+    prompt = build_prompt(timestamped_transcript="t", description_raw=None)
+    assert "[영상 설명 원문]\n\n" in prompt
+
+
+def test_extract_pois_passes_description_into_llm_prompt():
+    captured: dict[str, str] = {}
+    description = "성산일출봉 근처 카페 정보는 영상 설명에만 있음"
+
+    def capturing_llm(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return _VALID_JSON
+
+    extract_pois(
+        timestamped_transcript="[00:05] 안녕하세요",
+        description_raw=description,
+        llm=capturing_llm,
+    )
+    # LLM에 전달된 프롬프트에 영상 설명 원문이 포함되어야 한다.
+    assert description in captured["prompt"]
+    assert "[영상 설명 원문]" in captured["prompt"]

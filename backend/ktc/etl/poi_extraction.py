@@ -72,10 +72,18 @@ RESPONSE_JSON_SCHEMA: dict = {
 
 
 def build_prompt(*, timestamped_transcript: str, description_raw: str | None) -> str:
-    """POI 추출 프롬프트를 구성한다."""
+    """POI 추출 프롬프트를 구성한다.
+
+    장소(POI)는 타임스탬프 자막뿐 아니라 영상 설명 원문에서도 추출한다. 영상 설명에는
+    음성/자막에 나오지 않는 장소명·주소·링크가 적혀 있는 경우가 많으므로 두 출처를 모두
+    근거로 삼는다. 동시에 영상 설명 원문은 보정 결과(`description_gemini_corrected`)에만
+    반영하고 원문 자체는 덮어쓰지 않는다(ADR-16).
+    """
     return (
         "다음은 여행 YouTube 영상의 타임스탬프 자막과 영상 설명 원문이다. "
-        "장소(POI)를 추출하고, 영상 설명의 오탈자·문맥을 보정하라. "
+        "타임스탬프 자막과 영상 설명 원문 양쪽에 등장하는 장소(POI)를 모두 추출하라. "
+        "영상 설명에만 적혀 있고 자막에는 없는 장소도 빠짐없이 추출하라. "
+        "그리고 영상 설명의 오탈자·문맥을 보정하라. "
         "반드시 주어진 JSON Schema에 맞는 JSON만 출력하라.\n\n"
         f"[영상 설명 원문]\n{description_raw or ''}\n\n"
         f"[타임스탬프 자막]\n{timestamped_transcript}\n"
