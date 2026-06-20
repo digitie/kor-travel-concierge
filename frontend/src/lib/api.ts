@@ -133,13 +133,23 @@ export type RustfsStatus = {
 };
 
 export type RuntimeSettings = {
+  // gemini_engine_version은 선택된 AI 엔진(Gemini 또는 DeepSeek)을 가리킨다.
   gemini_engine_version: string;
   gemini_engine_default: string;
+  // Gemini + DeepSeek 통합 엔진 선택지.
   gemini_engine_options: string[];
+  // 모든 AI 프롬프트 앞에 붙는 사전 프롬프트(미설정 시 기본 예제).
+  ai_preprompt: string;
+  ai_preprompt_default: string;
+  // DeepSeek 키는 평문으로 내려주지 않고 설정 여부만 노출한다.
+  deepseek_api_key_set: boolean;
 };
 
+// 변경된 필드만 보낸다. deepseek_api_key는 새 값을 입력했을 때만 포함한다.
 export type RuntimeSettingsUpdate = {
-  gemini_engine_version: string;
+  gemini_engine_version?: string;
+  deepseek_api_key?: string;
+  ai_preprompt?: string;
 };
 
 export type ResolveCandidateInput = {

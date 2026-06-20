@@ -62,7 +62,7 @@ def test_generate_derived_keywords_custom_generator_dedup():
 
 
 def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
-    from ktc.etl import keyword_expansion
+    from ktc.etl import gemini_client, keyword_expansion
 
     def ok_post(**kwargs):
         return {
@@ -75,12 +75,12 @@ def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr(keyword_expansion, "post_generate_content", ok_post)
+    monkeypatch.setattr(gemini_client, "post_generate_content", ok_post)
     gen = keyword_expansion.make_gemini_keyword_generator(api_key="k", model="m")
     assert gen("제주", "summer") == ["제주 카페", "제주 오름"]
 
     def boom(**kwargs):
         raise RuntimeError("gemini down")
 
-    monkeypatch.setattr(keyword_expansion, "post_generate_content", boom)
+    monkeypatch.setattr(gemini_client, "post_generate_content", boom)
     assert gen("제주", "summer") == keyword_expansion._fallback_generator("제주", "summer")

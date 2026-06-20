@@ -23,6 +23,31 @@ GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
     "gemini-1.5-pro",
 )
 
+# DeepSeek V4 (OpenAI 호환, base_url=https://api.deepseek.com). 두 모델 모두 1M context,
+# JSON 출력·tool call 지원. api-docs.deepseek.com 기준.
+DEEPSEEK_ENGINE_OPTIONS: tuple[str, ...] = (
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+)
+
+# 웹 설정의 AI 엔진 선택지 = Gemini + DeepSeek 통합 목록(순서 보존).
+LLM_ENGINE_OPTIONS: tuple[str, ...] = (*GEMINI_ENGINE_OPTIONS, *DEEPSEEK_ENGINE_OPTIONS)
+
+
+def is_deepseek_model(model: str) -> bool:
+    """선택된 엔진이 DeepSeek provider인지 판별한다."""
+    return model.strip().lower().startswith("deepseek")
+
+
+# AI에게 명령을 주기 전에 모든 프롬프트 앞에 붙는 사용자 편집 가능 사전 프롬프트의 기본 예제.
+# 웹 설정에서 수정할 수 있고, 비우면 이 기본값이 쓰인다(JSON 출력 안정성도 함께 강화).
+AI_PREPROMPT_DEFAULT = (
+    "당신은 한국 여행 콘텐츠(YouTube 영상·자막)를 분석해 여행지(POI) 정보를 정리하는 보조자다. "
+    "항상 한국어로, 영상에 실제로 드러난 사실에 근거해 답하라. 확실하지 않은 장소명·위치·"
+    "카테고리는 단정하지 말고 불확실성을 함께 표시하라. 광고·과장 표현은 제거하고 사실만 남겨라. "
+    "출력은 지정된 JSON 스키마에 정확히 맞는 JSON만 반환하고, 코드펜스(```)나 추가 설명 문장은 붙이지 마라."
+)
+
 
 class Settings(BaseSettings):
     """`.env` 주입 기반 전역 설정.
@@ -63,6 +88,19 @@ class Settings(BaseSettings):
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""
     GEMINI_ENGINE_VERSION: str = GEMINI_ENGINE_VERSION_DEFAULT
+
+    # --- LLM: DeepSeek V4 (OpenAI 호환) ---
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+
+    # --- AI 사전 프롬프트(모든 프롬프트 앞에 prepend). 비우면 AI_PREPROMPT_DEFAULT 사용 ---
+    AI_PREPROMPT: str = ""
+
+    # --- LLM 재시도(사람과 유사한 느린 백오프). Gemini·DeepSeek 공용 ---
+    LLM_RETRY_MAX_ATTEMPTS: int = 4
+    LLM_RETRY_BASE_DELAY_SECONDS: float = 15.0
+    LLM_RETRY_MAX_DELAY_SECONDS: float = 90.0
+    LLM_RETRY_JITTER: float = 0.3
 
     # --- YouTube Data API v3 ---
     YOUTUBE_API_KEY: str = ""

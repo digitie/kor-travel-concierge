@@ -76,7 +76,7 @@ async def test_settings_rejects_unknown_gemini_engine(client):
         json={"gemini_engine_version": "gemini-unknown-model"},
     )
     assert resp.status_code == 400
-    assert "지원하지 않는 Gemini 엔진 버전" in resp.json()["detail"]
+    assert "지원하지 않는 AI 엔진" in resp.json()["detail"]
 
 
 async def test_health(client):

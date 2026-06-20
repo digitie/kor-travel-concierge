@@ -15,9 +15,7 @@ import json
 from collections.abc import Callable
 
 from ktc.core.config import get_settings
-from ktc.etl import category_catalog
-from ktc.etl.gemini_client import post_generate_content
-from ktc.etl.poi_extraction import _extract_gemini_text
+from ktc.etl import category_catalog, llm_client
 
 # llm 시그니처: (prompt) -> JSON 문자열
 LlmCallable = Callable[[str], str]
@@ -102,35 +100,37 @@ def suggest_category_code(
     return select_category_code(payload)
 
 
+def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
+    """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 카테고리 선택 `LlmCallable`을 만든다."""
+
+    def call(prompt: str) -> str:
+        try:
+            return llm_client.complete_json(
+                runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
+            )
+        except llm_client.LlmRequestError as exc:
+            raise RuntimeError(
+                f"카테고리 제안 호출 실패(status={exc.status_code}, model={runtime.model})"
+            ) from exc
+
+    return call
+
+
 def make_gemini_category_llm(
     *,
     api_key: str | None = None,
     model: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> LlmCallable:
-    """Gemini REST API를 호출하는 production `LlmCallable`을 만든다."""
-    settings = get_settings()
-    resolved_key = api_key or settings.GEMINI_API_KEY
-    resolved_model = model or settings.GEMINI_ENGINE_VERSION
-    if not resolved_key:
+    """`.env`/인자 기반 production `LlmCallable` (BACK-COMPAT shim → make_llm)."""
+    from dataclasses import replace
+
+    runtime = llm_client.LlmRuntime.from_settings(model=model)
+    if api_key:
+        runtime = replace(runtime, gemini_api_key=api_key)
+    if not (runtime.gemini_api_key or runtime.is_deepseek):
         raise ValueError("GEMINI_API_KEY가 필요하다")
-
-    def call(prompt: str) -> str:
-        data = post_generate_content(
-            api_key=resolved_key,
-            model=resolved_model,
-            body={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": RESPONSE_JSON_SCHEMA,
-                },
-            },
-            timeout_seconds=timeout_seconds,
-        )
-        return _extract_gemini_text(data)
-
-    return call
+    return make_llm(runtime)
 
 
 def default_category_llm() -> LlmCallable | None:

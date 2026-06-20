@@ -591,12 +591,17 @@ async def update_settings_endpoint(
         await settings_service.set_many(session, values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 비밀 값(DeepSeek 키)은 감사 로그에 평문으로 남기지 않는다.
+    audit_payload = {
+        key: ("***" if key == "deepseek_api_key" and value else value)
+        for key, value in settings.items()
+    }
     await audit_service.record(
         session,
         actor_type="web",
         action="settings.update",
         target_type="system_settings",
-        payload=settings,
+        payload=audit_payload,
     )
     return {"status": "updated", "settings": await settings_service.get_all(session)}
 
