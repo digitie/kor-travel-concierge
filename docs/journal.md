@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-20: T-087 완료 — 영상 설명(description) 기반 POI 추출 보강
+
+- **배경**: 자막에는 음성으로 언급되지 않지만 영상 설명란에만 적혀 있는 장소명·주소·링크가 흔하다. 영상 설명 원문이 Gemini POI 추출에 안정적으로 입력되어, 자막뿐 아니라 영상 설명에서도 장소 후보를 뽑도록 보강하기로 했다.
+- **조사 결과(데이터 흐름은 이미 정상)**:
+  - `youtube_client.videos_list`는 `part=snippet,statistics,contentDetails`로 호출한다(`backend/ktc/etl/youtube_client.py:127`). `videos.list`의 `snippet.description`은 잘리지 않은 **전체 설명**이다(검색용 `search.list` 스니펫과 달리 truncate 없음).
+  - `pipeline.build_candidate`가 `description_raw = snippet.get("description")`을 `videos.list` 항목에서 채운다(`backend/ktc/etl/pipeline.py:90`, 상세 조회는 `pipeline.py:392`). 즉 저장되는 설명은 전체 설명이다.
+  - `ingest_service.upsert_video`가 `description_raw`를 멱등 저장하고 Gemini 보정 필드는 건드리지 않는다(`backend/ktc/etl/ingest_service.py:343,352-355`).
+  - `summarize_service.summarize_video`가 `extract_pois(..., description_raw=video.description_raw, ...)`로 전달한다(`backend/ktc/etl/summarize_service.py:105`).
+  - `poi_extraction.build_prompt`가 `[영상 설명 원문]\n{description_raw or ''}`을 임베드한다(`backend/ktc/etl/poi_extraction.py:80`).
+  - `video_analysis_service`의 `_video_context`는 `description_raw`를 포함하므로 `build_url_summary_prompt`/`build_reconcile_prompt`에도 이미 설명이 들어간다(`backend/ktc/etl/video_analysis_service.py:180`).
+- **실제 공백(프롬프트 지시)**: 데이터는 전체 설명이 끝까지 흐르지만, POI 프롬프트 지시는 "장소를 추출하고 영상 설명의 오탈자·문맥을 보정하라"로만 되어 있어 설명을 **보정 대상**으로만 취급했다. 설명란에만 있는 장소를 추출하라는 명시 지시가 없었다.
+- **수정**: `poi_extraction.build_prompt` 지시를 "타임스탬프 자막과 영상 설명 원문 양쪽에 등장하는 장소(POI)를 모두 추출하라. 영상 설명에만 적혀 있고 자막에는 없는 장소도 빠짐없이 추출하라."로 확장하고, 기존 보정 지시는 유지했다. 원문 `description_raw`는 그대로 두고 보정본은 `description_gemini_corrected`에만 반영하는 ADR-16 분리는 변경하지 않았다.
+- **검증**: `build_prompt`가 영상 설명 원문과 추출 지시를 포함하는지, `extract_pois`가 설명을 LLM 프롬프트에 전달하는지 회귀 테스트를 `backend/tests/test_etl_poi.py`에 추가. `python -m compileall ktc` 통과, POI 9건 통과, 디스포저블 PostGIS 테스트 DB(`kor_travel_concierge_test`)로 summarize/ingest/pipeline/video_analysis 30건 + 백엔드 전체 스위트 통과.
+
 ## 2026-06-20: T-085 완료 — AI 엔진 다중 provider + 사전 프롬프트 + JSON + 느린 재시도 (ADR-30)
 
 - **배경**: 그동안 ETL·Deep Research의 LLM 호출이 Gemini 단일 provider(ADR-3)에 묶여 있었다. 사용자가 (1) DeepSeek V4를 대안 provider로 추가하고 웹 설정에서 엔진을 전환, (2) 모든 AI 프롬프트 앞에 편집 가능한 공통 지침(사전 프롬프트) 적용, (3) 두 provider 모두 안정적 JSON 출력, (4) 외부 LLM 429/일시 오류에 사람처럼 충분히 느리게 재시도하도록 요청했다.
