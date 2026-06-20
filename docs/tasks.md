@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [x] **T-092**: 모바일(삼성 인터넷) Select 미동작 수정 — Base UI Select가 터치(coarse pointer)에서 동작 안 하던 문제를, 공유 `Select`가 coarse pointer에서 OS 네이티브 `<select>`로 폴백하도록 수정(데스크톱은 Base UI 유지, 호출부 무변경 자동 적용). lint/type-check/build 통과, Playwright 터치 컨텍스트로 native 렌더·선택 연동 검증. (2026-06-20)
 - [x] **T-091**: whisper 폴백 활성화 재실행 + VWorld 지도 키 반영 — `.env`/`.env.production`에 `TRANSCRIPT_WHISPER_ENABLED=true`·`WHISPER_MODEL_SIZE=base`(.env.example 문서화). 깨끗한 DB UI E2E 재실행: 자막 3/27→11/27, 지오코딩 장소 13(전부). 전과 0건이던 키워드(제주 7)·채널(6) 소스가 whisper 전사로 추출 성공. 플레이리스트는 이번 배치 rate-limit으로 0(가용성 변동성). VWorld: docker-manager `.env`에 `NEXT_PUBLIC_VWORLD_API_KEY` 추가+UI 재시작으로 지도 렌더링 정상화. dev DB 복원·e2e DB 삭제. `docs/e2e-report-2026-06-20-ui-whisper.md`. (2026-06-20)
 - [x] **T-090**: UI 레벨 수집 E2E(10영상×3소스, 깨끗한 DB) — Playwright로 웹 UI 직접 조작(폼→"수집 시작"→"자막 생성 시작"). T-089 수정 빌드로 재배포, 깨끗한 `kor_travel_concierge_e2e`에서 27영상 수집. UI 2단계 플로우 검증 + T-089 버그 수정 검증(키워드 정상 완료). 플레이리스트 9개 장소 전부 지오코딩. 채널·키워드는 자막 가용성(youtube-transcript-api 차단 추정, whisper 미활성) 때문에 0건 — transcript 비면 POI 스킵. 권장: description 단독 POI 또는 whisper 폴백. 실행 후 dev DB 복원·e2e DB 삭제. `docs/e2e-report-2026-06-20-ui-10videos.md`. (2026-06-20)
 - [x] **T-089**: POI 타임스탬프 `VARCHAR(16)` truncation 버그 수정 — T-088 E2E에서 발견. `extracted_place_candidates`/`video_place_mappings`의 `timestamp_start/end`를 `String(64)`로 확장 + `@validates` 방어적 클립(모든 적재 경로 보호), Alembic migration `20260620_0007`. 클립 회귀 테스트 4종 + PostGIS 테스트 DB로 models/poi/place_service 통과. (2026-06-20)
