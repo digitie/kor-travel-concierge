@@ -413,11 +413,21 @@ async def place_search_endpoint(
     all_hits = normalized["google"] + normalized["kakao"] + normalized["naver"]
     gemini_opinion: dict[str, Any] | None = None
     if all_hits:
+        # Gemini 의견은 보조 정보이므로, 느린 사람-유사 재시도가 검수 검색 응답을
+        # 통째로 막지 않도록 짧은 상한을 둔다(초과 시 provider 결과만 반환).
         try:
             runtime = await settings_service.get_llm_runtime(session)
-            gemini_opinion = await asyncio.to_thread(
-                place_search.gemini_place_opinion, runtime, query=query, hits=all_hits
+            gemini_opinion = await asyncio.wait_for(
+                asyncio.to_thread(
+                    place_search.gemini_place_opinion,
+                    runtime,
+                    query=query,
+                    hits=all_hits,
+                ),
+                timeout=20.0,
             )
+        except (asyncio.TimeoutError, TimeoutError):
+            errors["gemini"] = "Gemini 의견 시간 초과(20초)"
         except Exception as exc:  # noqa: BLE001 - Gemini 의견 실패는 검색 결과를 막지 않는다
             errors["gemini"] = str(exc)
 
