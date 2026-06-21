@@ -556,3 +556,183 @@ async def test_settings_post_masks_secret_in_audit(client, session):
     assert settings_logs
     assert "ds-secret-xyz" not in settings_logs[0].payload_json
     assert "***" in settings_logs[0].payload_json
+
+
+async def test_run_labels_human_readable(client, session):
+    from ktc.models import CrawlRun, RunSource, RunState, YoutubeChannel
+
+    session.add(YoutubeChannel(channel_id="UClabeltest", title="빵이네tv"))
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            target_type="channel",
+            target_id="UClabeltest",
+            state=RunState.DONE,
+            progress=1.0,
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            target_type="keyword",
+            target_id="부산 여행",
+            state=RunState.DONE,
+            progress=1.0,
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="source_scan",
+            source=RunSource.SCHEDULER,
+            target_type="channel",
+            target_id="UCunknownxyz",
+            state=RunState.DONE,
+            progress=1.0,
+        )
+    )
+    await session.commit()
+
+    runs = (await client.get("/api/v1/runs?limit=20")).json()
+    by = {(r["target_type"], r["target_id"]): r for r in runs}
+    chan = by[("channel", "UClabeltest")]
+    assert chan["target_type_label"] == "유튜버"
+    assert chan["target_label"] == "빵이네tv"
+    assert chan["job_type_label"] == "수집"
+    kw = by[("keyword", "부산 여행")]
+    assert kw["target_type_label"] == "검색어"
+    assert kw["target_label"] == "부산 여행"
+    unknown = by[("channel", "UCunknownxyz")]
+    assert unknown["target_label"] == "UCunknownxyz"  # 제목 없으면 ID 폴백
+    assert unknown["job_type_label"] == "예약 스캔"
+
+
+async def test_runs_job_types_filter(client, session):
+    from ktc.models import CrawlRun, RunSource, RunState
+
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            target_type="keyword",
+            target_id="필터수집",
+            state=RunState.DONE,
+            progress=1.0,
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="source_scan",
+            source=RunSource.SCHEDULER,
+            target_type="source_targets",
+            target_id="active",
+            state=RunState.DONE,
+            progress=1.0,
+        )
+    )
+    await session.commit()
+
+    only_harvest = (
+        await client.get("/api/v1/runs?job_types=harvest&limit=50")
+    ).json()
+    types = {r["job_type"] for r in only_harvest}
+    assert "harvest" in types
+    assert "source_scan" not in types
+
+    everything = (await client.get("/api/v1/runs?limit=50")).json()
+    assert "source_scan" in {r["job_type"] for r in everything}
+
+
+async def test_run_now_enqueues_and_increments(client, session):
+    from ktc.models import SourceTarget
+
+    target = SourceTarget(
+        target_type="keyword",
+        source_value="지금 진행 테스트",
+        is_active=True,
+        scan_interval_minutes=60,
+        max_runs=0,
+        run_count=0,
+    )
+    session.add(target)
+    await session.commit()
+    await session.refresh(target)
+    tid = target.id
+
+    resp = await client.post(f"/api/v1/source-targets/{tid}/run-now")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["created"] is True
+    assert body["job_id"] is not None
+
+    await session.refresh(target)
+    assert target.run_count == 1
+
+    runs = (await client.get("/api/v1/runs?job_types=harvest&limit=50")).json()
+    assert any(r["target_id"] == "지금 진행 테스트" for r in runs)
+
+    # 같은 작업이 이미 active → 중복 생성하지 않음
+    again = (await client.post(f"/api/v1/source-targets/{tid}/run-now")).json()
+    assert again["created"] is False
+
+    missing = await client.post("/api/v1/source-targets/999999/run-now")
+    assert missing.status_code == 404
+
+
+async def test_source_target_videos_union(client, session):
+    from ktc.models import (
+        CrawlRun,
+        RunSource,
+        RunState,
+        SourceTarget,
+        YoutubeChannel,
+        YoutubeVideo,
+    )
+
+    session.add(YoutubeChannel(channel_id="UCunion", title="유니온 채널"))
+    for vid in ("uvid1", "uvid2", "uvid3"):
+        session.add(
+            YoutubeVideo(
+                video_id=vid,
+                title=f"영상 {vid}",
+                url=f"https://youtu.be/{vid}",
+                channel_id="UCunion",
+            )
+        )
+    target = SourceTarget(
+        target_type="keyword",
+        source_value="누적 키워드",
+        is_active=True,
+        scan_interval_minutes=60,
+    )
+    session.add(target)
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.SCHEDULER,
+            target_type="keyword",
+            target_id="누적 키워드",
+            state=RunState.DONE,
+            progress=1.0,
+            result_json='{"video_ids": ["uvid1", "uvid2"]}',
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.SCHEDULER,
+            target_type="keyword",
+            target_id="누적 키워드",
+            state=RunState.DONE,
+            progress=1.0,
+            result_json='{"video_ids": ["uvid3"]}',
+        )
+    )
+    await session.commit()
+    await session.refresh(target)
+
+    videos = (
+        await client.get(f"/api/v1/source-targets/{target.id}/videos")
+    ).json()
+    assert {v["video_id"] for v in videos} == {"uvid1", "uvid2", "uvid3"}

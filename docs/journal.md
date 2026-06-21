@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-21: T-099 완료 — 검색/결과 페이지 분리 + 작업 라벨 사람화 + run-now + 내부 스캔 필터
+
+T-097/098 후속 jobs/queue UX 보강. 백엔드(라벨·필터·run-now)는 포크로, 프런트(페이지 분리·표시)는 스샷 검증하며 구현(ADR-31 범위).
+
+- **페이지 분리(req1)**: 기본 `/`(결과)는 상단 `AppNav`(결과/수집/검수 + 운영·설정) + 간단한 실행 큐 상태바 + 장소·지도만. 수집 폼·작업 관리는 `/collect`(수집 폼 | 실행 큐 | 작업 반복/1회성 탭)로 분리. `AppNav`/`CollectWorkspace` 신설, `DestinationWorkspace`는 결과 전용으로 슬림화, `HarvestConsole`은 폼만(헤더 버튼·내부 실행 큐 제거).
+- **작업 라벨 사람화(req2/3)**: 백엔드 `_run_dict`/`_source_target_dict`에 `target_type_label`(유튜버/재생목록/검색어/영상)·`target_label`(키워드 텍스트 또는 채널/재생목록/영상 제목, 배치 조회로 N+1 방지)·`job_type_label`(수집/예약 스캔/심층 조사/…) 추가. 카드 1번째 줄=대상(검색어 "…"/유튜버 "…"), 작업유형은 둘째 줄 작은 배지로(가장 중요 정보 아님).
+- **run-now(req4)**: `POST /source-targets/{id}/run-now`로 반복 작업 "지금 진행" 즉시 실행(`run_target_now`, 중복 시 created:false). 1회성엔 "다시 시작"(기존 restart).
+- **내부 스캔 필터(req5)**: `GET /runs?job_types=harvest,deep_research,video_analysis`로 `source_scan`을 작업 목록·실행 큐에서 제외 → 사용자가 보는 작업이 실제 수집 작업만 남아, 상세의 "누적 수집 영상"이 정상 표시(엔드포인트는 원래 정상, source_scan은 영상 0개라 비어 보였던 것). `/source-targets/{id}/videos`는 채널 타깃도 `youtube_videos.channel_id`로 합쳐 견고화.
+- **검증**: backend 265 pytest·compileall, frontend tsc/lint/build. 13200 프리뷰에서 페이지 분리, 라벨(검색어 "korea travel guide vlog"·유튜버 "[빵이네]캠핑&여행TV"), source_scan 제외, "지금 진행"(실행 큐에 즉시 running), 상세 누적 영상 6 확인. dev/prod 배포(단 prod는 진행 중 실행 큐 종료 후).
+
 ## 2026-06-21: T-098 완료 — 검수 검색 위치 힌트 결합 + 메인 지도↔리스트 연계(번호 마커·양방향 선택)
 
 T-097 후속 UI 보강. 워크플로(2 기능 병렬 + 빌드 게이트)로 1차 구현 후 스샷으로 시각 검증·튜닝.

@@ -1,11 +1,11 @@
 import { AppNav } from "@/components/AppNav";
-import { DestinationWorkspace } from "@/components/DestinationWorkspace";
+import { CollectWorkspace } from "@/components/CollectWorkspace";
 
-export default function HomePage() {
+export default function CollectPage() {
   return (
     <main className="flex min-h-screen flex-col bg-background">
       <AppNav />
-      <DestinationWorkspace />
+      <CollectWorkspace />
     </main>
   );
 }

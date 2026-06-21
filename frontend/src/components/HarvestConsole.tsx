@@ -5,22 +5,18 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
-  ClipboardCheckIcon,
   FileTextIcon,
   Loader2Icon,
   PlayIcon,
 } from "lucide-react";
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import {
   getHarvestStatus,
-  listRunQueue,
   startHarvest,
   startTranscript,
-  type CrawlRunSummary,
   type HarvestContentFilter,
   type HarvestStatus,
   type HarvestTargetType,
@@ -43,8 +39,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { OpsMetricsDialog } from "@/components/OpsMetricsDialog";
-import { SettingsDialog } from "@/components/SettingsDialog";
 
 const targetLabels: Record<HarvestTargetType, string> = {
   keyword: "검색어",
@@ -169,16 +163,10 @@ export function HarvestConsole() {
       return data?.state === "pending" || data?.state === "running" ? 1_500 : false;
     },
   });
-  const runQueueQuery = useQuery({
-    queryKey: ["harvest-console-run-queue"],
-    queryFn: listRunQueue,
-    refetchInterval: 2_000,
-  });
 
   const status = statusQuery.data;
   const statusTone = useMemo(() => statusBadgeVariant(status?.state), [status?.state]);
   const statusLogs = status?.status_logs ?? [];
-  const queueRuns = runQueueQuery.data ?? [];
 
   const harvestResult = (status?.result ?? null) as
     | { transcript_skipped?: boolean; video_ids?: string[] }
@@ -197,22 +185,11 @@ export function HarvestConsole() {
 
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
-      <header className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold tracking-normal">Kor Travel Concierge</h1>
-          <p className="text-sm text-muted-foreground">YouTube 여행 수집 작업</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          <Link
-            href="/review"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ClipboardCheckIcon className="size-4" />
-            검수
-          </Link>
-          <OpsMetricsDialog />
-          <SettingsDialog />
-        </div>
+      <header className="flex flex-col gap-1">
+        <h1 className="text-base font-semibold tracking-normal">수집 작업</h1>
+        <p className="text-sm text-muted-foreground">
+          키워드·유튜버·재생목록으로 YouTube를 수집합니다.
+        </p>
       </header>
 
       <form
@@ -393,27 +370,6 @@ export function HarvestConsole() {
           수집 시작
         </Button>
       </form>
-
-      <section className="flex flex-col gap-3 border-t pt-5">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium">실행 큐</h2>
-          <Badge variant="outline">{queueRuns.length}</Badge>
-        </div>
-        {queueRuns.length > 0 ? (
-          <div className="flex max-h-52 flex-col gap-2 overflow-y-auto">
-            {queueRuns.map((run) => (
-              <QueueRunItem key={run.job_id} run={run} />
-            ))}
-          </div>
-        ) : (
-          <p className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-            실행 중이거나 대기 중인 작업이 없습니다.
-          </p>
-        )}
-        {runQueueQuery.error ? (
-          <p className="text-sm text-destructive">{runQueueQuery.error.message}</p>
-        ) : null}
-      </section>
 
       <section className="flex flex-col gap-3 border-t pt-5" aria-live="polite">
         <div className="flex items-center justify-between gap-3">
@@ -596,41 +552,6 @@ export function HarvestConsole() {
       ) : null}
     </div>
   );
-}
-
-function QueueRunItem({ run }: { run: CrawlRunSummary }) {
-  return (
-    <div className="flex flex-col gap-2 rounded-md border p-3 text-xs">
-      <div className="flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate font-medium">{runLabel(run)}</span>
-        <Badge variant={run.state === "running" ? "default" : "outline"}>
-          {run.state}
-        </Badge>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-primary"
-          style={{ width: `${Math.round(run.progress * 100)}%` }}
-        />
-      </div>
-      <div className="flex items-start justify-between gap-2">
-        <span className="min-w-0 break-words text-muted-foreground">
-          {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
-        </span>
-        <span className="shrink-0 text-muted-foreground">
-          {Math.round(run.progress * 100)}%
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function runLabel(run: CrawlRunSummary) {
-  return [run.job_type, run.target_id].filter(Boolean).join(" · ");
-}
-
-function latestRunLog(run: CrawlRunSummary) {
-  return run.status_logs.at(-1)?.message ?? null;
 }
 
 function StatusRow({

@@ -27,7 +27,7 @@ function intervalLabel(minutes: number | null | undefined): string {
   return `${minutes}분`;
 }
 function targetTypeLabel(type: string | null | undefined): string {
-  if (type === "channel") return "채널";
+  if (type === "channel") return "유튜버";
   if (type === "playlist") return "재생목록";
   if (type === "keyword") return "검색어";
   if (type === "video") return "영상";
@@ -61,10 +61,13 @@ export function JobDetailDialog({
   const result = (run?.result ?? {}) as Record<string, unknown>;
   const fields: { label: string; value: string }[] = run
     ? [
-        { label: "작업", value: `${run.job_type} · #${run.job_id}` },
+        {
+          label: "대상 유형",
+          value: run.target_type_label ?? targetTypeLabel(run.target_type),
+        },
+        { label: "대상", value: run.target_label ?? run.target_id ?? "-" },
+        { label: "작업 유형", value: run.job_type_label ?? run.job_type },
         { label: "상태", value: run.state },
-        { label: "대상 유형", value: targetTypeLabel(run.target_type) },
-        { label: "키워드/ID", value: run.target_id ?? "-" },
         {
           label: "최대 영상 수",
           value: String((result.max_videos as number) ?? "-"),
@@ -78,8 +81,18 @@ export function JobDetailDialog({
       ]
     : target
       ? [
-          { label: "대상 유형", value: targetTypeLabel(target.target_type) },
-          { label: "키워드/ID", value: target.source_value },
+          {
+            label: "대상 유형",
+            value:
+              target.target_type_label ?? targetTypeLabel(target.target_type),
+          },
+          {
+            label: "대상",
+            value:
+              target.target_label ??
+              target.display_name ??
+              target.source_value,
+          },
           { label: "반복 간격", value: intervalLabel(target.scan_interval_minutes) },
           {
             label: "반복 횟수",

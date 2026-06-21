@@ -318,23 +318,131 @@ async def start_transcript(
     return HarvestJob(job_id=str(run.id), state=run.state)
 
 
+_TARGET_TYPE_LABELS = {
+    "channel": "유튜버",
+    "playlist": "재생목록",
+    "keyword": "검색어",
+    "video": "영상",
+}
+_JOB_TYPE_LABELS = {
+    "harvest": "수집",
+    "source_scan": "예약 스캔",
+    "video_analysis": "영상 분석",
+    "deep_research": "심층 조사",
+    "transcript": "자막",
+    "geocode": "지오코딩",
+    "postprocess": "후처리",
+}
+
+
+def _enum_value(value: Any) -> str:
+    """str/Enum 어느 쪽이든 비교용 문자열 값으로 정규화한다."""
+    return str(getattr(value, "value", value) or "")
+
+
+def _target_type_label(target_type: Any) -> str:
+    key = _enum_value(target_type)
+    return _TARGET_TYPE_LABELS.get(key, key)
+
+
+def _job_type_label(job_type: Any) -> str:
+    key = _enum_value(job_type)
+    return _JOB_TYPE_LABELS.get(key, key)
+
+
+async def _resolve_title_map(
+    session: AsyncSession, pairs: list[tuple[Any, str | None]]
+) -> dict[tuple[str, str], str]:
+    """(target_type, target_id) 쌍에서 사람이 읽는 제목 맵을 배치 조회한다(N+1 회피)."""
+    channel_ids: set[str] = set()
+    playlist_ids: set[str] = set()
+    video_ids: set[str] = set()
+    for target_type, target_id in pairs:
+        if not target_id:
+            continue
+        key = _enum_value(target_type)
+        if key == "channel":
+            channel_ids.add(target_id)
+        elif key == "playlist":
+            playlist_ids.add(target_id)
+        elif key == "video":
+            video_ids.add(target_id)
+
+    titles: dict[tuple[str, str], str] = {}
+    if channel_ids:
+        for cid, title in (
+            await session.execute(
+                select(YoutubeChannel.channel_id, YoutubeChannel.title).where(
+                    YoutubeChannel.channel_id.in_(channel_ids)
+                )
+            )
+        ).all():
+            if title:
+                titles[("channel", cid)] = title
+    if playlist_ids:
+        for pid, title in (
+            await session.execute(
+                select(YoutubePlaylist.playlist_id, YoutubePlaylist.title).where(
+                    YoutubePlaylist.playlist_id.in_(playlist_ids)
+                )
+            )
+        ).all():
+            if title:
+                titles[("playlist", pid)] = title
+    if video_ids:
+        for vid, title in (
+            await session.execute(
+                select(YoutubeVideo.video_id, YoutubeVideo.title).where(
+                    YoutubeVideo.video_id.in_(video_ids)
+                )
+            )
+        ).all():
+            if title:
+                titles[("video", vid)] = title
+    return titles
+
+
+def _target_label(
+    target_type: Any, target_id: str | None, titles: dict[tuple[str, str], str]
+) -> str:
+    """대상의 사람이 읽는 값(검색어 텍스트 또는 채널/재생목록/영상 제목)."""
+    key = _enum_value(target_type)
+    if key == "keyword":
+        return target_id or ""
+    return titles.get((key, target_id)) or (target_id or "")
+
+
 @router.get("/runs")
 async def list_runs(
     state: str | None = None,
     limit: int = 20,
+    job_types: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    """최근 작업 목록을 반환한다."""
+    """최근 작업 목록을 반환한다.
+
+    `job_types`(쉼표 구분)를 주면 해당 job_type만 본다(예: 내부 `source_scan`을
+    숨기고 `harvest,deep_research,video_analysis`만 노출).
+    """
+    types = (
+        [t.strip() for t in job_types.split(",") if t.strip()] if job_types else None
+    )
     runs = await crawl_run_service.list_runs(
-        session, state=state, limit=max(1, min(limit, 100))
+        session, state=state, limit=max(1, min(limit, 100)), job_types=types
+    )
+    titles = await _resolve_title_map(
+        session, [(run.target_type, run.target_id) for run in runs]
     )
     return [
         {
             "job_id": str(run.id),
             "job_type": run.job_type,
+            "job_type_label": _job_type_label(run.job_type),
             "source": run.source,
             "target_type": run.target_type,
+            "target_type_label": _target_type_label(run.target_type),
             "target_id": run.target_id,
+            "target_label": _target_label(run.target_type, run.target_id, titles),
             "state": run.state,
             "progress": run.progress,
             "current_message": run.current_message,
@@ -504,11 +612,21 @@ async def restart_run(
     return {"job_id": str(run.id), "state": run.state}
 
 
-def _source_target_dict(target: Any) -> dict[str, Any]:
+def _source_target_dict(
+    target: Any, titles: dict[tuple[str, str], str] | None = None
+) -> dict[str, Any]:
+    titles = titles or {}
+    # display_name이 source_value(원본 ID)와 다르면 사람이 읽는 이름으로 본다.
+    if target.display_name and target.display_name != target.source_value:
+        target_label = target.display_name
+    else:
+        target_label = _target_label(target.target_type, target.source_value, titles)
     return {
         "id": target.id,
         "target_type": target.target_type,
+        "target_type_label": _target_type_label(target.target_type),
         "source_value": target.source_value,
+        "target_label": target_label,
         "display_name": target.display_name,
         "is_active": target.is_active,
         "scan_interval_minutes": target.scan_interval_minutes,
@@ -533,7 +651,10 @@ async def list_source_targets(
 ) -> list[dict[str, Any]]:
     """반복 수집(스캔 주기) 활성 대상 목록을 반환한다."""
     targets = await source_scan_service.list_recurring_targets(session)
-    return [_source_target_dict(target) for target in targets]
+    titles = await _resolve_title_map(
+        session, [(target.target_type, target.source_value) for target in targets]
+    )
+    return [_source_target_dict(target, titles) for target in targets]
 
 
 @router.delete("/source-targets/{target_id}")
@@ -586,7 +707,10 @@ async def update_source_target(
         target_id=str(target_id),
         payload=payload.model_dump(exclude_none=True),
     )
-    return _source_target_dict(target)
+    titles = await _resolve_title_map(
+        session, [(target.target_type, target.source_value)]
+    )
+    return _source_target_dict(target, titles)
 
 
 @router.get("/source-targets/{target_id}/videos")
@@ -598,6 +722,32 @@ async def list_source_target_videos(
     if target is None:
         raise HTTPException(status_code=404, detail="source target not found")
     return await _videos_for_source_target(session, target)
+
+
+@router.post("/source-targets/{target_id}/run-now")
+async def run_source_target_now(
+    target_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """반복 수집 대상을 즉시 1회 실행한다('지금 진행').
+
+    같은 작업이 이미 실행/대기 중이면 그 작업을 반환하고 새로 만들지 않는다.
+    """
+    target, run, created = await source_scan_service.run_target_now(session, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="source target not found")
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="source_target.run_now",
+        target_type="source_target",
+        target_id=str(target_id),
+        payload={"run_id": run.id if run else None, "created": created},
+    )
+    return {
+        "job_id": str(run.id) if run else None,
+        "state": run.state if run else None,
+        "created": created,
+    }
 
 
 @router.get("/audit-logs")
@@ -976,6 +1126,18 @@ async def _videos_for_source_target(
     video_ids: list[str] = []
     for (result_json,) in rows:
         video_ids.extend(_video_ids_from_result(result_json))
+    # 채널 대상은 harvest 결과 video_ids가 비어 있어도 channel_id로 적재된
+    # 영상을 보강해 누적 목록이 비지 않게 한다.
+    if _enum_value(target.target_type) == "channel":
+        chan_rows = (
+            await session.execute(
+                select(YoutubeVideo.video_id)
+                .where(YoutubeVideo.channel_id == target.source_value)
+                .order_by(YoutubeVideo.published_at.desc().nullslast())
+                .limit(200)
+            )
+        ).all()
+        video_ids.extend(vid for (vid,) in chan_rows)
     return (await _video_rows(session, video_ids))[:200]
 
 

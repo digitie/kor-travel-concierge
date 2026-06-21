@@ -35,6 +35,8 @@ export type SourceTargetSummary = {
   target_type: HarvestTargetType | string;
   source_value: string;
   display_name: string | null;
+  target_type_label?: string | null;
+  target_label?: string | null;
   is_active: boolean;
   scan_interval_minutes: number | null;
   max_runs: number;
@@ -114,6 +116,10 @@ export type CrawlRunSummary = {
   source: string;
   target_type: string | null;
   target_id: string | null;
+  // 사람이 읽을 수 있는 라벨(백엔드가 채움). 없으면 프런트에서 원시값으로 폴백.
+  target_type_label?: string | null;
+  target_label?: string | null;
+  job_type_label?: string | null;
   state: string;
   progress: number;
   current_message: string | null;
@@ -125,6 +131,9 @@ export type CrawlRunSummary = {
   started_at: string | null;
   finished_at: string | null;
 };
+
+// 사용자에게 노출하는 작업 유형(내부 source_scan 등은 기본 제외).
+export const USER_JOB_TYPES = ["harvest", "deep_research", "video_analysis"] as const;
 
 export type AuditLogSummary = {
   id: number;
@@ -298,26 +307,39 @@ export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
 export async function listRuns({
   state,
   limit = 12,
+  jobTypes,
 }: {
   state?: "pending" | "running" | "done" | "failed" | string;
   limit?: number;
+  jobTypes?: readonly string[];
 } = {}): Promise<CrawlRunSummary[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (state) {
     params.set("state", state);
   }
+  if (jobTypes && jobTypes.length > 0) {
+    params.set("job_types", jobTypes.join(","));
+  }
   return requestJson<CrawlRunSummary[]>(`/api/v1/runs?${params.toString()}`);
 }
 
-export async function listRunQueue(): Promise<CrawlRunSummary[]> {
+export async function listRunQueue(
+  jobTypes?: readonly string[],
+): Promise<CrawlRunSummary[]> {
   const [running, pending] = await Promise.all([
-    listRuns({ state: "running", limit: 50 }),
-    listRuns({ state: "pending", limit: 50 }),
+    listRuns({ state: "running", limit: 50, jobTypes }),
+    listRuns({ state: "pending", limit: 50, jobTypes }),
   ]);
   return [
     ...running.sort(compareRunIdAsc),
     ...pending.sort(compareRunIdAsc),
   ];
+}
+
+export async function runSourceTargetNow(id: number): Promise<HarvestJob> {
+  return requestJson<HarvestJob>(`/api/v1/source-targets/${id}/run-now`, {
+    method: "POST",
+  });
 }
 
 function compareRunIdAsc(a: CrawlRunSummary, b: CrawlRunSummary) {
