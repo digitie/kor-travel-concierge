@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Literal
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 ChannelInputKind = Literal["id", "handle", "username", "custom", "search"]
 
@@ -44,7 +44,9 @@ def parse_channel_input(raw: str) -> tuple[ChannelInputKind, str]:
 
     if _looks_like_url(value):
         parsed = urlparse(_with_scheme(value))
-        segments = [seg for seg in parsed.path.split("/") if seg]
+        # 브라우저 주소창에서 복사하면 한글 handle/이름이 percent-encoding된다
+        # (예: `/@%EB%B9%B5...tv`). 세그먼트를 디코드해 표준 handle/이름으로 되돌린다.
+        segments = [unquote(seg) for seg in parsed.path.split("/") if seg]
         if segments:
             first = segments[0]
             if first == "channel" and len(segments) >= 2:

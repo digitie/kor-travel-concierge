@@ -4,6 +4,11 @@
 
 ---
 
+## 2026-06-21: T-095 완료 — percent-encoded 채널 URL handle 디코드 수정
+
+- **증상**: 브라우저 주소창에서 복사한 `https://www.youtube.com/@%EB%B9%B5%EC%9D%B4%EB%84%A4tv`(= `@빵이네tv`) 입력 시 `parse_channel_input`이 `urlparse` path를 디코드하지 않아 handle을 percent-encoded(`@%EB%B9%B5...tv`)로 추출 → forHandle 해석이 불안정(검색 fallback 의존, 100 quota 소모 또는 실패).
+- **수정**: `parse_channel_input`이 URL path 세그먼트를 `unquote`로 디코드해 표준 handle/custom 이름으로 되돌린다. encoded URL이 literal `@빵이네tv`와 동일하게 파싱됨을 확인, 회귀 테스트 추가. dev/prod api 재배포.
+
 ## 2026-06-21: T-094 완료 — 수집 입력 유연화 + 반복 수집 + 작업 제어 + UI 재구성
 
 - **채널/재생목록 입력 해석**: harvest의 `channel_id`가 채널명/@handle/채널 URL/`UC...`를, `playlist_id`가 `PL...`/재생목록·시청 URL을 받아 표준 ID로 해석한다. `ktc/etl/source_resolve.py`(순수 파서 `parse_channel_input`/`parse_playlist_id` + API 해석 `resolve_channel_id`), `youtube_client`에 `forHandle`/`forUsername`/`search type=channel` 추가. `start_harvest`에서 해석 후 표준 ID로 run/target 저장(해석 실패는 400). 라이브 검증: 채널 URL→UC, 채널명 "빵이네tv"→UC(search), 재생목록 URL→PL.
