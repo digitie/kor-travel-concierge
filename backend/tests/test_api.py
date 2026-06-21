@@ -340,6 +340,116 @@ async def test_destinations_reflect_db(client, session_factory):
     assert unmatched_item["feature_export_status"] == FeatureExportStatus.PENDING
 
 
+async def test_candidate_and_place_detail_and_delete(client, session_factory):
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        MatchStatus,
+        TravelPlace,
+        VideoPlaceMapping,
+        YoutubeChannel,
+        YoutubeVideo,
+        YoutubeVideoAnalysisRun,
+    )
+
+    async with session_factory() as s:
+        channel = YoutubeChannel(channel_id="uc-d", title="여행 유튜버")
+        video = YoutubeVideo(
+            video_id="vd1",
+            title="부산 브이로그",
+            url="https://youtu.be/vd1",
+            channel_id="uc-d",
+            channel_name="여행 유튜버",
+            description_raw="부산 여행 설명",
+        )
+        place = TravelPlace(
+            name="감천문화마을",
+            latitude=35.0974,
+            longitude=129.0106,
+            is_geocoded=True,
+            category="관광",
+            detailed_research_content="딥리서치 결과",
+        )
+        s.add_all([channel, video, place])
+        await s.commit()
+        await s.refresh(place)
+        run = YoutubeVideoAnalysisRun(
+            video_id="vd1", run_type="transcript_extract", state="done", model="gemini"
+        )
+        s.add(run)
+        await s.commit()
+        await s.refresh(run)
+        cand = ExtractedPlaceCandidate(
+            video_id="vd1",
+            source_text="감천문화마을 언급",
+            ai_place_name="감천문화마을",
+            match_status=MatchStatus.NEEDS_REVIEW,
+            source_kind="transcript",
+            location_hint="부산",
+            timestamp_start="00:01:00",
+            analysis_run_id=run.id,
+        )
+        sib = ExtractedPlaceCandidate(
+            video_id="vd1",
+            source_text="다른 장소",
+            ai_place_name="자갈치시장",
+            match_status=MatchStatus.NEEDS_REVIEW,
+            source_kind="transcript",
+        )
+        s.add_all([cand, sib])
+        s.add_all(
+            [
+                VideoPlaceMapping(
+                    video_id="vd1",
+                    place_id=place.place_id,
+                    ai_summary="감천 첫 언급",
+                    timestamp_start="00:01:00",
+                    source_kind="transcript",
+                ),
+                VideoPlaceMapping(
+                    video_id="vd1",
+                    place_id=place.place_id,
+                    ai_summary="감천 반복 언급",
+                    timestamp_start="00:05:00",
+                    source_kind="transcript",
+                ),
+            ]
+        )
+        await s.commit()
+        await s.refresh(cand)
+        cand_id = cand.id
+        place_id = place.place_id
+
+    detail = await client.get(f"/api/v1/destinations/candidates/{cand_id}/detail")
+    assert detail.status_code == 200
+    dj = detail.json()
+    assert dj["candidate"]["ai_place_name"] == "감천문화마을"
+    assert dj["video"]["title"] == "부산 브이로그"
+    assert dj["video"]["channel_title"] == "여행 유튜버"
+    assert dj["video"]["description"] == "부산 여행 설명"
+    assert dj["source_run"]["run_type_label"] == "자막 추출"
+    assert any(c["ai_place_name"] == "자갈치시장" for c in dj["sibling_candidates"])
+
+    place_detail = await client.get(f"/api/v1/destinations/{place_id}/detail")
+    assert place_detail.status_code == 200
+    pj = place_detail.json()
+    assert pj["place"]["name"] == "감천문화마을"
+    assert pj["place"]["detailed_research_content"] == "딥리서치 결과"
+    assert pj["stats"]["mention_count"] == 2
+    assert pj["stats"]["video_count"] == 1
+    assert pj["stats"]["channel_count"] == 1
+    source_video = pj["source_videos"][0]
+    assert source_video["video_id"] == "vd1"
+    assert source_video["mention_count"] == 2
+    assert len(source_video["mentions"]) == 2
+    assert source_video["mentions"][0]["source_text"] == "감천 첫 언급"
+
+    deleted = await client.delete(f"/api/v1/destinations/candidates/{cand_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    gone = await client.get(f"/api/v1/destinations/candidates/{cand_id}/detail")
+    assert gone.status_code == 404
+
+
 async def test_destination_export_formats(client, session_factory):
     from ktc.models import TravelPlace, VideoPlaceMapping, YoutubeVideo
 

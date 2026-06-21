@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-21: T-100 완료 — 검수 후보·확정 장소 상세 정보 뷰(반응형) + 후보 삭제 + 검색 중지
+
+T-097~099 후속. 백엔드 상세 엔드포인트는 포크로, 반응형 상세 뷰는 스샷 검증하며 구현(ADR-31 범위).
+
+- **상세 정보 뷰(반응형)**: 검수 후보/확정 장소를 클릭하면 **PC=모달, 모바일=새 페이지**(`/review/[id]`·`/place/[id]`)로 상세를 연다. `useIsMobile`(matchMedia + useSyncExternalStore, SSR-safe)로 분기. 공용 뷰(`CandidateDetailView`/`PlaceDetailView`)를 모달·페이지가 공유.
+- **검수 후보 상세**: 추출 작업(어느 큐: analysis run type label), 어느 동영상(제목/채널/길이/설명), 동영상 내 근거(구간 timestamp·출처 source_kind·원문 source_text·메모), 같은 동영상의 다른 장소 목록(sibling). + **후보 삭제**("정말 삭제할까요?" 확인 후, `DELETE /destinations/candidates/{id}`; 확정 장소 연결 시 409 안전장치).
+- **장소 상세**: 장소 정보 + **언급 횟수·동영상 수·유튜버 수**(중복) + 영상 설명/AI 보강/심층 조사 + 출처 동영상별 **중복 횟수**와 어디에 나왔는지(타임스탬프·근거 텍스트). `GET /destinations/{id}/detail`(stats + grouped source_videos; 근거 텍스트는 `video_place_mappings.ai_summary`).
+- **검색 중지**: 검수 페이지 검색 버튼 옆에 진행 중 검색 취소 버튼(react-query AbortSignal + `cancelQueries`). `searchPlaces(query, signal)`.
+- **검증**: backend 266 pytest·compileall, frontend tsc/lint/build. 13200 프리뷰에서 후보/장소 상세(모달 + 모바일 페이지), 삭제 확인, 근거(구간 00:32~00:39·transcript 원문), 장소 stats(언급2/동영상2/유튜버2) 확인. dev/prod 배포(prod는 실행 큐 종료 후).
+
 ## 2026-06-21: T-099 완료 — 검색/결과 페이지 분리 + 작업 라벨 사람화 + run-now + 내부 스캔 필터
 
 T-097/098 후속 jobs/queue UX 보강. 백엔드(라벨·필터·run-now)는 포크로, 프런트(페이지 분리·표시)는 스샷 검증하며 구현(ADR-31 범위).

@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
   DownloadIcon,
   FlaskConicalIcon,
+  InfoIcon,
   ListChecksIcon,
   MapPinIcon,
 } from "lucide-react";
@@ -26,6 +28,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -33,6 +41,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
 export function DestinationWorkspace() {
@@ -52,6 +62,18 @@ export function DestinationWorkspace() {
     queryFn: () => listRunQueue(USER_JOB_TYPES),
     refetchInterval: 3_000,
   });
+
+  const router = useRouter();
+  const isMobile = useIsMobile();
+  const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
+  // 장소 상세: 모바일=새 페이지, PC=모달.
+  function openPlaceDetail(placeId: number) {
+    if (isMobile) {
+      router.push(`/place/${placeId}`);
+    } else {
+      setDetailPlaceId(placeId);
+    }
+  }
 
   const places = useMemo(() => destinationsQuery.data ?? [], [destinationsQuery.data]);
   const selectedPlace = useMemo(
@@ -124,6 +146,7 @@ export function DestinationWorkspace() {
             onToggleExportSelection={toggleExportSelection}
             onToggleAllExportSelection={toggleAllExportSelection}
             onExport={exportPlaces}
+            onShowDetail={openPlaceDetail}
           />
         </div>
         <div className="min-h-[22rem]">
@@ -134,6 +157,20 @@ export function DestinationWorkspace() {
           />
         </div>
       </div>
+
+      <Dialog
+        open={detailPlaceId != null}
+        onOpenChange={(open) => !open && setDetailPlaceId(null)}
+      >
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>장소 상세</DialogTitle>
+          </DialogHeader>
+          {detailPlaceId != null ? (
+            <PlaceDetailView placeId={detailPlaceId} />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -189,6 +226,7 @@ function DestinationList({
   onToggleExportSelection,
   onToggleAllExportSelection,
   onExport,
+  onShowDetail,
 }: {
   places: DestinationSummary[];
   selectedPlace: DestinationSummary | null;
@@ -207,6 +245,7 @@ function DestinationList({
   onToggleExportSelection: (placeId: number) => void;
   onToggleAllExportSelection: () => void;
   onExport: () => void;
+  onShowDetail: (placeId: number) => void;
 }) {
   // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -283,7 +322,7 @@ function DestinationList({
                 rowRefs.current.delete(place.place_id);
               }
             }}
-            className="grid grid-cols-[auto_1fr] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
+            className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
             data-selected={isSelected}
           >
             <input
@@ -327,6 +366,15 @@ function DestinationList({
                 {sourceLine(place.source_videos[0])}
               </span>
             </button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={`${place.name} 상세`}
+              onClick={() => onShowDetail(place.place_id)}
+            >
+              <InfoIcon className="size-4" />
+            </Button>
           </div>
           );
         })}

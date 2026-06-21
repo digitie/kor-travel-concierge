@@ -512,8 +512,104 @@ export type PlaceSearchResult = {
   errors: Record<string, string>;
 };
 
-export async function searchPlaces(query: string): Promise<PlaceSearchResult> {
+export async function searchPlaces(
+  query: string,
+  signal?: AbortSignal,
+): Promise<PlaceSearchResult> {
   return requestJson<PlaceSearchResult>(
     `/api/v1/place-search?q=${encodeURIComponent(query)}`,
+    { signal },
   );
+}
+
+// ── 상세 정보 (검수 후보 / 확정 장소) ───────────────────────────────────────
+export type CandidateDetail = {
+  candidate: {
+    id: number;
+    ai_place_name: string;
+    location_hint: string | null;
+    candidate_category: string | null;
+    match_status: string;
+    confidence_score: number | null;
+    speaker_note: string | null;
+    source_kind: string | null;
+    timestamp_start: string | null;
+    timestamp_end: string | null;
+    source_text: string | null;
+  };
+  video: {
+    video_id: string;
+    title: string | null;
+    url: string;
+    channel_title: string | null;
+    published_at: string | null;
+    duration_seconds: number | null;
+    description: string | null;
+  } | null;
+  source_run: {
+    id: number;
+    run_type: string | null;
+    run_type_label: string | null;
+    state: string | null;
+    model: string | null;
+    created_at: string | null;
+  } | null;
+  provider_evidence: Record<string, unknown> | null;
+  sibling_candidates: {
+    id: number;
+    ai_place_name: string;
+    match_status: string;
+    candidate_category: string | null;
+  }[];
+};
+
+export async function getCandidateDetail(id: number): Promise<CandidateDetail> {
+  return requestJson<CandidateDetail>(`/api/v1/destinations/candidates/${id}/detail`);
+}
+
+export async function deleteCandidate(
+  id: number,
+): Promise<{ deleted: boolean; id: number }> {
+  return requestJson(`/api/v1/destinations/candidates/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export type PlaceMention = {
+  timestamp_start: string | null;
+  timestamp_end?: string | null;
+  source_kind: string | null;
+  source_text: string | null;
+  speaker_note?: string | null;
+};
+export type PlaceDetailVideo = {
+  video_id: string;
+  title: string | null;
+  url: string;
+  channel_title: string | null;
+  published_at: string | null;
+  mention_count: number;
+  mentions: PlaceMention[];
+};
+export type PlaceDetail = {
+  place: {
+    place_id: number;
+    name: string;
+    category: string | null;
+    category_code_suggestion: string | null;
+    official_address: string | null;
+    road_address: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    is_geocoded: boolean;
+    description: string | null;
+    gemini_enriched_description: string | null;
+    detailed_research_content: string | null;
+  };
+  stats: { mention_count: number; video_count: number; channel_count: number };
+  source_videos: PlaceDetailVideo[];
+};
+
+export async function getPlaceDetail(placeId: number): Promise<PlaceDetail> {
+  return requestJson<PlaceDetail>(`/api/v1/destinations/${placeId}/detail`);
 }
