@@ -564,14 +564,29 @@ async def place_search_opinion_endpoint(
                 runtime,
                 query=query,
                 hits=payload.hits,
+                raise_on_error=True,
             ),
             timeout=12.0,
         )
         return {"gemini": gemini_opinion, "error": None}
     except (asyncio.TimeoutError, TimeoutError):
-        return {"gemini": None, "error": "Gemini 의견 시간 초과(12초)"}
+        return {
+            "gemini": None,
+            "error": "Gemini 의견 시간 초과(12초) — 검색 결과는 정상입니다.",
+        }
     except Exception as exc:  # noqa: BLE001 - 의견 실패는 검색 흐름을 막지 않는다
-        return {"gemini": None, "error": str(exc)}
+        status = getattr(exc, "status_code", None)
+        message = str(exc)
+        if (
+            status == 429
+            or "429" in message
+            or "quota" in message.lower()
+            or "RESOURCE_EXHAUSTED" in message
+        ):
+            error = "Gemini API 쿼터 초과(429) — 검색 결과는 정상입니다."
+        else:
+            error = "Gemini 의견을 가져오지 못했습니다(일시 오류) — 검색 결과는 정상입니다."
+        return {"gemini": None, "error": error}
 
 
 @router.post("/runs/{job_id}/stop")
