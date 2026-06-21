@@ -19,6 +19,7 @@ import {
   type DestinationSummary,
   type PlaceSearchHit,
   type PlaceSearchResult,
+  type UnmatchedCandidate,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,29 @@ function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
   };
 }
 
+// location_hint는 종종 AI가 쓴 장황한 문장("인천 (영상 설명에 언급)", "불확실함 (…)")이라
+// 그대로 붙이면 검색이 망가진다. 괄호 설명을 떼고, 불확실/미상류는 힌트로 쓰지 않는다.
+function cleanLocationHint(hint: string | null): string {
+  if (!hint) return "";
+  const stripped = hint
+    .replace(/\([^)]*\)/g, " ") // 괄호 안 설명 제거
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!stripped) return "";
+  if (/불확실|불명확|미상|없음|모름|unknown|n\/?a/i.test(stripped)) return "";
+  // 앞쪽 2단어 정도의 지역명만 사용(예: "서울 강남" 유지, 긴 설명은 절단).
+  return stripped.split(" ").slice(0, 2).join(" ");
+}
+
+function buildHintedQuery(candidate: UnmatchedCandidate): string {
+  const name = candidate.ai_place_name.trim();
+  const hint = cleanLocationHint(candidate.location_hint);
+  if (hint && !name.toLowerCase().includes(hint.toLowerCase())) {
+    return `${hint} ${name}`;
+  }
+  return name;
+}
+
 export default function ReviewPage() {
   const queryClient = useQueryClient();
   const candidatesQuery = useQuery({
@@ -69,7 +93,7 @@ export default function ReviewPage() {
 
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
-  const query = queryEdit ?? selected?.ai_place_name ?? "";
+  const query = queryEdit ?? (selected ? buildHintedQuery(selected) : "");
 
   const searchQuery = useQuery({
     queryKey: ["place-search", activeQuery],
@@ -90,10 +114,10 @@ export default function ReviewPage() {
       setActiveQuery(query.trim());
     }
   }
-  function pickCandidate(id: number, name: string) {
-    setSelectedId(id);
+  function pickCandidate(candidate: UnmatchedCandidate) {
+    setSelectedId(candidate.id);
     setQueryEdit(null);
-    setActiveQuery(name);
+    setActiveQuery(buildHintedQuery(candidate));
     setForm({ name: "", latitude: "", longitude: "", category: "" });
   }
   function selectHit(hit: PlaceSearchHit) {
@@ -210,9 +234,7 @@ export default function ReviewPage() {
               <button
                 key={candidate.id}
                 type="button"
-                onClick={() =>
-                  pickCandidate(candidate.id, candidate.ai_place_name)
-                }
+                onClick={() => pickCandidate(candidate)}
                 data-selected={candidate.id === selected?.id}
                 className="flex flex-col gap-0.5 rounded-lg border p-2.5 text-left text-sm transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
               >

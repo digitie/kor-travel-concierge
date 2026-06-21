@@ -12,7 +12,7 @@ import {
   SquareIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildDestinationExportUrl,
@@ -256,6 +256,20 @@ function DestinationList({
   onToggleAllExportSelection: () => void;
   onExport: () => void;
 }) {
+  // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
+  const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const selectedPlaceId = selectedPlace?.place_id ?? null;
+
+  useEffect(() => {
+    if (selectedPlaceId == null) {
+      return;
+    }
+    rowRefs.current.get(selectedPlaceId)?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [selectedPlaceId]);
+
   return (
     <section aria-label="장소 목록" className="flex flex-col gap-4 p-4">
       <PanelHeader title="장소" count={places.length} />
@@ -303,11 +317,22 @@ function DestinationList({
       </div>
       <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
-        {places.map((place) => (
+        {places.map((place, index) => {
+          const isSelected = place.place_id === selectedPlaceId;
+          // 마커 번호와 동일한 1-based 목록 행 번호(index + 1).
+          const number = index + 1;
+          return (
           <div
             key={place.place_id}
-            className="grid grid-cols-[auto_1fr] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary"
-            data-selected={place.place_id === selectedPlace?.place_id}
+            ref={(node) => {
+              if (node) {
+                rowRefs.current.set(place.place_id, node);
+              } else {
+                rowRefs.current.delete(place.place_id);
+              }
+            }}
+            className="grid grid-cols-[auto_1fr] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
+            data-selected={isSelected}
           >
             <input
               aria-label={`${place.name} 내보내기 선택`}
@@ -322,7 +347,20 @@ function DestinationList({
               type="button"
             >
               <span className="flex min-w-0 items-center justify-between gap-3">
-                <span className="truncate text-sm font-medium">{place.name}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    data-marker-number={number}
+                    className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums ${
+                      isSelected
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {number}
+                  </span>
+                  <span className="truncate text-sm font-medium">{place.name}</span>
+                </span>
                 <span className="flex shrink-0 items-center gap-1">
                   <Badge variant={place.is_geocoded ? "secondary" : "outline"}>
                     {place.category ?? "미분류"}
@@ -338,7 +376,8 @@ function DestinationList({
               </span>
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
       {selectedPlace ? (
         <div className="flex flex-col gap-3 border-t pt-4">
