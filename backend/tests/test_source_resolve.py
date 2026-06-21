@@ -23,6 +23,10 @@ def test_parse_channel_input_handle_forms():
     assert source_resolve.parse_channel_input(
         "https://youtube.com/@빵이네tv"
     ) == ("handle", "@빵이네tv")
+    # 브라우저 주소창에서 복사한 percent-encoded handle URL도 디코드한다.
+    assert source_resolve.parse_channel_input(
+        "https://www.youtube.com/@%EB%B9%B5%EC%9D%B4%EB%84%A4tv"
+    ) == ("handle", "@빵이네tv")
 
 
 def test_parse_channel_input_username_and_custom():
