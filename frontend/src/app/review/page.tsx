@@ -376,8 +376,9 @@ export default function ReviewPage() {
                       Gemini 의견 분석 중…
                     </div>
                   ) : opinionQuery.data?.error ? (
-                    <p className="rounded-xl border p-3 text-xs text-muted-foreground">
-                      Gemini 의견을 가져오지 못했습니다(검색 결과는 정상).
+                    <p className="flex items-center gap-1.5 rounded-xl border p-3 text-xs text-muted-foreground">
+                      <SparklesIcon className="size-3.5 shrink-0" />
+                      {opinionQuery.data.error}
                     </p>
                   ) : null}
                   {PROVIDER_ORDER.map((provider) => (

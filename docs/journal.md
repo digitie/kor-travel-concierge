@@ -13,7 +13,8 @@
 - `POST /place-search/opinion`(`{query, hits}`) 신설 — Gemini 의견을 **max_attempts=1(15초 재시도 제거) + 10초 타임아웃 + `wait_for(12s)`**로 단일 시도, 실패 시 `gemini:null`(500 아님). `complete_json`/`gemini_client`에 `max_attempts` 인자 추가.
 - 프런트: 검색 버튼 → provider 결과 즉시 표시, Gemini 의견은 별도 비동기 호출(`getPlaceOpinion`, "분석 중…" → 결과/생략). 검색 중지는 둘 다 취소(AbortSignal+cancelQueries).
 - **결과**: UI 검색 결과 표시 **~1초(이전 ~20초)**, 게이트웨이 타임아웃 해소.
-- 참고: Gemini 의견 자체는 dev 키 **429(쿼터)**로 현재 생략 — 검색 속도와 무관한 키/쿼터 사안(쿼터 있으면 정상 표시).
+- 참고: Gemini 의견 자체는 dev/prod 키 **429(쿼터)**로 현재 미표시 — 검색 속도와 무관한 키/쿼터 사안(쿼터 있으면 정상 표시).
+- 후속: 의견 실패 사유를 **응답·UI에 노출**(조용히 생략 → 안내). `gemini_place_opinion(raise_on_error=True)`로 에러를 전파하고 opinion 엔드포인트가 `LlmRequestError.status_code==429`면 "Gemini API 쿼터 초과(429) — 검색 결과는 정상", 그 외엔 "일시 오류"로 분류해 `error`에 반환, 프런트는 의견 카드 자리에 그 문구를 표시.
 - 검증: backend 267 pytest·compileall, frontend tsc/lint/build, dev 재측정(GET 0.44s, opinion 분리). dev/prod 배포(prod는 실행 큐 종료 후).
 
 ## 2026-06-21: T-100 완료 — 검수 후보·확정 장소 상세 정보 뷰(반응형) + 후보 삭제 + 검색 중지

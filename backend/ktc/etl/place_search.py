@@ -201,6 +201,7 @@ def gemini_place_opinion(
     hits: list[dict[str, Any]],
     timeout_seconds: float = 10.0,
     max_attempts: int = 1,
+    raise_on_error: bool = False,
 ) -> dict[str, Any] | None:
     """후보 목록을 받아 Gemini가 최적 장소를 고른 의견을 반환한다(동기).
 
@@ -220,6 +221,8 @@ def gemini_place_opinion(
             max_attempts=max_attempts,
         )
     except llm_client.LlmRequestError:
+        if raise_on_error:
+            raise
         return None
     try:
         data = json.loads(raw)
