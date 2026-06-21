@@ -470,10 +470,11 @@ async def place_search_endpoint(
     q: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """검수용 멀티 provider 장소 검색(Google/Kakao/Naver) + Gemini 의견.
+    """검수용 멀티 provider 장소 검색(Google/Kakao/Naver) — provider 결과만 즉시 반환.
 
     각 provider를 동시에 호출하고 독립적으로 격리한다. 키 미설정/호출 실패는
-    해당 provider를 빈 목록으로 두고 `errors`에 사유를 남긴다.
+    해당 provider를 빈 목록으로 두고 `errors`에 사유를 남긴다. Gemini 의견은 느려서
+    검색 응답을 막지 않도록 별도 `POST /place-search/opinion`으로 분리했다.
     """
     query = q.strip()
     if not query:
@@ -486,7 +487,7 @@ async def place_search_endpoint(
     )
     errors: dict[str, str] = {}
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=8.0) as client:
 
         async def google() -> list[dict[str, Any]]:
             if not google_key:
@@ -525,35 +526,52 @@ async def place_search_endpoint(
         else:
             normalized[name] = result
 
-    all_hits = normalized["google"] + normalized["kakao"] + normalized["naver"]
-    gemini_opinion: dict[str, Any] | None = None
-    if all_hits:
-        # Gemini 의견은 보조 정보이므로, 느린 사람-유사 재시도가 검수 검색 응답을
-        # 통째로 막지 않도록 짧은 상한을 둔다(초과 시 provider 결과만 반환).
-        try:
-            runtime = await settings_service.get_llm_runtime(session)
-            gemini_opinion = await asyncio.wait_for(
-                asyncio.to_thread(
-                    place_search.gemini_place_opinion,
-                    runtime,
-                    query=query,
-                    hits=all_hits,
-                ),
-                timeout=20.0,
-            )
-        except (asyncio.TimeoutError, TimeoutError):
-            errors["gemini"] = "Gemini 의견 시간 초과(20초)"
-        except Exception as exc:  # noqa: BLE001 - Gemini 의견 실패는 검색 결과를 막지 않는다
-            errors["gemini"] = str(exc)
-
     return {
         "query": query,
         "google": normalized["google"],
         "kakao": normalized["kakao"],
         "naver": normalized["naver"],
-        "gemini": gemini_opinion,
         "errors": errors,
     }
+
+
+class PlaceOpinionRequest(BaseModel):
+    """`POST /place-search/opinion` 요청 — provider 후보로 Gemini 의견을 구한다."""
+
+    query: str = Field(..., min_length=1)
+    hits: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@router.post("/place-search/opinion")
+async def place_search_opinion_endpoint(
+    payload: PlaceOpinionRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """provider 후보 목록으로 Gemini 의견만 별도로 구한다(대화형: 빠른 단발 호출).
+
+    검색(provider) 응답을 막지 않도록 프런트가 후보를 받은 뒤 비동기로 호출한다.
+    Gemini는 단발 호출(`max_attempts=1`)에 짧은 타임아웃을 쓰고, 전체를
+    `asyncio.wait_for(12s)`로 상한을 둔다. 실패/초과는 `gemini=null`로 흡수한다.
+    """
+    query = payload.query.strip()
+    if not query or not payload.hits:
+        return {"gemini": None, "error": None}
+    try:
+        runtime = await settings_service.get_llm_runtime(session)
+        gemini_opinion = await asyncio.wait_for(
+            asyncio.to_thread(
+                place_search.gemini_place_opinion,
+                runtime,
+                query=query,
+                hits=payload.hits,
+            ),
+            timeout=12.0,
+        )
+        return {"gemini": gemini_opinion, "error": None}
+    except (asyncio.TimeoutError, TimeoutError):
+        return {"gemini": None, "error": "Gemini 의견 시간 초과(12초)"}
+    except Exception as exc:  # noqa: BLE001 - 의견 실패는 검색 흐름을 막지 않는다
+        return {"gemini": None, "error": str(exc)}
 
 
 @router.post("/runs/{job_id}/stop")

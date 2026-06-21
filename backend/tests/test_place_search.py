@@ -162,4 +162,57 @@ async def test_place_search_endpoint_isolates_missing_keys(api_client, monkeypat
     assert body["query"] == "감천문화마을"
     assert body["google"] == [] and body["kakao"] == [] and body["naver"] == []
     assert set(body["errors"]).issuperset({"google", "kakao", "naver"})
-    assert body["gemini"] is None
+    # Gemini 의견은 GET에서 제거됨(별도 POST /place-search/opinion).
+    assert "gemini" not in body
+
+
+@pytest.mark.asyncio
+async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
+    # 빈 후보 → LLM 호출 없이 None.
+    empty = await api_client.post(
+        "/api/v1/place-search/opinion", json={"query": "감천문화마을", "hits": []}
+    )
+    assert empty.status_code == 200
+    assert empty.json() == {"gemini": None, "error": None}
+
+    hit = {
+        "provider": "google",
+        "name": "감천문화마을",
+        "address": None,
+        "road_address": None,
+        "latitude": 35.1,
+        "longitude": 129.0,
+        "category": None,
+    }
+
+    def fake_opinion(runtime, *, query, hits, **kwargs):
+        return {
+            "best_name": "감천문화마을",
+            "latitude": 35.1,
+            "longitude": 129.0,
+            "confidence": 0.9,
+            "reason": "ok",
+        }
+
+    monkeypatch.setattr(place_search, "gemini_place_opinion", fake_opinion)
+    ok = await api_client.post(
+        "/api/v1/place-search/opinion",
+        json={"query": "감천문화마을", "hits": [hit]},
+    )
+    assert ok.status_code == 200
+    ok_body = ok.json()
+    assert ok_body["error"] is None
+    assert ok_body["gemini"]["best_name"] == "감천문화마을"
+
+    # LLM 실패는 500이 아니라 gemini=null로 흡수.
+    def boom(runtime, *, query, hits, **kwargs):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(place_search, "gemini_place_opinion", boom)
+    failed = await api_client.post(
+        "/api/v1/place-search/opinion",
+        json={"query": "감천문화마을", "hits": [hit]},
+    )
+    assert failed.status_code == 200
+    assert failed.json()["gemini"] is None
+    assert failed.json()["error"]

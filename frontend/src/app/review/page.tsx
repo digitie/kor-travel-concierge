@@ -14,12 +14,13 @@ import {
 } from "lucide-react";
 
 import {
+  getPlaceOpinion,
   listUnmatchedCandidates,
   resolveCandidate,
   searchPlaces,
   type DestinationSummary,
+  type PlaceOpinion,
   type PlaceSearchHit,
-  type PlaceSearchResult,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -112,6 +113,22 @@ export default function ReviewPage() {
   });
   const result = searchQuery.data;
 
+  // provider hits를 모아 Gemini 의견을 별도(비동기)로 호출 → 검색 자체는 빠르게.
+  const allHits = useMemo(
+    () => [
+      ...(result?.google ?? []),
+      ...(result?.kakao ?? []),
+      ...(result?.naver ?? []),
+    ],
+    [result],
+  );
+  const opinionQuery = useQuery({
+    queryKey: ["place-opinion", activeQuery],
+    queryFn: ({ signal }) => getPlaceOpinion(activeQuery, allHits, signal),
+    enabled: activeQuery.trim().length > 0 && allHits.length > 0,
+  });
+  const gemini = opinionQuery.data?.gemini ?? null;
+
   const router = useRouter();
   const isMobile = useIsMobile();
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -130,6 +147,7 @@ export default function ReviewPage() {
   }
   function stopSearch() {
     queryClient.cancelQueries({ queryKey: ["place-search", activeQuery] });
+    queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
     setActiveQuery("");
   }
   // 검수 상세: 모바일=새 페이지, PC=모달.
@@ -154,7 +172,7 @@ export default function ReviewPage() {
       category: hit.category ?? "",
     });
   }
-  function applyGemini(gemini: NonNullable<PlaceSearchResult["gemini"]>) {
+  function applyGemini(gemini: PlaceOpinion) {
     setForm((prev) => ({
       name: gemini.best_name ?? prev.name,
       latitude: gemini.latitude != null ? String(gemini.latitude) : prev.latitude,
@@ -350,11 +368,17 @@ export default function ReviewPage() {
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
                 <div className="flex flex-col gap-3">
-                  {result?.gemini ? (
-                    <GeminiCard
-                      gemini={result.gemini}
-                      onApply={() => applyGemini(result.gemini!)}
-                    />
+                  {gemini ? (
+                    <GeminiCard gemini={gemini} onApply={() => applyGemini(gemini)} />
+                  ) : opinionQuery.isFetching ? (
+                    <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm text-muted-foreground">
+                      <Loader2Icon className="size-4 animate-spin text-primary" />
+                      Gemini 의견 분석 중…
+                    </div>
+                  ) : opinionQuery.data?.error ? (
+                    <p className="rounded-xl border p-3 text-xs text-muted-foreground">
+                      Gemini 의견을 가져오지 못했습니다(검색 결과는 정상).
+                    </p>
                   ) : null}
                   {PROVIDER_ORDER.map((provider) => (
                     <ProviderSection
@@ -502,7 +526,7 @@ function GeminiCard({
   gemini,
   onApply,
 }: {
-  gemini: NonNullable<PlaceSearchResult["gemini"]>;
+  gemini: PlaceOpinion;
   onApply: () => void;
 }) {
   return (

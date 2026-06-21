@@ -496,19 +496,22 @@ export type PlaceSearchHit = {
   category: string | null;
 };
 
+export type PlaceOpinion = {
+  best_name?: string;
+  latitude?: number;
+  longitude?: number;
+  category?: string;
+  confidence?: number;
+  reason?: string;
+};
+
+// /place-search는 이제 provider 결과만 즉시 반환한다(빠름). Gemini 의견은 별도 호출.
 export type PlaceSearchResult = {
   query: string;
   google: PlaceSearchHit[];
   kakao: PlaceSearchHit[];
   naver: PlaceSearchHit[];
-  gemini: {
-    best_name?: string;
-    latitude?: number;
-    longitude?: number;
-    category?: string;
-    confidence?: number;
-    reason?: string;
-  } | null;
+  gemini?: PlaceOpinion | null;
   errors: Record<string, string>;
 };
 
@@ -520,6 +523,24 @@ export async function searchPlaces(
     `/api/v1/place-search?q=${encodeURIComponent(query)}`,
     { signal },
   );
+}
+
+export type PlaceOpinionResult = {
+  gemini: PlaceOpinion | null;
+  error: string | null;
+};
+
+// Gemini 의견(느릴 수 있어 provider 결과 표시 후 비동기로 호출).
+export async function getPlaceOpinion(
+  query: string,
+  hits: PlaceSearchHit[],
+  signal?: AbortSignal,
+): Promise<PlaceOpinionResult> {
+  return requestJson<PlaceOpinionResult>("/api/v1/place-search/opinion", {
+    method: "POST",
+    body: JSON.stringify({ query, hits }),
+    signal,
+  });
 }
 
 // ── 상세 정보 (검수 후보 / 확정 장소) ───────────────────────────────────────

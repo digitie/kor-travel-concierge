@@ -195,18 +195,29 @@ def _build_opinion_prompt(query: str, hits: list[dict[str, Any]]) -> str:
 
 
 def gemini_place_opinion(
-    runtime: llm_client.LlmRuntime, *, query: str, hits: list[dict[str, Any]]
+    runtime: llm_client.LlmRuntime,
+    *,
+    query: str,
+    hits: list[dict[str, Any]],
+    timeout_seconds: float = 10.0,
+    max_attempts: int = 1,
 ) -> dict[str, Any] | None:
     """후보 목록을 받아 Gemini가 최적 장소를 고른 의견을 반환한다(동기).
 
-    LLM/파싱 실패는 None으로 흡수한다. 호출부에서 `asyncio.to_thread`로 감싼다.
+    검수 검색은 대화형이라 기본을 **단발 호출(max_attempts=1)·짧은 타임아웃**으로 둔다.
+    느린 사람-유사 재시도(15초~)를 타지 않으므로 응답이 빠르고, 실패해도 검색 흐름을
+    막지 않는다. LLM/파싱 실패는 None으로 흡수한다. 호출부에서 `asyncio.to_thread`로 감싼다.
     """
     if not hits:
         return None
     prompt = _build_opinion_prompt(query, hits)
     try:
         raw = llm_client.complete_json(
-            runtime, prompt, response_schema=GEMINI_OPINION_SCHEMA
+            runtime,
+            prompt,
+            response_schema=GEMINI_OPINION_SCHEMA,
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
         )
     except llm_client.LlmRequestError:
         return None
