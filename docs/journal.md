@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-21: T-101 완료 — 검수 place-search 성능 개선(provider 즉시 + Gemini 의견 비동기 분리)
+
+**문제**: 검수 검색이 매우 느리고(≈20초) 게이트웨이 타임아웃에 취약.
+**원인(측정)**: provider 3종(Google/Kakao/Naver)은 ~0.4초로 빠르나, Gemini 의견이 provider 다음에 **직렬**로 await되고 매번 `wait_for(20s)` 상한에 걸림. dev Gemini 키가 **429(쿼터)**를 반환 → ETL용 "사람-유사 느린 재시도"(기본 15초)에 걸려 20초까지 늘어남. 단일 요청 20초+ → 프록시/게이트웨이 타임아웃 위험.
+**개선**:
+- `GET /place-search`를 **provider-only**(Gemini 호출·필드 제거)로 → ≈0.4초 즉시 반환. provider httpx 타임아웃 15→8초.
+- `POST /place-search/opinion`(`{query, hits}`) 신설 — Gemini 의견을 **max_attempts=1(15초 재시도 제거) + 10초 타임아웃 + `wait_for(12s)`**로 단일 시도, 실패 시 `gemini:null`(500 아님). `complete_json`/`gemini_client`에 `max_attempts` 인자 추가.
+- 프런트: 검색 버튼 → provider 결과 즉시 표시, Gemini 의견은 별도 비동기 호출(`getPlaceOpinion`, "분석 중…" → 결과/생략). 검색 중지는 둘 다 취소(AbortSignal+cancelQueries).
+- **결과**: UI 검색 결과 표시 **~1초(이전 ~20초)**, 게이트웨이 타임아웃 해소.
+- 참고: Gemini 의견 자체는 dev 키 **429(쿼터)**로 현재 생략 — 검색 속도와 무관한 키/쿼터 사안(쿼터 있으면 정상 표시).
+- 검증: backend 267 pytest·compileall, frontend tsc/lint/build, dev 재측정(GET 0.44s, opinion 분리). dev/prod 배포(prod는 실행 큐 종료 후).
+
 ## 2026-06-21: T-100 완료 — 검수 후보·확정 장소 상세 정보 뷰(반응형) + 후보 삭제 + 검색 중지
 
 T-097~099 후속. 백엔드 상세 엔드포인트는 포크로, 반응형 상세 뷰는 스샷 검증하며 구현(ADR-31 범위).

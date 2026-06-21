@@ -118,10 +118,13 @@ def complete_json(
     *,
     response_schema: dict[str, Any] | None = None,
     timeout_seconds: float = 120.0,
+    max_attempts: int | None = None,
 ) -> str:
     """선택된 엔진으로 prompt를 보내고 (JSON) 문자열 응답을 반환한다.
 
     실패 시 provider 무관 `LlmRequestError`를 던진다(호출부가 자기 에러로 감싼다).
+    `max_attempts`를 주면 provider의 느린 사람-유사 재시도 횟수를 덮어쓴다(검수
+    검색 의견처럼 대화형 호출은 `max_attempts=1`로 단발 호출에 짧은 타임아웃을 쓴다).
     """
     full = compose_prompt(runtime.preprompt, prompt)
     if runtime.is_deepseek:
@@ -133,6 +136,7 @@ def complete_json(
                 json_mode=response_schema is not None,
                 base_url=runtime.deepseek_base_url,
                 timeout_seconds=timeout_seconds,
+                max_attempts=max_attempts,
             )
         except deepseek_client.DeepSeekRequestError as exc:
             raise LlmRequestError(
@@ -146,6 +150,7 @@ def complete_json(
             model=runtime.model,
             body=build_gemini_body(full, response_schema),
             timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
         )
     except gemini_client.GeminiRequestError as exc:
         raise LlmRequestError(
