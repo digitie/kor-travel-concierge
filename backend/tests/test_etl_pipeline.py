@@ -18,6 +18,27 @@ from ktc.models import SearchKeyword, SourceTarget, YoutubeChannel, YoutubeVideo
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 
+
+def test_filter_candidates_by_content():
+    candidates = [
+        {"video_id": "a", "duration_seconds": 30},
+        {"video_id": "b", "duration_seconds": 600},
+        {"video_id": "c", "duration_seconds": None},
+        {"video_id": "d", "duration_seconds": 60},
+    ]
+    both = pipeline.filter_candidates_by_content(
+        candidates, "both", shorts_max_seconds=60
+    )
+    assert [c["video_id"] for c in both] == ["a", "b", "c", "d"]
+    shorts = pipeline.filter_candidates_by_content(
+        candidates, "shorts", shorts_max_seconds=60
+    )
+    assert [c["video_id"] for c in shorts] == ["a", "d"]
+    videos = pipeline.filter_candidates_by_content(
+        candidates, "videos", shorts_max_seconds=60
+    )
+    assert [c["video_id"] for c in videos] == ["b", "c"]
+
 _SEARCH_RESPONSE = {
     "items": [
         {"id": {"videoId": "v1"}},

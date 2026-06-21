@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-21: T-096 완료 — 숏츠/동영상 콘텐츠 유형 필터 + 재생목록 URL 확인
+
+- **콘텐츠 유형 필터**: 수집 폼에 "콘텐츠 유형"(숏츠+동영상/숏츠만/동영상만) 선택을 추가. 백엔드는 `duration_seconds <= SHORTS_MAX_DURATION_SECONDS`(기본 60초)면 숏츠로 보는 휴리스틱으로 `pipeline.filter_candidates_by_content`를 적용한다. 숏츠/동영상 필터 시 `collect_limit`(max_videos×3, 50 상한)로 넉넉히 수집한 뒤 길이로 걸러 `max_videos`로 자른다. `HarvestRequest.content_filter`(`both`/`shorts`/`videos`), `run_harvest(content_filter, shorts_max_seconds)`, `harvest_handler`에서 payload→run_harvest 전달, `config.SHORTS_MAX_DURATION_SECONDS`. 프런트 `HarvestContentFilter` + `lib/api.ts` payload. (반복 수집은 현재 `both` 기본 — source_target에 필터를 저장하지 않음, 향후 보강 여지.)
+- **재생목록 URL**: `https://www.youtube.com/playlist?list=PLXQvmY7fb6wrbbCYcjFI4A0j-j9Fx13Xk`는 기존 `parse_playlist_id`로 이미 정상 처리됨을 확인.
+- **검증**: backend 전체 pytest(필터 단위 테스트 포함)·compileall, frontend lint/type-check/build. dev 재빌드 후 라이브 검증, dev/prod 배포.
+
 ## 2026-06-21: T-095 완료 — percent-encoded 채널 URL handle 디코드 수정
 
 - **증상**: 브라우저 주소창에서 복사한 `https://www.youtube.com/@%EB%B9%B5%EC%9D%B4%EB%84%A4tv`(= `@빵이네tv`) 입력 시 `parse_channel_input`이 `urlparse` path를 디코드하지 않아 handle을 percent-encoded(`@%EB%B9%B5...tv`)로 추출 → forHandle 해석이 불안정(검색 fallback 의존, 100 quota 소모 또는 실패).

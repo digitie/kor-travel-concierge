@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     YOUTUBE_USE_OFFICIAL_API: bool = True
     YOUTUBE_SEARCH_DAILY_BUDGET_UNITS: int = 1000
     YOUTUBE_MAX_VIDEOS_PER_RUN: int = 20
+    # 콘텐츠 유형 필터(숏츠/동영상)의 숏츠 판정 기준(초). duration이 이 값 이하면 숏츠로 본다.
+    SHORTS_MAX_DURATION_SECONDS: int = 60
 
     # --- 자막/전사 폴백 순서 ---
     TRANSCRIPT_PROVIDER_ORDER: str = "youtube-transcript-api,yt-dlp,faster-whisper"
