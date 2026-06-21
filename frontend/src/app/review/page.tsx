@@ -1,15 +1,16 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeftIcon,
   ExternalLinkIcon,
+  InfoIcon,
   Loader2Icon,
   MapPinIcon,
   SearchIcon,
   SparklesIcon,
+  SquareIcon,
 } from "lucide-react";
 
 import {
@@ -21,9 +22,18 @@ import {
   type PlaceSearchResult,
   type UnmatchedCandidate,
 } from "@/lib/api";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AppNav } from "@/components/AppNav";
+import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -97,10 +107,14 @@ export default function ReviewPage() {
 
   const searchQuery = useQuery({
     queryKey: ["place-search", activeQuery],
-    queryFn: () => searchPlaces(activeQuery),
+    queryFn: ({ signal }) => searchPlaces(activeQuery, signal),
     enabled: activeQuery.trim().length > 0,
   });
   const result = searchQuery.data;
+
+  const router = useRouter();
+  const isMobile = useIsMobile();
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -112,6 +126,18 @@ export default function ReviewPage() {
   function runSearch() {
     if (query.trim()) {
       setActiveQuery(query.trim());
+    }
+  }
+  function stopSearch() {
+    queryClient.cancelQueries({ queryKey: ["place-search", activeQuery] });
+    setActiveQuery("");
+  }
+  // 검수 상세: 모바일=새 페이지, PC=모달.
+  function openDetail(candidateId: number) {
+    if (isMobile) {
+      router.push(`/review/${candidateId}`);
+    } else {
+      setDetailId(candidateId);
     }
   }
   function pickCandidate(candidate: UnmatchedCandidate) {
@@ -203,16 +229,10 @@ export default function ReviewPage() {
 
   return (
     <main className="flex min-h-screen flex-col bg-background">
-      <header className="flex items-center justify-between gap-3 border-b px-5 py-3">
+      <AppNav />
+      <header className="flex items-center justify-between gap-3 border-b px-5 py-2.5">
         <div className="flex items-center gap-3">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ArrowLeftIcon className="size-4" />
-            메인
-          </Link>
-          <h1 className="text-lg font-semibold">검수 큐</h1>
+          <h1 className="text-base font-semibold">검수 큐</h1>
           <Badge variant="secondary">{candidates.length}</Badge>
         </div>
         <p className="hidden text-xs text-muted-foreground sm:block">
@@ -231,20 +251,33 @@ export default function ReviewPage() {
             </p>
           ) : (
             candidates.map((candidate) => (
-              <button
+              <div
                 key={candidate.id}
-                type="button"
-                onClick={() => pickCandidate(candidate)}
                 data-selected={candidate.id === selected?.id}
-                className="flex flex-col gap-0.5 rounded-lg border p-2.5 text-left text-sm transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
+                className="flex items-center gap-1 rounded-lg border p-1 transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
               >
-                <span className="truncate font-medium">
-                  {candidate.ai_place_name}
-                </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {candidate.location_hint ?? candidate.video_id}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => pickCandidate(candidate)}
+                  className="flex min-w-0 flex-1 flex-col gap-0.5 px-1.5 py-1 text-left text-sm"
+                >
+                  <span className="truncate font-medium">
+                    {candidate.ai_place_name}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {candidate.location_hint ?? candidate.video_id}
+                  </span>
+                </button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`${candidate.ai_place_name} 상세`}
+                  onClick={() => openDetail(candidate.id)}
+                >
+                  <InfoIcon className="size-4" />
+                </Button>
+              </div>
             ))
           )}
         </aside>
@@ -267,14 +300,25 @@ export default function ReviewPage() {
                     위치 힌트: {selected.location_hint}
                   </p>
                 ) : null}
-                <a
-                  href={`https://www.youtube.com/watch?v=${selected.video_id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex w-fit items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  영상 보기 <ExternalLinkIcon className="size-3" />
-                </a>
+                <div className="flex flex-wrap items-center gap-3">
+                  <a
+                    href={`https://www.youtube.com/watch?v=${selected.video_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex w-fit items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    영상 보기 <ExternalLinkIcon className="size-3" />
+                  </a>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => openDetail(selected.id)}
+                  >
+                    <InfoIcon data-icon="inline-start" />
+                    상세 보기
+                  </Button>
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -296,6 +340,12 @@ export default function ReviewPage() {
                   )}
                   검색
                 </Button>
+                {searchQuery.isFetching ? (
+                  <Button type="button" variant="outline" onClick={stopSearch}>
+                    <SquareIcon data-icon="inline-start" />
+                    검색 중지
+                  </Button>
+                ) : null}
               </div>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
@@ -427,6 +477,23 @@ export default function ReviewPage() {
           )}
         </section>
       </div>
+
+      <Dialog
+        open={detailId != null}
+        onOpenChange={(open) => !open && setDetailId(null)}
+      >
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>검수 후보 상세</DialogTitle>
+          </DialogHeader>
+          {detailId != null ? (
+            <CandidateDetailView
+              candidateId={detailId}
+              onDeleted={() => setDetailId(null)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

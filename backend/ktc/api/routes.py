@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
@@ -36,6 +37,7 @@ from ktc.models import (
     YoutubeChannel,
     YoutubePlaylist,
     YoutubeVideo,
+    YoutubeVideoAnalysisRun,
 )
 from ktc.services import (
     audit_service,
@@ -332,6 +334,11 @@ _JOB_TYPE_LABELS = {
     "transcript": "자막",
     "geocode": "지오코딩",
     "postprocess": "후처리",
+}
+_ANALYSIS_RUN_TYPE_LABELS = {
+    "transcript_extract": "자막 추출",
+    "url_summary": "URL 요약",
+    "reconcile": "대조 정리",
 }
 
 
@@ -944,6 +951,234 @@ async def resolve_unmatched_candidate(
         "candidate": _candidate_payload(candidate),
         "place": _place_payload(place) if place else None,
         "mapping_id": mapping.id if mapping else None,
+    }
+
+
+async def _video_detail_dict(
+    session: AsyncSession, video_id: str | None
+) -> dict[str, Any] | None:
+    """영상 1건의 상세 표시 정보(설명 포함)를 반환한다."""
+    if not video_id:
+        return None
+    row = (
+        await session.execute(
+            select(YoutubeVideo, YoutubeChannel.title)
+            .join(
+                YoutubeChannel,
+                YoutubeChannel.channel_id == YoutubeVideo.channel_id,
+                isouter=True,
+            )
+            .where(YoutubeVideo.video_id == video_id)
+        )
+    ).first()
+    if row is None:
+        return None
+    video, channel_title = row
+    return {
+        "video_id": video.video_id,
+        "title": video.title,
+        "url": video.canonical_url
+        or video.url
+        or f"https://www.youtube.com/watch?v={video.video_id}",
+        "channel_title": channel_title or video.channel_name,
+        "published_at": video.published_at.isoformat()
+        if video.published_at
+        else None,
+        "duration_seconds": video.duration_seconds,
+        "description": video.description_gemini_corrected or video.description_raw,
+    }
+
+
+@router.get("/destinations/candidates/{candidate_id}/detail")
+async def get_candidate_detail(
+    candidate_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """검수 후보 1건의 상세 정보(영상·근거·동일 영상의 다른 후보)를 반환한다."""
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="candidate not found")
+
+    video = await _video_detail_dict(session, candidate.video_id)
+
+    source_run: dict[str, Any] | None = None
+    if candidate.analysis_run_id is not None:
+        run = await session.get(YoutubeVideoAnalysisRun, candidate.analysis_run_id)
+        if run is not None:
+            source_run = {
+                "id": run.id,
+                "run_type": run.run_type,
+                "run_type_label": _ANALYSIS_RUN_TYPE_LABELS.get(
+                    run.run_type, run.run_type
+                ),
+                "state": run.state,
+                "model": run.model,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+            }
+
+    sibling_rows = (
+        await session.execute(
+            select(
+                ExtractedPlaceCandidate.id,
+                ExtractedPlaceCandidate.ai_place_name,
+                ExtractedPlaceCandidate.match_status,
+                ExtractedPlaceCandidate.candidate_category,
+            )
+            .where(
+                ExtractedPlaceCandidate.video_id == candidate.video_id,
+                ExtractedPlaceCandidate.id != candidate.id,
+            )
+            .order_by(ExtractedPlaceCandidate.id)
+        )
+    ).all()
+
+    return {
+        "candidate": {
+            "id": candidate.id,
+            "ai_place_name": candidate.ai_place_name,
+            "location_hint": candidate.location_hint,
+            "candidate_category": candidate.candidate_category,
+            "match_status": candidate.match_status,
+            "confidence_score": candidate.confidence_score,
+            "speaker_note": candidate.speaker_note,
+            "source_kind": candidate.source_kind,
+            "timestamp_start": candidate.timestamp_start,
+            "timestamp_end": candidate.timestamp_end,
+            "source_text": candidate.source_text,
+        },
+        "video": video,
+        "source_run": source_run,
+        "provider_evidence": candidate.provider_evidence_json,
+        "sibling_candidates": [
+            {
+                "id": sid,
+                "ai_place_name": name,
+                "match_status": status,
+                "candidate_category": category,
+            }
+            for sid, name, status, category in sibling_rows
+        ],
+    }
+
+
+@router.delete("/destinations/candidates/{candidate_id}")
+async def delete_candidate(
+    candidate_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """검수 후보를 영구 삭제한다(확정 장소와 연결된 후보는 삭제 거부)."""
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="candidate not found")
+    await session.delete(candidate)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="확정 장소와 연결된 후보는 삭제할 수 없습니다.",
+        ) from exc
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="candidate.delete",
+        target_type="extracted_place_candidate",
+        target_id=str(candidate_id),
+    )
+    return {"deleted": True, "id": candidate_id}
+
+
+@router.get("/destinations/{place_id}/detail")
+async def get_destination_detail(
+    place_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """확정 장소의 상세 정보(설명·통계·등장 영상별 근거)를 반환한다."""
+    place = await place_service.get_place(session, place_id)
+    if place is None:
+        raise HTTPException(status_code=404, detail="place not found")
+
+    rows = (
+        await session.execute(
+            select(VideoPlaceMapping, YoutubeVideo, YoutubeChannel.title)
+            .join(
+                YoutubeVideo,
+                YoutubeVideo.video_id == VideoPlaceMapping.video_id,
+                isouter=True,
+            )
+            .join(
+                YoutubeChannel,
+                YoutubeChannel.channel_id == YoutubeVideo.channel_id,
+                isouter=True,
+            )
+            .where(VideoPlaceMapping.place_id == place_id)
+            .order_by(VideoPlaceMapping.video_id, VideoPlaceMapping.id)
+        )
+    ).all()
+
+    by_video: dict[str, dict[str, Any]] = {}
+    channels: set[str] = set()
+    total_mentions = 0
+    for mapping, video, channel_title in rows:
+        total_mentions += 1
+        vid = mapping.video_id
+        if video is not None and video.channel_id:
+            channels.add(video.channel_id)
+        group = by_video.get(vid)
+        if group is None:
+            group = {
+                "video_id": vid,
+                "title": video.title if video is not None else vid,
+                "url": (
+                    (video.canonical_url or video.url)
+                    if video is not None
+                    else f"https://www.youtube.com/watch?v={vid}"
+                ),
+                "channel_title": channel_title
+                or (video.channel_name if video is not None else None),
+                "published_at": video.published_at.isoformat()
+                if (video is not None and video.published_at)
+                else None,
+                "mention_count": 0,
+                "mentions": [],
+            }
+            by_video[vid] = group
+        group["mention_count"] += 1
+        group["mentions"].append(
+            {
+                "timestamp_start": mapping.timestamp_start,
+                "timestamp_end": mapping.timestamp_end,
+                "source_kind": mapping.source_kind,
+                "source_text": mapping.ai_summary,
+                "speaker_note": mapping.speaker_note,
+            }
+        )
+
+    source_videos = sorted(
+        by_video.values(),
+        key=lambda item: item["published_at"] or "",
+        reverse=True,
+    )
+
+    return {
+        "place": {
+            "place_id": place.place_id,
+            "name": place.name,
+            "category": place.category,
+            "category_code_suggestion": place.category_code_suggestion,
+            "official_address": place.official_address,
+            "road_address": place.road_address,
+            "latitude": place.latitude,
+            "longitude": place.longitude,
+            "is_geocoded": place.is_geocoded,
+            "description": place.description,
+            "gemini_enriched_description": place.gemini_enriched_description,
+            "detailed_research_content": place.detailed_research_content,
+        },
+        "stats": {
+            "mention_count": total_mentions,
+            "video_count": len(by_video),
+            "channel_count": len(channels),
+        },
+        "source_videos": source_videos,
     }
 
 
