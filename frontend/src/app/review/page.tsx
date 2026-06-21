@@ -122,10 +122,13 @@ export default function ReviewPage() {
     ],
     [result],
   );
+  // AI(Gemini) 의견은 자동이 아니라 사용자가 버튼으로 수동 요청한다(쿼터 절약).
+  const [opinionRequested, setOpinionRequested] = useState(false);
   const opinionQuery = useQuery({
     queryKey: ["place-opinion", activeQuery],
     queryFn: ({ signal }) => getPlaceOpinion(activeQuery, allHits, signal),
-    enabled: activeQuery.trim().length > 0 && allHits.length > 0,
+    enabled:
+      opinionRequested && activeQuery.trim().length > 0 && allHits.length > 0,
   });
   const gemini = opinionQuery.data?.gemini ?? null;
 
@@ -142,12 +145,14 @@ export default function ReviewPage() {
 
   function runSearch() {
     if (query.trim()) {
+      setOpinionRequested(false);
       setActiveQuery(query.trim());
     }
   }
   function stopSearch() {
     queryClient.cancelQueries({ queryKey: ["place-search", activeQuery] });
     queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
+    setOpinionRequested(false);
     setActiveQuery("");
   }
   // 검수 상세: 모바일=새 페이지, PC=모달.
@@ -161,6 +166,7 @@ export default function ReviewPage() {
   function pickCandidate(candidate: UnmatchedCandidate) {
     setSelectedId(candidate.id);
     setQueryEdit(null);
+    setOpinionRequested(false);
     setActiveQuery(buildHintedQuery(candidate));
     setForm({ name: "", latitude: "", longitude: "", category: "" });
   }
@@ -368,19 +374,41 @@ export default function ReviewPage() {
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
                 <div className="flex flex-col gap-3">
-                  {gemini ? (
+                  {!opinionRequested ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      disabled={allHits.length === 0}
+                      onClick={() => setOpinionRequested(true)}
+                    >
+                      <SparklesIcon data-icon="inline-start" />
+                      AI(Gemini) 의견 요청
+                    </Button>
+                  ) : gemini ? (
                     <GeminiCard gemini={gemini} onApply={() => applyGemini(gemini)} />
                   ) : opinionQuery.isFetching ? (
                     <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm text-muted-foreground">
                       <Loader2Icon className="size-4 animate-spin text-primary" />
                       Gemini 의견 분석 중…
                     </div>
-                  ) : opinionQuery.data?.error ? (
-                    <p className="flex items-center gap-1.5 rounded-xl border p-3 text-xs text-muted-foreground">
-                      <SparklesIcon className="size-3.5 shrink-0" />
-                      {opinionQuery.data.error}
-                    </p>
-                  ) : null}
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <p className="flex items-center gap-1.5 rounded-xl border p-3 text-xs text-muted-foreground">
+                        <SparklesIcon className="size-3.5 shrink-0" />
+                        {opinionQuery.data?.error ??
+                          "Gemini 의견이 없습니다."}
+                      </p>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => opinionQuery.refetch()}
+                      >
+                        다시 요청
+                      </Button>
+                    </div>
+                  )}
                   {PROVIDER_ORDER.map((provider) => (
                     <ProviderSection
                       key={provider}
