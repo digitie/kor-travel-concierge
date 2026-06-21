@@ -346,6 +346,78 @@ async def deactivate_target(
     return target
 
 
+async def run_target_now(
+    session: AsyncSession,
+    target_id: int,
+    *,
+    now: datetime | None = None,
+    max_videos: int = 20,
+) -> tuple[SourceTarget | None, CrawlRun | None, bool]:
+    """반복 대상을 즉시 1회 enqueue한다('지금 진행').
+
+    스캔 due 여부와 무관하게 사용자가 수동으로 트리거한다. 같은 작업이 이미
+    pending/running이면 새로 만들지 않고 그 작업을 반환한다(중복 방지). 새로
+    만든 경우 `run_count`를 올리고 다음 스캔 시각을 now+interval로 미룬다.
+    `max_runs` 도달 시에도 이번 수동 실행은 허용하되 이후 자동 스캔은 멈춘다.
+    반환값: (target, run, created).
+    """
+    target = await session.get(SourceTarget, target_id)
+    if target is None:
+        return None, None, False
+
+    scan_now = _as_utc(now)
+    target.last_scan_at = scan_now
+    job_type, target_type, run_target_id, payload = build_followup_run(
+        target, max_videos=max_videos
+    )
+
+    if await has_active_run(
+        session,
+        job_type=job_type,
+        target_type=target_type,
+        target_id=run_target_id,
+    ):
+        existing = (
+            await session.execute(
+                select(CrawlRun)
+                .where(
+                    CrawlRun.job_type == job_type,
+                    CrawlRun.target_type == target_type,
+                    CrawlRun.target_id == run_target_id,
+                    CrawlRun.state.in_(ACTIVE_RUN_STATES),
+                )
+                .order_by(CrawlRun.id.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        await session.commit()
+        return target, existing, False
+
+    run = await crawl_run_service.create_run(
+        session,
+        job_type=job_type,
+        source=RunSource.WEB,
+        target_type=target_type,
+        target_id=run_target_id,
+        payload=payload,
+        commit=False,
+    )
+    target.run_count = (target.run_count or 0) + 1
+    target.scan_failure_count = 0
+    target.last_scan_error = None
+    if target.scan_interval_minutes:
+        target.next_crawl_at = scan_now + timedelta(
+            minutes=max(1, int(target.scan_interval_minutes))
+        )
+    # 반복 상한 도달 시 이번 수동 실행은 허용하되 이후 자동 스캔은 멈춘다.
+    if target.max_runs and target.run_count >= target.max_runs:
+        target.is_active = False
+        target.next_crawl_at = None
+    await session.commit()
+    await session.refresh(run)
+    return target, run, True
+
+
 async def ensure_source_scan_run(
     session: AsyncSession,
     *,

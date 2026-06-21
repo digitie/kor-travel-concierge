@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
@@ -7,29 +8,20 @@ import {
   FlaskConicalIcon,
   ListChecksIcon,
   MapPinIcon,
-  PencilIcon,
-  RotateCcwIcon,
-  SquareIcon,
-  Trash2Icon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildDestinationExportUrl,
-  deleteSourceTarget,
   listDestinations,
   listRunQueue,
-  listRuns,
-  listSourceTargets,
-  restartRun,
-  stopRun,
   triggerDeepResearch,
+  USER_JOB_TYPES,
   type CrawlRunSummary,
   type DestinationExportFormat,
   type DestinationSort,
   type DestinationSummary,
   type PlaceSourceVideo,
-  type SourceTargetSummary,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,9 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { JobDetailDialog } from "@/components/JobDetailDialog";
-import { RecurringEditDialog } from "@/components/RecurringEditDialog";
 import { VWorldMap } from "@/components/VWorldMap";
 
 export function DestinationWorkspace() {
@@ -52,49 +41,16 @@ export function DestinationWorkspace() {
   const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
   const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
-  const [detailRun, setDetailRun] = useState<CrawlRunSummary | null>(null);
-  const [detailTarget, setDetailTarget] = useState<SourceTargetSummary | null>(null);
-  const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
   const destinationsQuery = useQuery({
     queryKey: ["destinations", destinationSort],
     queryFn: () => listDestinations(destinationSort),
     refetchInterval: 10_000,
   });
-  const runsQuery = useQuery({
-    queryKey: ["runs"],
-    queryFn: () => listRuns({ limit: 40 }),
-    refetchInterval: 5_000,
-  });
   const runQueueQuery = useQuery({
-    queryKey: ["run-queue"],
-    queryFn: listRunQueue,
-    refetchInterval: 2_000,
-  });
-  const sourceTargetsQuery = useQuery({
-    queryKey: ["source-targets"],
-    queryFn: listSourceTargets,
-    refetchInterval: 15_000,
-  });
-
-  const stopRunMutation = useMutation({
-    mutationFn: stopRun,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runs"] });
-      queryClient.invalidateQueries({ queryKey: ["run-queue"] });
-    },
-  });
-  const restartRunMutation = useMutation({
-    mutationFn: restartRun,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runs"] });
-      queryClient.invalidateQueries({ queryKey: ["run-queue"] });
-    },
-  });
-  const deleteTargetMutation = useMutation({
-    mutationFn: deleteSourceTarget,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["source-targets"] }),
+    queryKey: ["run-queue", "user"],
+    queryFn: () => listRunQueue(USER_JOB_TYPES),
+    refetchInterval: 3_000,
   });
 
   const places = useMemo(() => destinationsQuery.data ?? [], [destinationsQuery.data]);
@@ -145,7 +101,8 @@ export function DestinationWorkspace() {
   }
 
   return (
-    <div className="flex h-full min-h-screen flex-col bg-background">
+    <div className="flex h-full min-h-[calc(100vh-3rem)] flex-col bg-background">
+      <RunQueueStatus runs={runQueueQuery.data ?? []} />
       {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
       <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[0.7fr_1.6fr]">
         <div className="flex min-h-[22rem] flex-col overflow-y-auto border-b lg:border-b-0 lg:border-r">
@@ -177,44 +134,39 @@ export function DestinationWorkspace() {
           />
         </div>
       </div>
-      {/* 실행 큐 · 작업(반복/1회성) (아래, 작은 목록) */}
-      <div className="grid max-h-[26rem] grid-cols-1 overflow-y-auto border-t md:grid-cols-2">
-        <RunQueuePanel
-          queueRuns={runQueueQuery.data ?? []}
-          errorMessage={runQueueQuery.error?.message ?? null}
-          onStop={(jobId) => stopRunMutation.mutate(jobId)}
-          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onDetail={setDetailRun}
-          isMutating={stopRunMutation.isPending || restartRunMutation.isPending}
-        />
-        <JobsPanel
-          runs={runsQuery.data ?? []}
-          targets={sourceTargetsQuery.data ?? []}
-          errorMessage={
-            runsQuery.error?.message ?? sourceTargetsQuery.error?.message ?? null
-          }
-          onStop={(jobId) => stopRunMutation.mutate(jobId)}
-          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onDetailRun={setDetailRun}
-          onDetailTarget={setDetailTarget}
-          onEditTarget={setEditTarget}
-          onDeleteTarget={(id) => deleteTargetMutation.mutate(id)}
-          isMutating={stopRunMutation.isPending || restartRunMutation.isPending}
-          isDeleting={deleteTargetMutation.isPending}
-        />
-      </div>
-      <JobDetailDialog
-        run={detailRun}
-        target={detailTarget}
-        onClose={() => {
-          setDetailRun(null);
-          setDetailTarget(null);
-        }}
-      />
-      <RecurringEditDialog
-        target={editTarget}
-        onClose={() => setEditTarget(null)}
-      />
+    </div>
+  );
+}
+
+// 결과 페이지 상단의 간단한 실행 큐 상태 바(상세 관리는 /collect).
+function RunQueueStatus({ runs }: { runs: CrawlRunSummary[] }) {
+  const running = runs.filter((run) => run.state === "running");
+  const pending = runs.filter((run) => run.state === "pending");
+  const current = running[0] ?? pending[0] ?? null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs">
+      <ListChecksIcon className="size-4 text-muted-foreground" />
+      <span className="font-semibold">실행 큐</span>
+      <Badge variant="secondary">실행 {running.length}</Badge>
+      <Badge variant="outline">대기 {pending.length}</Badge>
+      {current ? (
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="font-medium">
+            {current.target_label ?? current.target_id ?? "진행 중"}
+          </span>
+          <span className="truncate text-muted-foreground">
+            {current.current_message ?? ""}
+          </span>
+        </span>
+      ) : (
+        <span className="text-muted-foreground">유휴 상태</span>
+      )}
+      <Link
+        href="/collect"
+        className="ml-auto whitespace-nowrap font-medium text-primary hover:underline"
+      >
+        수집 관리 →
+      </Link>
     </div>
   );
 }
@@ -434,316 +386,6 @@ function DestinationList({
 }
 
 // 실행 큐 패널: running/pending 작업 + 중지/재시작 + 상세 모달.
-function RunQueuePanel({
-  queueRuns,
-  errorMessage,
-  onStop,
-  onRestart,
-  onDetail,
-  isMutating,
-}: {
-  queueRuns: CrawlRunSummary[];
-  errorMessage: string | null;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
-  onDetail: (run: CrawlRunSummary) => void;
-  isMutating: boolean;
-}) {
-  return (
-    <section
-      aria-label="실행 큐"
-      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <ListChecksIcon className="size-4 text-muted-foreground" />
-          실행 큐
-        </h2>
-        <Badge variant="secondary">{queueRuns.length}</Badge>
-      </div>
-      {errorMessage ? (
-        <p role="alert" className="text-xs text-destructive">
-          {errorMessage}
-        </p>
-      ) : null}
-      {queueRuns.length > 0 ? (
-        queueRuns.map((run) => (
-          <RunControlCard
-            key={run.job_id}
-            run={run}
-            onStop={onStop}
-            onRestart={onRestart}
-            onDetail={onDetail}
-            isMutating={isMutating}
-          />
-        ))
-      ) : (
-        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-          실행 중이거나 대기 중인 작업이 없습니다.
-        </p>
-      )}
-    </section>
-  );
-}
-
-// 작업 패널: 반복 작업 / 1회성 작업 탭. 항목 클릭 시 상세, 반복은 수정/삭제.
-function JobsPanel({
-  runs,
-  targets,
-  errorMessage,
-  onStop,
-  onRestart,
-  onDetailRun,
-  onDetailTarget,
-  onEditTarget,
-  onDeleteTarget,
-  isMutating,
-  isDeleting,
-}: {
-  runs: CrawlRunSummary[];
-  targets: SourceTargetSummary[];
-  errorMessage: string | null;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
-  onDetailRun: (run: CrawlRunSummary) => void;
-  onDetailTarget: (target: SourceTargetSummary) => void;
-  onEditTarget: (target: SourceTargetSummary) => void;
-  onDeleteTarget: (id: number) => void;
-  isMutating: boolean;
-  isDeleting: boolean;
-}) {
-  return (
-    <section aria-label="작업" className="flex flex-col gap-3 p-3">
-      <Tabs defaultValue="recurring">
-        <TabsList className="w-full">
-          <TabsTrigger value="recurring">반복 {targets.length}</TabsTrigger>
-          <TabsTrigger value="oneoff">1회성 {runs.length}</TabsTrigger>
-        </TabsList>
-        {errorMessage ? (
-          <p role="alert" className="mt-2 text-xs text-destructive">
-            {errorMessage}
-          </p>
-        ) : null}
-        <TabsContent value="recurring" className="mt-3 flex flex-col gap-2">
-          {targets.length > 0 ? (
-            targets.map((target) => (
-              <div
-                key={target.id}
-                className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs"
-              >
-                <button
-                  type="button"
-                  className="flex items-center justify-between gap-2 text-left"
-                  onClick={() => onDetailTarget(target)}
-                >
-                  <span className="truncate font-medium">
-                    {target.display_name ?? target.source_value}
-                  </span>
-                  <Badge variant={target.is_active ? "outline" : "secondary"}>
-                    {targetTypeLabel(target.target_type)}
-                  </Badge>
-                </button>
-                <p className="text-muted-foreground">
-                  {intervalLabel(target.scan_interval_minutes)} ·{" "}
-                  {target.max_runs === 0
-                    ? `무한 (${target.run_count}회)`
-                    : `${target.run_count}/${target.max_runs}회`}{" "}
-                  · 다음 {formatRunTime(target.next_crawl_at)}
-                </p>
-                {target.last_scan_error ? (
-                  <p className="break-words text-destructive">
-                    {target.last_scan_error}
-                  </p>
-                ) : null}
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    onClick={() => onEditTarget(target)}
-                  >
-                    <PencilIcon data-icon="inline-start" />
-                    수정
-                  </Button>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={isDeleting}
-                    onClick={() => onDeleteTarget(target.id)}
-                    aria-label={`${target.display_name ?? target.source_value} 반복 삭제`}
-                  >
-                    <Trash2Icon data-icon="inline-start" />
-                    삭제
-                  </Button>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
-            </p>
-          )}
-        </TabsContent>
-        <TabsContent value="oneoff" className="mt-3 flex flex-col gap-2">
-          {runs.length > 0 ? (
-            runs.map((run) => (
-              <RunControlCard
-                key={run.job_id}
-                run={run}
-                onStop={onStop}
-                onRestart={onRestart}
-                onDetail={onDetailRun}
-                isMutating={isMutating}
-              />
-            ))
-          ) : (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              작업이 없습니다.
-            </p>
-          )}
-        </TabsContent>
-      </Tabs>
-    </section>
-  );
-}
-
-// 작업 카드: 클릭하면 상세 모달을 열고, 상태에 따라 중지/재시작.
-function RunControlCard({
-  run,
-  onStop,
-  onRestart,
-  onDetail,
-  isMutating,
-}: {
-  run: CrawlRunSummary;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
-  onDetail: (run: CrawlRunSummary) => void;
-  isMutating: boolean;
-}) {
-  const isActive = run.state === "pending" || run.state === "running";
-  const isTerminal =
-    run.state === "done" || run.state === "failed" || run.state === "cancelled";
-
-  return (
-    <div className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs">
-      <button
-        type="button"
-        className="flex items-center justify-between gap-2 text-left"
-        onClick={() => onDetail(run)}
-      >
-        <span className="truncate font-medium">{runLabel(run)}</span>
-        <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
-          {run.state}
-        </Badge>
-      </button>
-      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        <div
-          className={progressBarClass(run.state)}
-          style={{ width: `${Math.round(run.progress * 100)}%` }}
-        />
-      </div>
-      <p className="line-clamp-1 text-muted-foreground">
-        {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
-      </p>
-      <div className="flex gap-2">
-        {isActive ? (
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={isMutating}
-            onClick={() => onStop(run.job_id)}
-          >
-            <SquareIcon data-icon="inline-start" />
-            중지
-          </Button>
-        ) : null}
-        {isTerminal ? (
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={isMutating}
-            onClick={() => onRestart(run.job_id)}
-          >
-            <RotateCcwIcon data-icon="inline-start" />
-            재시작
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          onClick={() => onDetail(run)}
-        >
-          상세
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// 반복 수집(source_target) 패널: 활성 반복 작업 목록 + 상태 + 삭제.
-function runLabel(run: CrawlRunSummary) {
-  return [run.job_type, run.target_id].filter(Boolean).join(" · ");
-}
-
-function formatRunTime(value: string | null) {
-  if (!value) {
-    return "-";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-}
-
-function targetTypeLabel(type: string) {
-  if (type === "channel") {
-    return "채널";
-  }
-  if (type === "playlist") {
-    return "재생목록";
-  }
-  if (type === "keyword") {
-    return "검색어";
-  }
-  if (type === "video") {
-    return "영상";
-  }
-  return type;
-}
-
-function intervalLabel(minutes: number | null) {
-  if (!minutes) {
-    return "-";
-  }
-  if (minutes % 1440 === 0) {
-    return `${minutes / 1440}일`;
-  }
-  if (minutes % 60 === 0) {
-    return `${minutes / 60}시간`;
-  }
-  return `${minutes}분`;
-}
-
-function latestRunLog(run: CrawlRunSummary) {
-  return run.status_logs.at(-1)?.message ?? null;
-}
-
-function progressBarClass(state: string) {
-  if (state === "failed") {
-    return "h-full rounded-full bg-destructive";
-  }
-  if (state === "done") {
-    return "h-full rounded-full bg-success";
-  }
-  return "h-full rounded-full bg-primary";
-}
-
 function PanelHeader({ title, count }: { title: string; count: number }) {
   return (
     <div className="flex items-center justify-between gap-3">

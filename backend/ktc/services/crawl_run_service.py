@@ -119,12 +119,22 @@ async def get_run(session: AsyncSession, run_id: int) -> CrawlRun | None:
 
 
 async def list_runs(
-    session: AsyncSession, *, state: str | None = None, limit: int = 50
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 50,
+    job_types: list[str] | None = None,
 ) -> list[CrawlRun]:
-    """작업 목록을 최신순으로 조회한다."""
+    """작업 목록을 최신순으로 조회한다.
+
+    `job_types`가 주어지면 해당 job_type만 필터링한다(예: 내부 `source_scan`을
+    숨기고 사용자 작업만 보기). 비어 있으면 전체.
+    """
     stmt = select(CrawlRun).order_by(CrawlRun.id.desc()).limit(limit)
     if state is not None:
         stmt = stmt.where(CrawlRun.state == state)
+    if job_types:
+        stmt = stmt.where(CrawlRun.job_type.in_(job_types))
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
