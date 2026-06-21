@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -59,6 +59,8 @@ class HarvestRequest(BaseModel):
     skip_transcript: bool = False
     # 양수면 즉시 1회 수집과 함께 해당 분 간격의 반복 수집 대상(source_target)으로 등록한다.
     repeat_interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
+    # 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
+    content_filter: Literal["both", "shorts", "videos"] = "both"
 
 
 class HarvestJob(BaseModel):

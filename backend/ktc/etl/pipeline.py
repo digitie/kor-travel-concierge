@@ -279,6 +279,29 @@ def _uploads_playlist_id_from_channels(data: dict[str, Any]) -> str | None:
     return None
 
 
+def filter_candidates_by_content(
+    candidates: list[dict[str, Any]],
+    content_filter: str,
+    *,
+    shorts_max_seconds: int,
+) -> list[dict[str, Any]]:
+    """콘텐츠 유형으로 후보를 거른다.
+
+    `duration_seconds <= shorts_max_seconds`면 숏츠로 본다(YouTube가 숏츠 여부를 공식
+    API로 제공하지 않아 길이 기준 휴리스틱을 쓴다). `both`/알 수 없는 값은 그대로 둔다.
+    """
+    if content_filter not in ("shorts", "videos"):
+        return candidates
+    want_shorts = content_filter == "shorts"
+    filtered: list[dict[str, Any]] = []
+    for candidate in candidates:
+        duration = candidate.get("duration_seconds")
+        is_short = duration is not None and duration <= shorts_max_seconds
+        if is_short == want_shorts:
+            filtered.append(candidate)
+    return filtered
+
+
 async def run_harvest(
     session: AsyncSession,
     client: YouTubeClient,
@@ -287,12 +310,23 @@ async def run_harvest(
     channel_id: str | None = None,
     playlist_id: str | None = None,
     max_videos: int = 20,
+    content_filter: str = "both",
+    shorts_max_seconds: int = 60,
     now: datetime | None = None,
     generator: KeywordGenerator | None = None,
     status_reporter: StatusReporter | None = None,
 ) -> dict[str, Any]:
-    """키워드·채널·재생목록 기준 수집을 실행하고 요약을 반환한다."""
+    """키워드·채널·재생목록 기준 수집을 실행하고 요약을 반환한다.
+
+    `content_filter`가 `shorts`/`videos`면 더 넉넉히 수집한 뒤 길이로 걸러 `max_videos`로 자른다.
+    """
     now = now or ingest_service.utcnow()
+    # 숏츠/동영상 필터 시 더 많이 수집해 필터 후에도 max_videos를 채울 확률을 높인다.
+    collect_limit = (
+        max_videos
+        if content_filter == "both"
+        else min(max(max_videos * 3, max_videos), 50)
+    )
     season = ranking.current_season(now.date())
     await _report(status_reporter, "수집 대상과 계절 맥락을 확인 중입니다.", 0.12)
 
@@ -320,7 +354,7 @@ async def run_harvest(
         video_ids, playlist_links = await _collect_playlist_video_ids(
             client,
             playlist_id,
-            max_videos=max_videos,
+            max_videos=collect_limit,
             stop_at_or_before=watermark,
             status_reporter=status_reporter,
         )
@@ -338,7 +372,7 @@ async def run_harvest(
             client,
             channel_id,
             uploads_playlist_id=uploads_playlist_id,
-            max_videos=max_videos,
+            max_videos=collect_limit,
             stop_at_or_before=watermark,
             status_reporter=status_reporter,
         )
@@ -377,7 +411,7 @@ async def run_harvest(
         video_ids = await _collect_keyword_video_ids(
             client,
             queries,
-            max_videos=max_videos,
+            max_videos=collect_limit,
             published_after=watermark,
             status_reporter=status_reporter,
         )
@@ -394,6 +428,9 @@ async def run_harvest(
             build_candidate(item, seed=seed_keyword or "", now=now)
             for item in details.get("items", [])
         ]
+        candidates = filter_candidates_by_content(
+            candidates, content_filter, shorts_max_seconds=shorts_max_seconds
+        )
         candidate_channel_ids = sorted(
             {
                 str(candidate.get("channel_id"))

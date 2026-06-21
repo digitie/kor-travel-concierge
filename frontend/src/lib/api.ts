@@ -12,6 +12,7 @@ export const VWORLD_SERVICE_KEY =
   process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY ?? "";
 
 export type HarvestTargetType = "keyword" | "channel" | "playlist";
+export type HarvestContentFilter = "both" | "shorts" | "videos";
 export type DestinationSort = "latest" | "mention_count" | "name" | "category";
 export type DestinationExportFormat = "xlsx" | "gpx" | "kml";
 
@@ -23,6 +24,8 @@ export type StartHarvestInput = {
   skipTranscript?: boolean;
   // 설정하면 해당 분 간격으로 반복 수집(source_target 등록).
   repeatIntervalMinutes?: number | null;
+  // 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
+  contentFilter?: HarvestContentFilter;
 };
 
 export type SourceTargetSummary = {
@@ -189,6 +192,7 @@ function harvestPayload(input: StartHarvestInput) {
     max_videos: input.maxVideos,
     skip_transcript: input.skipTranscript ?? false,
     repeat_interval_minutes: input.repeatIntervalMinutes ?? undefined,
+    content_filter: input.contentFilter ?? "both",
   };
 }
 

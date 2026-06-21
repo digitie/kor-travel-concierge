@@ -19,6 +19,7 @@ import {
   startHarvest,
   startTranscript,
   type CrawlRunSummary,
+  type HarvestContentFilter,
   type HarvestStatus,
   type HarvestTargetType,
 } from "@/lib/api";
@@ -71,6 +72,20 @@ function repeatIntervalLabel(value: number): string {
   );
 }
 
+// 콘텐츠 유형 필터 선택지.
+const contentFilterOptions: { value: HarvestContentFilter; label: string }[] = [
+  { value: "both", label: "숏츠+동영상" },
+  { value: "shorts", label: "숏츠만" },
+  { value: "videos", label: "동영상만" },
+];
+
+function contentFilterLabel(value: HarvestContentFilter): string {
+  return (
+    contentFilterOptions.find((option) => option.value === value)?.label ??
+    "숏츠+동영상"
+  );
+}
+
 const harvestFormSchema = z.object({
   targetType: z.enum(["keyword", "channel", "playlist"]),
   targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
@@ -81,6 +96,7 @@ const harvestFormSchema = z.object({
     .max(50, "한 번에 최대 50개까지 요청할 수 있습니다."),
   repeat: z.boolean(),
   repeatIntervalMinutes: z.coerce.number().int().min(1),
+  contentFilter: z.enum(["both", "shorts", "videos"]),
 });
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
@@ -96,6 +112,7 @@ export function HarvestConsole() {
       maxVideos: 10,
       repeat: false,
       repeatIntervalMinutes: 1440,
+      contentFilter: "both",
     },
   });
   const targetType = useWatch({
@@ -106,6 +123,10 @@ export function HarvestConsole() {
   const repeatIntervalMinutes = useWatch({
     control: form.control,
     name: "repeatIntervalMinutes",
+  });
+  const contentFilter = useWatch({
+    control: form.control,
+    name: "contentFilter",
   });
 
   const mutation = useMutation({
@@ -242,6 +263,35 @@ export function HarvestConsole() {
             />
             <FieldDescription>1-50</FieldDescription>
             <FieldError errors={[form.formState.errors.maxVideos]} />
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="harvest-content-filter">콘텐츠 유형</FieldLabel>
+            <Select
+              value={contentFilter}
+              onValueChange={(value) =>
+                form.setValue("contentFilter", value as HarvestContentFilter, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            >
+              <SelectTrigger id="harvest-content-filter" className="w-full">
+                <SelectValue>{contentFilterLabel(contentFilter)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {contentFilterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              숏츠는 길이 {`≤`}60초 기준으로 구분합니다.
+            </FieldDescription>
           </Field>
 
           <Field>

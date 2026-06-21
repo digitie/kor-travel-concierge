@@ -149,6 +149,8 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             channel_id=str(channel_id) if channel_id else None,
             playlist_id=str(playlist_id) if playlist_id else None,
             max_videos=_max_videos_from_payload(payload),
+            content_filter=str(payload.get("content_filter") or "both"),
+            shorts_max_seconds=settings.SHORTS_MAX_DURATION_SECONDS,
             status_reporter=report_status,
         )
         if payload.get("skip_transcript"):
