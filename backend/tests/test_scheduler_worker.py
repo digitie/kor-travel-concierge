@@ -501,6 +501,29 @@ async def test_source_scan_handler_enqueues_due_harvest(session, session_factory
     assert refreshed_target.scan_failure_count == 0
 
 
+async def test_scan_due_targets_stops_at_max_runs(session):
+    from ktc.services import source_scan_service
+
+    now = utcnow()
+    target = SourceTarget(
+        target_type="keyword",
+        source_value="한정 반복",
+        is_active=True,
+        next_crawl_at=now - timedelta(minutes=1),
+        scan_interval_minutes=30,
+        max_runs=1,
+    )
+    session.add(target)
+    await session.commit()
+
+    result = await source_scan_service.scan_due_targets(session, now=now, max_videos=3)
+    assert result["enqueued_runs"] == 1
+    await session.refresh(target)
+    assert target.run_count == 1
+    # 상한(1) 도달 → 더 이상 반복하지 않도록 비활성화
+    assert target.is_active is False
+
+
 async def test_source_scan_skips_existing_active_run(session, session_factory):
     now = utcnow()
     target = SourceTarget(

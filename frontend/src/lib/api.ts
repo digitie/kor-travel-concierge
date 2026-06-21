@@ -24,6 +24,8 @@ export type StartHarvestInput = {
   skipTranscript?: boolean;
   // 설정하면 해당 분 간격으로 반복 수집(source_target 등록).
   repeatIntervalMinutes?: number | null;
+  // 반복 횟수(0이면 무한). repeatIntervalMinutes가 있을 때만 의미.
+  repeatMaxRuns?: number | null;
   // 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
   contentFilter?: HarvestContentFilter;
 };
@@ -35,6 +37,8 @@ export type SourceTargetSummary = {
   display_name: string | null;
   is_active: boolean;
   scan_interval_minutes: number | null;
+  max_runs: number;
+  run_count: number;
   next_crawl_at: string | null;
   last_crawled_at: string | null;
   last_scan_at: string | null;
@@ -163,13 +167,35 @@ export type RuntimeSettings = {
   ai_preprompt_default: string;
   // DeepSeek 키는 평문으로 내려주지 않고 설정 여부만 노출한다.
   deepseek_api_key_set: boolean;
+  // 각 API 키의 설정 여부(값은 내려주지 않는다). DB→.env 순으로 판정.
+  api_keys?: Record<string, { set: boolean }>;
 };
 
-// 변경된 필드만 보낸다. deepseek_api_key는 새 값을 입력했을 때만 포함한다.
+// UI에서 관리하는 API 키 이름(라벨은 컴포넌트에서 매핑).
+export const API_KEY_NAMES = [
+  "youtube_api_key",
+  "gemini_api_key",
+  "google_places_api_key",
+  "naver_search_client_id",
+  "naver_search_client_secret",
+  "kakao_rest_api_key",
+  "vworld_service_key",
+  "deepseek_api_key",
+] as const;
+export type ApiKeyName = (typeof API_KEY_NAMES)[number];
+
+// 변경된 필드만 보낸다. 키는 새 값을 입력했을 때만 포함한다(빈 값은 미변경).
 export type RuntimeSettingsUpdate = {
   gemini_engine_version?: string;
-  deepseek_api_key?: string;
   ai_preprompt?: string;
+  deepseek_api_key?: string;
+  youtube_api_key?: string;
+  gemini_api_key?: string;
+  google_places_api_key?: string;
+  naver_search_client_id?: string;
+  naver_search_client_secret?: string;
+  kakao_rest_api_key?: string;
+  vworld_service_key?: string;
 };
 
 export type ResolveCandidateInput = {
@@ -192,6 +218,7 @@ function harvestPayload(input: StartHarvestInput) {
     max_videos: input.maxVideos,
     skip_transcript: input.skipTranscript ?? false,
     repeat_interval_minutes: input.repeatIntervalMinutes ?? undefined,
+    repeat_max_runs: input.repeatMaxRuns ?? undefined,
     content_filter: input.contentFilter ?? "both",
   };
 }
@@ -376,4 +403,95 @@ export async function restartRun(jobId: string): Promise<HarvestJob> {
   return requestJson<HarvestJob>(`/api/v1/runs/${jobId}/restart`, {
     method: "POST",
   });
+}
+
+export type SourceTargetUpdate = {
+  scanIntervalMinutes?: number;
+  maxRuns?: number;
+  isActive?: boolean;
+};
+
+export async function updateSourceTarget(
+  id: number,
+  input: SourceTargetUpdate,
+): Promise<SourceTargetSummary> {
+  return requestJson<SourceTargetSummary>(`/api/v1/source-targets/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      scan_interval_minutes: input.scanIntervalMinutes,
+      max_runs: input.maxRuns,
+      is_active: input.isActive,
+    }),
+  });
+}
+
+export type CollectedVideo = {
+  video_id: string;
+  title: string;
+  url: string;
+  published_at: string | null;
+  duration_seconds: number | null;
+  channel_title: string | null;
+};
+
+export async function getRunVideos(jobId: string): Promise<CollectedVideo[]> {
+  return requestJson<CollectedVideo[]>(`/api/v1/runs/${jobId}/videos`);
+}
+
+export async function getSourceTargetVideos(
+  id: number,
+): Promise<CollectedVideo[]> {
+  return requestJson<CollectedVideo[]>(`/api/v1/source-targets/${id}/videos`);
+}
+
+// 운영 상세 지표(스토리지 + DB 카운트). 백엔드 형태에 느슨하게 맞춘다.
+export type MetricsSummary = {
+  storage?: {
+    enabled?: boolean;
+    endpoint?: string;
+    console_url?: string;
+    retention_policy?: string;
+    health?: { ok: boolean; status_code: number | null; error: string | null };
+    assets?: { asset_type: string; count: number; size_bytes: number }[];
+    total_objects?: number;
+    total_size_bytes?: number;
+  };
+  database?: Record<string, number | Record<string, number>>;
+  runs?: Record<string, number>;
+};
+
+export async function getMetrics(): Promise<MetricsSummary> {
+  return requestJson<MetricsSummary>("/api/v1/metrics");
+}
+
+export type PlaceSearchHit = {
+  provider: string;
+  name: string;
+  address: string | null;
+  road_address: string | null;
+  latitude: number;
+  longitude: number;
+  category: string | null;
+};
+
+export type PlaceSearchResult = {
+  query: string;
+  google: PlaceSearchHit[];
+  kakao: PlaceSearchHit[];
+  naver: PlaceSearchHit[];
+  gemini: {
+    best_name?: string;
+    latitude?: number;
+    longitude?: number;
+    category?: string;
+    confidence?: number;
+    reason?: string;
+  } | null;
+  errors: Record<string, string>;
+};
+
+export async function searchPlaces(query: string): Promise<PlaceSearchResult> {
+  return requestJson<PlaceSearchResult>(
+    `/api/v1/place-search?q=${encodeURIComponent(query)}`,
+  );
 }

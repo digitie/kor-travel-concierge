@@ -62,3 +62,10 @@ class SourceTarget(TimestampMixin, Base):
     last_scan_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 반복 실행 상한(0이면 무한)과 그동안 enqueue된 누적 횟수.
+    max_runs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    run_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )

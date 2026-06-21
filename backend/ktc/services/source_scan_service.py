@@ -189,6 +189,7 @@ async def scan_due_targets(
                 commit=False,
             )
             enqueued_run_ids.append(run.id)
+            target.run_count = (target.run_count or 0) + 1
             target.scan_failure_count = 0
             target.last_scan_error = None
             target.next_crawl_at = _next_crawl_at(
@@ -196,6 +197,10 @@ async def scan_due_targets(
                 now=scan_now,
                 default_interval_minutes=default_interval_minutes,
             )
+            # 반복 상한 도달 시 더 이상 스캔하지 않도록 비활성화한다(0이면 무한).
+            if target.max_runs and target.run_count >= target.max_runs:
+                target.is_active = False
+                target.next_crawl_at = None
             target_summaries.append(
                 {
                     "source_target_id": target.id,
@@ -242,12 +247,14 @@ async def upsert_recurring_target(
     source_value: str,
     display_name: str | None = None,
     scan_interval_minutes: int,
+    max_runs: int = 0,
     now: datetime | None = None,
 ) -> SourceTarget:
     """반복 수집 대상을 등록/갱신한다.
 
     즉시 1회 수집은 별도 one-shot harvest가 처리하므로, 주기 스캔은 interval 이후에
-    시작하도록 `next_crawl_at`을 `now + interval`로 둔다.
+    시작하도록 `next_crawl_at`을 `now + interval`로 둔다. 재등록 시 `run_count`는 0으로
+    리셋해 새 반복 한도(`max_runs`)를 처음부터 적용한다(`max_runs`=0이면 무한).
     """
     scan_now = _as_utc(now)
     interval = max(1, int(scan_interval_minutes))
@@ -262,6 +269,8 @@ async def upsert_recurring_target(
         session.add(target)
     target.is_active = True
     target.scan_interval_minutes = interval
+    target.max_runs = max(0, int(max_runs))
+    target.run_count = 0
     if display_name:
         target.display_name = display_name
     elif not target.display_name:
@@ -286,6 +295,41 @@ async def list_recurring_targets(session: AsyncSession) -> list[SourceTarget]:
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def update_recurring_target(
+    session: AsyncSession,
+    target_id: int,
+    *,
+    scan_interval_minutes: int | None = None,
+    max_runs: int | None = None,
+    is_active: bool | None = None,
+    now: datetime | None = None,
+) -> SourceTarget | None:
+    """반복 수집 대상의 주기/횟수/활성 여부를 수정한다(제공된 필드만 갱신)."""
+    target = await session.get(SourceTarget, target_id)
+    if target is None:
+        return None
+    scan_now = _as_utc(now)
+    if scan_interval_minutes is not None:
+        interval = max(1, int(scan_interval_minutes))
+        target.scan_interval_minutes = interval
+        target.next_crawl_at = scan_now + timedelta(minutes=interval)
+    if max_runs is not None:
+        target.max_runs = max(0, int(max_runs))
+    if is_active is not None:
+        target.is_active = bool(is_active)
+        if (
+            is_active
+            and target.next_crawl_at is None
+            and target.scan_interval_minutes
+        ):
+            target.next_crawl_at = scan_now + timedelta(
+                minutes=max(1, int(target.scan_interval_minutes))
+            )
+    await session.commit()
+    await session.refresh(target)
+    return target
 
 
 async def deactivate_target(

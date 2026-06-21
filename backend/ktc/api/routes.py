@@ -21,9 +21,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
 from ktc.core.security import require_api_key
-from ktc.etl import category_suggestion, source_resolve
+from ktc.etl import category_suggestion, place_search, source_resolve
 from ktc.etl.youtube_client import YouTubeClient
-from ktc.models import MediaAsset, RunSource, RunState
+from ktc.models import (
+    CrawlRun,
+    ExtractedPlaceCandidate,
+    FeatureExport,
+    MediaAsset,
+    RunSource,
+    RunState,
+    SourceTarget,
+    TravelPlace,
+    VideoPlaceMapping,
+    YoutubeChannel,
+    YoutubePlaylist,
+    YoutubeVideo,
+)
 from ktc.services import (
     audit_service,
     crawl_run_service,
@@ -59,6 +72,8 @@ class HarvestRequest(BaseModel):
     skip_transcript: bool = False
     # 양수면 즉시 1회 수집과 함께 해당 분 간격의 반복 수집 대상(source_target)으로 등록한다.
     repeat_interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
+    # 반복 수집 횟수 상한(0이면 무한). repeat_interval_minutes가 있을 때만 의미가 있다.
+    repeat_max_runs: int | None = Field(default=None, ge=0)
     # 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
     content_filter: Literal["both", "shorts", "videos"] = "both"
 
@@ -158,11 +173,11 @@ async def start_harvest(
         if kind == "id":
             canonical_channel = _value
         else:
-            settings = get_settings()
+            youtube_key = await settings_service.get_secret(session, "youtube_api_key")
             try:
                 async with httpx.AsyncClient(timeout=30.0) as http_client:
                     client = YouTubeClient(
-                        api_key=settings.YOUTUBE_API_KEY, http_client=http_client
+                        api_key=youtube_key, http_client=http_client
                     )
                     canonical_channel = await source_resolve.resolve_channel_id(
                         client, payload.channel_id
@@ -214,6 +229,7 @@ async def start_harvest(
             source_value=target_id,
             display_name=target_id,
             scan_interval_minutes=payload.repeat_interval_minutes,
+            max_runs=payload.repeat_max_runs or 0,
         )
     await audit_service.record(
         session,
@@ -334,6 +350,87 @@ async def list_runs(
     ]
 
 
+@router.get("/place-search")
+async def place_search_endpoint(
+    q: str = Query(..., min_length=1),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """검수용 멀티 provider 장소 검색(Google/Kakao/Naver) + Gemini 의견.
+
+    각 provider를 동시에 호출하고 독립적으로 격리한다. 키 미설정/호출 실패는
+    해당 provider를 빈 목록으로 두고 `errors`에 사유를 남긴다.
+    """
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="검색어 q가 필요합니다")
+    google_key = await settings_service.get_secret(session, "google_places_api_key")
+    kakao_key = await settings_service.get_secret(session, "kakao_rest_api_key")
+    naver_id = await settings_service.get_secret(session, "naver_search_client_id")
+    naver_secret = await settings_service.get_secret(
+        session, "naver_search_client_secret"
+    )
+    errors: dict[str, str] = {}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+
+        async def google() -> list[dict[str, Any]]:
+            if not google_key:
+                raise RuntimeError("GOOGLE_PLACES_API_KEY 미설정")
+            return await place_search.search_google_places(
+                client, query=query, api_key=google_key
+            )
+
+        async def kakao() -> list[dict[str, Any]]:
+            if not kakao_key:
+                raise RuntimeError("KAKAO_REST_API_KEY 미설정")
+            return await place_search.search_kakao(
+                client, query=query, api_key=kakao_key
+            )
+
+        async def naver() -> list[dict[str, Any]]:
+            if not (naver_id and naver_secret):
+                raise RuntimeError("NAVER_SEARCH_CLIENT_ID/SECRET 미설정")
+            return await place_search.search_naver_local(
+                client,
+                query=query,
+                client_id=naver_id,
+                client_secret=naver_secret,
+            )
+
+        provider_names = ("google", "kakao", "naver")
+        gathered = await asyncio.gather(
+            google(), kakao(), naver(), return_exceptions=True
+        )
+
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    for name, result in zip(provider_names, gathered):
+        if isinstance(result, BaseException):
+            errors[name] = str(result)
+            normalized[name] = []
+        else:
+            normalized[name] = result
+
+    all_hits = normalized["google"] + normalized["kakao"] + normalized["naver"]
+    gemini_opinion: dict[str, Any] | None = None
+    if all_hits:
+        try:
+            runtime = await settings_service.get_llm_runtime(session)
+            gemini_opinion = await asyncio.to_thread(
+                place_search.gemini_place_opinion, runtime, query=query, hits=all_hits
+            )
+        except Exception as exc:  # noqa: BLE001 - Gemini 의견 실패는 검색 결과를 막지 않는다
+            errors["gemini"] = str(exc)
+
+    return {
+        "query": query,
+        "google": normalized["google"],
+        "kakao": normalized["kakao"],
+        "naver": normalized["naver"],
+        "gemini": gemini_opinion,
+        "errors": errors,
+    }
+
+
 @router.post("/runs/{job_id}/stop")
 async def stop_run(
     job_id: int, session: AsyncSession = Depends(get_session)
@@ -405,6 +502,8 @@ def _source_target_dict(target: Any) -> dict[str, Any]:
         "display_name": target.display_name,
         "is_active": target.is_active,
         "scan_interval_minutes": target.scan_interval_minutes,
+        "max_runs": target.max_runs,
+        "run_count": target.run_count,
         "next_crawl_at": target.next_crawl_at.isoformat()
         if target.next_crawl_at
         else None,
@@ -443,6 +542,52 @@ async def delete_source_target(
         target_id=str(target_id),
     )
     return {"status": "ok"}
+
+
+class SourceTargetUpdate(BaseModel):
+    """반복 수집 대상 수정 요청(제공된 필드만 갱신)."""
+
+    scan_interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
+    max_runs: int | None = Field(default=None, ge=0)
+    is_active: bool | None = None
+
+
+@router.patch("/source-targets/{target_id}")
+async def update_source_target(
+    target_id: int,
+    payload: SourceTargetUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """반복 수집 대상의 주기/횟수/활성 여부를 수정한다."""
+    target = await source_scan_service.update_recurring_target(
+        session,
+        target_id,
+        scan_interval_minutes=payload.scan_interval_minutes,
+        max_runs=payload.max_runs,
+        is_active=payload.is_active,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="source target not found")
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="source_target.update",
+        target_type="source_target",
+        target_id=str(target_id),
+        payload=payload.model_dump(exclude_none=True),
+    )
+    return _source_target_dict(target)
+
+
+@router.get("/source-targets/{target_id}/videos")
+async def list_source_target_videos(
+    target_id: int, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """반복 수집 대상이 그동안 수집한 동영상(누적)을 최신순으로 반환한다."""
+    target = await session.get(SourceTarget, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="source target not found")
+    return await _videos_for_source_target(session, target)
 
 
 @router.get("/audit-logs")
@@ -642,11 +787,8 @@ async def resolve_unmatched_candidate(
     }
 
 
-@router.get("/storage/rustfs")
-async def get_rustfs_status(
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    """RustFS 연결 상태와 DB에 기록된 객체 메타데이터 요약을 반환한다."""
+async def _rustfs_status_dict(session: AsyncSession) -> dict[str, Any]:
+    """RustFS 연결 상태 + DB 객체 메타데이터 요약(엔드포인트/지표 공용)."""
     settings = get_settings()
     result = await session.execute(
         select(
@@ -684,7 +826,158 @@ async def get_rustfs_status(
         "retention_policy": settings.MEDIA_RETENTION_POLICY,
         "health": health,
         "assets": assets,
+        "total_objects": sum(asset["count"] for asset in assets),
+        "total_size_bytes": sum(asset["size_bytes"] for asset in assets),
     }
+
+
+@router.get("/storage/rustfs")
+async def get_rustfs_status(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """RustFS 연결 상태와 DB에 기록된 객체 메타데이터 요약을 반환한다."""
+    return await _rustfs_status_dict(session)
+
+
+async def _database_counts(session: AsyncSession) -> dict[str, Any]:
+    """운영 지표용 주요 테이블 수치를 집계한다."""
+
+    async def _count(stmt: Any) -> int:
+        return int((await session.execute(stmt)).scalar_one() or 0)
+
+    candidate_rows = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.match_status, func.count()).group_by(
+                ExtractedPlaceCandidate.match_status
+            )
+        )
+    ).all()
+    run_rows = (
+        await session.execute(
+            select(CrawlRun.state, func.count()).group_by(CrawlRun.state)
+        )
+    ).all()
+    return {
+        "youtube_videos": await _count(select(func.count()).select_from(YoutubeVideo)),
+        "youtube_channels": await _count(
+            select(func.count()).select_from(YoutubeChannel)
+        ),
+        "youtube_playlists": await _count(
+            select(func.count()).select_from(YoutubePlaylist)
+        ),
+        "travel_places": await _count(select(func.count()).select_from(TravelPlace)),
+        "travel_places_geocoded": await _count(
+            select(func.count())
+            .select_from(TravelPlace)
+            .where(TravelPlace.is_geocoded.is_(True))
+        ),
+        "video_place_mappings": await _count(
+            select(func.count()).select_from(VideoPlaceMapping)
+        ),
+        "feature_exports": await _count(
+            select(func.count()).select_from(FeatureExport)
+        ),
+        "active_recurring_targets": await _count(
+            select(func.count())
+            .select_from(SourceTarget)
+            .where(
+                SourceTarget.is_active.is_(True),
+                SourceTarget.scan_interval_minutes.is_not(None),
+            )
+        ),
+        "candidates_by_status": {str(s): int(c) for s, c in candidate_rows},
+        "runs_by_state": {str(s): int(c) for s, c in run_rows},
+    }
+
+
+@router.get("/metrics")
+async def get_metrics(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """운영 상세 지표(스토리지 + DB 수치)를 반환한다."""
+    return {
+        "storage": await _rustfs_status_dict(session),
+        "database": await _database_counts(session),
+    }
+
+
+async def _video_rows(
+    session: AsyncSession, video_ids: list[str]
+) -> list[dict[str, Any]]:
+    """video_id 목록의 동영상 표시 정보를 게시 최신순으로 반환한다(중복 제거)."""
+    ids = [vid for vid in dict.fromkeys(video_ids) if vid]
+    if not ids:
+        return []
+    result = await session.execute(
+        select(YoutubeVideo, YoutubeChannel.title)
+        .join(
+            YoutubeChannel,
+            YoutubeChannel.channel_id == YoutubeVideo.channel_id,
+            isouter=True,
+        )
+        .where(YoutubeVideo.video_id.in_(ids))
+        .order_by(YoutubeVideo.published_at.desc().nullslast())
+    )
+    return [
+        {
+            "video_id": video.video_id,
+            "title": video.title,
+            "url": f"https://www.youtube.com/watch?v={video.video_id}",
+            "published_at": video.published_at.isoformat()
+            if video.published_at
+            else None,
+            "duration_seconds": video.duration_seconds,
+            "channel_title": channel_title,
+        }
+        for video, channel_title in result.all()
+    ]
+
+
+def _video_ids_from_result(result_json: str | None) -> list[str]:
+    if not result_json:
+        return []
+    try:
+        data = json.loads(result_json)
+    except (TypeError, ValueError):
+        return []
+    return [str(vid) for vid in (data.get("video_ids") or [])]
+
+
+async def _videos_for_source_target(
+    session: AsyncSession, target: SourceTarget
+) -> list[dict[str, Any]]:
+    """반복 대상으로 만들어진 harvest 작업들의 수집 동영상을 누적해 반환한다.
+
+    이 대상으로 enqueue된 crawl_run은 `target_type`+`target_id(=source_value)`가
+    일치하므로 그 결과 `video_ids`를 합산한다(직접 1회 수집과 스캔 반복 모두 포함).
+    """
+    rows = (
+        await session.execute(
+            select(CrawlRun.result_json)
+            .where(
+                CrawlRun.job_type == "harvest",
+                CrawlRun.target_type == target.target_type,
+                CrawlRun.target_id == target.source_value,
+            )
+            .order_by(CrawlRun.id.desc())
+            .limit(200)
+        )
+    ).all()
+    video_ids: list[str] = []
+    for (result_json,) in rows:
+        video_ids.extend(_video_ids_from_result(result_json))
+    return (await _video_rows(session, video_ids))[:200]
+
+
+@router.get("/runs/{job_id}/videos")
+async def list_run_videos(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """해당 작업이 수집한 동영상 목록을 반환한다."""
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return await _video_rows(session, _video_ids_from_result(run.result_json))
 
 
 # --- 범용 feature 수집 API (ADR-26) ---
@@ -756,14 +1049,20 @@ async def get_settings_endpoint(
 async def update_settings_endpoint(
     settings: dict[str, Any], session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
-    values = {key: str(value) for key, value in settings.items()}
+    values: dict[str, str] = {}
+    for key, value in settings.items():
+        str_value = str(value)
+        # 비밀 키는 빈 값으로 덮어쓰지 않는다(미입력=변경 없음).
+        if key in settings_service.SECRET_ENV_ATTRS and not str_value:
+            continue
+        values[key] = str_value
     try:
         await settings_service.set_many(session, values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # 비밀 값(DeepSeek 키)은 감사 로그에 평문으로 남기지 않는다.
+    # 비밀 값(API 키 등)은 감사 로그에 평문으로 남기지 않는다.
     audit_payload = {
-        key: ("***" if key == "deepseek_api_key" and value else value)
+        key: ("***" if key in settings_service.SECRET_ENV_ATTRS and value else value)
         for key, value in settings.items()
     }
     await audit_service.record(

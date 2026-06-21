@@ -1,55 +1,38 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
-  DatabaseIcon,
   DownloadIcon,
   FlaskConicalIcon,
+  ListChecksIcon,
   MapPinIcon,
-  RepeatIcon,
+  PencilIcon,
   RotateCcwIcon,
   SquareIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
+import { useMemo, useState } from "react";
 
 import {
   buildDestinationExportUrl,
   deleteSourceTarget,
-  getRustfsStatus,
-  listAuditLogs,
   listDestinations,
   listRunQueue,
   listRuns,
   listSourceTargets,
-  listUnmatchedCandidates,
-  resolveCandidate,
   restartRun,
   stopRun,
   triggerDeepResearch,
-  type AuditLogSummary,
   type CrawlRunSummary,
   type DestinationExportFormat,
   type DestinationSort,
   type DestinationSummary,
   type PlaceSourceVideo,
-  type RustfsStatus,
   type SourceTargetSummary,
-  type UnmatchedCandidate,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -58,70 +41,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { JobDetailDialog } from "@/components/JobDetailDialog";
+import { RecurringEditDialog } from "@/components/RecurringEditDialog";
 import { VWorldMap } from "@/components/VWorldMap";
-
-const reviewQueueSchema = z.object({
-  name: z.string().trim().min(1, "장소명을 입력하세요."),
-  latitude: z
-    .string()
-    .trim()
-    .min(1, "위도를 입력하세요.")
-    .refine((value) => Number.isFinite(Number(value)), "숫자로 입력하세요.")
-    .refine((value) => {
-      const number = Number(value);
-      return number >= -90 && number <= 90;
-    }, "위도는 -90부터 90 사이여야 합니다."),
-  longitude: z
-    .string()
-    .trim()
-    .min(1, "경도를 입력하세요.")
-    .refine((value) => Number.isFinite(Number(value)), "숫자로 입력하세요.")
-    .refine((value) => {
-      const number = Number(value);
-      return number >= -180 && number <= 180;
-    }, "경도는 -180부터 180 사이여야 합니다."),
-  category: z.string().trim().optional(),
-});
-
-type ReviewQueueFormValues = z.infer<typeof reviewQueueSchema>;
 
 export function DestinationWorkspace() {
   const queryClient = useQueryClient();
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
   const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
   const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
+  const [detailRun, setDetailRun] = useState<CrawlRunSummary | null>(null);
+  const [detailTarget, setDetailTarget] = useState<SourceTargetSummary | null>(null);
+  const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
   const destinationsQuery = useQuery({
     queryKey: ["destinations", destinationSort],
     queryFn: () => listDestinations(destinationSort),
     refetchInterval: 10_000,
   });
-  const unmatchedQuery = useQuery({
-    queryKey: ["unmatched-candidates"],
-    queryFn: listUnmatchedCandidates,
-    refetchInterval: 10_000,
-  });
   const runsQuery = useQuery({
     queryKey: ["runs"],
-    queryFn: () => listRuns(),
+    queryFn: () => listRuns({ limit: 40 }),
     refetchInterval: 5_000,
   });
   const runQueueQuery = useQuery({
     queryKey: ["run-queue"],
     queryFn: listRunQueue,
     refetchInterval: 2_000,
-  });
-  const auditQuery = useQuery({
-    queryKey: ["audit-logs"],
-    queryFn: listAuditLogs,
-    refetchInterval: 15_000,
-  });
-  const rustfsQuery = useQuery({
-    queryKey: ["rustfs-status"],
-    queryFn: getRustfsStatus,
-    refetchInterval: 15_000,
   });
   const sourceTargetsQuery = useQuery({
     queryKey: ["source-targets"],
@@ -154,23 +102,6 @@ export function DestinationWorkspace() {
     () => places.find((place) => place.place_id === selectedPlaceId) ?? places[0] ?? null,
     [places, selectedPlaceId],
   );
-  const candidates = useMemo(
-    () => unmatchedQuery.data ?? [],
-    [unmatchedQuery.data],
-  );
-  const selectedCandidate = useMemo(
-    () =>
-      candidates.find((candidate) => candidate.id === selectedCandidateId) ??
-      candidates[0] ??
-      null,
-    [candidates, selectedCandidateId],
-  );
-  const operationError =
-    runsQuery.error?.message ??
-    runQueueQuery.error?.message ??
-    auditQuery.error?.message ??
-    rustfsQuery.error?.message ??
-    null;
   const visiblePlaceIds = useMemo(
     () => new Set(places.map((place) => place.place_id)),
     [places],
@@ -215,16 +146,9 @@ export function DestinationWorkspace() {
 
   return (
     <div className="flex h-full min-h-screen flex-col bg-background">
-      {/* 지도 + 장소(지도 옆) */}
-      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[1.6fr_1fr]">
-        <div className="min-h-[22rem] border-b lg:border-b-0 lg:border-r">
-          <VWorldMap
-            places={places}
-            selectedPlaceId={selectedPlace?.place_id ?? null}
-            onSelectPlace={setSelectedPlaceId}
-          />
-        </div>
-        <div className="flex min-h-[22rem] flex-col overflow-y-auto">
+      {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
+      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[0.7fr_1.6fr]">
+        <div className="flex min-h-[22rem] flex-col overflow-y-auto border-b lg:border-b-0 lg:border-r">
           <DestinationList
             places={places}
             selectedPlace={selectedPlace}
@@ -245,37 +169,52 @@ export function DestinationWorkspace() {
             onExport={exportPlaces}
           />
         </div>
+        <div className="min-h-[22rem]">
+          <VWorldMap
+            places={places}
+            selectedPlaceId={selectedPlace?.place_id ?? null}
+            onSelectPlace={setSelectedPlaceId}
+          />
+        </div>
       </div>
-      {/* 검수 큐 · 반복 작업 · 운영 (아래, 작은 목록) */}
-      <div className="grid max-h-[26rem] grid-cols-1 overflow-y-auto border-t md:grid-cols-3">
-        <ReviewQueue
-          candidates={candidates}
-          selectedCandidate={selectedCandidate}
-          onSelect={setSelectedCandidateId}
-          errorMessage={unmatchedQuery.error?.message ?? null}
-          onResolved={() => {
-            queryClient.invalidateQueries({ queryKey: ["destinations"] });
-            queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
-            queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
-          }}
-        />
-        <RecurringPanel
-          targets={sourceTargetsQuery.data ?? []}
-          errorMessage={sourceTargetsQuery.error?.message ?? null}
-          onDelete={(id) => deleteTargetMutation.mutate(id)}
-          isDeleting={deleteTargetMutation.isPending}
-        />
-        <OperationsPanel
-          runs={runsQuery.data ?? []}
+      {/* 실행 큐 · 작업(반복/1회성) (아래, 작은 목록) */}
+      <div className="grid max-h-[26rem] grid-cols-1 overflow-y-auto border-t md:grid-cols-2">
+        <RunQueuePanel
           queueRuns={runQueueQuery.data ?? []}
-          audits={auditQuery.data ?? []}
-          rustfs={rustfsQuery.data}
-          errorMessage={operationError}
+          errorMessage={runQueueQuery.error?.message ?? null}
           onStop={(jobId) => stopRunMutation.mutate(jobId)}
           onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+          onDetail={setDetailRun}
           isMutating={stopRunMutation.isPending || restartRunMutation.isPending}
         />
+        <JobsPanel
+          runs={runsQuery.data ?? []}
+          targets={sourceTargetsQuery.data ?? []}
+          errorMessage={
+            runsQuery.error?.message ?? sourceTargetsQuery.error?.message ?? null
+          }
+          onStop={(jobId) => stopRunMutation.mutate(jobId)}
+          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+          onDetailRun={setDetailRun}
+          onDetailTarget={setDetailTarget}
+          onEditTarget={setEditTarget}
+          onDeleteTarget={(id) => deleteTargetMutation.mutate(id)}
+          isMutating={stopRunMutation.isPending || restartRunMutation.isPending}
+          isDeleting={deleteTargetMutation.isPending}
+        />
       </div>
+      <JobDetailDialog
+        run={detailRun}
+        target={detailTarget}
+        onClose={() => {
+          setDetailRun(null);
+          setDetailTarget(null);
+        }}
+      />
+      <RecurringEditDialog
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+      />
     </div>
   );
 }
@@ -318,10 +257,7 @@ function DestinationList({
   onExport: () => void;
 }) {
   return (
-    <section
-      aria-label="장소 목록"
-      className="flex flex-col gap-4 border-b p-4 md:border-b-0 md:border-r"
-    >
+    <section aria-label="장소 목록" className="flex flex-col gap-4 p-4">
       <PanelHeader title="장소" count={places.length} />
       <div className="grid grid-cols-2 gap-2">
         <Select value={sort} onValueChange={(value) => onSortChange(value as DestinationSort)}>
@@ -458,277 +394,195 @@ function DestinationList({
   );
 }
 
-function ReviewQueue({
-  candidates,
-  selectedCandidate,
-  onSelect,
-  errorMessage,
-  onResolved,
-}: {
-  candidates: UnmatchedCandidate[];
-  selectedCandidate: UnmatchedCandidate | null;
-  onSelect: (candidateId: number) => void;
-  errorMessage: string | null;
-  onResolved: () => void;
-}) {
-  const form = useForm<ReviewQueueFormValues>({
-    resolver: zodResolver(reviewQueueSchema),
-    defaultValues: {
-      name: selectedCandidate?.ai_place_name ?? "",
-      latitude: "",
-      longitude: "",
-      category: selectedCandidate?.candidate_category ?? "",
-    },
-  });
-
-  useEffect(() => {
-    form.reset({
-      name: selectedCandidate?.ai_place_name ?? "",
-      latitude: "",
-      longitude: "",
-      category: selectedCandidate?.candidate_category ?? "",
-    });
-  }, [
-    form,
-    selectedCandidate?.id,
-    selectedCandidate?.ai_place_name,
-    selectedCandidate?.candidate_category,
-  ]);
-
-  const mutation = useMutation({
-    mutationFn: (values: ReviewQueueFormValues) => {
-      if (!selectedCandidate) {
-        throw new Error("candidate required");
-      }
-      return resolveCandidate(selectedCandidate.id, {
-        action: "create_place",
-        correctedName: values.name,
-        latitude: Number(values.latitude),
-        longitude: Number(values.longitude),
-        category: values.category || selectedCandidate.candidate_category || undefined,
-      });
-    },
-    onSuccess: () => {
-      onResolved();
-    },
-  });
-
-  const ignoreMutation = useMutation({
-    mutationFn: (candidateId: number) =>
-      resolveCandidate(candidateId, { action: "ignore", reviewNote: "웹 UI 제외" }),
-    onSuccess: onResolved,
-  });
-
-  return (
-    <section
-      aria-label="검수 큐"
-      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
-    >
-      <PanelHeader title="검수 큐" count={candidates.length} />
-      {errorMessage ? (
-        <p role="alert" className="text-xs text-destructive">
-          {errorMessage}
-        </p>
-      ) : null}
-      <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
-        {candidates.map((candidate) => (
-          <button
-            key={candidate.id}
-            className="flex w-full flex-col gap-1 rounded-lg border p-3 text-left hover:bg-muted data-[selected=true]:border-primary"
-            data-selected={candidate.id === selectedCandidate?.id}
-            onClick={() => onSelect(candidate.id)}
-            type="button"
-          >
-            <span className="truncate text-sm font-medium">{candidate.ai_place_name}</span>
-            <span className="truncate text-xs text-muted-foreground">
-              {candidate.location_hint ?? candidate.video_id}
-            </span>
-          </button>
-        ))}
-      </div>
-      {selectedCandidate ? (
-        <form
-          className="flex flex-col gap-3 border-t pt-4"
-          onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
-        >
-          <FieldGroup>
-            <Field data-invalid={Boolean(form.formState.errors.name)}>
-              <FieldLabel htmlFor="review-place-name">장소명</FieldLabel>
-              <Input
-                id="review-place-name"
-                aria-label="보정 장소명"
-                aria-invalid={Boolean(form.formState.errors.name)}
-                {...form.register("name")}
-              />
-              <FieldError errors={[form.formState.errors.name]} />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field data-invalid={Boolean(form.formState.errors.latitude)}>
-                <FieldLabel htmlFor="review-latitude">위도</FieldLabel>
-                <Input
-                  id="review-latitude"
-                  aria-label="보정 위도"
-                  inputMode="decimal"
-                  placeholder="위도"
-                  aria-invalid={Boolean(form.formState.errors.latitude)}
-                  {...form.register("latitude")}
-                />
-                <FieldError errors={[form.formState.errors.latitude]} />
-              </Field>
-              <Field data-invalid={Boolean(form.formState.errors.longitude)}>
-                <FieldLabel htmlFor="review-longitude">경도</FieldLabel>
-                <Input
-                  id="review-longitude"
-                  aria-label="보정 경도"
-                  inputMode="decimal"
-                  placeholder="경도"
-                  aria-invalid={Boolean(form.formState.errors.longitude)}
-                  {...form.register("longitude")}
-                />
-                <FieldError errors={[form.formState.errors.longitude]} />
-              </Field>
-            </div>
-            <Field>
-              <FieldLabel htmlFor="review-category">카테고리</FieldLabel>
-              <Input
-                id="review-category"
-                aria-label="보정 카테고리"
-                placeholder="카테고리"
-                {...form.register("category")}
-              />
-            </Field>
-          </FieldGroup>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="submit"
-              disabled={mutation.isPending}
-            >
-              저장
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={ignoreMutation.isPending}
-              onClick={() => ignoreMutation.mutate(selectedCandidate.id)}
-            >
-              제외
-            </Button>
-          </div>
-          {mutation.error ? (
-            <p className="text-xs text-destructive">{mutation.error.message}</p>
-          ) : null}
-        </form>
-      ) : null}
-    </section>
-  );
-}
-
-function OperationsPanel({
-  runs,
+// 실행 큐 패널: running/pending 작업 + 중지/재시작 + 상세 모달.
+function RunQueuePanel({
   queueRuns,
-  audits,
-  rustfs,
   errorMessage,
   onStop,
   onRestart,
+  onDetail,
   isMutating,
 }: {
-  runs: CrawlRunSummary[];
   queueRuns: CrawlRunSummary[];
-  audits: AuditLogSummary[];
-  rustfs: RustfsStatus | undefined;
   errorMessage: string | null;
   onStop: (jobId: string) => void;
   onRestart: (jobId: string) => void;
+  onDetail: (run: CrawlRunSummary) => void;
   isMutating: boolean;
 }) {
-  const failedRuns = runs.filter((run) => run.state === "failed").length;
-  const totalObjects = rustfs?.assets.reduce((sum, asset) => sum + asset.count, 0) ?? 0;
-
   return (
-    <section aria-label="운영 패널" className="flex flex-col gap-3 p-3">
-      <PanelHeader title="운영" count={runs.length} />
+    <section
+      aria-label="실행 큐"
+      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+          <ListChecksIcon className="size-4 text-muted-foreground" />
+          실행 큐
+        </h2>
+        <Badge variant="secondary">{queueRuns.length}</Badge>
+      </div>
       {errorMessage ? (
         <p role="alert" className="text-xs text-destructive">
           {errorMessage}
         </p>
       ) : null}
-      <div className="grid grid-cols-3 gap-2">
-        <Metric label="실패" value={failedRuns.toString()} />
-        <Metric label="객체" value={totalObjects.toString()} />
-        <Metric label="RustFS" value={rustfs?.health.ok ? "OK" : "확인"} />
-      </div>
-      <div className="flex flex-col gap-1.5 border-t pt-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs font-medium">실행 큐</p>
-          <Badge variant="outline">{queueRuns.length}</Badge>
-        </div>
-        {queueRuns.length > 0 ? (
-          queueRuns.map((run) => (
-            <RunControlCard
-              key={run.job_id}
-              run={run}
-              onStop={onStop}
-              onRestart={onRestart}
-              isMutating={isMutating}
-            />
-          ))
-        ) : (
-          <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-            실행 중이거나 대기 중인 작업이 없습니다.
-          </p>
-        )}
-      </div>
-      <div className="flex flex-col gap-1.5 border-t pt-3">
-        <p className="text-xs font-medium">최근 작업</p>
-        {runs.length > 0 ? (
-          runs.slice(0, 6).map((run) => (
-            <RunControlCard
-              key={run.job_id}
-              run={run}
-              onStop={onStop}
-              onRestart={onRestart}
-              isMutating={isMutating}
-            />
-          ))
-        ) : (
-          <p className="text-xs text-muted-foreground">작업 없음</p>
-        )}
-      </div>
-      <details className="border-t pt-3">
-        <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium">
-          <DatabaseIcon className="size-3.5 text-muted-foreground" />
-          MCP/웹 쓰기 로그
-        </summary>
-        <div className="mt-2 flex flex-col gap-1">
-          {audits.slice(0, 6).map((audit) => (
-            <div
-              key={audit.id}
-              className="flex items-center justify-between gap-3 text-xs"
-            >
-              <span className="truncate">{audit.action}</span>
-              <span className="text-muted-foreground">{audit.actor_type}</span>
-            </div>
-          ))}
-        </div>
-      </details>
+      {queueRuns.length > 0 ? (
+        queueRuns.map((run) => (
+          <RunControlCard
+            key={run.job_id}
+            run={run}
+            onStop={onStop}
+            onRestart={onRestart}
+            onDetail={onDetail}
+            isMutating={isMutating}
+          />
+        ))
+      ) : (
+        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+          실행 중이거나 대기 중인 작업이 없습니다.
+        </p>
+      )}
     </section>
   );
 }
 
-// 최근/큐 작업 카드: 클릭하면 상세 로그를 펼치고 중지/재시작할 수 있다.
+// 작업 패널: 반복 작업 / 1회성 작업 탭. 항목 클릭 시 상세, 반복은 수정/삭제.
+function JobsPanel({
+  runs,
+  targets,
+  errorMessage,
+  onStop,
+  onRestart,
+  onDetailRun,
+  onDetailTarget,
+  onEditTarget,
+  onDeleteTarget,
+  isMutating,
+  isDeleting,
+}: {
+  runs: CrawlRunSummary[];
+  targets: SourceTargetSummary[];
+  errorMessage: string | null;
+  onStop: (jobId: string) => void;
+  onRestart: (jobId: string) => void;
+  onDetailRun: (run: CrawlRunSummary) => void;
+  onDetailTarget: (target: SourceTargetSummary) => void;
+  onEditTarget: (target: SourceTargetSummary) => void;
+  onDeleteTarget: (id: number) => void;
+  isMutating: boolean;
+  isDeleting: boolean;
+}) {
+  return (
+    <section aria-label="작업" className="flex flex-col gap-3 p-3">
+      <Tabs defaultValue="recurring">
+        <TabsList className="w-full">
+          <TabsTrigger value="recurring">반복 {targets.length}</TabsTrigger>
+          <TabsTrigger value="oneoff">1회성 {runs.length}</TabsTrigger>
+        </TabsList>
+        {errorMessage ? (
+          <p role="alert" className="mt-2 text-xs text-destructive">
+            {errorMessage}
+          </p>
+        ) : null}
+        <TabsContent value="recurring" className="mt-3 flex flex-col gap-2">
+          {targets.length > 0 ? (
+            targets.map((target) => (
+              <div
+                key={target.id}
+                className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs"
+              >
+                <button
+                  type="button"
+                  className="flex items-center justify-between gap-2 text-left"
+                  onClick={() => onDetailTarget(target)}
+                >
+                  <span className="truncate font-medium">
+                    {target.display_name ?? target.source_value}
+                  </span>
+                  <Badge variant={target.is_active ? "outline" : "secondary"}>
+                    {targetTypeLabel(target.target_type)}
+                  </Badge>
+                </button>
+                <p className="text-muted-foreground">
+                  {intervalLabel(target.scan_interval_minutes)} ·{" "}
+                  {target.max_runs === 0
+                    ? `무한 (${target.run_count}회)`
+                    : `${target.run_count}/${target.max_runs}회`}{" "}
+                  · 다음 {formatRunTime(target.next_crawl_at)}
+                </p>
+                {target.last_scan_error ? (
+                  <p className="break-words text-destructive">
+                    {target.last_scan_error}
+                  </p>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => onEditTarget(target)}
+                  >
+                    <PencilIcon data-icon="inline-start" />
+                    수정
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={isDeleting}
+                    onClick={() => onDeleteTarget(target.id)}
+                    aria-label={`${target.display_name ?? target.source_value} 반복 삭제`}
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                    삭제
+                  </Button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+              반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
+            </p>
+          )}
+        </TabsContent>
+        <TabsContent value="oneoff" className="mt-3 flex flex-col gap-2">
+          {runs.length > 0 ? (
+            runs.map((run) => (
+              <RunControlCard
+                key={run.job_id}
+                run={run}
+                onStop={onStop}
+                onRestart={onRestart}
+                onDetail={onDetailRun}
+                isMutating={isMutating}
+              />
+            ))
+          ) : (
+            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+              작업이 없습니다.
+            </p>
+          )}
+        </TabsContent>
+      </Tabs>
+    </section>
+  );
+}
+
+// 작업 카드: 클릭하면 상세 모달을 열고, 상태에 따라 중지/재시작.
 function RunControlCard({
   run,
   onStop,
   onRestart,
+  onDetail,
   isMutating,
 }: {
   run: CrawlRunSummary;
   onStop: (jobId: string) => void;
   onRestart: (jobId: string) => void;
+  onDetail: (run: CrawlRunSummary) => void;
   isMutating: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const isActive = run.state === "pending" || run.state === "running";
   const isTerminal =
     run.state === "done" || run.state === "failed" || run.state === "cancelled";
@@ -738,8 +592,7 @@ function RunControlCard({
       <button
         type="button"
         className="flex items-center justify-between gap-2 text-left"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
+        onClick={() => onDetail(run)}
       >
         <span className="truncate font-medium">{runLabel(run)}</span>
         <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
@@ -755,137 +608,45 @@ function RunControlCard({
       <p className="line-clamp-1 text-muted-foreground">
         {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
       </p>
-      {expanded ? (
-        <div className="flex flex-col gap-2 border-t pt-2">
-          {run.last_error ? (
-            <p className="break-words text-destructive">{run.last_error}</p>
-          ) : null}
-          <ol className="flex max-h-40 flex-col gap-1 overflow-y-auto">
-            {run.status_logs.length > 0 ? (
-              run.status_logs.slice(-12).map((log, index) => (
-                <li
-                  key={`${log.timestamp}-${index}`}
-                  className="grid grid-cols-[3.5rem_1fr] gap-1"
-                >
-                  <span className="text-muted-foreground">
-                    {formatRunTime(log.timestamp)}
-                  </span>
-                  <span className="min-w-0 break-words">{log.message}</span>
-                </li>
-              ))
-            ) : (
-              <li className="text-muted-foreground">상세 로그 없음</li>
-            )}
-          </ol>
-          <div className="flex gap-2">
-            {isActive ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={isMutating}
-                onClick={() => onStop(run.job_id)}
-              >
-                <SquareIcon data-icon="inline-start" />
-                중지
-              </Button>
-            ) : null}
-            {isTerminal ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={isMutating}
-                onClick={() => onRestart(run.job_id)}
-              >
-                <RotateCcwIcon data-icon="inline-start" />
-                재시작
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      <div className="flex gap-2">
+        {isActive ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={isMutating}
+            onClick={() => onStop(run.job_id)}
+          >
+            <SquareIcon data-icon="inline-start" />
+            중지
+          </Button>
+        ) : null}
+        {isTerminal ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={isMutating}
+            onClick={() => onRestart(run.job_id)}
+          >
+            <RotateCcwIcon data-icon="inline-start" />
+            재시작
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          onClick={() => onDetail(run)}
+        >
+          상세
+        </Button>
+      </div>
     </div>
   );
 }
 
 // 반복 수집(source_target) 패널: 활성 반복 작업 목록 + 상태 + 삭제.
-function RecurringPanel({
-  targets,
-  errorMessage,
-  onDelete,
-  isDeleting,
-}: {
-  targets: SourceTargetSummary[];
-  errorMessage: string | null;
-  onDelete: (id: number) => void;
-  isDeleting: boolean;
-}) {
-  return (
-    <section
-      aria-label="반복 작업"
-      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <RepeatIcon className="size-4 text-muted-foreground" />
-          반복 작업
-        </h2>
-        <Badge variant="secondary">{targets.length}</Badge>
-      </div>
-      {errorMessage ? (
-        <p role="alert" className="text-xs text-destructive">
-          {errorMessage}
-        </p>
-      ) : null}
-      {targets.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          {targets.map((target) => (
-            <div
-              key={target.id}
-              className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate font-medium">
-                  {target.display_name ?? target.source_value}
-                </span>
-                <Badge variant="outline">{targetTypeLabel(target.target_type)}</Badge>
-              </div>
-              <p className="truncate text-muted-foreground">{target.source_value}</p>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">
-                  {intervalLabel(target.scan_interval_minutes)} · 다음{" "}
-                  {formatRunTime(target.next_crawl_at)}
-                </span>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={isDeleting}
-                  onClick={() => onDelete(target.id)}
-                  aria-label={`${target.display_name ?? target.source_value} 반복 삭제`}
-                >
-                  <Trash2Icon data-icon="inline-start" />
-                  삭제
-                </Button>
-              </div>
-              {target.last_scan_error ? (
-                <p className="break-words text-destructive">
-                  {target.last_scan_error}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-          반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
-        </p>
-      )}
-    </section>
-  );
-}
-
 function runLabel(run: CrawlRunSummary) {
   return [run.job_type, run.target_id].filter(Boolean).join(" · ");
 }
@@ -949,15 +710,6 @@ function PanelHeader({ title, count }: { title: string; count: number }) {
     <div className="flex items-center justify-between gap-3">
       <h2 className="text-sm font-semibold">{title}</h2>
       <Badge variant="secondary">{count}</Badge>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border p-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-lg font-semibold">{value}</span>
     </div>
   );
 }

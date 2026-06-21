@@ -78,12 +78,16 @@ async def process_harvest_videos(
     gemini_model = runtime.model
     resolved_llm = llm or poi_extraction.make_llm(runtime)
     resolved_transcript_fetcher = transcript_fetcher or _default_transcript_fetcher
+    vworld_key = await settings_service.get_secret(session, "vworld_service_key")
+    kakao_key = await settings_service.get_secret(session, "kakao_rest_api_key")
     async with httpx.AsyncClient(timeout=30.0) as http_client:
         owned_geocode_context = await _make_geocode_context(
             http_client,
             settings=settings,
             geocode_decider=geocode_decider,
             geocode_applier=geocode_applier,
+            vworld_key=vworld_key,
+            kakao_key=kakao_key,
         )
 
         await _report(
@@ -277,6 +281,8 @@ async def _make_geocode_context(
     settings: Settings,
     geocode_decider: GeocodeDecider | None,
     geocode_applier: GeocodeApplier | None,
+    vworld_key: str | None = None,
+    kakao_key: str | None = None,
 ) -> _GeocodeContext:
     if geocode_decider is not None:
         return _GeocodeContext(
@@ -284,14 +290,17 @@ async def _make_geocode_context(
             geocode_applier or _default_geocode_applier(None),
         )
 
+    # DB(system_settings) 오버라이드 키가 주어지면 그것을, 없으면 `.env` 값을 쓴다.
+    vworld_secret = vworld_key if vworld_key is not None else settings.VWORLD_SERVICE_KEY
+    kakao_secret = kakao_key if kakao_key is not None else settings.KAKAO_REST_API_KEY
     vworld_client = (
-        AsyncVworldClient(api_key=settings.VWORLD_SERVICE_KEY)
-        if _configured_secret(settings.VWORLD_SERVICE_KEY)
+        AsyncVworldClient(api_key=vworld_secret)
+        if _configured_secret(vworld_secret)
         else None
     )
     kakao = (
-        KakaoGeocoder(settings.KAKAO_REST_API_KEY, http_client)
-        if _configured_secret(settings.KAKAO_REST_API_KEY)
+        KakaoGeocoder(kakao_secret, http_client)
+        if _configured_secret(kakao_secret)
         else None
     )
     naver = (

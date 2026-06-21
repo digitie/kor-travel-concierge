@@ -14,6 +14,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from ktc.core.database import get_session
+from ktc.services import audit_service, settings_service
 from main import app
 
 
@@ -138,6 +139,87 @@ async def test_stop_running_run_sets_cancel_requested(client, session):
     await session.refresh(run)
     assert run.cancel_requested is True
     assert run.state == "running"
+
+
+async def test_recurring_max_runs_and_patch(client):
+    cid = "UCnV8h6ZzQnLoFBFXqHGtxBg"
+    await client.post(
+        "/api/v1/harvest",
+        json={
+            "channel_id": cid,
+            "max_videos": 3,
+            "repeat_interval_minutes": 60,
+            "repeat_max_runs": 5,
+        },
+    )
+    target = (await client.get("/api/v1/source-targets")).json()[0]
+    assert target["max_runs"] == 5
+    assert target["run_count"] == 0
+
+    patched = await client.patch(
+        f"/api/v1/source-targets/{target['id']}",
+        json={"scan_interval_minutes": 720, "max_runs": 10},
+    )
+    assert patched.status_code == 200
+    body = patched.json()
+    assert body["scan_interval_minutes"] == 720
+    assert body["max_runs"] == 10
+
+    missing = await client.patch(
+        "/api/v1/source-targets/999999", json={"is_active": False}
+    )
+    assert missing.status_code == 404
+
+
+async def test_metrics_endpoint_shape(client):
+    resp = await client.get("/api/v1/metrics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "storage" in body and "database" in body
+    db = body["database"]
+    for key in (
+        "youtube_videos",
+        "travel_places",
+        "active_recurring_targets",
+        "candidates_by_status",
+        "runs_by_state",
+    ):
+        assert key in db
+
+
+async def test_run_videos_endpoint(client, session):
+    from ktc.models import CrawlRun, RunSource, RunState, YoutubeChannel, YoutubeVideo
+
+    session.add(YoutubeChannel(channel_id="UCvidtest", title="테스트 채널"))
+    session.add(
+        YoutubeVideo(
+            video_id="vidABC",
+            title="테스트 영상",
+            url="https://youtu.be/vidABC",
+            channel_id="UCvidtest",
+            duration_seconds=42,
+        )
+    )
+    run = CrawlRun(
+        job_type="harvest",
+        source=RunSource.WEB,
+        target_type="keyword",
+        target_id="x",
+        state=RunState.DONE,
+        progress=1.0,
+        result_json='{"video_ids": ["vidABC"]}',
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+
+    resp = await client.get(f"/api/v1/runs/{run.id}/videos")
+    assert resp.status_code == 200
+    videos = resp.json()
+    assert len(videos) == 1
+    assert videos[0]["video_id"] == "vidABC"
+    assert videos[0]["url"] == "https://www.youtube.com/watch?v=vidABC"
+    assert videos[0]["channel_title"] == "테스트 채널"
 
 
 async def test_stop_terminal_run_400(client, session):
@@ -434,3 +516,43 @@ async def test_resolve_candidate_and_deep_research(client, session_factory):
     research = await client.post(f"/api/v1/destinations/{place.place_id}/deep-research", json={})
     assert research.status_code == 200
     assert research.json()["state"] == "pending"
+
+
+async def test_settings_post_saves_api_key_and_exposes_set_flag(client, session):
+    resp = await client.post(
+        "/api/v1/settings", json={"google_places_api_key": "g-secret-123"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["settings"]["api_keys"]["google_places_api_key"]["set"] is True
+    # 값은 system_settings에 저장되지만 GET 응답에는 노출되지 않는다.
+    assert (
+        await settings_service.get_setting(session, "google_places_api_key")
+        == "g-secret-123"
+    )
+    got = await client.get("/api/v1/settings")
+    assert got.json()["api_keys"]["google_places_api_key"]["set"] is True
+    assert "g-secret-123" not in got.text
+
+
+async def test_settings_post_empty_key_does_not_overwrite(client, session):
+    await client.post("/api/v1/settings", json={"google_places_api_key": "kept-value"})
+    resp = await client.post("/api/v1/settings", json={"google_places_api_key": ""})
+    assert resp.status_code == 200
+    # 빈 값으로 덮어쓰지 않는다(미입력=변경 없음).
+    assert (
+        await settings_service.get_setting(session, "google_places_api_key")
+        == "kept-value"
+    )
+
+
+async def test_settings_post_masks_secret_in_audit(client, session):
+    resp = await client.post(
+        "/api/v1/settings", json={"deepseek_api_key": "ds-secret-xyz"}
+    )
+    assert resp.status_code == 200
+    logs = await audit_service.list_recent(session)
+    settings_logs = [log for log in logs if log.action == "settings.update"]
+    assert settings_logs
+    assert "ds-secret-xyz" not in settings_logs[0].payload_json
+    assert "***" in settings_logs[0].payload_json
