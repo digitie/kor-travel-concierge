@@ -36,7 +36,12 @@ from ktc.models import (
     YoutubeVideo,
     YoutubeVideoAnalysisRun,
 )
-from ktc.services import crawl_run_service, place_service, source_scan_service
+from ktc.services import (
+    crawl_run_service,
+    place_service,
+    settings_service,
+    source_scan_service,
+)
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
@@ -126,9 +131,10 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
         raise ValueError(f"지원하지 않는 harvest target_type: {target_type}")
 
     settings = get_settings()
+    youtube_key = await settings_service.get_secret(session, "youtube_api_key")
     async with httpx.AsyncClient(timeout=30.0) as http_client:
         client = YouTubeClient(
-            api_key=settings.YOUTUBE_API_KEY,
+            api_key=youtube_key,
             http_client=http_client,
             quota_budget_units=settings.YOUTUBE_SEARCH_DAILY_BUDGET_UNITS,
         )

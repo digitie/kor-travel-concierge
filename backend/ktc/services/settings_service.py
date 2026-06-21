@@ -21,8 +21,35 @@ from ktc.core.config import (
 from ktc.etl.llm_client import LlmRuntime
 from ktc.models import SystemSetting
 
-ALLOWED_SETTING_KEYS = frozenset({"gemini_engine_version", "deepseek_api_key", "ai_preprompt"})
+# UI에서 관리 가능한 시크릿 설정 키 → `.env` 폴백 속성명.
+SECRET_ENV_ATTRS = {
+    "youtube_api_key": "YOUTUBE_API_KEY",
+    "gemini_api_key": "GEMINI_API_KEY",
+    "google_places_api_key": "GOOGLE_PLACES_API_KEY",
+    "naver_search_client_id": "NAVER_SEARCH_CLIENT_ID",
+    "naver_search_client_secret": "NAVER_SEARCH_CLIENT_SECRET",
+    "kakao_rest_api_key": "KAKAO_REST_API_KEY",
+    "vworld_service_key": "VWORLD_SERVICE_KEY",
+    "deepseek_api_key": "DEEPSEEK_API_KEY",
+}
+
+ALLOWED_SETTING_KEYS = frozenset(
+    {"gemini_engine_version", "ai_preprompt"} | set(SECRET_ENV_ATTRS)
+)
 AI_PREPROMPT_MAX_LEN = 4000
+
+
+async def get_secret(session: AsyncSession, name: str) -> str:
+    """관리형 시크릿 키를 해석한다: `system_settings`에 값이 있으면 그것, 없으면 `.env` 값.
+
+    DB에 값이 없으면 동작이 기존(`.env`)과 동일하다.
+    """
+    if name not in SECRET_ENV_ATTRS:
+        raise ValueError(f"알 수 없는 시크릿 키: {name}")
+    value = await get_setting(session, name)
+    if value:
+        return value
+    return getattr(get_settings(), SECRET_ENV_ATTRS[name], "") or ""
 
 
 def validate_setting_key(key: str) -> None:
@@ -109,7 +136,11 @@ async def get_all(session: AsyncSession) -> dict[str, Any]:
     if preprompt is None:
         preprompt = settings.AI_PREPROMPT or AI_PREPROMPT_DEFAULT
 
-    deepseek_set = bool(db.get("deepseek_api_key") or settings.DEEPSEEK_API_KEY)
+    api_keys = {
+        name: {"set": bool(await get_secret(session, name))}
+        for name in SECRET_ENV_ATTRS
+    }
+    deepseek_set = api_keys["deepseek_api_key"]["set"]
 
     return {
         "gemini_engine_version": engine_version,
@@ -118,6 +149,7 @@ async def get_all(session: AsyncSession) -> dict[str, Any]:
         "ai_preprompt": preprompt,
         "ai_preprompt_default": AI_PREPROMPT_DEFAULT,
         "deepseek_api_key_set": deepseek_set,
+        "api_keys": api_keys,
     }
 
 
@@ -149,8 +181,8 @@ async def get_llm_runtime(session: AsyncSession) -> LlmRuntime:
     settings = get_settings()
     return LlmRuntime(
         model=await get_gemini_engine_version(session),
-        gemini_api_key=settings.GEMINI_API_KEY,
-        deepseek_api_key=await get_deepseek_api_key(session),
+        gemini_api_key=await get_secret(session, "gemini_api_key"),
+        deepseek_api_key=await get_secret(session, "deepseek_api_key"),
         deepseek_base_url=settings.DEEPSEEK_BASE_URL,
         preprompt=await get_ai_preprompt(session),
     )

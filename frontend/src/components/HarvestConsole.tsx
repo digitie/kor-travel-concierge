@@ -5,10 +5,12 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  ClipboardCheckIcon,
   FileTextIcon,
   Loader2Icon,
   PlayIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
@@ -41,6 +43,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { OpsMetricsDialog } from "@/components/OpsMetricsDialog";
+import { SettingsDialog } from "@/components/SettingsDialog";
 
 const targetLabels: Record<HarvestTargetType, string> = {
   keyword: "검색어",
@@ -56,13 +60,13 @@ const targetPlaceholders: Record<HarvestTargetType, string> = {
 
 // 반복 검색 간격 선택지(분).
 const repeatIntervalOptions: { value: number; label: string }[] = [
-  { value: 30, label: "30분" },
   { value: 60, label: "1시간" },
-  { value: 180, label: "3시간" },
-  { value: 360, label: "6시간" },
   { value: 720, label: "12시간" },
   { value: 1440, label: "1일" },
-  { value: 10080, label: "1주" },
+  { value: 10080, label: "1주일" },
+  { value: 20160, label: "2주일" },
+  { value: 43200, label: "1달" },
+  { value: 129600, label: "3달" },
 ];
 
 function repeatIntervalLabel(value: number): string {
@@ -96,6 +100,7 @@ const harvestFormSchema = z.object({
     .max(50, "한 번에 최대 50개까지 요청할 수 있습니다."),
   repeat: z.boolean(),
   repeatIntervalMinutes: z.coerce.number().int().min(1),
+  repeatMaxRuns: z.coerce.number().int().min(0),
   contentFilter: z.enum(["both", "shorts", "videos"]),
 });
 
@@ -112,6 +117,7 @@ export function HarvestConsole() {
       maxVideos: 10,
       repeat: false,
       repeatIntervalMinutes: 1440,
+      repeatMaxRuns: 0,
       contentFilter: "both",
     },
   });
@@ -124,6 +130,7 @@ export function HarvestConsole() {
     control: form.control,
     name: "repeatIntervalMinutes",
   });
+  const repeatMaxRuns = useWatch({ control: form.control, name: "repeatMaxRuns" });
   const contentFilter = useWatch({
     control: form.control,
     name: "contentFilter",
@@ -190,11 +197,22 @@ export function HarvestConsole() {
 
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-normal">Kor Travel Concierge</h1>
-        <p className="text-sm text-muted-foreground">
-          YouTube 여행 수집 작업
-        </p>
+      <header className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl font-semibold tracking-normal">Kor Travel Concierge</h1>
+          <p className="text-sm text-muted-foreground">YouTube 여행 수집 작업</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          <Link
+            href="/review"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ClipboardCheckIcon className="size-4" />
+            검수
+          </Link>
+          <OpsMetricsDialog />
+          <SettingsDialog />
+        </div>
       </header>
 
       <form
@@ -202,10 +220,12 @@ export function HarvestConsole() {
         onSubmit={form.handleSubmit((values) =>
           mutation.mutate({
             ...values,
-            skipTranscript: true,
+            // 자막 추출→POI→지오코딩→DB 저장까지 자동 완료(별도 확인 단계 없음).
+            skipTranscript: false,
             repeatIntervalMinutes: values.repeat
               ? values.repeatIntervalMinutes
               : null,
+            repeatMaxRuns: values.repeat ? values.repeatMaxRuns : null,
           }),
         )}
       >
@@ -342,6 +362,23 @@ export function HarvestConsole() {
                 <FieldDescription>
                   체크 시 선택한 간격으로 자동 반복 수집합니다.
                 </FieldDescription>
+                <FieldLabel htmlFor="harvest-repeat-count" className="mt-2">
+                  반복 횟수
+                </FieldLabel>
+                <Input
+                  id="harvest-repeat-count"
+                  type="number"
+                  min={0}
+                  value={String(repeatMaxRuns)}
+                  onChange={(event) =>
+                    form.setValue(
+                      "repeatMaxRuns",
+                      Math.max(0, Number(event.target.value) || 0),
+                      { shouldDirty: true },
+                    )
+                  }
+                />
+                <FieldDescription>0이면 무한 반복.</FieldDescription>
               </div>
             ) : null}
           </Field>

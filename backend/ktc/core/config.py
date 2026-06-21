@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""
     VWORLD_SERVICE_KEY: str = ""
+    # 검수 페이지 멀티 provider 장소 검색용 (geocoding 키와 별개).
+    GOOGLE_PLACES_API_KEY: str = ""
+    NAVER_SEARCH_CLIENT_ID: str = ""
+    NAVER_SEARCH_CLIENT_SECRET: str = ""
 
     # --- 3. MCP 서버 ---
     MCP_WRITE_ENABLED: bool = False

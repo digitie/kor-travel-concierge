@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-21: T-097 완료 — UI 전면 개편(검수 별도 페이지·멀티 provider) + 작업/반복 관리 + 운영·설정 모달 + API 키 DB 관리
+
+대규모 UI 개편 + 신규 기능. 각 단계를 스샷으로 검토받으며 진행하고 완료 후 dev/prod에 배포(ADR-31).
+
+- **메인 레이아웃**: 좌측 수집 사이드바를 접이식(48px 토글)으로, 장소 목록을 지도 왼쪽 좁은 칼럼(`lg:grid-cols-[0.7fr_1.6fr]`)으로, 하단을 **실행 큐 | 작업(반복/1회성 탭)** 2열로 재편. 검수 큐 패널 → 별도 페이지, 운영 패널 → 사이드바 버튼+모달. 사이드바 헤더에 검수·운영·설정 버튼.
+- **검수 별도 페이지(`/review`)**: 후보 목록 + 선택 후보 정보 + **Google Places·Kakao·Naver 검색과 Gemini 의견을 한 번에 비교**(결과/지도 마커 클릭→좌표 선택) + 직접 검색 + 지도 + 확정/제외. 백엔드 `GET /api/v1/place-search?q=`(`ktc/etl/place_search.py`: 4 provider 병렬·결함 격리·정규화, Naver mapx/mapy÷1e7, Gemini 의견).
+- **작업 표시·상세·제어**: 작업 패널을 반복/1회성 탭으로(모든 작업 표시). 항목 클릭 → **상세 모달**(대상·키워드·최대수·간격·누적 영상; `GET /runs/{id}/videos`, `GET /source-targets/{id}/videos`). 실행 큐 카드에 중지/재시작.
+- **반복 수정·횟수**: 반복 작업 **수정 모달**(주기·횟수, `PATCH /source-targets/{id}`). 생성 시 **반복 횟수(0=무한)** 추가, 간격을 1시간·12시간·1일·1주일·2주일·1달·3달로. `source_targets.max_runs/run_count`(migration `20260621_0009`; 기존 DB는 직접 ALTER), `scan_due_targets`가 run_count 증가·max_runs 도달 시 비활성화.
+- **자동 완료**: 수집 시작 시 자막→POI→지오코딩→DB까지 자동(자막 생성 확인 단계 제거, `skip_transcript=false`).
+- **운영 지표 모달**: `GET /api/v1/metrics`(RustFS 객체/용량/타입별 + DB 카운트: 영상·채널·재생목록·장소·지오코딩·언급매핑·반복작업·후보상태·작업상태).
+- **설정 모달 + API 키 DB 관리**: AI 엔진·사전 프롬프트·DeepSeek 키에 더해 **8종 API 키(YouTube/Gemini/Google Places/Naver 검색 id·secret/Kakao/VWorld/DeepSeek)를 UI에서 저장/수정**. `settings_service.get_secret`(system_settings→.env 폴백), `GET /settings`에 `api_keys`(set 여부만 노출), POST는 빈 값 미변경·감사 로그 마스킹. 소비처(harvest youtube, place-search, geocoding postprocess, get_llm_runtime)가 get_secret로 해석.
+- **UI 프리미티브**: base-ui 기반 `Dialog`/`Tabs` 추가(검수 페이지/모달/탭 공용).
+- **검증**: backend pytest 257 + compileall, frontend lint/type-check/build. dev 백엔드 재빌드 후 4 provider 검색·`/metrics`·반복 PATCH·작업 상세·설정 API 키를 실데이터로 확인. dev/prod 배포.
+
 ## 2026-06-21: T-096 완료 — 숏츠/동영상 콘텐츠 유형 필터 + 재생목록 URL 확인
 
 - **콘텐츠 유형 필터**: 수집 폼에 "콘텐츠 유형"(숏츠+동영상/숏츠만/동영상만) 선택을 추가. 백엔드는 `duration_seconds <= SHORTS_MAX_DURATION_SECONDS`(기본 60초)면 숏츠로 보는 휴리스틱으로 `pipeline.filter_candidates_by_content`를 적용한다. 숏츠/동영상 필터 시 `collect_limit`(max_videos×3, 50 상한)로 넉넉히 수집한 뒤 길이로 걸러 `max_videos`로 자른다. `HarvestRequest.content_filter`(`both`/`shorts`/`videos`), `run_harvest(content_filter, shorts_max_seconds)`, `harvest_handler`에서 payload→run_harvest 전달, `config.SHORTS_MAX_DURATION_SECONDS`. 프런트 `HarvestContentFilter` + `lib/api.ts` payload. (반복 수집은 현재 `both` 기본 — source_target에 필터를 저장하지 않음, 향후 보강 여지.)

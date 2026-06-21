@@ -1,0 +1,497 @@
+"use client";
+
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeftIcon,
+  ExternalLinkIcon,
+  Loader2Icon,
+  MapPinIcon,
+  SearchIcon,
+  SparklesIcon,
+} from "lucide-react";
+
+import {
+  listUnmatchedCandidates,
+  resolveCandidate,
+  searchPlaces,
+  type DestinationSummary,
+  type PlaceSearchHit,
+  type PlaceSearchResult,
+} from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { VWorldMap } from "@/components/VWorldMap";
+
+const PROVIDER_LABELS: Record<string, string> = {
+  google: "Google Places",
+  kakao: "Kakao",
+  naver: "Naver",
+};
+const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
+
+function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
+  return {
+    place_id: placeId,
+    name: hit.name,
+    description: null,
+    gemini_enriched_description: null,
+    latitude: hit.latitude,
+    longitude: hit.longitude,
+    category: hit.category,
+    official_address: hit.road_address ?? hit.address,
+    road_address: hit.road_address,
+    is_geocoded: true,
+    mention_count: 0,
+    source_channel_count: 0,
+    source_videos: [],
+  };
+}
+
+export default function ReviewPage() {
+  const queryClient = useQueryClient();
+  const candidatesQuery = useQuery({
+    queryKey: ["unmatched-candidates"],
+    queryFn: listUnmatchedCandidates,
+    refetchInterval: 15_000,
+  });
+  const candidates = useMemo(
+    () => candidatesQuery.data ?? [],
+    [candidatesQuery.data],
+  );
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selected = useMemo(
+    () => candidates.find((c) => c.id === selectedId) ?? candidates[0] ?? null,
+    [candidates, selectedId],
+  );
+
+  const [queryEdit, setQueryEdit] = useState<string | null>(null);
+  const [activeQuery, setActiveQuery] = useState("");
+  const query = queryEdit ?? selected?.ai_place_name ?? "";
+
+  const searchQuery = useQuery({
+    queryKey: ["place-search", activeQuery],
+    queryFn: () => searchPlaces(activeQuery),
+    enabled: activeQuery.trim().length > 0,
+  });
+  const result = searchQuery.data;
+
+  const [form, setForm] = useState({
+    name: "",
+    latitude: "",
+    longitude: "",
+    category: "",
+  });
+
+  function runSearch() {
+    if (query.trim()) {
+      setActiveQuery(query.trim());
+    }
+  }
+  function pickCandidate(id: number, name: string) {
+    setSelectedId(id);
+    setQueryEdit(null);
+    setActiveQuery(name);
+    setForm({ name: "", latitude: "", longitude: "", category: "" });
+  }
+  function selectHit(hit: PlaceSearchHit) {
+    setForm({
+      name: hit.name,
+      latitude: String(hit.latitude),
+      longitude: String(hit.longitude),
+      category: hit.category ?? "",
+    });
+  }
+  function applyGemini(gemini: NonNullable<PlaceSearchResult["gemini"]>) {
+    setForm((prev) => ({
+      name: gemini.best_name ?? prev.name,
+      latitude: gemini.latitude != null ? String(gemini.latitude) : prev.latitude,
+      longitude:
+        gemini.longitude != null ? String(gemini.longitude) : prev.longitude,
+      category: gemini.category ?? prev.category,
+    }));
+  }
+
+  const mapPlaces = useMemo<DestinationSummary[]>(() => {
+    const hits = [
+      ...(result?.google ?? []),
+      ...(result?.kakao ?? []),
+      ...(result?.naver ?? []),
+    ].map((h, i) => hitPlace(h, i + 1));
+    const lat = Number(form.latitude);
+    const lng = Number(form.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && form.latitude) {
+      hits.unshift(
+        hitPlace(
+          {
+            provider: "선택",
+            name: form.name || "선택 위치",
+            address: null,
+            road_address: null,
+            latitude: lat,
+            longitude: lng,
+            category: form.category || null,
+          },
+          9999,
+        ),
+      );
+    }
+    return hits;
+  }, [result, form]);
+
+  const resolveMutation = useMutation({
+    mutationFn: (action: "create_place" | "ignore") => {
+      if (!selected) {
+        throw new Error("검수할 후보가 없습니다.");
+      }
+      if (action === "ignore") {
+        return resolveCandidate(selected.id, {
+          action: "ignore",
+          reviewNote: "검수 페이지 제외",
+        });
+      }
+      return resolveCandidate(selected.id, {
+        action: "create_place",
+        correctedName: form.name,
+        latitude: Number(form.latitude),
+        longitude: Number(form.longitude),
+        category: form.category || undefined,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["destinations"] });
+      setForm({ name: "", latitude: "", longitude: "", category: "" });
+      setQueryEdit(null);
+      setActiveQuery("");
+      setSelectedId(null);
+    },
+  });
+
+  const canSave =
+    Boolean(form.name.trim()) &&
+    Number.isFinite(Number(form.latitude)) &&
+    Number.isFinite(Number(form.longitude)) &&
+    Boolean(form.latitude) &&
+    Boolean(form.longitude);
+
+  return (
+    <main className="flex min-h-screen flex-col bg-background">
+      <header className="flex items-center justify-between gap-3 border-b px-5 py-3">
+        <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ArrowLeftIcon className="size-4" />
+            메인
+          </Link>
+          <h1 className="text-lg font-semibold">검수 큐</h1>
+          <Badge variant="secondary">{candidates.length}</Badge>
+        </div>
+        <p className="hidden text-xs text-muted-foreground sm:block">
+          Google·Kakao·Naver 검색과 Gemini 의견을 비교해 위치를 확정합니다.
+        </p>
+      </header>
+
+      <div className="grid flex-1 grid-cols-1 lg:grid-cols-[18rem_1fr]">
+        <aside className="flex max-h-[40vh] flex-col gap-1 overflow-y-auto border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
+          <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+            검수 대기 후보
+          </p>
+          {candidates.length === 0 ? (
+            <p className="rounded-lg border p-3 text-xs text-muted-foreground">
+              검수할 후보가 없습니다.
+            </p>
+          ) : (
+            candidates.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                onClick={() =>
+                  pickCandidate(candidate.id, candidate.ai_place_name)
+                }
+                data-selected={candidate.id === selected?.id}
+                className="flex flex-col gap-0.5 rounded-lg border p-2.5 text-left text-sm transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
+              >
+                <span className="truncate font-medium">
+                  {candidate.ai_place_name}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {candidate.location_hint ?? candidate.video_id}
+                </span>
+              </button>
+            ))
+          )}
+        </aside>
+
+        <section className="flex flex-col gap-4 overflow-y-auto p-5">
+          {selected ? (
+            <>
+              <div className="flex flex-col gap-2 rounded-xl border p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">
+                    {selected.ai_place_name}
+                  </span>
+                  {selected.candidate_category ? (
+                    <Badge variant="outline">{selected.candidate_category}</Badge>
+                  ) : null}
+                  <Badge variant="secondary">{selected.match_status}</Badge>
+                </div>
+                {selected.location_hint ? (
+                  <p className="text-xs text-muted-foreground">
+                    위치 힌트: {selected.location_hint}
+                  </p>
+                ) : null}
+                <a
+                  href={`https://www.youtube.com/watch?v=${selected.video_id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex w-fit items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  영상 보기 <ExternalLinkIcon className="size-3" />
+                </a>
+              </div>
+
+              <div className="flex gap-2">
+                <Input
+                  value={query}
+                  placeholder="장소명으로 검색 (Google·Kakao·Naver·Gemini)"
+                  onChange={(event) => setQueryEdit(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      runSearch();
+                    }
+                  }}
+                />
+                <Button type="button" onClick={runSearch} disabled={!query.trim()}>
+                  {searchQuery.isFetching ? (
+                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <SearchIcon data-icon="inline-start" />
+                  )}
+                  검색
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
+                <div className="flex flex-col gap-3">
+                  {result?.gemini ? (
+                    <GeminiCard
+                      gemini={result.gemini}
+                      onApply={() => applyGemini(result.gemini!)}
+                    />
+                  ) : null}
+                  {PROVIDER_ORDER.map((provider) => (
+                    <ProviderSection
+                      key={provider}
+                      label={PROVIDER_LABELS[provider]}
+                      hits={result?.[provider] ?? []}
+                      error={result?.errors?.[provider]}
+                      loading={searchQuery.isFetching}
+                      onSelect={selectHit}
+                    />
+                  ))}
+                  {!activeQuery ? (
+                    <p className="text-xs text-muted-foreground">
+                      후보를 선택하면 자동 검색합니다. 직접 검색어를 입력할 수도 있습니다.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <div className="h-72 overflow-hidden rounded-xl border">
+                    <VWorldMap
+                      places={mapPlaces}
+                      selectedPlaceId={form.latitude ? 9999 : null}
+                      onSelectPlace={(placeId) => {
+                        const place = mapPlaces.find(
+                          (p) => p.place_id === placeId,
+                        );
+                        if (place && place.place_id !== 9999) {
+                          setForm({
+                            name: place.name,
+                            latitude: String(place.latitude),
+                            longitude: String(place.longitude),
+                            category: place.category ?? "",
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2 rounded-xl border p-3">
+                    <p className="flex items-center gap-1.5 text-sm font-medium">
+                      <MapPinIcon className="size-4 text-muted-foreground" />
+                      확정 정보
+                    </p>
+                    <Input
+                      aria-label="확정 장소명"
+                      placeholder="장소명"
+                      value={form.name}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, name: event.target.value }))
+                      }
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input
+                        aria-label="위도"
+                        inputMode="decimal"
+                        placeholder="위도"
+                        value={form.latitude}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            latitude: event.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        aria-label="경도"
+                        inputMode="decimal"
+                        placeholder="경도"
+                        value={form.longitude}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            longitude: event.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <Input
+                      aria-label="카테고리"
+                      placeholder="카테고리"
+                      value={form.category}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          category: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        disabled={!canSave || resolveMutation.isPending}
+                        onClick={() => resolveMutation.mutate("create_place")}
+                      >
+                        저장
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={resolveMutation.isPending}
+                        onClick={() => resolveMutation.mutate("ignore")}
+                      >
+                        제외
+                      </Button>
+                    </div>
+                    {resolveMutation.error ? (
+                      <p className="text-xs text-destructive">
+                        {resolveMutation.error.message}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              검수할 후보가 없습니다.
+            </p>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function GeminiCard({
+  gemini,
+  onApply,
+}: {
+  gemini: NonNullable<PlaceSearchResult["gemini"]>;
+  onApply: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-primary/40 bg-primary/5 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-sm font-medium">
+          <SparklesIcon className="size-4 text-primary" />
+          Gemini 의견
+        </p>
+        {gemini.confidence != null ? (
+          <Badge variant="outline">
+            신뢰도 {Math.round(gemini.confidence * 100)}%
+          </Badge>
+        ) : null}
+      </div>
+      <p className="text-sm font-medium">{gemini.best_name ?? "-"}</p>
+      {gemini.reason ? (
+        <p className="text-xs text-muted-foreground">{gemini.reason}</p>
+      ) : null}
+      {gemini.latitude != null && gemini.longitude != null ? (
+        <Button type="button" size="xs" variant="outline" onClick={onApply}>
+          이 결과 사용
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderSection({
+  label,
+  hits,
+  error,
+  loading,
+  onSelect,
+}: {
+  label: string;
+  hits: PlaceSearchHit[];
+  error?: string;
+  loading: boolean;
+  onSelect: (hit: PlaceSearchHit) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold">{label}</p>
+        <Badge variant="outline">{hits.length}</Badge>
+      </div>
+      {error ? (
+        <p className="text-xs text-destructive">{error}</p>
+      ) : hits.length === 0 ? (
+        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+          {loading ? "검색 중…" : "결과 없음"}
+        </p>
+      ) : (
+        hits.map((hit, index) => (
+          <button
+            key={`${label}-${index}`}
+            type="button"
+            onClick={() => onSelect(hit)}
+            className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted"
+          >
+            <span className="flex items-center justify-between gap-2">
+              <span className="truncate font-medium">{hit.name}</span>
+              {hit.category ? (
+                <span className="shrink-0 text-muted-foreground">
+                  {hit.category}
+                </span>
+              ) : null}
+            </span>
+            <span className="truncate text-muted-foreground">
+              {hit.road_address ?? hit.address ?? "-"}
+            </span>
+            <span className="text-muted-foreground">
+              {hit.latitude.toFixed(5)}, {hit.longitude.toFixed(5)}
+            </span>
+          </button>
+        ))
+      )}
+    </div>
+  );
+}

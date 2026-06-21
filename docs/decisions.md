@@ -651,6 +651,25 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 
 ---
 
+## ADR-31: 검수 멀티-provider 비교 페이지 + 작업/반복 관리 UX + API 키 DB 관리
+
+- **상태**: 채택 (2026-06-21)
+- **결정자**: 사용자, AI agent
+- **맥락**: 메인 한 화면에 수집·장소·지도·검수·반복·운영이 몰려 있어 검수(장소 좌표 보정)가 비좁았고, 반복 작업의 주기·횟수 수정과 작업별 누적 영상 확인 수단이 없었다. 또 각종 API 키를 `.env` 편집으로만 바꿀 수 있었다. 사용자는 (1) 검수를 별도 페이지로 빼서 Google Places·Kakao·Naver 검색과 Gemini 의견을 한 번에 비교하며 좌표를 보정하고, (2) 메인 기존 검수 자리에는 실행 큐를, 작업은 반복/1회성 탭으로 모두 표시하며 항목 클릭 시 상세(대상·키워드·최대수·간격·누적 영상)와 중지/재시작을 제공하고, (3) 반복 작업의 주기·횟수를 수정(0=무한)하고, (4) 자막 확인 단계 없이 자동 완료하고, (5) 운영 수치를 별도 모달로, (6) 설정 모달에서 8종 API 키를 저장/수정하길 요청했다. 각 UI 단계는 스샷 검토를 받으며 진행한다.
+- **결정**:
+  - **검수 별도 페이지(`/review`)**: 후보 목록 + 선택 후보 정보 + 멀티-provider 비교(클릭→좌표 선택) + 직접 검색 + 지도 + 확정/제외. 백엔드 `GET /api/v1/place-search?q=`를 신설하고 `ktc/etl/place_search.py`에서 Google Places(New)·Kakao 키워드·Naver 지역검색을 병렬 호출(결함 격리, 정규화 `{provider,name,address,road_address,latitude,longitude,category}`, Naver mapx/mapy÷1e7)하고 Gemini 의견을 덧붙인다. 키 미설정 provider는 빈 결과 + `errors`.
+  - **메인 재편**: 좌측 수집 사이드바 접이식(48px), 장소 목록을 지도 왼쪽 좁은 칼럼으로, 하단을 실행 큐 | 작업(반복/1회성 탭)으로. 검수는 사이드바 검수 버튼→페이지, 운영은 사이드바 운영 버튼→모달.
+  - **작업 상세·반복 관리**: 작업/반복 클릭→상세 모달(`GET /runs/{id}/videos`, `GET /source-targets/{id}/videos`로 누적 영상). 반복 수정 모달은 `PATCH /api/v1/source-targets/{id}`로 주기·횟수를 바꾼다. `source_targets.max_runs`(0=무한)/`run_count`를 추가(migration `20260621_0009`; alembic 이전 DB는 직접 ALTER), `scan_due_targets`가 enqueue마다 run_count를 올리고 max_runs 도달 시 비활성화한다. 생성 폼의 반복 간격은 1시간·12시간·1일·1주일·2주일·1달·3달.
+  - **자동 완료**: 수집 시작이 `skip_transcript=false`로 자막→POI→지오코딩→DB까지 자동 진행한다(별도 확인 단계 제거).
+  - **운영 지표**: `GET /api/v1/metrics`(RustFS 객체/용량/타입별 + DB 카운트·후보상태·작업상태)를 운영 모달이 소비한다.
+  - **API 키 DB 관리**: `settings_service.get_secret(session, name)`가 `system_settings`→`.env` 순으로 해석하고, `GET /settings`가 8종 키의 `api_keys.{name}.set`만(값 비노출) 내려준다. POST는 빈 값은 미변경, 감사 로그는 비밀을 마스킹한다. 소비처(harvest YouTube, place-search, geocoding postprocess, `get_llm_runtime`)가 `get_secret`로 해석하되 DB에 값이 없으면 env로 폴백해 동작이 바뀌지 않는다. NCP geocoding의 `NAVER_CLIENT_ID/SECRET`은 검색용 `naver_search_*`와 구분되는 별개 키라 env에 둔다.
+  - **UI 프리미티브**: base-ui 기반 `Dialog`/`Tabs`(`components/ui/dialog.tsx`, `tabs.tsx`)를 추가해 모달·탭 공용으로 쓴다.
+- **결과 (긍정)**: 검수가 넓은 전용 화면에서 4개 출처를 한눈에 비교·보정할 수 있다. 모든 작업을 탭으로 보고 상세·중지·재시작·반복 수정까지 한 화면에서 처리한다. 운영자가 `.env` 편집 없이 키를 교체할 수 있고, env 폴백으로 무중단 호환된다.
+- **결과 (부정)**: place-search가 외부 4 provider에 의존해 지연·할당량 변동이 검수 UX에 노출된다. 키를 DB와 env 두 곳에서 관리하게 되어 우선순위(DB>env)를 문서로 명확히 유지해야 한다. 비밀이 `system_settings`에 평문 저장되므로 DB 접근 통제가 중요하다.
+- **관련**: ADR-22(장소 언급·검수 UX), ADR-24(`/api/v1`·`X-API-Key`), ADR-29(StyleSeed UI)를 확장한다. ADR-30의 `get_llm_runtime`·설정 저장 모델을 API 키 전반으로 일반화한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

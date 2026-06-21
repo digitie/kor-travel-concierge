@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from ktc.services import audit_service, settings_service
@@ -49,6 +51,34 @@ async def test_set_many_commits_allowed_settings_together(session):
     )
     merged2 = await settings_service.get_all(session)
     assert merged2["gemini_engine_version"] == "gemini-1.5-flash"
+
+
+async def test_get_secret_db_override_and_env_fallback(session, monkeypatch):
+    fake = types.SimpleNamespace(YOUTUBE_API_KEY="env-youtube")
+    monkeypatch.setattr(settings_service, "get_settings", lambda: fake)
+    # DB 미저장 → .env 폴백.
+    assert await settings_service.get_secret(session, "youtube_api_key") == "env-youtube"
+    # DB 저장값이 .env보다 우선.
+    await settings_service.set_setting(session, "youtube_api_key", "db-youtube")
+    assert await settings_service.get_secret(session, "youtube_api_key") == "db-youtube"
+
+
+async def test_get_secret_unknown_key_raises(session):
+    with pytest.raises(ValueError, match="알 수 없는 시크릿 키"):
+        await settings_service.get_secret(session, "not_a_secret")
+
+
+async def test_get_all_exposes_api_key_set_flags(session):
+    merged = await settings_service.get_all(session)
+    assert set(merged["api_keys"]) == set(settings_service.SECRET_ENV_ATTRS)
+    for entry in merged["api_keys"].values():
+        # 값은 노출하지 않고 설정 여부만 반환한다.
+        assert list(entry) == ["set"]
+        assert isinstance(entry["set"], bool)
+
+    await settings_service.set_setting(session, "kakao_rest_api_key", "db-kakao")
+    merged2 = await settings_service.get_all(session)
+    assert merged2["api_keys"]["kakao_rest_api_key"]["set"] is True
 
 
 async def test_audit_record_and_list(session):
