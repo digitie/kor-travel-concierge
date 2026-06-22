@@ -206,6 +206,42 @@ async def _apply_geocoding(
     return geocoded_any
 
 
+async def geocode_candidates(
+    session: AsyncSession,
+    candidates: Sequence[ExtractedPlaceCandidate],
+    *,
+    status_reporter: StatusReporter | None = None,
+) -> dict[str, Any]:
+    """`needs_review` 후보들을 지오코딩해 자동 확정/검수 큐로 보낸다(배치 POI 흐름 재사용).
+
+    `process_harvest_videos`의 지오코딩 단계를 후보 목록 단독으로 재사용한다. 공급자 키가
+    없으면 모두 검수 큐에 남긴다. 8자리 카테고리 코드는 후보 evidence 값을 그대로 쓴다.
+    """
+    summary: dict[str, Any] = {"matched_places": 0, "needs_review_candidates": 0}
+    if not candidates:
+        return summary
+    settings = get_settings()
+    vworld_key = await settings_service.get_secret(session, "vworld_service_key")
+    kakao_key = await settings_service.get_secret(session, "kakao_rest_api_key")
+    async with httpx.AsyncClient(timeout=30.0) as http_client:
+        context = await _make_geocode_context(
+            http_client,
+            settings=settings,
+            geocode_decider=None,
+            geocode_applier=None,
+            vworld_key=vworld_key,
+            kakao_key=kakao_key,
+        )
+        await _apply_geocoding(
+            session,
+            candidates,
+            context=context,
+            summary=summary,
+            status_reporter=status_reporter,
+        )
+    return summary
+
+
 async def _load_target_videos(
     session: AsyncSession,
     *,

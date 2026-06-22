@@ -14,10 +14,10 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-GEMINI_ENGINE_VERSION_DEFAULT = "gemini-2.0-flash"
+GEMINI_ENGINE_VERSION_DEFAULT = "gemini-2.5-flash"
 GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
     GEMINI_ENGINE_VERSION_DEFAULT,
-    "gemini-2.5-flash",
+    "gemini-2.0-flash",
     "gemini-flash-latest",
     "gemini-1.5-flash",
     "gemini-1.5-pro",
@@ -46,6 +46,21 @@ AI_PREPROMPT_DEFAULT = (
     "항상 한국어로, 영상에 실제로 드러난 사실에 근거해 답하라. 확실하지 않은 장소명·위치·"
     "카테고리는 단정하지 말고 불확실성을 함께 표시하라. 광고·과장 표현은 제거하고 사실만 남겨라. "
     "출력은 지정된 JSON 스키마에 정확히 맞는 JSON만 반환하고, 코드펜스(```)나 추가 설명 문장은 붙이지 마라."
+)
+
+
+# 자막 교정 전용 system instruction(평문 응답). 영상 설명을 표기 근거로 활용하도록 5항 포함.
+TRANSCRIPT_CORRECTION_SYSTEM_INSTRUCTION = (
+    "너는 전문 자막 교정자다. 입력되는 유튜브 STT(음성인식) 자막의 오탈자, 맞춤법, "
+    "띄어쓰기를 문맥에 맞게 교정하라.\n\n"
+    "[엄격한 제약 조건]\n"
+    "1. 원본 자막에 포함된 타임스탬프(예: 00:01:23) 구조를 절대 수정하거나 누락하지 마라.\n"
+    "2. 음성인식 오류로 뭉개진 고유명사나 상호명은 문맥을 파악하여 표준 표기법으로 교정하라.\n"
+    "3. 원본 문장의 타임라인 싱크를 유지해야 하므로, 임의로 문장을 합치거나 길이를 크게 늘리지 마라.\n"
+    "4. 교정된 자막 이외의 불필요한 설명이나 인사말은 절대 출력하지 마라.\n"
+    "5. 함께 제공되는 [영상 설명]은 정확한 상호명·고유명사·지명 표기의 근거다. 자막에서 음성인식으로 "
+    "뭉개진 고유명사·상호명·지명은 [영상 설명]의 표기에 맞춰 교정하라. 단, 영상 설명에만 있고 자막에 "
+    "없는 내용을 자막에 새로 추가하지는 마라."
 )
 
 
@@ -101,6 +116,15 @@ class Settings(BaseSettings):
     LLM_RETRY_BASE_DELAY_SECONDS: float = 15.0
     LLM_RETRY_MAX_DELAY_SECONDS: float = 90.0
     LLM_RETRY_JITTER: float = 0.3
+
+    # --- Gemini API 키 전역 rate limit (gemini-2.5-flash 기준 가정값). DeepSeek는 별도 쿼터라
+    # 이 한도에 잡히지 않는다. 키 전역(API+scheduler) 공유를 위해 DB 카운터로 강제한다(순차). ---
+    GEMINI_RATE_RPM: int = 10  # 분당 요청 수
+    GEMINI_RATE_RPD: int = 1500  # 일일 요청 수(PT 자정 리셋)
+    GEMINI_RATE_TPM: int = 250_000  # 분당 토큰 수(입력+출력 추정)
+    # POI 배치 1콜에 담을 영상 수 상한과 토큰 예산(TPM 헤드룸 확보). 20분급 영상은 수가 줄어든다.
+    POI_BATCH_MAX_VIDEOS: int = 10
+    POI_BATCH_TOKEN_BUDGET: int = 180_000
 
     # --- YouTube Data API v3 ---
     YOUTUBE_API_KEY: str = ""

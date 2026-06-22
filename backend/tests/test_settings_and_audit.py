@@ -36,7 +36,7 @@ async def test_get_all_merges_env_default(session):
     merged = await settings_service.get_all(session)
     # DB에 값이 없어도 .env 기반 기본값이 들어온다.
     assert "gemini_engine_version" in merged
-    assert merged["gemini_engine_default"] == "gemini-2.0-flash"
+    assert merged["gemini_engine_default"] == "gemini-2.5-flash"
     assert merged["gemini_engine_version"] in merged["gemini_engine_options"]
     assert "gemini-1.5-pro" in merged["gemini_engine_options"]
 

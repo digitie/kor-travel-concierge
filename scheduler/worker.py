@@ -25,12 +25,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ktc.core.config import get_settings
 from ktc.core.database import async_session_factory, init_db
-from ktc.etl import deep_research_service, video_analysis_service
+from ktc.etl import (
+    batch_poi_service,
+    deep_research_service,
+    postprocess_service,
+    video_analysis_service,
+)
 from ktc.etl.pipeline import run_harvest
-from ktc.etl.postprocess_service import process_harvest_videos
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
     CrawlRun,
+    CrawlStatus,
+    RunSource,
     VideoAnalysisRunState,
     VideoAnalysisRunType,
     YoutubePlaylistVideo,
@@ -194,29 +200,29 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
         new_video_ids = [str(v) for v in (harvest_summary.get("video_ids") or [])]
         if payload.get("force"):
             # 강제 재실행: 대상(재생목록/채널)의 기존 영상까지 재처리 대상에 포함한다.
-            # (후처리 루프가 이미 완료된 영상은 건너뛰므로 미완료/실패분만 재처리.)
             target_ids = await _force_target_video_ids(session, payload)
             post_video_ids: list[str] = list(
                 dict.fromkeys([*new_video_ids, *target_ids])
             )
-            post_limit: int | None = None
         else:
             post_video_ids = new_video_ids
-            post_limit = _max_videos_from_payload(payload)
-        postprocess_summary = await process_harvest_videos(
-            session,
-            video_ids=post_video_ids,
-            limit=post_limit,
-            status_reporter=report_status,
+        # 자막 교정·POI는 묶음(≤10) 단위 poi_batch 작업으로 분리 enqueue한다(키 전역 rate
+        # limit·순차 처리를 위해 별도 job으로 돌린다). 개별 영상 작업은 없다.
+        batch_run_ids = await _enqueue_poi_batches(
+            session, post_video_ids, source=RunSource.SCHEDULER.value
         )
-        return {**harvest_summary, "postprocess": postprocess_summary}
+        await report_status(
+            f"영상 {len(post_video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
+            1.0,
+        )
+        return {**harvest_summary, "poi_batch_runs": batch_run_ids}
 
 
 async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
-    """수집 완료된 영상에 자막·POI·지오코딩 후처리를 적용하는 handler.
+    """수집 완료된 영상의 자막·POI 처리를 묶음(poi_batch) 작업으로 등록하는 handler.
 
     `harvest`에서 `skip_transcript`로 수집만 끝낸 뒤, 사용자 확인을 거쳐 생성되는
-    `transcript` 작업을 처리한다(자막 생성 게이팅).
+    `transcript` 작업을 받아 묶음 단위 poi_batch 작업으로 분리 enqueue한다.
     """
     payload = load_payload(run)
     video_ids = [str(v) for v in (payload.get("video_ids") or [])]
@@ -228,14 +234,103 @@ async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, 
             session, run.id, message, progress=progress
         )
 
-    await report_status("자막·장소 추출 작업을 시작합니다.", 0.05)
-    postprocess_summary = await process_harvest_videos(
+    await report_status("자막·POI 배치 작업을 등록합니다.", 0.1)
+    batch_run_ids = await _enqueue_poi_batches(
+        session, video_ids, source=RunSource.WEB.value
+    )
+    await report_status(
+        f"영상 {len(video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
+        1.0,
+    )
+    return {"video_ids": video_ids, "poi_batch_runs": batch_run_ids}
+
+
+async def _enqueue_poi_batches(
+    session: AsyncSession, video_ids: list[str], *, source: str
+) -> list[int]:
+    """video_ids를 ≤POI_BATCH_MAX_VIDEOS개씩 묶어 `poi_batch` 작업으로 enqueue한다.
+
+    POI 추출은 묶음 단위라 개별 영상이 아닌 job 단위로만 처리한다(예: 15개→[10,5] 2건).
+    """
+    unique = list(dict.fromkeys(str(v) for v in video_ids if v))
+    if not unique:
+        return []
+    size = max(1, get_settings().POI_BATCH_MAX_VIDEOS)
+    run_ids: list[int] = []
+    for start in range(0, len(unique), size):
+        chunk = unique[start : start + size]
+        run = await crawl_run_service.create_run(
+            session,
+            job_type="poi_batch",
+            source=source,
+            payload={"video_ids": chunk},
+            commit=False,
+        )
+        run_ids.append(run.id)
+    await session.commit()
+    return run_ids
+
+
+async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
+    """묶음 POI 작업: 영상별 자막 교정 → 묶음(≤10) POI 추출 → 후보 생성 → 지오코딩.
+
+    개별 영상이 아닌 묶음 단위로만 처리한다(payload.video_ids). 카테고리는 AI가 마스터
+    코드표에서 고른 8자리 코드를 그대로 쓴다(변경 금지).
+    """
+    payload = load_payload(run)
+    video_ids = [str(v) for v in (payload.get("video_ids") or [])]
+    if not video_ids:
+        raise ValueError("poi_batch 작업에는 video_ids가 필요하다")
+
+    async def report_status(message: str, progress: float | None = None) -> None:
+        await crawl_run_service.append_status_log(
+            session, run.id, message, progress=progress
+        )
+
+    await report_status("자막 교정·POI 배치 추출을 시작합니다.", 0.1)
+    # 이미 처리된 영상(SUMMARIZED/GEOCODED/DONE)은 건너뛴다 — 재실행/강제/재시작 시
+    # 중복 후보가 생기지 않도록(멱등성). DISCOVERED/FAILED만 처리.
+    videos = list(
+        (
+            await session.execute(
+                select(YoutubeVideo).where(
+                    YoutubeVideo.video_id.in_(video_ids),
+                    YoutubeVideo.crawl_status.notin_(
+                        [
+                            CrawlStatus.SUMMARIZED,
+                            CrawlStatus.GEOCODED,
+                            CrawlStatus.DONE,
+                        ]
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not videos:
+        return {"video_ids": video_ids, "processed_videos": 0, "skipped_done": True}
+    runtime = await settings_service.get_llm_runtime(session)
+    store = postprocess_service._make_media_store(get_settings())
+    summary = await batch_poi_service.process_video_batch(
         session,
-        video_ids=video_ids,
-        limit=len(video_ids),
+        store,
+        videos=videos,
+        runtime=runtime,
+        transcript_fetcher=postprocess_service._default_transcript_fetcher,
         status_reporter=report_status,
     )
-    return {"video_ids": video_ids, "postprocess": postprocess_summary}
+    # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
+    # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).
+    if not summary.get("quota_deferred"):
+        for video in videos:
+            if video.crawl_status != CrawlStatus.FAILED:
+                video.crawl_status = CrawlStatus.DONE
+        await session.commit()
+        await report_status("POI 배치 작업을 완료했습니다.", 1.0)
+    else:
+        await report_status("Gemini 일일 한도로 POI 배치를 보류했습니다(추후 재처리).", 1.0)
+    return {"video_ids": video_ids, **summary}
 
 
 async def deep_research_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
@@ -473,6 +568,7 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "harvest": harvest_handler,
     "transcript": transcript_handler,
+    "poi_batch": poi_batch_handler,
     "deep_research": deep_research_handler,
     "source_scan": source_scan_handler,
     "video_analysis": video_analysis_handler,

@@ -251,7 +251,7 @@ async def test_settings_roundtrip(client):
 
     get_resp = await client.get("/api/v1/settings")
     assert get_resp.json()["gemini_engine_version"] == "gemini-1.5-pro"
-    assert get_resp.json()["gemini_engine_default"] == "gemini-2.0-flash"
+    assert get_resp.json()["gemini_engine_default"] == "gemini-2.5-flash"
     assert "gemini-2.0-flash" in get_resp.json()["gemini_engine_options"]
 
 

@@ -76,14 +76,25 @@ def compose_prompt(preprompt: str, prompt: str) -> str:
     return f"{pre}\n\n---\n\n{prompt}"
 
 
-def build_gemini_body(prompt: str, response_schema: dict[str, Any] | None) -> dict[str, Any]:
-    """Gemini `generateContent` 요청 body(텍스트 + 선택적 responseSchema)."""
+def build_gemini_body(
+    prompt: str,
+    response_schema: dict[str, Any] | None,
+    *,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+) -> dict[str, Any]:
+    """Gemini `generateContent` 요청 body. responseSchema·systemInstruction·temperature 지원."""
     body: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
+    generation_config: dict[str, Any] = {}
     if response_schema is not None:
-        body["generationConfig"] = {
-            "responseMimeType": "application/json",
-            "responseSchema": response_schema,
-        }
+        generation_config["responseMimeType"] = "application/json"
+        generation_config["responseSchema"] = response_schema
+    if temperature is not None:
+        generation_config["temperature"] = temperature
+    if generation_config:
+        body["generationConfig"] = generation_config
+    if system_instruction:
+        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     return body
 
 
@@ -117,16 +128,23 @@ def complete_json(
     prompt: str,
     *,
     response_schema: dict[str, Any] | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
     timeout_seconds: float = 120.0,
     max_attempts: int | None = None,
 ) -> str:
-    """선택된 엔진으로 prompt를 보내고 (JSON) 문자열 응답을 반환한다.
+    """선택된 엔진으로 prompt를 보내고 문자열 응답을 반환한다.
 
     실패 시 provider 무관 `LlmRequestError`를 던진다(호출부가 자기 에러로 감싼다).
-    `max_attempts`를 주면 provider의 느린 사람-유사 재시도 횟수를 덮어쓴다(검수
-    검색 의견처럼 대화형 호출은 `max_attempts=1`로 단발 호출에 짧은 타임아웃을 쓴다).
+    `max_attempts`를 주면 provider의 느린 사람-유사 재시도 횟수를 덮어쓴다(대화형은 1).
+    `system_instruction`을 주면 사전 프롬프트 대신 그것을 시스템 지시로 쓰고 prepend하지
+    않는다(자막 교정·POI 배치처럼 전용 지시문이 있는 경우). `response_schema=None`이면
+    JSON 강제 없이 평문 응답을 받는다. `temperature`로 무작위성을 낮출 수 있다(교정 0.1).
     """
-    full = compose_prompt(runtime.preprompt, prompt)
+    if system_instruction is None:
+        full = compose_prompt(runtime.preprompt, prompt)
+    else:
+        full = prompt
     if runtime.is_deepseek:
         try:
             return deepseek_client.post_chat_completion(
@@ -134,8 +152,10 @@ def complete_json(
                 model=runtime.model,
                 prompt=_deepseek_prompt_with_schema(full, response_schema),
                 json_mode=response_schema is not None,
+                system_instruction=system_instruction,
                 base_url=runtime.deepseek_base_url,
                 timeout_seconds=timeout_seconds,
+                temperature=temperature,
                 max_attempts=max_attempts,
             )
         except deepseek_client.DeepSeekRequestError as exc:
@@ -148,7 +168,12 @@ def complete_json(
         data = gemini_client.post_generate_content(
             api_key=runtime.gemini_api_key,
             model=runtime.model,
-            body=build_gemini_body(full, response_schema),
+            body=build_gemini_body(
+                full,
+                response_schema,
+                system_instruction=system_instruction,
+                temperature=temperature,
+            ),
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
         )
@@ -159,3 +184,24 @@ def complete_json(
             model=runtime.model,
         ) from exc
     return extract_gemini_text(data, model=runtime.model)
+
+
+def complete_text(
+    runtime: LlmRuntime,
+    prompt: str,
+    *,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+    timeout_seconds: float = 120.0,
+    max_attempts: int | None = None,
+) -> str:
+    """평문(텍스트) 응답 — JSON 강제 없음. 자막 교정 등에 쓴다(의미적 별칭)."""
+    return complete_json(
+        runtime,
+        prompt,
+        response_schema=None,
+        system_instruction=system_instruction,
+        temperature=temperature,
+        timeout_seconds=timeout_seconds,
+        max_attempts=max_attempts,
+    )

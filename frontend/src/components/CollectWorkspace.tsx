@@ -19,6 +19,7 @@ import {
   restartRun,
   runSourceTargetNow,
   stopRun,
+  triggerPoiBatch,
   USER_JOB_TYPES,
   type CrawlRunSummary,
   type SourceTargetSummary,
@@ -60,6 +61,10 @@ export function CollectWorkspace() {
   };
   const stopRunMutation = useMutation({ mutationFn: stopRun, onSuccess: invalidateJobs });
   const restartRunMutation = useMutation({ mutationFn: restartRun, onSuccess: invalidateJobs });
+  const poiBatchMutation = useMutation({
+    mutationFn: triggerPoiBatch,
+    onSuccess: invalidateJobs,
+  });
   const deleteTargetMutation = useMutation({
     mutationFn: deleteSourceTarget,
     onSuccess: () =>
@@ -80,6 +85,29 @@ export function CollectWorkspace() {
     <div className="flex min-h-[calc(100vh-3rem)] flex-col lg:flex-row">
       <div className="shrink-0 border-b lg:w-[26rem] lg:border-b-0 lg:border-r">
         <HarvestConsole />
+        <div className="flex flex-col gap-1.5 border-t p-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="w-full"
+            disabled={poiBatchMutation.isPending}
+            onClick={() => poiBatchMutation.mutate()}
+          >
+            <ListChecksIcon data-icon="inline-start" />
+            미처리 영상 POI 추출(묶음)
+          </Button>
+          {poiBatchMutation.data ? (
+            <p className="text-xs text-muted-foreground">
+              영상 {poiBatchMutation.data.videos}개를 {poiBatchMutation.data.enqueued_jobs}개
+              작업으로 등록했습니다.
+            </p>
+          ) : poiBatchMutation.error ? (
+            <p className="text-xs text-destructive">
+              {poiBatchMutation.error.message}
+            </p>
+          ) : null}
+        </div>
       </div>
       <div className="grid flex-1 grid-cols-1 md:grid-cols-2">
         <RunQueuePanel
@@ -142,6 +170,7 @@ function jobTypeLabel(type: string | null | undefined): string {
     video_analysis: "영상 분석",
     deep_research: "심층 조사",
     transcript: "자막",
+    poi_batch: "장소 추출(묶음)",
     geocode: "지오코딩",
     postprocess: "후처리",
   };
