@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -483,12 +484,24 @@ async def resolve_candidate(
         await session.flush()
         await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
         if category_code_selector is not None:
-            code = category_code_selector(
-                name=place.name,
-                category_label=place.category,
-                description=place.description,
-                address=place.road_address or place.official_address,
-            )
+            # 카테고리 제안(Gemini/DeepSeek)은 best-effort다. 동기 LLM 호출이라
+            # 그대로 await하면 async 이벤트 루프를 막아(검수 저장 중 다른 요청이 모두
+            # 멈춤) UX가 멈춘다. thread로 격리하고 짧은 타임아웃만 기다리며, 초과·
+            # 실패는 None으로 흡수한다(category_code_suggestion은 null 허용).
+            code = None
+            try:
+                code = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        category_code_selector,
+                        name=place.name,
+                        category_label=place.category,
+                        description=place.description,
+                        address=place.road_address or place.official_address,
+                    ),
+                    timeout=10.0,
+                )
+            except Exception:
+                code = None
             if code:
                 place.category_code_suggestion = code
         candidate.match_status = MatchStatus.USER_CORRECTED
