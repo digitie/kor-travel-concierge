@@ -25,6 +25,9 @@ _BUCKET_BY_ASSET_TYPE = {
     AssetType.RAW_VIDEO: "RUSTFS_BUCKET_RAW_VIDEOS",
     AssetType.SUBTITLE: "RUSTFS_BUCKET_SUBTITLES",
     AssetType.TRANSCRIPT: "RUSTFS_BUCKET_SUBTITLES",
+    # 교정본도 자막 버킷에 저장한다(원본 TRANSCRIPT과 동일). T-109에서 enum만 추가하고
+    # 이 매핑을 빠뜨려 poi_batch 저장 시 "알 수 없는 asset_type"으로 실패했었다.
+    AssetType.TRANSCRIPT_CORRECTED: "RUSTFS_BUCKET_SUBTITLES",
     AssetType.FRAME: "RUSTFS_BUCKET_FRAMES",
 }
 

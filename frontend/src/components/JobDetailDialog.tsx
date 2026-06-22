@@ -9,6 +9,7 @@ import {
   type CrawlRunSummary,
   type SourceTargetSummary,
 } from "@/lib/api";
+import { JobLogView } from "@/components/JobLogDialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -105,7 +106,7 @@ export function JobDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>작업 상세</DialogTitle>
           <DialogDescription>
@@ -126,6 +127,13 @@ export function JobDetailDialog({
             </div>
           ))}
         </div>
+
+        {run ? (
+          <div className="flex flex-col gap-2 border-t pt-4">
+            <p className="text-sm font-medium">상태 로그·오류</p>
+            <JobLogView status={run} />
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-2 border-t pt-4">
           <div className="flex items-center justify-between gap-2">

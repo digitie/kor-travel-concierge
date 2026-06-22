@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-23: T-112 완료 — poi_batch "알 수 없는 asset_type" 실패 수정 + 작업 로그·오류 상세 다이얼로그(복사)
+
+사용자 보고: "대구 맛집" 검색 중 "작업이 실패했습니다: 알 수 없는 asset_type:.,". 로그가 잘리고 실패.
+- **근본 원인(T-109 회귀)**: `AssetType.TRANSCRIPT_CORRECTED`를 enum에만 추가하고 `media_store._BUCKET_BY_ASSET_TYPE` 매핑을 빠뜨려, poi_batch가 교정본을 저장할 때 `bucket_for`가 `ValueError("알 수 없는 asset_type: transcript_corrected")`로 실패 → 모든 poi_batch 작업 실패. **prod도 동일하게 깨져 있었음.** → 매핑 추가(교정본=자막 버킷), 모든 `AssetType`이 버킷에 매핑되는지 검증하는 회귀 테스트 추가(`test_etl_media_store`).
+- **로그 잘림**: DB는 `Text`(무손실)지만 프런트 `StatusRow`가 CSS `truncate`로 잘라 표시. error 행을 `wrap`으로 바꿔 인라인에서도 안 잘리게.
+- **로그·오류 상세 + 복사**: 공용 `JobLogDialog`/`JobLogView` 추가 — 상태·현재 메시지·오류 전문(pre-wrap, 스크롤)·전체 상태 로그 타임라인 + **"전체 복사"** 버튼(`buildJobReport`로 job_id·상태·오류·로그 포맷). 수집 패널(HarvestConsole) "작업 상태"에 **"오류·로그 상세"** 버튼, 작업 상세(JobDetailDialog)에 "상태 로그·오류" 섹션으로 연결. 복붙해 바로 공유·수정 가능.
+
+검증: backend 281 pytest+compileall, frontend tsc/lint/build. dev/prod 배포(asset_type는 prod 긴급 수정).
+
 ## 2026-06-23: T-111 완료 — 수집 키워드 보정 멈춤 해소 + 수집 상태/로그 페이지 이동 보존
 
 사용자 보고 2건:
