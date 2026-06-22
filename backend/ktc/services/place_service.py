@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -424,6 +422,22 @@ async def review_candidate(
     return candidate
 
 
+def candidate_category_code(candidate: ExtractedPlaceCandidate) -> str | None:
+    """후보의 provider evidence에 저장된 8자리 카테고리 코드를 안전하게 읽는다.
+
+    POI 추출 단계에서 함께 받아 검증·저장한 코드다(A안). 확정 시 별도 Gemini 호출
+    없이 이 값을 장소(`category_code_suggestion`)에 복사한다.
+    """
+    evidence = candidate.provider_evidence_json
+    if not isinstance(evidence, dict):
+        return None
+    transcript = evidence.get("transcript")
+    if not isinstance(transcript, dict):
+        return None
+    code = transcript.get("category_code")
+    return code if isinstance(code, str) and code else None
+
+
 async def resolve_candidate(
     session: AsyncSession,
     *,
@@ -433,14 +447,12 @@ async def resolve_candidate(
     review_note: str | None = None,
     place_id: int | None = None,
     place_data: dict[str, Any] | None = None,
-    category_code_selector: Callable[..., str | None] | None = None,
     commit: bool = True,
 ) -> tuple[ExtractedPlaceCandidate, TravelPlace | None, VideoPlaceMapping | None]:
     """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다.
 
-    `category_code_selector`를 주입하면 신규 장소(`create_place`)에 8자리 category
-    코드 제안값을 채운다. services 계층이 etl을 직접 import하지 않도록, 실제 Gemini
-    선택기는 호출자(routes/MCP)가 주입한다(T-070).
+    신규 장소(`create_place`)의 8자리 category 코드 제안은 POI 추출 단계에서 후보
+    evidence에 함께 저장해 둔 값을 복사한다(별도 Gemini 호출 없음, A안).
     """
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
     if candidate is None:
@@ -483,27 +495,11 @@ async def resolve_candidate(
         session.add(place)
         await session.flush()
         await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
-        if category_code_selector is not None:
-            # 카테고리 제안(Gemini/DeepSeek)은 best-effort다. 동기 LLM 호출이라
-            # 그대로 await하면 async 이벤트 루프를 막아(검수 저장 중 다른 요청이 모두
-            # 멈춤) UX가 멈춘다. thread로 격리하고 짧은 타임아웃만 기다리며, 초과·
-            # 실패는 None으로 흡수한다(category_code_suggestion은 null 허용).
-            code = None
-            try:
-                code = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        category_code_selector,
-                        name=place.name,
-                        category_label=place.category,
-                        description=place.description,
-                        address=place.road_address or place.official_address,
-                    ),
-                    timeout=10.0,
-                )
-            except Exception:
-                code = None
-            if code:
-                place.category_code_suggestion = code
+        # 8자리 카테고리 코드는 POI 추출 때 후보 evidence에 저장해 둔 값을 복사한다
+        # (별도 Gemini 호출 없음, A안). 없으면 비워 둔다(best-effort, null 허용).
+        code = candidate_category_code(candidate)
+        if code:
+            place.category_code_suggestion = code
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value

@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from ktc.etl import llm_client
+from ktc.etl import category_catalog, llm_client
 
 # llm 시그니처: (prompt) -> JSON 문자열
 LlmCallable = Callable[[str], str]
@@ -34,6 +34,7 @@ class ExtractedPOI(BaseModel):
     timestamp_start: str | None = None
     timestamp_end: str | None = None
     category: str | None = None
+    category_code: str | None = None
 
 
 class POIExtractionResult(BaseModel):
@@ -62,6 +63,7 @@ RESPONSE_JSON_SCHEMA: dict = {
                     "timestamp_start": {"type": "string"},
                     "timestamp_end": {"type": "string"},
                     "category": {"type": "string"},
+                    "category_code": {"type": "string"},
                 },
                 "required": ["name"],
             },
@@ -84,9 +86,12 @@ def build_prompt(*, timestamped_transcript: str, description_raw: str | None) ->
         "타임스탬프 자막과 영상 설명 원문 양쪽에 등장하는 장소(POI)를 모두 추출하라. "
         "영상 설명에만 적혀 있고 자막에는 없는 장소도 빠짐없이 추출하라. "
         "그리고 영상 설명의 오탈자·문맥을 보정하라. "
+        "각 장소에는 아래 [카테고리 코드표]에서 가장 알맞은 8자리 코드 하나를 "
+        "`category_code`로 고르되, 적합한 코드가 없거나 불확실하면 생략(미설정)하라. "
         "반드시 주어진 JSON Schema에 맞는 JSON만 출력하라.\n\n"
         f"[영상 설명 원문]\n{description_raw or ''}\n\n"
-        f"[타임스탬프 자막]\n{timestamped_transcript}\n"
+        f"[타임스탬프 자막]\n{timestamped_transcript}\n\n"
+        f"[카테고리 코드표] (코드<TAB>분류 경로)\n{category_catalog.prompt_catalog()}\n"
     )
 
 
@@ -97,7 +102,11 @@ class POIExtractionError(RuntimeError):
 def parse_extraction(payload: str) -> POIExtractionResult:
     """LLM JSON 문자열을 파싱·검증한다. 실패 시 예외."""
     data = json.loads(payload)  # JSONDecodeError 가능
-    return POIExtractionResult.model_validate(data)  # ValidationError 가능
+    result = POIExtractionResult.model_validate(data)  # ValidationError 가능
+    # Gemini가 고른 category_code는 카탈로그 검증을 거쳐 유효 코드만 남긴다(미지정→None).
+    for place in result.places:
+        place.category_code = category_catalog.normalize_code(place.category_code)
+    return result
 
 
 def extract_pois(

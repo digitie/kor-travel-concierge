@@ -89,23 +89,18 @@ async def test_list_unmatched_candidates(session):
     assert unmatched[0].ai_place_name == "검수대상"
 
 
-async def test_resolve_create_place_fills_category_code_via_selector(session):
+async def test_resolve_create_place_copies_category_code_from_candidate(session):
+    # A안: 카테고리 코드는 POI 추출 때 후보 evidence에 저장된 값을 복사한다(Gemini 호출 X).
     session.add(YoutubeVideo(video_id="v1", title="t", url="u", channel_id="c"))
     await session.commit()
     candidate = ExtractedPlaceCandidate(
         video_id="v1", source_text="s", ai_place_name="월정리 해변",
         match_status=MatchStatus.NEEDS_REVIEW,
+        provider_evidence_json={"transcript": {"category_code": "01050100"}},
     )
     session.add(candidate)
     await session.commit()
     await session.refresh(candidate)
-
-    captured = {}
-
-    def fake_selector(*, name, category_label=None, description=None, address=None):
-        captured["name"] = name
-        captured["category_label"] = category_label
-        return "01050100"
 
     _, place, _ = await svc.resolve_candidate(
         session,
@@ -118,15 +113,12 @@ async def test_resolve_create_place_fills_category_code_via_selector(session):
             "longitude": 126.7958,
             "category": "해변",
         },
-        category_code_selector=fake_selector,
     )
     assert place is not None
     assert place.category_code_suggestion == "01050100"
-    assert captured["name"] == "월정리 해변"
-    assert captured["category_label"] == "해변"
 
 
-async def test_resolve_create_place_without_selector_leaves_code_none(session):
+async def test_resolve_create_place_without_evidence_code_leaves_code_none(session):
     session.add(YoutubeVideo(video_id="v2", title="t", url="u", channel_id="c"))
     await session.commit()
     candidate = ExtractedPlaceCandidate(

@@ -141,6 +141,38 @@ def test_build_prompt_handles_missing_description():
     assert "[영상 설명 원문]\n\n" in prompt
 
 
+def test_extract_validates_category_code_against_catalog():
+    # A안: POI 추출이 장소별 8자리 코드를 함께 받고, 카탈로그 검증 통과분만 남긴다.
+    payload = json.dumps(
+        {
+            "summary": "s",
+            "places": [
+                {"name": "유효 코드", "category_code": "01050100"},
+                {"name": "잘못된 코드", "category_code": "99999999"},
+                {"name": "코드 없음"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    result = extract_pois(
+        timestamped_transcript="t",
+        description_raw=None,
+        llm=lambda _: payload,
+        max_retries=0,
+    )
+    by_name = {p.name: p for p in result.places}
+    assert by_name["유효 코드"].category_code == "01050100"
+    assert by_name["잘못된 코드"].category_code is None  # 카탈로그에 없음 → 미설정
+    assert by_name["코드 없음"].category_code is None
+
+
+def test_build_prompt_embeds_category_catalog():
+    prompt = build_prompt(timestamped_transcript="t", description_raw=None)
+    assert "[카테고리 코드표]" in prompt
+    assert "category_code" in prompt
+    assert "8자리 코드" in prompt
+
+
 def test_extract_pois_passes_description_into_llm_prompt():
     captured: dict[str, str] = {}
     description = "성산일출봉 근처 카페 정보는 영상 설명에만 있음"

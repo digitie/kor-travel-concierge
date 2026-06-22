@@ -160,6 +160,9 @@ async def summarize_video(
                     "timestamp_end": poi.timestamp_end,
                     "speaker_note": poi.speaker_note,
                     "location_hint": poi.location_hint,
+                    # POI 추출 단계에서 함께 받은 8자리 카테고리 코드(검증 통과분).
+                    # 확정 시 별도 Gemini 호출 없이 이 값을 장소에 복사한다(호출 절감, A안).
+                    "category_code": poi.category_code,
                 }
             },
             feature_export_status=FeatureExportStatus.PENDING.value,
