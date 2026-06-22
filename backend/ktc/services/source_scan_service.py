@@ -352,13 +352,16 @@ async def run_target_now(
     *,
     now: datetime | None = None,
     max_videos: int = 20,
+    force: bool = False,
 ) -> tuple[SourceTarget | None, CrawlRun | None, bool]:
-    """반복 대상을 즉시 1회 enqueue한다('지금 진행').
+    """반복 대상을 즉시 1회 enqueue한다('지금 진행' / '강제 재실행').
 
     스캔 due 여부와 무관하게 사용자가 수동으로 트리거한다. 같은 작업이 이미
     pending/running이면 새로 만들지 않고 그 작업을 반환한다(중복 방지). 새로
     만든 경우 `run_count`를 올리고 다음 스캔 시각을 now+interval로 미룬다.
     `max_runs` 도달 시에도 이번 수동 실행은 허용하되 이후 자동 스캔은 멈춘다.
+    `force=True`(강제 재실행)면 증분 워터마크를 리셋해 대상 영상을 다시 수집하고,
+    후처리가 대상의 미완료 영상을 재처리하도록 payload에 force 플래그를 넣는다.
     반환값: (target, run, created).
     """
     target = await session.get(SourceTarget, target_id)
@@ -370,6 +373,10 @@ async def run_target_now(
     job_type, target_type, run_target_id, payload = build_followup_run(
         target, max_videos=max_videos
     )
+    if force:
+        payload["force"] = True
+        target.last_seen_cursor = None
+        target.last_seen_video_published_at = None
 
     if await has_active_run(
         session,

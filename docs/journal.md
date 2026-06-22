@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-22: T-102 완료 — 재생목록 harvest 후처리 스코프 버그 수정 + 강제 재실행
+
+**버그(사용자 보고)**: 강원도 playlist harvest 실행 중 "예전(부산) 재생목록"을 처리. 진단: 대상 재생목록에서 신규 영상 0개일 때, 후처리(자막·POI)가 그 재생목록이 아니라 DB 전역의 미처리 영상(예전 부산 harvest의 미전사 영상)을 max_videos만큼 처리.
+**원인**: worker가 `video_ids = harvest_summary.video_ids or []`(신규 0개면 `[]`)를 넘기고, `postprocess_service._load_target_videos`의 `if video_ids:`가 빈 리스트를 "스코프 없음"으로 오해 → `crawl_status != DONE` 전역을 `limit`만큼 로드.
+**수정**: `_load_target_videos`를 `if video_ids is not None:`로 변경 — 빈 리스트는 `in_([])` → 0건(전역 백로그 폴백 금지). 회귀 테스트 추가(`test_..._empty_video_ids_does_not_fall_back_to_backlog`).
+**강제 재실행**: `POST /source-targets/{id}/run-now?force=true` → `run_target_now(force=True)`가 증분 워터마크(`last_seen_cursor`, `last_seen_video_published_at`) 리셋 + payload `"force": true`. worker가 force면 대상(재생목록→`youtube_playlist_videos`/채널→`youtube_videos`)의 영상 ID를 모아 후처리 스코프에 합집합으로 포함(루프가 완료분은 건너뛰어 중복 없음 — 미완료/실패분 재시도). 프런트 "강제 재실행" 버튼(지금 진행 옆), `runSourceTargetNow(id, force)`. 정상 "지금 진행"은 신규만(0개면 아무것도 안 함).
+**검증**: backend 영향 테스트 54 + 신규 회귀 통과, compileall. frontend tsc/lint/build. dev 라이브: force run-now가 워터마크 리셋 + payload force 확인, 강제 재실행 버튼 표시. (백엔드 fork가 529로 죽어 직접 구현.) dev/prod 배포.
+
 ## 2026-06-21: T-101 완료 — 검수 place-search 성능 개선(provider 즉시 + Gemini 의견 비동기 분리)
 
 **문제**: 검수 검색이 매우 느리고(≈20초) 게이트웨이 타임아웃에 취약.

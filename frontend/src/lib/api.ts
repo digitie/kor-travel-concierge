@@ -336,8 +336,12 @@ export async function listRunQueue(
   ];
 }
 
-export async function runSourceTargetNow(id: number): Promise<HarvestJob> {
-  return requestJson<HarvestJob>(`/api/v1/source-targets/${id}/run-now`, {
+export async function runSourceTargetNow(
+  id: number,
+  force = false,
+): Promise<HarvestJob> {
+  const qs = force ? "?force=true" : "";
+  return requestJson<HarvestJob>(`/api/v1/source-targets/${id}/run-now${qs}`, {
     method: "POST",
   });
 }
