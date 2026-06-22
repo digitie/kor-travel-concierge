@@ -104,10 +104,13 @@ export default function ReviewPage() {
 
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
+  // 검색 버튼은 검색어가 그대로여도 항상 재요청해야 한다. queryKey에 nonce를 넣어
+  // runSearch/pickCandidate마다 증가시키면 동일 검색어로도 강제 refetch된다(무반응 방지).
+  const [searchNonce, setSearchNonce] = useState(0);
   const query = queryEdit ?? (selected ? buildHintedQuery(selected) : "");
 
   const searchQuery = useQuery({
-    queryKey: ["place-search", activeQuery],
+    queryKey: ["place-search", activeQuery, searchNonce],
     queryFn: ({ signal }) => searchPlaces(activeQuery, signal),
     enabled: activeQuery.trim().length > 0,
   });
@@ -125,7 +128,7 @@ export default function ReviewPage() {
   // AI(Gemini) 의견은 자동이 아니라 사용자가 버튼으로 수동 요청한다(쿼터 절약).
   const [opinionRequested, setOpinionRequested] = useState(false);
   const opinionQuery = useQuery({
-    queryKey: ["place-opinion", activeQuery],
+    queryKey: ["place-opinion", activeQuery, searchNonce],
     queryFn: ({ signal }) => getPlaceOpinion(activeQuery, allHits, signal),
     enabled:
       opinionRequested && activeQuery.trim().length > 0 && allHits.length > 0,
@@ -146,6 +149,7 @@ export default function ReviewPage() {
   function runSearch() {
     if (query.trim()) {
       setOpinionRequested(false);
+      setSearchNonce((n) => n + 1);
       setActiveQuery(query.trim());
     }
   }
@@ -168,9 +172,14 @@ export default function ReviewPage() {
     }
   }
   function pickCandidate(candidate: UnmatchedCandidate) {
+    // 검색 진행 중 다른 후보로 전환하면 진행 중 요청을 취소하고(이전 검색 결과가
+    // 새 후보에 매달리지 않도록) nonce를 올려 새 후보 검색을 깨끗하게 시작한다.
+    void queryClient.cancelQueries({ queryKey: ["place-search"] });
+    void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
     setSelectedId(candidate.id);
     setQueryEdit(null);
     setOpinionRequested(false);
+    setSearchNonce((n) => n + 1);
     setActiveQuery(buildHintedQuery(candidate));
     setForm({ name: "", latitude: "", longitude: "", category: "" });
   }
@@ -238,13 +247,37 @@ export default function ReviewPage() {
         category: form.category || undefined,
       });
     },
+    onMutate: async () => {
+      // 저장/제외 즉시 검수 대기 목록에서 제거(낙관적) — 응답 round-trip을 기다리지
+      // 않고 사라진다. 진행 중 자동 refetch(15s)가 덮어쓰지 않도록 먼저 취소하고,
+      // 실패 시 onError에서 원래 목록을 복구한다.
+      const removedId = selected?.id ?? null;
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      const previous = queryClient.getQueryData<UnmatchedCandidate[]>([
+        "unmatched-candidates",
+      ]);
+      if (removedId != null) {
+        queryClient.setQueryData<UnmatchedCandidate[]>(
+          ["unmatched-candidates"],
+          (old) => (old ?? []).filter((c) => c.id !== removedId),
+        );
+      }
+      return { previous };
+    },
+    onError: (_error, _action, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["unmatched-candidates"], context.previous);
+      }
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
       setForm({ name: "", latitude: "", longitude: "", category: "" });
       setQueryEdit(null);
       setActiveQuery("");
       setSelectedId(null);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
     },
   });
 
