@@ -150,8 +150,12 @@ export default function ReviewPage() {
     }
   }
   function stopSearch() {
-    queryClient.cancelQueries({ queryKey: ["place-search", activeQuery] });
-    queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
+    // 진행 중 요청을 취소(BFF가 upstream abort까지 전파)하고, 취소된 쿼리 캐시를
+    // 제거해 같은 검색어로 재검색할 때 깨끗하게 다시 가져오도록 한다.
+    void queryClient.cancelQueries({ queryKey: ["place-search", activeQuery] });
+    void queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
+    queryClient.removeQueries({ queryKey: ["place-search", activeQuery] });
+    queryClient.removeQueries({ queryKey: ["place-opinion", activeQuery] });
     setOpinionRequested(false);
     setActiveQuery("");
   }

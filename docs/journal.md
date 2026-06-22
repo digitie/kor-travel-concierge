@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-22: T-103 완료 — BFF 프록시 abort 미전파로 인한 POI 검색 지연/무응답 수정
+
+**버그(사용자 보고)**: 검수 POI 검색이 "처음 한번 빼고는 늦거나 응답이 없음", "검색 중지 후 재호출해도 느림".
+**진단**: 백엔드/BFF 직접 연속 호출은 0.3~0.7s로 빠르고, dev `npx next dev`에서는 재현 안 됨. 그러나 **prod 백엔드 로그에서, 브라우저가 중단(abort)시킨 40개 place-search 요청이 전부 백엔드에 도달해 200으로 완료**됨을 확인 → BFF 프록시(`frontend/src/app/api/v1/[...path]/route.ts`)가 `request.signal`을 upstream `fetch`에 전달하지 않는 게 원인. 후보 전환·검색 중지로 react-query가 요청을 취소해도 BFF는 백엔드 작업을 계속하고 응답 스트림을 비우지 않아 **undici 커넥션이 누수**된다. 빠른 전환/중지가 쌓이면 커넥션 풀이 포화돼 이후 검색이 지연·무응답이 된다.
+**수정**: BFF 프록시가 `signal: request.signal`(+ `cache: "no-store"`)을 upstream `fetch`에 전달하고, abort는 `499`로 흡수한다 → 클라이언트가 끊으면 upstream도 즉시 취소돼 백엔드 낭비·커넥션 누수가 없다. 프런트 `stopSearch`는 `cancelQueries` 후 `removeQueries`로 취소된 쿼리 캐시를 제거해 같은 검색어 재검색이 깨끗하게 재요청되도록 했다.
+**검증**: frontend tsc/lint/build. 정상(비중단) 요청에는 영향 없음(signal 미발화). dev/prod web 재빌드 배포. (severe 무응답은 합성 테스트로 재현되지 않아, 배포 후 사용자 재확인 필요 — 재발 시 발생 시점·브라우저 Network 탭 정보 수집.)
+
 ## 2026-06-22: T-102 완료 — 재생목록 harvest 후처리 스코프 버그 수정 + 강제 재실행
 
 **버그(사용자 보고)**: 강원도 playlist harvest 실행 중 "예전(부산) 재생목록"을 처리. 진단: 대상 재생목록에서 신규 영상 0개일 때, 후처리(자막·POI)가 그 재생목록이 아니라 DB 전역의 미처리 영상(예전 부산 harvest의 미전사 영상)을 max_videos만큼 처리.

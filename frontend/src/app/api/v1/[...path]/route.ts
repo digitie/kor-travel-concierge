@@ -44,25 +44,43 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   }
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers,
-    body: hasBody ? await request.arrayBuffer() : undefined,
-    redirect: "manual",
-  });
+  try {
+    const body = hasBody ? await request.arrayBuffer() : undefined;
+    // 브라우저가 요청을 끊으면(검색 중지·후보 전환 시 react-query abort, 또는 탭 이동)
+    // request.signal이 abort된다. 이를 upstream fetch에 전달해야 백엔드가 불필요한
+    // 작업을 계속하거나 undici 커넥션이 누수되지 않는다. 누락 시 끊긴 요청이 쌓여
+    // 커넥션 풀이 포화되고 이후 검색이 느려지거나 무응답이 된다.
+    const upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      redirect: "manual",
+      signal: request.signal,
+      cache: "no-store",
+    });
 
-  const responseHeaders = new Headers();
-  upstream.headers.forEach((value, key) => {
-    if (!SKIP_HEADERS.has(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+    const responseHeaders = new Headers();
+    upstream.headers.forEach((value, key) => {
+      if (!SKIP_HEADERS.has(key.toLowerCase())) {
+        responseHeaders.set(key, value);
+      }
+    });
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    // 클라이언트가 끊은 요청은 정상 취소(499)로 흡수한다 — 응답 대상이 이미 사라졌다.
+    if (
+      request.signal.aborted ||
+      (error as { name?: string } | null)?.name === "AbortError"
+    ) {
+      return new Response(null, { status: 499 });
     }
-  });
-
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: responseHeaders,
-  });
+    throw error;
+  }
 }
 
 type RouteContext = { params: Promise<{ path: string[] }> };
