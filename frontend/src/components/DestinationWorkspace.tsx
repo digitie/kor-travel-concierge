@@ -167,7 +167,10 @@ export function DestinationWorkspace() {
             <DialogTitle>장소 상세</DialogTitle>
           </DialogHeader>
           {detailPlaceId != null ? (
-            <PlaceDetailView placeId={detailPlaceId} />
+            <PlaceDetailView
+              placeId={detailPlaceId}
+              onDeleted={() => setDetailPlaceId(null)}
+            />
           ) : null}
         </DialogContent>
       </Dialog>

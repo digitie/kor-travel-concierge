@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy import select
+
 from ktc.models import (
     ExtractedPlaceCandidate,
     MatchStatus,
+    MediaAsset,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeVideo,
@@ -142,6 +146,73 @@ async def test_resolve_create_place_without_selector_leaves_code_none(session):
     )
     assert place is not None
     assert place.category_code_suggestion is None
+
+
+async def test_delete_place_reverts_candidate_unlinks_media_removes_mapping(session):
+    session.add(YoutubeVideo(video_id="vdel", title="t", url="u", channel_id="c"))
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="vdel",
+        source_text="s",
+        ai_place_name="삭제 대상",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    _, place, mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={"name": "삭제 대상", "latitude": 35.0, "longitude": 129.0},
+    )
+    assert place is not None and mapping is not None
+    place_id = place.place_id
+    asset = MediaAsset(
+        place_id=place_id,
+        video_id="vdel",
+        asset_type="frame",
+        bucket="b",
+        object_key="k",
+        object_uri="u",
+    )
+    session.add(asset)
+    await session.commit()
+    await session.refresh(candidate)
+    assert candidate.matched_place_id == place_id
+
+    reverted = await svc.delete_place(session, place_id=place_id)
+    await session.commit()
+
+    # 장소·매핑은 사라지고, 후보는 검수 큐로, 미디어는 링크만 해제(보존)된다.
+    assert await session.get(TravelPlace, place_id) is None
+    remaining = (
+        (
+            await session.execute(
+                select(VideoPlaceMapping).where(
+                    VideoPlaceMapping.place_id == place_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+    await session.refresh(candidate)
+    assert candidate.matched_place_id is None
+    assert candidate.match_status == MatchStatus.NEEDS_REVIEW
+    assert candidate.id in [c.id for c in reverted]
+    unmatched = await svc.list_unmatched_candidates(session)
+    assert candidate.id in [c.id for c in unmatched]
+    await session.refresh(asset)
+    assert asset.place_id is None
+
+
+async def test_delete_place_missing_raises(session):
+    with pytest.raises(ValueError):
+        await svc.delete_place(session, place_id=999_999)
 
 
 async def test_list_place_summaries_sorts_by_mention_count(session):

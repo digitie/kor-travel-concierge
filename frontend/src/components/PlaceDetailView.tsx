@@ -1,22 +1,40 @@
 "use client";
 
-import { type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ExternalLinkIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
 
-import { getPlaceDetail } from "@/lib/api";
+import { deletePlace, getPlaceDetail } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
 }
 
-export function PlaceDetailView({ placeId }: { placeId: number }) {
+export function PlaceDetailView({
+  placeId,
+  onDeleted,
+}: {
+  placeId: number;
+  onDeleted?: () => void;
+}) {
+  const queryClient = useQueryClient();
   const detailQuery = useQuery({
     queryKey: ["place-detail", placeId],
     queryFn: () => getPlaceDetail(placeId),
   });
   const detail = detailQuery.data;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteMutation = useMutation({
+    mutationFn: () => deletePlace(placeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["destinations"] });
+      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.removeQueries({ queryKey: ["place-detail", placeId] });
+      onDeleted?.();
+    },
+  });
 
   if (detailQuery.isLoading) {
     return <p className="p-2 text-sm text-muted-foreground">불러오는 중…</p>;
@@ -133,6 +151,56 @@ export function PlaceDetailView({ placeId }: { placeId: number }) {
           ) : null}
         </div>
       </DetailSection>
+
+      <div className="border-t pt-3">
+        {confirmDelete ? (
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-destructive">
+              정말 삭제할까요? 이 장소를 만든 검수 후보는 검수 큐로 되돌아갑니다.
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate()}
+              >
+                {deleteMutation.isPending ? (
+                  <Loader2Icon
+                    data-icon="inline-start"
+                    className="animate-spin"
+                  />
+                ) : null}
+                삭제
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmDelete(false)}
+              >
+                취소
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2Icon data-icon="inline-start" />
+            장소 삭제
+          </Button>
+        )}
+        {deleteMutation.error ? (
+          <p className="mt-1 text-xs text-destructive">
+            {deleteMutation.error.message}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }

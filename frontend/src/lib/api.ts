@@ -638,3 +638,13 @@ export type PlaceDetail = {
 export async function getPlaceDetail(placeId: number): Promise<PlaceDetail> {
   return requestJson<PlaceDetail>(`/api/v1/destinations/${placeId}/detail`);
 }
+
+export async function deletePlace(placeId: number): Promise<{
+  deleted: boolean;
+  place_id: number;
+  reverted_candidates: number;
+}> {
+  return requestJson(`/api/v1/destinations/${placeId}`, {
+    method: "DELETE",
+  });
+}

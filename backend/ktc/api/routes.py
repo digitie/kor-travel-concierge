@@ -1126,6 +1126,36 @@ async def delete_candidate(
     return {"deleted": True, "id": candidate_id}
 
 
+@router.delete("/destinations/{place_id}")
+async def delete_place(
+    place_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """확정 장소를 삭제한다.
+
+    장소를 만든 후보는 검수 큐(`needs_review`)로 되돌리고, 영상 매핑은 삭제, 미디어
+    자산은 링크만 해제한다. feature export ledger를 동기화해 이미 내보낸 feature는
+    tombstone으로 전환한다(downstream consumer 반영). 감사 로그 기록 시 단일 커밋.
+    """
+    try:
+        reverted = await place_service.delete_place(session, place_id=place_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await feature_export_service.sync_feature_exports(session, commit=False)
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="place.delete",
+        target_type="travel_place",
+        target_id=str(place_id),
+        payload={"reverted_candidate_ids": [c.id for c in reverted]},
+    )
+    return {
+        "deleted": True,
+        "place_id": place_id,
+        "reverted_candidates": len(reverted),
+    }
+
+
 @router.get("/destinations/{place_id}/detail")
 async def get_destination_detail(
     place_id: int, session: AsyncSession = Depends(get_session)

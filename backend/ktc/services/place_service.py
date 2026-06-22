@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from geoalchemy2 import Geography
-from sqlalchemy import cast, func, or_, select
+from sqlalchemy import cast, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.spatial import sync_place_geometry
@@ -571,6 +571,49 @@ async def ensure_candidate_mapping(
 ) -> VideoPlaceMapping:
     """후보와 확정 장소 사이의 영상 매핑을 멱등 생성한다."""
     return await _ensure_candidate_mapping(session, candidate, place)
+
+
+async def delete_place(
+    session: AsyncSession, *, place_id: int
+) -> list[ExtractedPlaceCandidate]:
+    """확정 장소를 삭제한다.
+
+    `travel_places`를 참조하는 FK는 모두 `ondelete=NO ACTION`이라 PostgreSQL이 참조
+    행이 남아 있으면 삭제를 거부한다. 따라서 참조를 명시적으로 정리한다:
+    - 이 장소를 매칭한 후보는 `needs_review`로 되돌려 검수 큐로 보낸다(데이터 보존).
+      `feature_export_status`도 `pending`으로 낮춰, 호출부가 `sync_feature_exports`를
+      돌리면 이미 내보낸 feature가 tombstone으로 전환되도록 한다.
+    - 영상-장소 매핑(`video_place_mappings`)은 삭제한다(장소가 사라짐).
+    - 미디어 자산(`media_assets`)은 장소 링크만 해제한다(미디어 자체는 보존).
+    되돌린 후보 목록을 반환한다(호출부의 ledger 동기화·감사 로그용).
+    """
+    place = await session.get(TravelPlace, place_id)
+    if place is None:
+        raise ValueError(f"place not found: {place_id}")
+    reverted = list(
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.matched_place_id == place_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for candidate in reverted:
+        candidate.matched_place_id = None
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+    await session.execute(
+        update(MediaAsset).where(MediaAsset.place_id == place_id).values(place_id=None)
+    )
+    await session.execute(
+        delete(VideoPlaceMapping).where(VideoPlaceMapping.place_id == place_id)
+    )
+    await session.delete(place)
+    await session.flush()
+    return reverted
 
 
 async def list_unmatched_candidates(

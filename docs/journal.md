@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-22: T-106 완료 — 확정 장소(정리된 리스트) 삭제 기능
+
+사용자 요청: "정리된 리스트에서도 삭제할 수 있게". 검수 큐 후보만 삭제 가능하던 것을 **확정 장소(travel_places)** 삭제로 확장.
+- **백엔드**: `place_service.delete_place` — `travel_places`를 참조하는 FK 3개(모두 `NO ACTION`)를 명시적으로 정리한다: 이 장소를 매칭한 후보는 `needs_review`+`feature_export_status=pending`으로 되돌려 검수 큐로(데이터 보존), 영상-장소 매핑은 삭제, 미디어 자산은 링크만 해제(미디어 보존). `DELETE /api/v1/destinations/{place_id}` 엔드포인트가 서비스 호출 후 `sync_feature_exports(commit=False)`로 이미 내보낸 feature를 **tombstone**으로 전환하고, `audit_service.record`로 단일 커밋(원자적). 되돌린 후보 수를 반환.
+- **프런트**: `PlaceDetailView`에 "장소 삭제" 버튼 + 2단계 확인("정말 삭제할까요? 이 장소를 만든 검수 후보는 검수 큐로 되돌아갑니다") + `deletePlace` API. PC 모달은 닫고 모바일 `/place/[id]`는 결과로 이동, `["destinations"]`/`["unmatched-candidates"]` invalidate + stale `["place-detail"]` 제거.
+- **검증**: 신규 단위 테스트 2건(되돌림·미디어 unlink·매핑 삭제, 미존재 404) + 적대적 데이터 정합성 리뷰(고아 참조·라우트 충돌·트랜잭션 원자성·원장 tombstone·엣지 — 중대 이슈 없음) + dev 라이브: place 1 삭제 시 장소·매핑 제거, 후보 `matched→needs_review`(검수 큐 복귀), 원장 `upsert→tombstone` 확인. UI: 삭제 버튼·확인 흐름 확인. compileall·pytest·tsc/lint/build 통과. dev/prod 배포.
+
 ## 2026-06-22: T-105 완료 — 검수 저장 시 동기 Gemini 호출이 이벤트 루프를 막던 먹통 수정
 
 **버그(사용자 보고)**: "처음 한 번 검수(저장) 후 리스트 상세·API 검색이 둘 다 먹통, 시간이 좀 지나면 다시 동작".
