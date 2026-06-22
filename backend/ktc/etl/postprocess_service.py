@@ -213,7 +213,9 @@ async def _load_target_videos(
     limit: int | None,
 ) -> list[YoutubeVideo]:
     stmt = select(YoutubeVideo).where(YoutubeVideo.crawl_status != CrawlStatus.DONE)
-    if video_ids:
+    # 빈 리스트([])는 "처리할 영상 없음"으로 스코프해야 한다(전역 백로그로 폴백 금지).
+    # None만 "스코프 없음(미완료 전체)"으로 둔다.
+    if video_ids is not None:
         stmt = stmt.where(YoutubeVideo.video_id.in_(list(video_ids)))
     stmt = stmt.order_by(YoutubeVideo.crawled_at.desc())
     if limit is not None:

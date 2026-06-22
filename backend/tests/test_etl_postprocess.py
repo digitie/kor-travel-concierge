@@ -116,6 +116,38 @@ async def test_process_harvest_videos_creates_place_from_summarized_poi(session)
     assert any("장소 목록에 확정했습니다" in message for message in reported)
 
 
+async def test_process_harvest_videos_empty_video_ids_does_not_fall_back_to_backlog(
+    session,
+):
+    """빈 video_ids는 '처리 대상 없음'으로 스코프돼야 한다.
+
+    미완료 영상이 DB에 있어도 전역 백로그로 폴백하지 않는다(재생목록 harvest가
+    신규 0개일 때 다른 재생목록의 예전 영상을 처리하던 회귀 방지).
+    """
+    session.add(
+        YoutubeVideo(
+            video_id="backlog-1",
+            title="예전 부산 영상",
+            url="https://youtu.be/backlog-1",
+            channel_id="UC_OLD",
+            description_raw="...",
+            crawl_status=CrawlStatus.DISCOVERED,
+        )
+    )
+    await session.commit()
+
+    summary = await process_harvest_videos(
+        session,
+        video_ids=[],
+        limit=20,
+        store=InMemoryMediaStore(),
+        llm=lambda _: "{}",
+    )
+
+    assert summary["processed_videos"] == 0
+    assert summary["summarized_videos"] == 0
+
+
 async def test_process_harvest_videos_keeps_candidate_when_geocoder_needs_review(session):
     video = YoutubeVideo(
         video_id="busan-2",

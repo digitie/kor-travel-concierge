@@ -766,13 +766,19 @@ async def list_source_target_videos(
 
 @router.post("/source-targets/{target_id}/run-now")
 async def run_source_target_now(
-    target_id: int, session: AsyncSession = Depends(get_session)
+    target_id: int,
+    force: bool = False,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """반복 수집 대상을 즉시 1회 실행한다('지금 진행').
+    """반복 수집 대상을 즉시 1회 실행한다('지금 진행' / '강제 재실행').
 
     같은 작업이 이미 실행/대기 중이면 그 작업을 반환하고 새로 만들지 않는다.
+    `force=true`(강제 재실행)면 증분 워터마크를 리셋해 대상 영상을 재수집하고
+    대상의 미완료 영상을 다시 후처리한다.
     """
-    target, run, created = await source_scan_service.run_target_now(session, target_id)
+    target, run, created = await source_scan_service.run_target_now(
+        session, target_id, force=force
+    )
     if target is None:
         raise HTTPException(status_code=404, detail="source target not found")
     await audit_service.record(
@@ -781,7 +787,7 @@ async def run_source_target_now(
         action="source_target.run_now",
         target_type="source_target",
         target_id=str(target_id),
-        payload={"run_id": run.id if run else None, "created": created},
+        payload={"run_id": run.id if run else None, "created": created, "force": force},
     )
     return {
         "job_id": str(run.id) if run else None,

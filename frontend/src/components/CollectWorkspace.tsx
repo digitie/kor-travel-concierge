@@ -66,7 +66,8 @@ export function CollectWorkspace() {
       queryClient.invalidateQueries({ queryKey: ["source-targets"] }),
   });
   const runNowMutation = useMutation({
-    mutationFn: runSourceTargetNow,
+    mutationFn: ({ id, force }: { id: number; force: boolean }) =>
+      runSourceTargetNow(id, force),
     onSuccess: () => {
       invalidateJobs();
       queryClient.invalidateQueries({ queryKey: ["source-targets"] });
@@ -97,7 +98,7 @@ export function CollectWorkspace() {
           }
           onStop={(jobId) => stopRunMutation.mutate(jobId)}
           onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onRunNow={(id) => runNowMutation.mutate(id)}
+          onRunNow={(id, force) => runNowMutation.mutate({ id, force })}
           onDetailRun={setDetailRun}
           onDetailTarget={setDetailTarget}
           onEditTarget={setEditTarget}
@@ -254,7 +255,7 @@ function JobsPanel({
   errorMessage: string | null;
   onStop: (jobId: string) => void;
   onRestart: (jobId: string) => void;
-  onRunNow: (id: number) => void;
+  onRunNow: (id: number, force: boolean) => void;
   onDetailRun: (run: CrawlRunSummary) => void;
   onDetailTarget: (target: SourceTargetSummary) => void;
   onEditTarget: (target: SourceTargetSummary) => void;
@@ -319,10 +320,21 @@ function JobsPanel({
                     type="button"
                     size="xs"
                     disabled={isRunningNow}
-                    onClick={() => onRunNow(target.id)}
+                    onClick={() => onRunNow(target.id, false)}
                   >
                     <ZapIcon data-icon="inline-start" />
                     지금 진행
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={isRunningNow}
+                    onClick={() => onRunNow(target.id, true)}
+                    title="대상 영상을 다시 수집·재처리(미완료/실패분 재시도)"
+                  >
+                    <RotateCcwIcon data-icon="inline-start" />
+                    강제 재실행
                   </Button>
                   <Button
                     type="button"

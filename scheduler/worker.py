@@ -33,6 +33,7 @@ from ktc.models import (
     CrawlRun,
     VideoAnalysisRunState,
     VideoAnalysisRunType,
+    YoutubePlaylistVideo,
     YoutubeVideo,
     YoutubeVideoAnalysisRun,
 )
@@ -94,6 +95,29 @@ def _max_videos_from_payload(payload: Mapping[str, Any]) -> int:
     except (TypeError, ValueError):
         value = settings.YOUTUBE_MAX_VIDEOS_PER_RUN
     return max(1, min(value, settings.YOUTUBE_MAX_VIDEOS_PER_RUN))
+
+
+async def _force_target_video_ids(
+    session: AsyncSession, payload: Mapping[str, Any]
+) -> list[str]:
+    """강제 재실행 시 재처리 대상이 될 기존 영상 ID(재생목록/채널 스코프)."""
+    playlist_id = payload.get("playlist_id")
+    if playlist_id:
+        result = await session.execute(
+            select(YoutubePlaylistVideo.video_id).where(
+                YoutubePlaylistVideo.playlist_id == str(playlist_id)
+            )
+        )
+        return [str(value) for value in result.scalars().all()]
+    channel_id = payload.get("channel_id")
+    if channel_id:
+        result = await session.execute(
+            select(YoutubeVideo.video_id).where(
+                YoutubeVideo.channel_id == str(channel_id)
+            )
+        )
+        return [str(value) for value in result.scalars().all()]
+    return []
 
 
 def _max_sources_from_payload(payload: Mapping[str, Any]) -> int:
@@ -167,10 +191,22 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
                 1.0,
             )
             return {**harvest_summary, "transcript_skipped": True}
+        new_video_ids = [str(v) for v in (harvest_summary.get("video_ids") or [])]
+        if payload.get("force"):
+            # 강제 재실행: 대상(재생목록/채널)의 기존 영상까지 재처리 대상에 포함한다.
+            # (후처리 루프가 이미 완료된 영상은 건너뛰므로 미완료/실패분만 재처리.)
+            target_ids = await _force_target_video_ids(session, payload)
+            post_video_ids: list[str] = list(
+                dict.fromkeys([*new_video_ids, *target_ids])
+            )
+            post_limit: int | None = None
+        else:
+            post_video_ids = new_video_ids
+            post_limit = _max_videos_from_payload(payload)
         postprocess_summary = await process_harvest_videos(
             session,
-            video_ids=harvest_summary.get("video_ids") or [],
-            limit=_max_videos_from_payload(payload),
+            video_ids=post_video_ids,
+            limit=post_limit,
             status_reporter=report_status,
         )
         return {**harvest_summary, "postprocess": postprocess_summary}
