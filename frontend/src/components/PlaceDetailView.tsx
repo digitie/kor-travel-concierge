@@ -2,9 +2,14 @@
 
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
+import {
+  ExternalLinkIcon,
+  FlaskConicalIcon,
+  Loader2Icon,
+  Trash2Icon,
+} from "lucide-react";
 
-import { deletePlace, getPlaceDetail } from "@/lib/api";
+import { deletePlace, getPlaceDetail, triggerDeepResearch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -34,6 +39,9 @@ export function PlaceDetailView({
       queryClient.removeQueries({ queryKey: ["place-detail", placeId] });
       onDeleted?.();
     },
+  });
+  const deepResearchMutation = useMutation({
+    mutationFn: () => triggerDeepResearch(placeId),
   });
 
   if (detailQuery.isLoading) {
@@ -152,7 +160,30 @@ export function PlaceDetailView({
         </div>
       </DetailSection>
 
-      <div className="border-t pt-3">
+      <div className="flex flex-col gap-2 border-t pt-3">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={deepResearchMutation.isPending}
+          onClick={() => deepResearchMutation.mutate()}
+        >
+          {deepResearchMutation.isPending ? (
+            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <FlaskConicalIcon data-icon="inline-start" />
+          )}
+          Deep Research
+        </Button>
+        {deepResearchMutation.error ? (
+          <p className="text-xs text-destructive">
+            {deepResearchMutation.error.message}
+          </p>
+        ) : deepResearchMutation.isSuccess ? (
+          <p className="text-xs text-muted-foreground">
+            Deep Research 작업을 시작했습니다. 완료되면 심층 조사에 반영됩니다.
+          </p>
+        ) : null}
         {confirmDelete ? (
           <div className="flex flex-col gap-2">
             <span className="text-sm font-medium text-destructive">
