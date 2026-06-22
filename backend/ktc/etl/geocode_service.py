@@ -8,11 +8,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
 from ktc.core.spatial import sync_place_geometry
-from ktc.etl import category_suggestion
 from ktc.etl.geocoding import (
     GeocodeDecision,
     KakaoGeocoder,
@@ -35,9 +31,6 @@ from ktc.services import place_service
 
 _MIN_CONTAINED_NAME_LENGTH = 4
 _MIN_CONTAINED_NAME_RATIO = 0.6
-
-# `category_code_llm` 미지정과 명시적 None(제안 비활성)을 구분하는 sentinel.
-_UNSET: Any = object()
 
 
 async def geocode_query(
@@ -97,15 +90,12 @@ async def apply_geocode_to_candidate(
     *,
     vworld: AsyncVworldClient | None = None,
     reviewer: str = "system",
-    category_code_llm: Any = _UNSET,
 ) -> TravelPlace | None:
     """평가 결과를 후보에 적용한다.
 
     matched면 중복 확인 후 장소를 확정(또는 재사용)하고, 그 외에는 `needs_review`로
-    남긴다. 확정한 `TravelPlace`를 반환한다(미확정 시 None).
-
-    `category_code_llm`을 생략하면 설정의 Gemini 키 유무에 따라 기본 선택기를 쓰고
-    (키 없으면 제안 생략), 명시적으로 None을 주면 카테고리 코드 제안을 끈다(T-070).
+    남긴다. 확정한 `TravelPlace`를 반환한다(미확정 시 None). 8자리 category 코드는
+    POI 추출 때 후보 evidence에 저장된 값을 복사한다(별도 Gemini 호출 없음, A안).
     """
     candidate.confidence_score = decision.confidence
     candidate.provider_evidence_json = _merge_provider_evidence(
@@ -167,29 +157,10 @@ async def apply_geocode_to_candidate(
     candidate.reviewed_at = utcnow()
     candidate.feature_export_status = FeatureExportStatus.READY.value
 
-    # 8자리 category 코드 제안: 기존 제안이 없을 때만 Gemini로 한 번 채운다(T-070).
-    selector = (
-        category_suggestion.default_category_llm()
-        if category_code_llm is _UNSET
-        else category_code_llm
-    )
-    if place.category_code_suggestion is None and selector is not None:
-        # 동기 LLM 호출이 worker 이벤트 루프를 막지 않도록 thread로 격리한다(best-effort).
-        code = None
-        try:
-            code = await asyncio.wait_for(
-                asyncio.to_thread(
-                    category_suggestion.suggest_category_code,
-                    name=place.name,
-                    category_label=place.category,
-                    description=place.description,
-                    address=place.road_address or place.official_address,
-                    llm=selector,
-                ),
-                timeout=10.0,
-            )
-        except Exception:
-            code = None
+    # 8자리 category 코드는 POI 추출 때 후보 evidence에 저장된 값을 복사한다
+    # (별도 Gemini 호출 없음, A안). 기존 제안이 없을 때만 채운다.
+    if place.category_code_suggestion is None:
+        code = place_service.candidate_category_code(candidate)
         if code:
             place.category_code_suggestion = code
 

@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
 from ktc.core.security import require_api_key
-from ktc.etl import category_suggestion, place_search, source_resolve
+from ktc.etl import place_search, source_resolve
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
     CrawlRun,
@@ -972,7 +972,6 @@ async def resolve_unmatched_candidate(
             review_note=payload.review_note,
             place_id=payload.place_id,
             place_data=place_data,
-            category_code_selector=category_suggestion.make_default_selector(),
             commit=False,
         )
     except ValueError as exc:

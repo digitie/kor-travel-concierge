@@ -62,8 +62,11 @@ async def test_apply_matched_creates_place(session):
     assert mapping.provider_evidence_json == refreshed.provider_evidence_json
 
 
-async def test_apply_matched_sets_category_code_suggestion(session):
+async def test_apply_matched_copies_category_code_from_evidence(session):
+    # A안: 확정 시 POI 추출 때 후보 evidence에 저장된 코드를 복사한다(Gemini 호출 X).
     candidate = await _make_candidate(session, name="월정리 해변", category="해변")
+    candidate.provider_evidence_json = {"transcript": {"category_code": "01050100"}}
+    await session.commit()
     decision = GeocodeDecision(
         status="matched",
         candidate=GeocodeCandidate(
@@ -73,19 +76,12 @@ async def test_apply_matched_sets_category_code_suggestion(session):
         reason="single_result",
         candidate_count=1,
     )
-
-    def fake_category_llm(prompt: str) -> str:
-        assert "카테고리 목록" in prompt
-        return json.dumps({"category_code": "01050100"})
-
-    place = await apply_geocode_to_candidate(
-        session, candidate, decision, category_code_llm=fake_category_llm
-    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
     assert place.category_code_suggestion == "01050100"
 
 
-async def test_apply_matched_skips_category_suggestion_when_llm_none(session):
-    candidate = await _make_candidate(session)
+async def test_apply_matched_no_code_when_evidence_missing(session):
+    candidate = await _make_candidate(session)  # evidence에 category_code 없음
     decision = GeocodeDecision(
         status="matched",
         candidate=GeocodeCandidate(latitude=33.5563, longitude=126.7958, source="kakao"),
@@ -93,10 +89,7 @@ async def test_apply_matched_skips_category_suggestion_when_llm_none(session):
         reason="single_result",
         candidate_count=1,
     )
-    # 명시적 None → 카테고리 코드 제안을 끈다(네트워크 호출 없음).
-    place = await apply_geocode_to_candidate(
-        session, candidate, decision, category_code_llm=None
-    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
     assert place.category_code_suggestion is None
 
 

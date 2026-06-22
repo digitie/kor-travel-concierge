@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-22: T-108 완료 — Gemini 호출 절감(A안): 8자리 카테고리 코드를 POI 추출 콜에 통합
+
+사용자 요청(호출 횟수·프롬프트 최적화). 기존엔 **확정 장소마다** `category_suggestion`이 144개 코드표 전체를 매번 보내며 별도 Gemini 호출(영상당 N콜). A안으로 이를 **영상당 POI 추출 1콜에 통합**:
+- `poi_extraction`: `ExtractedPOI`/`RESPONSE_JSON_SCHEMA`에 `category_code` 추가, `build_prompt`에 `category_catalog.prompt_catalog()`(코드표)를 **한 번** 포함, `parse_extraction`이 `category_catalog.normalize_code`로 유효 코드만 통과(미상·미분류·미존재→None).
+- `summarize_service`: 추출한 코드를 후보 `provider_evidence_json["transcript"]["category_code"]`에 저장.
+- 확정 경로(`place_service.resolve_candidate`·`geocode_service.apply_geocode_to_candidate`): 후보 evidence의 코드를 **복사**(`place_service.candidate_category_code`). **별도 Gemini 호출 제거** — `category_code_selector`/`category_code_llm` 파라미터, `_UNSET`, to_thread Gemini 호출, 관련 import(routes·mcp 포함) 정리.
+- 효과: 확정 장소당 Gemini 호출 **N→0**, 코드표 전송 **N회→영상당 1회**. 단발 카테고리 호출의 이벤트 루프 블로킹(T-105) 원인도 함께 소멸.
+- 검증: 신규 단위 테스트(코드 파싱·카탈로그 검증·prompt 코드표 포함·확정 시 evidence 복사·코드 없으면 None) + 영향 테스트 전체 통과(backend 276 pytest), compileall. 적대적 리뷰로 end-to-end 체인·하위호환·dead code 점검. `category_suggestion` 모듈은 자동 경로에서 미사용(향후 재제안 기능용으로 보존).
+
 ## 2026-06-22: T-107 완료 — 결과 화면 선택-장소 하단 패널 제거(중복 표시 해소) + Deep Research 이동
 
 사용자 보고: "UI에서 해동용궁사만 또 나온다". 진단: **데이터 중복 아님**(해동용궁사는 `place_id` 하나뿐, 검수 큐·근접 중복 없음). 원인은 `DestinationWorkspace`가 목록(언급 많은 순 → 해동용궁사 1번) 아래에 **현재 선택 장소 상세 패널**(좌표·언급 소스·Deep Research)을 두고, 선택값이 없으면 `places[0]`을 기본 선택해서 같은 장소가 목록+패널에 동시 표시된 것. 사용자가 "패널 제거" 선택.

@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ktc.etl import category_suggestion
 from ktc.models import MediaAsset, RunSource
 from ktc.services import audit_service, crawl_run_service, place_service
 
@@ -498,7 +497,6 @@ class ToolRuntime:
                 review_note=payload.review_note,
                 place_id=payload.place_id,
                 place_data=place_data,
-                category_code_selector=category_suggestion.make_default_selector(),
                 commit=False,
             )
             result = {

@@ -49,6 +49,18 @@ def is_known_code(code: str | None) -> bool:
     return bool(code) and code in _by_code()
 
 
+def normalize_code(code: str | None) -> str | None:
+    """카탈로그에 존재하는 유효 코드만 통과시킨다(미상·미분류·미지정은 None).
+
+    POI 추출이 장소별로 받은 후보 코드를 검증할 때 쓴다. 자동 확정을 막기 위해
+    불확실한 결과는 강제로 채우지 않는다(`suggest_category_code`와 동일 정책).
+    """
+    code = (code or "").strip()
+    if not code or code == UNCLASSIFIED_CODE:
+        return None
+    return code if is_known_code(code) else None
+
+
 def label_for(code: str | None) -> str | None:
     """코드의 표시 label(계층 경로)을 반환한다."""
     if not code:
