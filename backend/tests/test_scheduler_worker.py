@@ -224,13 +224,9 @@ async def test_harvest_handler_passes_channel_target(monkeypatch, session):
 
     async def fake_run_harvest(session, client, **kwargs):
         captured.update(kwargs)
-        return {"ok": True, "target_type": "channel"}
-
-    async def fake_process_harvest_videos(session, **kwargs):
-        return {"processed_videos": 0}
+        return {"ok": True, "target_type": "channel", "video_ids": ["v1"]}
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -243,11 +239,9 @@ async def test_harvest_handler_passes_channel_target(monkeypatch, session):
 
     result = await worker.harvest_handler(session, claimed)
 
-    assert result == {
-        "ok": True,
-        "target_type": "channel",
-        "postprocess": {"processed_videos": 0},
-    }
+    # 자막·POI는 묶음 poi_batch 작업으로 분리 enqueue된다.
+    assert result["ok"] is True
+    assert len(result["poi_batch_runs"]) == 1
     assert captured["channel_id"] == "UC123"
     assert captured["seed_keyword"] is None
     assert captured["playlist_id"] is None
@@ -258,13 +252,9 @@ async def test_harvest_handler_passes_playlist_target(monkeypatch, session):
 
     async def fake_run_harvest(session, client, **kwargs):
         captured.update(kwargs)
-        return {"ok": True, "target_type": "playlist"}
-
-    async def fake_process_harvest_videos(session, **kwargs):
-        return {"processed_videos": 0}
+        return {"ok": True, "target_type": "playlist", "video_ids": ["v1"]}
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -277,17 +267,14 @@ async def test_harvest_handler_passes_playlist_target(monkeypatch, session):
 
     result = await worker.harvest_handler(session, claimed)
 
-    assert result == {
-        "ok": True,
-        "target_type": "playlist",
-        "postprocess": {"processed_videos": 0},
-    }
+    assert result["ok"] is True
+    assert len(result["poi_batch_runs"]) == 1
     assert captured["playlist_id"] == "PL123"
     assert captured["seed_keyword"] is None
     assert captured["channel_id"] is None
 
 
-async def test_harvest_handler_runs_postprocess_after_video_ingest(monkeypatch, session):
+async def test_harvest_handler_enqueues_poi_batch_after_ingest(monkeypatch, session):
     captured = {}
 
     async def fake_run_harvest(session, client, **kwargs):
@@ -296,23 +283,12 @@ async def test_harvest_handler_runs_postprocess_after_video_ingest(monkeypatch, 
             "discovered": 1,
             "inserted": 1,
             "updated": 0,
+            "video_ids": ["v1"],
             "target_type": "keyword",
             "target_id": "부산 맛집",
         }
 
-    async def fake_process_harvest_videos(session, **kwargs):
-        captured["postprocess"] = kwargs
-        return {
-            "processed_videos": 1,
-            "summarized_videos": 1,
-            "failed_videos": 0,
-            "created_candidates": 1,
-            "matched_places": 1,
-            "needs_review_candidates": 0,
-        }
-
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -326,15 +302,18 @@ async def test_harvest_handler_runs_postprocess_after_video_ingest(monkeypatch, 
     result = await worker.harvest_handler(session, claimed)
 
     assert captured["harvest"]["seed_keyword"] == "부산 맛집"
-    assert captured["postprocess"]["limit"] == 1
     assert result["inserted"] == 1
-    assert result["postprocess"]["created_candidates"] == 1
-    assert result["postprocess"]["matched_places"] == 1
+    assert len(result["poi_batch_runs"]) == 1
+    # poi_batch 작업이 실제로 생성되었는지 확인
+    poi_runs = (
+        await session.execute(
+            select(CrawlRun).where(CrawlRun.job_type == "poi_batch")
+        )
+    ).scalars().all()
+    assert len(poi_runs) == 1
 
 
 async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, session):
-    called = {"postprocess": False}
-
     async def fake_run_harvest(session, client, **kwargs):
         return {
             "inserted": 2,
@@ -343,12 +322,7 @@ async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, sessio
             "target_id": "제주 6월 여행",
         }
 
-    async def fake_process_harvest_videos(session, **kwargs):
-        called["postprocess"] = True
-        return {"processed_videos": 2}
-
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -361,20 +335,18 @@ async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, sessio
 
     result = await worker.harvest_handler(session, claimed)
 
-    assert called["postprocess"] is False
     assert result["transcript_skipped"] is True
     assert result["video_ids"] == ["v1", "v2"]
-    assert "postprocess" not in result
+    assert "poi_batch_runs" not in result
+    poi_runs = (
+        await session.execute(
+            select(CrawlRun).where(CrawlRun.job_type == "poi_batch")
+        )
+    ).scalars().all()
+    assert poi_runs == []
 
 
-async def test_transcript_handler_processes_collected_video_ids(monkeypatch, session):
-    captured = {}
-
-    async def fake_process_harvest_videos(session, **kwargs):
-        captured.update(kwargs)
-        return {"processed_videos": 2, "matched_places": 1}
-
-    monkeypatch.setattr(worker, "process_harvest_videos", fake_process_harvest_videos)
+async def test_transcript_handler_enqueues_poi_batch(session):
     run = await crawl_run_service.create_run(
         session,
         job_type="transcript",
@@ -387,10 +359,14 @@ async def test_transcript_handler_processes_collected_video_ids(monkeypatch, ses
 
     result = await worker.transcript_handler(session, claimed)
 
-    assert captured["video_ids"] == ["v1", "v2"]
-    assert captured["limit"] == 2
     assert result["video_ids"] == ["v1", "v2"]
-    assert result["postprocess"]["matched_places"] == 1
+    assert len(result["poi_batch_runs"]) == 1  # ≤10 → 한 묶음
+    poi_runs = (
+        await session.execute(
+            select(CrawlRun).where(CrawlRun.job_type == "poi_batch")
+        )
+    ).scalars().all()
+    assert len(poi_runs) == 1
 
 
 async def test_run_once_executes_deep_research_default_handler(

@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-22: T-109 완료 — 자막 교정 + 10개 묶음 POI 배치 파이프라인 + Gemini 키 전역 rate limiter
+
+사용자 요청 8항 반영. POI 처리를 영상당 1콜에서 **영상 단위 자막 교정 + 묶음(≤10) POI 배치**로 재설계.
+- **모델**: 기본 `gemini-2.5-flash`. rate limit `GEMINI_RATE_RPM=10`·`RPD=1500`·`TPM=250000`(키 전역).
+- **dispatch**: `llm_client.complete_text`(평문) + `build_gemini_body`/`complete_json`에 `systemInstruction`·`temperature` 추가. `deepseek_client`에 system 메시지·temperature. Gemini/DeepSeek 모두 지원.
+- **rate limiter**(`gemini_rate_limiter`+`GeminiRateState` 단일행): API·scheduler 두 프로세스 공유, `FOR UPDATE`로 직렬화. 분 윈도우(RPM/TPM)·PT 자정 일일(RPD). **병렬 없음(순차)**. Gemini 콜만 대상(DeepSeek 별도 쿼터). Gemini 콜 전 `acquire`로 슬롯 예약.
+- **자막 교정**(`transcript_correction`, 영상 단위): `config.TRANSCRIPT_CORRECTION_SYSTEM_INSTRUCTION`(영상 설명을 표기 근거로 활용하는 5항 포함) + temp 0.1, 평문. raw는 `TRANSCRIPT`, 교정본은 신규 `TRANSCRIPT_CORRECTED` 에셋으로 RustFS 저장.
+- **POI 배치**(`batch_poi`): 교정본 ≤10개를 `<video_transcripts>` XML로 묶어 1콜. system에 추출 규칙+교차참조 금지+카테고리 마스터(8자리 코드표). `response_schema=BatchPOIResult`(video_id·official_name·location_hint·category_code·timestamp·speaker_note). 결과는 입력 alias로 역매핑·검증(미존재 alias·미지 코드 폐기 → 환각/교차오염 차단). 긴 영상은 토큰 예산(`POI_BATCH_TOKEN_BUDGET`)으로 sub-batch 분할.
+- **오케스트레이션**(`batch_poi_service.process_video_batch`): 교정→저장→배치 추출→영상별 `needs_review` 후보 생성(카테고리 8자리 코드는 evidence에 그대로, 변경 금지)→지오코딩(`postprocess_service.geocode_candidates` 재사용).
+- **job 모델**: harvest/transcript가 신규 `poi_batch` 작업으로 분리 enqueue(≤`POI_BATCH_MAX_VIDEOS`개/job, 15→[10,5]). worker `poi_batch_handler`. 자동(harvest 후) + 수동(`POST /jobs/poi-batch`, discovered 영상). **개별 영상 트리거 없음(job 단위)**. UI에 "미처리 영상 POI 추출" 버튼 + `poi_batch` 작업 목록 노출(라벨).
+- **검증**: backend 279 pytest + compileall, frontend tsc/lint/build, 적대적 리뷰, dev live smoke, Windows Playwright e2e. dev/prod 배포.
+
 ## 2026-06-22: T-108 완료 — Gemini 호출 절감(A안): 8자리 카테고리 코드를 POI 추출 콜에 통합
 
 사용자 요청(호출 횟수·프롬프트 최적화). 기존엔 **확정 장소마다** `category_suggestion`이 144개 코드표 전체를 매번 보내며 별도 Gemini 호출(영상당 N콜). A안으로 이를 **영상당 POI 추출 1콜에 통합**:

@@ -133,7 +133,12 @@ export type CrawlRunSummary = {
 };
 
 // 사용자에게 노출하는 작업 유형(내부 source_scan 등은 기본 제외).
-export const USER_JOB_TYPES = ["harvest", "deep_research", "video_analysis"] as const;
+export const USER_JOB_TYPES = [
+  "harvest",
+  "poi_batch",
+  "deep_research",
+  "video_analysis",
+] as const;
 
 export type AuditLogSummary = {
   id: number;
@@ -266,6 +271,14 @@ export async function startHarvest(input: StartHarvestInput): Promise<HarvestJob
     method: "POST",
     body: JSON.stringify(harvestPayload(input)),
   });
+}
+
+export async function triggerPoiBatch(): Promise<{
+  enqueued_jobs: number;
+  videos: number;
+  job_ids: string[];
+}> {
+  return requestJson("/api/v1/jobs/poi-batch", { method: "POST" });
 }
 
 export async function getHarvestStatus(jobId: string): Promise<HarvestStatus> {

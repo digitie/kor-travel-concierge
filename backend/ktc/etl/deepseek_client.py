@@ -41,6 +41,7 @@ def post_chat_completion(
     model: str,
     prompt: str,
     json_mode: bool = False,
+    system_instruction: str | None = None,
     base_url: str | None = None,
     timeout_seconds: float = 120.0,
     temperature: float | None = None,
@@ -75,9 +76,13 @@ def post_chat_completion(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
+    messages: list[dict[str, str]] = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
     body: dict[str, Any] = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "stream": False,
     }
     if json_mode:

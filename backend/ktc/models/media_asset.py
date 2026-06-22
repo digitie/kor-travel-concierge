@@ -19,6 +19,7 @@ class AssetType(str, Enum):
     RAW_VIDEO = "raw_video"
     SUBTITLE = "subtitle"
     TRANSCRIPT = "transcript"
+    TRANSCRIPT_CORRECTED = "transcript_corrected"
     FRAME = "frame"
 
 

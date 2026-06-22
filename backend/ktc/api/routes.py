@@ -26,6 +26,7 @@ from ktc.etl import place_search, source_resolve
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
     CrawlRun,
+    CrawlStatus,
     ExtractedPlaceCandidate,
     FeatureExport,
     MediaAsset,
@@ -244,6 +245,45 @@ async def start_harvest(
     return HarvestJob(job_id=str(run.id), state=run.state)
 
 
+@router.post("/jobs/poi-batch")
+async def trigger_poi_batch(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """미처리(discovered) 영상을 묶음(≤10) POI 작업으로 등록한다(수동, job 단위).
+
+    POI 추출은 묶음 단위라 개별 영상이 아닌 job 단위로만 실행한다. 각 묶음이 하나의
+    `poi_batch` 작업이 되어 scheduler가 순차 처리한다(자막 교정→배치 추출→지오코딩).
+    """
+    rows = await session.execute(
+        select(YoutubeVideo.video_id)
+        .where(YoutubeVideo.crawl_status == CrawlStatus.DISCOVERED)
+        .order_by(YoutubeVideo.crawled_at.desc())
+    )
+    video_ids = [str(v) for v in rows.scalars().all()]
+    if not video_ids:
+        return {"enqueued_jobs": 0, "videos": 0, "job_ids": []}
+    size = max(1, get_settings().POI_BATCH_MAX_VIDEOS)
+    job_ids: list[str] = []
+    for start in range(0, len(video_ids), size):
+        chunk = video_ids[start : start + size]
+        run = await crawl_run_service.create_run(
+            session,
+            job_type="poi_batch",
+            source=RunSource.WEB,
+            payload={"video_ids": chunk},
+            commit=False,
+        )
+        job_ids.append(str(run.id))
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="poi_batch.enqueue",
+        target_type="crawl_run",
+        payload={"videos": len(video_ids), "jobs": len(job_ids)},
+    )
+    return {"enqueued_jobs": len(job_ids), "videos": len(video_ids), "job_ids": job_ids}
+
+
 @router.get("/harvest/{job_id}", response_model=HarvestStatus)
 async def get_harvest_status(
     job_id: int, session: AsyncSession = Depends(get_session)
@@ -332,6 +372,7 @@ _JOB_TYPE_LABELS = {
     "video_analysis": "영상 분석",
     "deep_research": "심층 조사",
     "transcript": "자막",
+    "poi_batch": "장소 추출(묶음)",
     "geocode": "지오코딩",
     "postprocess": "후처리",
 }
