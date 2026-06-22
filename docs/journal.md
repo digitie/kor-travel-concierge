@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-22: T-107 완료 — 결과 화면 선택-장소 하단 패널 제거(중복 표시 해소) + Deep Research 이동
+
+사용자 보고: "UI에서 해동용궁사만 또 나온다". 진단: **데이터 중복 아님**(해동용궁사는 `place_id` 하나뿐, 검수 큐·근접 중복 없음). 원인은 `DestinationWorkspace`가 목록(언급 많은 순 → 해동용궁사 1번) 아래에 **현재 선택 장소 상세 패널**(좌표·언급 소스·Deep Research)을 두고, 선택값이 없으면 `places[0]`을 기본 선택해서 같은 장소가 목록+패널에 동시 표시된 것. 사용자가 "패널 제거" 선택.
+- `DestinationWorkspace`의 하단 선택-장소 패널 제거(+ 관련 props·`deepResearchMutation`·미사용 import 정리). 지도 연동용 `selectedPlace` 상태는 유지.
+- 패널에 있던 **Deep Research** 버튼을 `PlaceDetailView`(상세 모달, 삭제 버튼 옆)로 이동 — 장소별 작업을 상세에 모음. 상세는 각 항목 ⓘ로 연다.
+- 검증: tsc/lint(0 warning)/build, 13200 라이브(하단 패널 제거 확인, 상세 모달에 Deep Research+삭제 확인). dev/prod 배포.
+
 ## 2026-06-22: T-106 완료 — 확정 장소(정리된 리스트) 삭제 기능
 
 사용자 요청: "정리된 리스트에서도 삭제할 수 있게". 검수 큐 후보만 삭제 가능하던 것을 **확정 장소(travel_places)** 삭제로 확장.

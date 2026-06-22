@@ -2,14 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
   DownloadIcon,
-  FlaskConicalIcon,
   InfoIcon,
   ListChecksIcon,
-  MapPinIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -17,7 +15,6 @@ import {
   buildDestinationExportUrl,
   listDestinations,
   listRunQueue,
-  triggerDeepResearch,
   USER_JOB_TYPES,
   type CrawlRunSummary,
   type DestinationExportFormat,
@@ -46,7 +43,6 @@ import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
 export function DestinationWorkspace() {
-  const queryClient = useQueryClient();
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
   const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
@@ -95,11 +91,6 @@ export function DestinationWorkspace() {
   const isAllSelected =
     places.length > 0 && selectedVisibleExportIds.length === places.length;
 
-  const deepResearchMutation = useMutation({
-    mutationFn: triggerDeepResearch,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runs"] }),
-  });
-
   function toggleExportSelection(placeId: number) {
     setSelectedExportIds((current) =>
       current.includes(placeId)
@@ -133,9 +124,6 @@ export function DestinationWorkspace() {
             selectedPlace={selectedPlace}
             isLoading={destinationsQuery.isLoading}
             onSelect={setSelectedPlaceId}
-            onDeepResearch={(placeId) => deepResearchMutation.mutate(placeId)}
-            isResearching={deepResearchMutation.isPending}
-            researchError={deepResearchMutation.error?.message ?? null}
             sort={destinationSort}
             onSortChange={setDestinationSort}
             exportFormat={exportFormat}
@@ -216,9 +204,6 @@ function DestinationList({
   selectedPlace,
   isLoading,
   onSelect,
-  onDeepResearch,
-  isResearching,
-  researchError,
   sort,
   onSortChange,
   exportFormat,
@@ -235,9 +220,6 @@ function DestinationList({
   selectedPlace: DestinationSummary | null;
   isLoading: boolean;
   onSelect: (placeId: number) => void;
-  onDeepResearch: (placeId: number) => void;
-  isResearching: boolean;
-  researchError: string | null;
   sort: DestinationSort;
   onSortChange: (sort: DestinationSort) => void;
   exportFormat: DestinationExportFormat;
@@ -382,56 +364,6 @@ function DestinationList({
           );
         })}
       </div>
-      {selectedPlace ? (
-        <div className="flex flex-col gap-3 border-t pt-4">
-          <div className="flex items-start gap-2">
-            <MapPinIcon className="mt-0.5 size-4 text-muted-foreground" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{selectedPlace.name}</p>
-              <p className="text-xs text-muted-foreground">
-                {selectedPlace.latitude.toFixed(5)}, {selectedPlace.longitude.toFixed(5)}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                언급 {selectedPlace.mention_count}회 · 유튜버 {selectedPlace.source_channel_count}명
-              </p>
-            </div>
-          </div>
-          <div className="flex max-h-36 flex-col gap-2 overflow-y-auto border-t pt-3">
-            <p className="text-xs font-medium">언급 소스</p>
-            {selectedPlace.source_videos.length > 0 ? (
-              selectedPlace.source_videos.slice(0, 5).map((source) => (
-                <a
-                  key={source.mapping_id}
-                  className="flex flex-col gap-0.5 rounded-md border p-2 text-xs hover:bg-muted"
-                  href={source.video_url}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  <span className="truncate font-medium">{source.video_title}</span>
-                  <span className="truncate text-muted-foreground">
-                    {sourceLine(source)}
-                  </span>
-                </a>
-              ))
-            ) : (
-              <p className="text-xs text-muted-foreground">언급 소스 없음</p>
-            )}
-          </div>
-          <Button
-            variant="outline"
-            disabled={isResearching}
-            onClick={() => onDeepResearch(selectedPlace.place_id)}
-          >
-            <FlaskConicalIcon data-icon="inline-start" />
-            Deep Research
-          </Button>
-          {researchError ? (
-            <p role="alert" className="text-xs text-destructive">
-              {researchError}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
     </section>
   );
 }
