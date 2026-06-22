@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-23: T-110 완료 — Playwright E2E 스펙을 멀티페이지 UI에 맞게 갱신
+
+T-097+ UI 개편(결과/수집/검수 페이지 분리, 설정 모달·페이지, 장소 상세 모달, Deep Research 상세 이동) 이후 갱신 안 됐던 `tests/e2e/ktc.spec.ts` 4개를 현행 UI에 맞게 재작성:
+- 결과(/): `장소 목록` region + 지도(`#vworld-map-container` fallback) + 간단 실행 큐 + 헤더 nav(수집/검수). (검수·운영 패널은 별도 페이지/모달로 이동했으므로 제외)
+- 수집(/collect): `#harvest-target`/`#harvest-max-videos`/수집 시작 + `aria-live` 상태 패널의 job_id·pending.
+- Deep Research는 결과 장소 **상세 모달**(`월정리 해변 상세` ⓘ → dialog → Deep Research, T-107), 검수 저장은 `/review`에서 확정 장소명/위도/경도/카테고리(라벨 변경) 입력 후 저장 → unmatched 0.
+- 설정(/settings): 엔진 셀렉터 id `#gemini-engine-select`→`#ai-engine-select`, `gemini-1.5-pro` 선택 후 저장 → `#success-toast` + 설정 반영.
+- 결과: Windows 호스트 Playwright **4/4 통과**(KTC_TEST_PG_DSN 시드). 셀렉터 strict-mode(행 버튼 vs ⓘ)·nav 링크는 `.first()`·`header nav` 텍스트로 보정. (앱 코드 변경 없음)
+
 ## 2026-06-22: T-109 완료 — 자막 교정 + 10개 묶음 POI 배치 파이프라인 + Gemini 키 전역 rate limiter
 
 사용자 요청 8항 반영. POI 처리를 영상당 1콜에서 **영상 단위 자막 교정 + 묶음(≤10) POI 배치**로 재설계.

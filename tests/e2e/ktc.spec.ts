@@ -13,44 +13,37 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     seedE2EData();
   });
 
-  test('메인 화면이 장소·지도·검수 큐·운영 패널을 렌더링한다', async ({ page }) => {
+  test('결과 화면이 장소 목록·지도·실행 큐·내비를 렌더링한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
 
     await expectSeedReady(page);
     await page.goto('/');
 
-    const placesRegion = page.getByRole('region', { name: '장소 목록' });
-    const reviewRegion = page.getByRole('region', { name: '검수 큐' });
-    const operationsRegion = page.getByRole('region', { name: '운영 패널' });
-    const sidebar = page.locator('#destination-list');
-
     await expect(page).toHaveTitle(/Kor Travel Concierge/);
-    await expect(page.locator('#destination-list')).toBeVisible();
+    // 결과(/) = 확정 장소 목록 + 지도 + 간단 실행 큐 상태(상세는 /collect·/review로 분리, T-097+)
+    const placesRegion = page.getByRole('region', { name: '장소 목록' });
+    await expect(placesRegion).toBeVisible();
+    // 장소 행 버튼(이름 포함)과 ⓘ "월정리 해변 상세" 버튼 둘 다 매칭되므로 행 버튼(first)만.
+    await expect(
+      placesRegion.getByRole('button', { name: /월정리 해변/ }).first(),
+    ).toBeVisible();
     await expect(page.locator('#vworld-map-container')).toBeVisible();
     await expect(page.locator('#vworld-map-container')).toHaveAttribute(
       'data-status',
       'fallback',
     );
-    await expect(sidebar.getByText('실행 큐')).toBeVisible();
-    await expect(sidebar.getByText('harvest · 부산 맛집')).toBeVisible();
-    await expect(placesRegion.getByRole('heading', { name: '장소' })).toBeVisible();
-    await expect(placesRegion.getByRole('button', { name: /월정리 해변/ })).toBeVisible();
-    await expect(reviewRegion.getByRole('heading', { name: '검수 큐' })).toBeVisible();
-    await expect(reviewRegion.getByRole('button', { name: /성산 일출봉 카페/ })).toBeVisible();
-    await expect(operationsRegion.getByRole('heading', { name: '운영' })).toBeVisible();
-    await expect(operationsRegion.getByText('실행 큐')).toBeVisible();
-    await expect(operationsRegion.getByText('harvest · 부산 맛집').first()).toBeVisible();
-    await expect(operationsRegion.getByText(/검색을 실행 중/).first()).toBeVisible();
-    await expect(operationsRegion.getByText('MCP/웹 쓰기 로그')).toBeVisible();
-    await expect(operationsRegion.getByText('place.correct')).toBeVisible();
+    await expect(page.getByText('실행 큐').first()).toBeVisible();
+    // 멀티페이지 내비(결과/수집/검수) — 헤더 nav 안의 링크 텍스트로 확인
+    const nav = page.locator('header nav');
+    await expect(nav.getByText('수집')).toBeVisible();
+    await expect(nav.getByText('검수')).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('수집 시작 후 job_id와 pending 상태를 표시한다', async ({ page }) => {
+  test('수집 화면에서 수집 시작 시 job_id·pending을 표시한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    await expectSeedReady(page);
-    await page.goto('/');
+    await page.goto('/collect');
 
     await page.locator('#harvest-target').fill('제주 카페');
     await page.locator('#harvest-max-videos').fill('3');
@@ -73,22 +66,22 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('Deep Research와 검수 후보 저장이 API와 UI에 반영된다', async ({ page }) => {
+  test('Deep Research(상세 모달)와 검수 저장이 API·UI에 반영된다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await expectSeedReady(page);
+
+    // Part A: 결과 화면에서 장소 상세 모달을 열고 Deep Research(상세 모달로 이동, T-107)
     await page.goto('/');
-
-    const placesRegion = page.getByRole('region', { name: '장소 목록' });
-    const reviewRegion = page.getByRole('region', { name: '검수 큐' });
-
-    await placesRegion.getByRole('button', { name: /월정리 해변/ }).click();
+    await page.getByRole('button', { name: '월정리 해변 상세' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
     const deepResearchResponse = page.waitForResponse(
       (response) =>
         response.url().includes('/api/v1/destinations/') &&
         response.url().endsWith('/deep-research') &&
         response.request().method() === 'POST',
     );
-    await page.getByRole('button', { name: /Deep Research/ }).click();
+    await dialog.getByRole('button', { name: /Deep Research/ }).click();
     expect((await deepResearchResponse).ok()).toBeTruthy();
     await expect
       .poll(async () => {
@@ -98,11 +91,13 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       })
       .toBe(true);
 
-    await reviewRegion.getByRole('button', { name: /성산 일출봉 카페/ }).click();
-    await page.getByLabel('보정 장소명').fill('성산 일출봉 카페');
-    await page.getByLabel('보정 위도').fill('33.4581');
-    await page.getByLabel('보정 경도').fill('126.9425');
-    await page.getByLabel('보정 카테고리').fill('카페');
+    // Part B: 검수 화면에서 후보를 확정 저장
+    await page.goto('/review');
+    await page.getByRole('button', { name: /성산 일출봉 카페/ }).first().click();
+    await page.getByLabel('확정 장소명').fill('성산 일출봉 카페');
+    await page.getByLabel('위도').fill('33.4581');
+    await page.getByLabel('경도').fill('126.9425');
+    await page.getByLabel('카테고리').fill('카페');
     const resolveResponse = page.waitForResponse(
       (response) =>
         response.url().includes('/api/v1/destinations/unmatched/') &&
@@ -119,19 +114,17 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
         return candidates.length;
       })
       .toBe(0);
-    await expect(reviewRegion.getByRole('button', { name: /성산 일출봉 카페/ })).toHaveCount(0);
-    await expect(placesRegion.getByRole('button', { name: /성산 일출봉 카페/ })).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('설정 페이지에서 Gemini 엔진 설정을 저장한다', async ({ page }) => {
+  test('설정 화면에서 AI 엔진을 저장한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await page.goto('/settings');
 
-    await expect(page.locator('#gemini-engine-select')).toBeVisible();
-    await page.locator('#gemini-engine-select').click();
-    await page.getByRole('option', { name: 'gemini-1.5-pro' }).click();
+    await expect(page.locator('#ai-engine-select')).toBeVisible();
+    await page.locator('#ai-engine-select').click();
+    await page.getByRole('option', { name: 'gemini-1.5-pro', exact: true }).click();
     await page.locator('#settings-save-button').click();
 
     await expect(page.locator('#success-toast')).toBeVisible();
