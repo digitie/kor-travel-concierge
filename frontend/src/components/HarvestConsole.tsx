@@ -9,7 +9,7 @@ import {
   Loader2Icon,
   PlayIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
@@ -21,6 +21,7 @@ import {
   type HarvestStatus,
   type HarvestTargetType,
 } from "@/lib/api";
+import { JobLogDialog } from "@/components/JobLogDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -100,9 +101,36 @@ const harvestFormSchema = z.object({
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
 
+const JOB_ID_STORAGE_KEY = "ktc.harvest.jobId";
+const TRANSCRIPT_JOB_ID_STORAGE_KEY = "ktc.harvest.transcriptJobId";
+
 export function HarvestConsole() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [transcriptJobId, setTranscriptJobId] = useState<string | null>(null);
+  const [logDialogStatus, setLogDialogStatus] = useState<HarvestStatus | null>(
+    null,
+  );
+
+  // 다른 페이지에 다녀와도 진행 중인 수집 작업의 상태·로그가 사라지지 않도록 작업 id를
+  // localStorage에 보존한다. 마운트 시 복원하면 statusQuery가 백엔드에서 상태·로그를 재조회.
+  // hydration 안전(서버=null, 클라=저장값)을 위해 마운트 후 1회 setState가 필요하므로
+  // set-state-in-effect를 이 복원 effect에 한해 허용한다.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const savedJob = window.localStorage.getItem(JOB_ID_STORAGE_KEY);
+    if (savedJob) setJobId(savedJob);
+    const savedTranscript = window.localStorage.getItem(TRANSCRIPT_JOB_ID_STORAGE_KEY);
+    if (savedTranscript) setTranscriptJobId(savedTranscript);
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (jobId) window.localStorage.setItem(JOB_ID_STORAGE_KEY, jobId);
+  }, [jobId]);
+  useEffect(() => {
+    if (transcriptJobId)
+      window.localStorage.setItem(TRANSCRIPT_JOB_ID_STORAGE_KEY, transcriptJobId);
+  }, [transcriptJobId]);
+
   const form = useForm<HarvestFormValues>({
     resolver: zodResolver(harvestFormSchema),
     defaultValues: {
@@ -135,6 +163,8 @@ export function HarvestConsole() {
     onSuccess: (job) => {
       setJobId(job.job_id);
       setTranscriptJobId(null);
+      // 새 수집 시작 시 직전 자막 작업 id는 정리한다(persist effect는 null을 지우지 않음).
+      window.localStorage.removeItem(TRANSCRIPT_JOB_ID_STORAGE_KEY);
     },
   });
 
@@ -374,14 +404,27 @@ export function HarvestConsole() {
       <section className="flex flex-col gap-3 border-t pt-5" aria-live="polite">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-medium">작업 상태</h2>
-          {status ? (
-            <Badge variant={statusTone.variant}>
-              {statusTone.icon}
-              {status.state}
-            </Badge>
-          ) : (
-            <Badge variant="outline">대기</Badge>
-          )}
+          <div className="flex items-center gap-2">
+            {status ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setLogDialogStatus(status)}
+              >
+                <FileTextIcon data-icon="inline-start" />
+                오류·로그 상세
+              </Button>
+            ) : null}
+            {status ? (
+              <Badge variant={statusTone.variant}>
+                {statusTone.icon}
+                {status.state}
+              </Badge>
+            ) : (
+              <Badge variant="outline">대기</Badge>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 text-sm">
@@ -395,7 +438,7 @@ export function HarvestConsole() {
             value={status?.current_message ?? "작업이 아직 시작되지 않았습니다."}
             wrap
           />
-          <StatusRow label="error" value={status?.last_error ?? "-"} />
+          <StatusRow label="error" value={status?.last_error ?? "-"} wrap />
         </div>
 
         <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3">
@@ -434,6 +477,12 @@ export function HarvestConsole() {
           <p className="text-sm text-destructive">{statusQuery.error.message}</p>
         ) : null}
       </section>
+
+      <JobLogDialog
+        status={logDialogStatus}
+        title="수집 작업 로그·오류"
+        onClose={() => setLogDialogStatus(null)}
+      />
 
       {transcriptReady || transcriptJobId ? (
         <section className="flex flex-col gap-3 border-t pt-5" aria-live="polite">

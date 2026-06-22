@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-06-23: T-112 완료 — poi_batch "알 수 없는 asset_type" 실패 수정 + 작업 로그·오류 상세 다이얼로그(복사)
+
+사용자 보고: "대구 맛집" 검색 중 "작업이 실패했습니다: 알 수 없는 asset_type:.,". 로그가 잘리고 실패.
+- **근본 원인(T-109 회귀)**: `AssetType.TRANSCRIPT_CORRECTED`를 enum에만 추가하고 `media_store._BUCKET_BY_ASSET_TYPE` 매핑을 빠뜨려, poi_batch가 교정본을 저장할 때 `bucket_for`가 `ValueError("알 수 없는 asset_type: transcript_corrected")`로 실패 → 모든 poi_batch 작업 실패. **prod도 동일하게 깨져 있었음.** → 매핑 추가(교정본=자막 버킷), 모든 `AssetType`이 버킷에 매핑되는지 검증하는 회귀 테스트 추가(`test_etl_media_store`).
+- **로그 잘림**: DB는 `Text`(무손실)지만 프런트 `StatusRow`가 CSS `truncate`로 잘라 표시. error 행을 `wrap`으로 바꿔 인라인에서도 안 잘리게.
+- **로그·오류 상세 + 복사**: 공용 `JobLogDialog`/`JobLogView` 추가 — 상태·현재 메시지·오류 전문(pre-wrap, 스크롤)·전체 상태 로그 타임라인 + **"전체 복사"** 버튼(`buildJobReport`로 job_id·상태·오류·로그 포맷). 수집 패널(HarvestConsole) "작업 상태"에 **"오류·로그 상세"** 버튼, 작업 상세(JobDetailDialog)에 "상태 로그·오류" 섹션으로 연결. 복붙해 바로 공유·수정 가능.
+
+검증: backend 281 pytest+compileall, frontend tsc/lint/build. dev/prod 배포(asset_type는 prod 긴급 수정).
+
+## 2026-06-23: T-111 완료 — 수집 키워드 보정 멈춤 해소 + 수집 상태/로그 페이지 이동 보존
+
+사용자 보고 2건:
+1. **"Gemini에서 검색어 보정 중"에서 한참 멈춤** — `pipeline.py`의 키워드 보정 단계가 동기 Gemini 호출(`keyword_expansion.complete_json`)을 `await` 없이 실행해 워커 이벤트 루프를 막았고, 429 키에서 느린 재시도(15→90s×4)로 ~90s 동안 상태/heartbeat가 멈춤. → (a) `complete_json(max_attempts=1)`로 429 즉시 템플릿 폴백, (b) `asyncio.to_thread`로 보정 호출을 offload해 루프 비차단, (c) "YouTube에서 검색어 N개로 영상을 검색 중" 중간 상태 추가. 이후 기존 상세 메시지(보정 결과→조회→적재→POI 배치 N건 등록)가 정상 흐름.
+2. **페이지 이동 후 수집 로그/상태 소실** — `HarvestConsole`의 `jobId`가 `useState`라 /collect 언마운트 시 소실. → 작업 id를 `localStorage`에 보존(마운트 복원→statusQuery가 백엔드에서 상태·로그 재조회), 새 수집 시작 시 직전 자막 작업 id 정리. 복원 effect는 hydration 안전 위해 `set-state-in-effect` 1곳 허용.
+
+검증: backend 279 pytest+compileall, frontend tsc/lint/build. 앱 dev/prod 배포.
+
 ## 2026-06-23: T-110 완료 — Playwright E2E 스펙을 멀티페이지 UI에 맞게 갱신
 
 T-097+ UI 개편(결과/수집/검수 페이지 분리, 설정 모달·페이지, 장소 상세 모달, Deep Research 상세 이동) 이후 갱신 안 됐던 `tests/e2e/ktc.spec.ts` 4개를 현행 UI에 맞게 재작성:

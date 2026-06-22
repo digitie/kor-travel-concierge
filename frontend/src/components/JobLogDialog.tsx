@@ -1,0 +1,163 @@
+"use client";
+
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useState } from "react";
+
+import type { RunStatusLog } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+// 수집 상태 로그·오류를 전체로 보여주고 복사할 수 있는 공용 다이얼로그.
+// HarvestConsole(수집 패널)과 JobDetailDialog(작업 상세) 양쪽에서 재사용한다.
+
+export type JobLogLike = {
+  job_id?: string | null;
+  state: string;
+  current_message: string | null;
+  last_error: string | null;
+  status_logs: RunStatusLog[];
+};
+
+function formatLogTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function stateVariant(
+  state: string,
+): "default" | "secondary" | "destructive" | "outline" {
+  if (state === "failed") return "destructive";
+  if (state === "done") return "default";
+  return "secondary";
+}
+
+export function buildJobReport(status: JobLogLike): string {
+  const lines = [
+    "[작업 정보]",
+    `job_id: ${status.job_id ?? "-"}`,
+    `상태: ${status.state}`,
+    `현재 메시지: ${status.current_message ?? "-"}`,
+    `오류: ${status.last_error ?? "-"}`,
+    "",
+    `[상태 로그] (${status.status_logs.length})`,
+    ...status.status_logs.map(
+      (log) => `${log.timestamp} [${log.level}] ${log.message}`,
+    ),
+  ];
+  return lines.join("\n");
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // 클립보드 권한이 막힌 환경에서는 조용히 무시한다.
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon data-icon="inline-start" />
+      ) : (
+        <CopyIcon data-icon="inline-start" />
+      )}
+      {copied ? "복사됨" : "전체 복사"}
+    </Button>
+  );
+}
+
+export function JobLogView({ status }: { status: JobLogLike }) {
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <Badge variant={stateVariant(status.state)}>{status.state}</Badge>
+        <CopyButton text={buildJobReport(status)} />
+      </div>
+
+      {status.current_message ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-muted-foreground">현재 메시지</p>
+          <p className="break-words whitespace-pre-wrap">
+            {status.current_message}
+          </p>
+        </div>
+      ) : null}
+
+      {status.last_error ? (
+        <div className="flex flex-col gap-1 rounded-lg border border-destructive/40 bg-destructive/5 p-2">
+          <p className="text-xs font-semibold text-destructive">오류 상세</p>
+          <pre className="max-h-48 overflow-auto break-words whitespace-pre-wrap text-xs text-destructive">
+            {status.last_error}
+          </pre>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-1">
+        <p className="text-xs text-muted-foreground">
+          상태 로그 ({status.status_logs.length})
+        </p>
+        <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto rounded-lg border p-2">
+          {status.status_logs.length === 0 ? (
+            <p className="text-xs text-muted-foreground">로그가 없습니다.</p>
+          ) : (
+            status.status_logs.map((log, index) => (
+              <div key={index} className="flex flex-col gap-0.5 text-xs">
+                <span className="text-muted-foreground">
+                  {formatLogTime(log.timestamp)} · {log.level}
+                </span>
+                <span className="break-words whitespace-pre-wrap">
+                  {log.message}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function JobLogDialog({
+  status,
+  title,
+  onClose,
+}: {
+  status: JobLogLike | null;
+  title?: string;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={Boolean(status)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{title ?? "작업 로그·오류"}</DialogTitle>
+          <DialogDescription>
+            전체 상태 로그와 오류 메시지입니다. &quot;전체 복사&quot;로 그대로
+            복사해 공유·문의할 수 있습니다.
+          </DialogDescription>
+        </DialogHeader>
+        {status ? <JobLogView status={status} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}

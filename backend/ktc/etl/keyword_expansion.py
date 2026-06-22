@@ -66,7 +66,12 @@ def make_llm(runtime: llm_client.LlmRuntime) -> KeywordGenerator:
         )
         try:
             payload = llm_client.complete_json(
-                runtime, prompt, response_schema=_DERIVED_KEYWORDS_SCHEMA
+                runtime,
+                prompt,
+                response_schema=_DERIVED_KEYWORDS_SCHEMA,
+                # 단발 호출: 429(쿼터 소진) 시 느린 재시도(~90s)로 harvest가 멈추지 않고
+                # 즉시 템플릿 폴백한다. keyword expansion은 best-effort라 안전하다.
+                max_attempts=1,
             )
             parsed = json.loads(payload)
             keywords = parsed.get("keywords") or []
