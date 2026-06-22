@@ -42,4 +42,7 @@ async def correct_transcript(
         prompt,
         system_instruction=TRANSCRIPT_CORRECTION_SYSTEM_INSTRUCTION,
         temperature=temperature,
+        # 단발 호출(rate limiter가 분당 한도를 강제하므로 429는 일일 쿼터 소진 신호 →
+        # 느린 사람-유사 재시도로 묶음 작업이 ~1시간 멈추는 것을 막는다, best-effort).
+        max_attempts=1,
     )

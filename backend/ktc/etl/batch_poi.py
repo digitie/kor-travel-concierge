@@ -90,7 +90,15 @@ def build_batch_prompt(items: list[tuple[str, str]]) -> str:
     """items=[(alias, corrected_transcript)] → `<video_transcripts>` XML 사용자 프롬프트."""
     blocks = []
     for alias, transcript in items:
-        safe = (transcript or "").replace("</script>", "<\\/script>")
+        # 자막이 묶음 경계 태그를 흉내내 영상 경계를 흐리지 못하도록 중화한다(< → ‹).
+        safe = transcript or ""
+        for tag in (
+            "</script>",
+            "<script",
+            "<video_transcripts",
+            "</video_transcripts",
+        ):
+            safe = safe.replace(tag, tag.replace("<", "‹"))
         blocks.append(f'  <script video_id="{alias}">\n{safe}\n  </script>')
     return "<video_transcripts>\n" + "\n".join(blocks) + "\n</video_transcripts>"
 
@@ -137,6 +145,8 @@ async def extract_batch(
                 response_schema=BATCH_RESPONSE_SCHEMA,
                 system_instruction=system,
                 temperature=POI_BATCH_TEMPERATURE,
+                # 단발 호출(rate limiter가 분당 한도를 강제 → 429는 일일 쿼터 소진 신호).
+                max_attempts=1,
             )
             return parse_batch(raw, valid_aliases=aliases)
         except (json.JSONDecodeError, ValidationError) as exc:

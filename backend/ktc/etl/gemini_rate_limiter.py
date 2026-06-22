@@ -74,6 +74,12 @@ async def acquire(*, estimated_tokens: int) -> None:
         settings.GEMINI_RATE_RPD,
         settings.GEMINI_RATE_TPM,
     )
+    # 단일 호출 추정 토큰이 분당 한도를 넘으면 어떤 윈도우에서도 들어맞지 않는다 →
+    # 무한 대기 대신 즉시 보류(입력 절단은 호출부 책임).
+    if estimated_tokens > tpm:
+        raise GeminiQuotaExceeded(
+            f"단일 호출 추정 토큰({estimated_tokens})이 분당 한도(TPM={tpm})를 초과한다."
+        )
     await _ensure_row()
     for _ in range(_MAX_WAIT_LOOPS):
         wait_seconds = 0.0

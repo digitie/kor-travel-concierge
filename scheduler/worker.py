@@ -288,17 +288,28 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         )
 
     await report_status("자막 교정·POI 배치 추출을 시작합니다.", 0.1)
+    # 이미 처리된 영상(SUMMARIZED/GEOCODED/DONE)은 건너뛴다 — 재실행/강제/재시작 시
+    # 중복 후보가 생기지 않도록(멱등성). DISCOVERED/FAILED만 처리.
     videos = list(
         (
             await session.execute(
-                select(YoutubeVideo).where(YoutubeVideo.video_id.in_(video_ids))
+                select(YoutubeVideo).where(
+                    YoutubeVideo.video_id.in_(video_ids),
+                    YoutubeVideo.crawl_status.notin_(
+                        [
+                            CrawlStatus.SUMMARIZED,
+                            CrawlStatus.GEOCODED,
+                            CrawlStatus.DONE,
+                        ]
+                    ),
+                )
             )
         )
         .scalars()
         .all()
     )
     if not videos:
-        return {"video_ids": video_ids, "processed_videos": 0}
+        return {"video_ids": video_ids, "processed_videos": 0, "skipped_done": True}
     runtime = await settings_service.get_llm_runtime(session)
     store = postprocess_service._make_media_store(get_settings())
     summary = await batch_poi_service.process_video_batch(
@@ -309,11 +320,16 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         transcript_fetcher=postprocess_service._default_transcript_fetcher,
         status_reporter=report_status,
     )
-    for video in videos:
-        if video.crawl_status != CrawlStatus.FAILED:
-            video.crawl_status = CrawlStatus.DONE
-    await session.commit()
-    await report_status("POI 배치 작업을 완료했습니다.", 1.0)
+    # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
+    # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).
+    if not summary.get("quota_deferred"):
+        for video in videos:
+            if video.crawl_status != CrawlStatus.FAILED:
+                video.crawl_status = CrawlStatus.DONE
+        await session.commit()
+        await report_status("POI 배치 작업을 완료했습니다.", 1.0)
+    else:
+        await report_status("Gemini 일일 한도로 POI 배치를 보류했습니다(추후 재처리).", 1.0)
     return {"video_ids": video_ids, **summary}
 
 

@@ -38,6 +38,10 @@ from ktc.models import (
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 TranscriptFetcher = Callable[[str], Awaitable["TranscriptResult | None"]]
 
+# 단일 영상 자막이 분당 토큰 한도(TPM)를 넘지 않도록 LLM 입력에 적용하는 문자 상한.
+# 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
+_MAX_TRANSCRIPT_CHARS = 350_000
+
 
 async def _report(reporter: StatusReporter | None, message: str, progress: float | None = None) -> None:
     if reporter is not None:
@@ -94,7 +98,9 @@ async def process_video_batch(
         await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
         try:
             corrected = await transcript_correction.correct_transcript(
-                runtime, transcript=raw_text, description=video.description_raw
+                runtime,
+                transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
+                description=video.description_raw,
             )
             summary["corrected_videos"] += 1
         except Exception as exc:  # 교정 실패는 best-effort: 원본 자막으로 진행
@@ -128,7 +134,11 @@ async def process_video_batch(
     sub_batches: list[list[tuple[str, str]]] = []
     current: list[tuple[str, str]] = []
     current_tokens = 0
+    max_chars = max(1000, 2 * (budget - 2048))
     for alias, corrected in items:
+        # 단일 영상이 예산을 넘지 않도록 절단(rate limiter 무한 보류 방지).
+        if len(corrected) > max_chars:
+            corrected = corrected[:max_chars]
         tok = gemini_rate_limiter.estimate_tokens(corrected)
         if current and current_tokens + tok > budget:
             sub_batches.append(current)
@@ -138,17 +148,40 @@ async def process_video_batch(
     if current:
         sub_batches.append(current)
     pois = []
-    for sub in sub_batches:
-        await _report(status_reporter, f"동영상 {len(sub)}개를 묶어 POI를 추출 중입니다.")
-        pois.extend(await batch_poi.extract_batch(runtime, sub))
+    try:
+        for sub in sub_batches:
+            await _report(
+                status_reporter, f"동영상 {len(sub)}개를 묶어 POI를 추출 중입니다."
+            )
+            pois.extend(await batch_poi.extract_batch(runtime, sub))
+    except gemini_rate_limiter.GeminiQuotaExceeded as exc:
+        # 일일 쿼터 소진 → 하드 실패 대신 보류(교정본은 저장됨, 영상은 DISCOVERED 유지로
+        # 다음 PT일/수동 재실행 시 재처리). 후보는 생성하지 않는다.
+        await _report(status_reporter, f"Gemini 일일 한도로 POI 추출을 보류합니다: {exc}")
+        summary["quota_deferred"] = True
+        return summary
 
-    # 3) 결과를 영상별 needs_review 후보로 생성.
+    # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 장소명) 중복은 건너뛴다(멱등성:
+    #    부분 재실행/재시작 시 중복 후보 방지).
+    batch_video_ids = [item["video"].video_id for item in batch.values()]
+    existing_pairs: set[tuple[str, str]] = set()
+    if batch_video_ids:
+        rows = await session.execute(
+            select(
+                ExtractedPlaceCandidate.video_id,
+                ExtractedPlaceCandidate.ai_place_name,
+            ).where(ExtractedPlaceCandidate.video_id.in_(batch_video_ids))
+        )
+        existing_pairs = {(str(v), str(n)) for v, n in rows.all()}
     created_candidates: list[ExtractedPlaceCandidate] = []
     for poi in pois:
         item = batch.get(poi.video_id)
         if item is None:
             continue
         video = item["video"]
+        if (video.video_id, poi.official_name) in existing_pairs:
+            continue
+        existing_pairs.add((video.video_id, poi.official_name))
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
         category_label = category_catalog.label_for(poi.category_code) if poi.category_code else None
         candidate = ExtractedPlaceCandidate(
