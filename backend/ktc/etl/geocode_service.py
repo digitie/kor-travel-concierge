@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ktc.core.spatial import sync_place_geometry
@@ -173,13 +174,22 @@ async def apply_geocode_to_candidate(
         else category_code_llm
     )
     if place.category_code_suggestion is None and selector is not None:
-        code = category_suggestion.suggest_category_code(
-            name=place.name,
-            category_label=place.category,
-            description=place.description,
-            address=place.road_address or place.official_address,
-            llm=selector,
-        )
+        # 동기 LLM 호출이 worker 이벤트 루프를 막지 않도록 thread로 격리한다(best-effort).
+        code = None
+        try:
+            code = await asyncio.wait_for(
+                asyncio.to_thread(
+                    category_suggestion.suggest_category_code,
+                    name=place.name,
+                    category_label=place.category,
+                    description=place.description,
+                    address=place.road_address or place.official_address,
+                    llm=selector,
+                ),
+                timeout=10.0,
+            )
+        except Exception:
+            code = None
         if code:
             place.category_code_suggestion = code
 

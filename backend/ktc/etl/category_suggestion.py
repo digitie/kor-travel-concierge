@@ -105,8 +105,14 @@ def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
 
     def call(prompt: str) -> str:
         try:
+            # 카테고리 제안은 best-effort(null 허용)이므로 단발 호출만 한다. 느린
+            # 사람-유사 재시도(15~90s)를 타면 동기 호출이 호출부 이벤트 루프를
+            # 오래 막으므로(검수 저장·harvest), max_attempts=1로 빠르게 실패한다.
             return llm_client.complete_json(
-                runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
+                runtime,
+                prompt,
+                response_schema=RESPONSE_JSON_SCHEMA,
+                max_attempts=1,
             )
         except llm_client.LlmRequestError as exc:
             raise RuntimeError(

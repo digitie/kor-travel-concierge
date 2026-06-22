@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-22: T-105 완료 — 검수 저장 시 동기 Gemini 호출이 이벤트 루프를 막던 먹통 수정
+
+**버그(사용자 보고)**: "처음 한 번 검수(저장) 후 리스트 상세·API 검색이 둘 다 먹통, 시간이 좀 지나면 다시 동작".
+**진단**: `resolve_candidate`의 `create_place` 경로가 8자리 카테고리 제안(T-070)을 위해 `category_code_selector(...)`를 **동기로 호출**(place_service.py)한다. selector는 동기 Gemini(`complete_json`) 호출이고, dev/prod Gemini 키가 429라 느린 사람-유사 재시도(15→90s)가 **async 이벤트 루프 안에서 동기로 실행**되며 그동안 모든 다른 요청(상세·검색)이 멈춘다 → 재시도가 끝나면(=시간이 지나면) 다시 동작. harvest의 `geocode_service`도 같은 동기 호출로 worker 루프를 막는다.
+**수정**:
+- `category_suggestion.make_llm`: `complete_json(..., max_attempts=1)`로 단발 호출(429 시 ~1s 실패). 카테고리 제안은 best-effort(null 허용)라 느린 재시도가 불필요.
+- `place_service.resolve_candidate`·`geocode_service`: selector 호출을 `await asyncio.to_thread(...)` + `asyncio.wait_for(timeout=10s)`로 격리 → 이벤트 루프를 막지 않고, 초과·실패는 None으로 흡수.
+**검증**: compileall + 영향 테스트 53 통과. dev(키 429)에서 저장 중 동시 검색/상세가 막히지 않음을 라이브 확인. dev/prod 배포.
+
 ## 2026-06-22: T-104 완료 — 검수 페이지 UX 4건 (저장 즉시 제거·후보전환 가드·검색 재요청)
 
 사용자 보고 4건:
