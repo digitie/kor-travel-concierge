@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-22: T-104 완료 — 검수 페이지 UX 4건 (저장 즉시 제거·후보전환 가드·검색 재요청)
+
+사용자 보고 4건:
+1. **저장/제외 시 검수 대기 목록에서 즉시 제거**: `resolveMutation`에 낙관적 제거(`onMutate`로 cache에서 후보 필터 + `cancelQueries`로 자동 refetch 덮어쓰기 방지, `onError` 복구, `onSettled` 동기화) 추가. 라이브 검증: 제외 클릭 180ms 내 후보 사라짐(refetch 전), resolve 200, settle 후에도 유지. (백엔드는 이미 resolve 시 `IGNORED`/`USER_CORRECTED`로 바꿔 `NEEDS_REVIEW`만 보는 unmatched에서 제외 — 기존엔 느린 refetch가 체감 지연이었음.)
+2. **검수 상세가 안 나옴**: 상세 엔드포인트·모달(PC)·페이지(모바일)는 dev/prod 모두 정상 동작(200, 콘텐츠 렌더 확인). 재현 불가 — 커넥션 포화(아래 4, T-103) 증상으로 추정. BFF abort 수정 + 검색 가드로 완화. 잔존 시 재확인 필요.
+3. **검색 중 다른 후보 클릭 시 가드 없음**: `pickCandidate`가 진행 중 `place-search`/`place-opinion`을 `cancelQueries`로 취소하고 nonce를 올려 새 후보 검색을 깨끗이 시작(이전 검색이 새 후보에 매달리지 않음).
+4. **검색 버튼 무반응/지연**: `searchQuery`/`opinionQuery` queryKey에 `searchNonce`를 추가하고 `runSearch`/`pickCandidate`마다 증가 → 동일 검색어로도 항상 강제 refetch. 라이브 검증: 같은 검색어로 검색 3회 클릭 → 3회 모두 재요청(기존엔 0회 → 무반응). (네트워크 지연은 T-103 BFF abort 수정으로 별도 해소.)
+
+검증: frontend tsc/lint/build, dev 라이브(#1·#4). dev/prod web 재빌드 배포.
+
 ## 2026-06-22: T-103 완료 — BFF 프록시 abort 미전파로 인한 POI 검색 지연/무응답 수정
 
 **버그(사용자 보고)**: 검수 POI 검색이 "처음 한번 빼고는 늦거나 응답이 없음", "검색 중지 후 재호출해도 느림".
