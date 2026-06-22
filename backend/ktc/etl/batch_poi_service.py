@@ -160,6 +160,17 @@ async def process_video_batch(
         await _report(status_reporter, f"Gemini 일일 한도로 POI 추출을 보류합니다: {exc}")
         summary["quota_deferred"] = True
         return summary
+    except llm_client.LlmRequestError as exc:
+        # Google 측 429(키 쿼터 소진)도 하드 실패 대신 보류로 처리한다(작업 실패 스팸 방지).
+        # 그 외 LLM 오류는 실제 실패로 전파한다.
+        message = str(exc)
+        if exc.status_code == 429 or "429" in message or "quota" in message.lower():
+            await _report(
+                status_reporter, f"Gemini 쿼터(429)로 POI 추출을 보류합니다: {exc}"
+            )
+            summary["quota_deferred"] = True
+            return summary
+        raise
 
     # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 장소명) 중복은 건너뛴다(멱등성:
     #    부분 재실행/재시작 시 중복 후보 방지).
