@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
   const username = typeof payload.username === "string" ? payload.username : "";
   const password = typeof payload.password === "string" ? payload.password : "";
   const nextPath = sanitizeLocalPath(typeof payload.next === "string" ? payload.next : null);
-  const rateLimit = checkLoginRateLimit(request);
+  const rateLimit = checkLoginRateLimit(request, undefined, username);
   if (!rateLimit.allowed) {
     await recordAuthAuditEvent(request, {
       attemptedUsername: username,
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "AUTH_MISCONFIGURED" }, { status: 503 });
   }
   if (result !== "ok") {
-    recordLoginFailure(request);
+    recordLoginFailure(request, undefined, username);
     await recordAuthAuditEvent(request, {
       attemptedUsername: username,
       eventType: "login",
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "INVALID_CREDENTIALS" }, { status: 401 });
   }
 
-  clearLoginFailures(request);
+  clearLoginFailures(request, username);
   await revokeSessionCookieValue(request.cookies.get(SESSION_COOKIE_NAME)?.value);
   await recordAuthAuditEvent(request, {
     attemptedUsername: username,

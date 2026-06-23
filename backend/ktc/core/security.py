@@ -57,7 +57,11 @@ async def require_api_key(
             detail="관리자 proxy 인증이 필요하다.",
         )
 
-    if _peer_in_cidrs(request, settings.api_trusted_client_cidrs):
+    # 키 없는 CIDR 우회는 명시 활성화(+ CIDR 설정) 시에만 허용한다. client IP는
+    # FORWARDED_ALLOW_IPS=*에서 X-Forwarded-For로 위조 가능하므로 기본 비활성이다.
+    if settings.api_trusted_client_bypass_active and _peer_in_cidrs(
+        request, settings.api_trusted_client_cidrs
+    ):
         return
 
     provided_key = key or api_key
@@ -94,7 +98,14 @@ async def require_api_key(
 
 
 def resolve_admin_proxy_actor(request: Request, settings: Settings) -> str | None:
-    """신뢰 proxy에서 주입한 관리자 actor를 검증해 반환한다."""
+    """신뢰 proxy에서 주입한 관리자 actor를 검증해 반환한다.
+
+    주의: CIDR(peer IP) 검사는 방어심층(defense-in-depth)일 뿐이다. 운영에서
+    FORWARDED_ALLOW_IPS=*이면 `request.client.host`가 X-Forwarded-For로 위조될 수
+    있으므로, 관리자 권한의 실질 게이트는 상수시간 비교하는 공유 비밀
+    `KTC_ADMIN_PROXY_SECRET`이다(아래). FORWARDED_ALLOW_IPS는 실제 프록시 IP로
+    고정하는 것을 권장한다.
+    """
     if not _peer_in_cidrs(request, settings.admin_trusted_proxy_cidrs):
         return None
     expected_secret = settings.KTC_ADMIN_PROXY_SECRET.strip()

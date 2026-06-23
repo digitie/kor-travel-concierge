@@ -45,6 +45,8 @@ export function LoginForm() {
       }
       router.replace(payload.next ?? "/");
       router.refresh();
+    } catch {
+      setError("네트워크 오류로 로그인하지 못했습니다. 잠시 뒤 다시 시도하세요.");
     } finally {
       setPending(false);
     }

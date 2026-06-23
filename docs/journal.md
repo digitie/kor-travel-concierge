@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-24: T-117 — PR #124(T-116) 인증 기능 사후 보안 리뷰 + High/Medium 보강
+
+PR #124(관리자 로그인·공개 API 키)는 이미 squash 머지(`3fa933c`)되어 운영 배포된 상태였다. 다중 에이전트 사후 보안 리뷰(원시 32→반박 검증 후 확정 26: High 1/Medium 5/Low 16/Nit 4)를 PR에 코멘트로 남기고, High·Medium을 코드로 보강했다.
+
+- **High — XFF 스푸핑 가능한 CIDR 신뢰**(`security.py`): 운영 `FORWARDED_ALLOW_IPS=*`에서 uvicorn이 `request.client.host`를 X-Forwarded-For로 덮어써 `_peer_in_cidrs` 신뢰가 위조 가능. 키 없는 `API_TRUSTED_CLIENT_CIDRS` 우회를 새 플래그 `API_TRUSTED_CLIENT_BYPASS_ENABLED`(기본 false) 뒤로 게이트하고, 기동 시 위험 구성 경고(`main.py`)를 추가. admin 게이트의 실질 보호는 shared secret임을 코드 주석/`.env.example`에 명시하고 `FORWARDED_ALLOW_IPS`를 실제 프록시 IP로 고정하라는 가이드를 추가. (정의적 운영 조치=프록시 IP 고정은 prod `.env`에서 적용 필요.)
+- **Medium — `init_db` create_all ↔ Alembic 충돌**(`database.py`): 비-local에서 create_all을 건너뛰고 운영 schema는 Alembic이 단독 소유하도록 게이트(비멱등 마이그레이션 "relation already exists" 충돌 제거).
+- **Medium — `?key=` 쿼리 키 누출**: 기능은 유지(VWorld 호환), `.env.example`에 로그·Referer 누출 위험 + 프록시 로그 마스킹·키 회전 가이드 추가.
+- **Medium — LoginForm 네트워크 오류 무시**: `catch`로 사용자 오류 메시지 노출.
+- **Medium — 로그인 rate-limit 전역 `local` 버킷**: 버킷 키를 (신뢰 client IP)+계정으로 분리해 단일 출처가 관리자를 전역 잠그는 DoS를 완화.
+- **Medium — 프런트 인증 테스트 0건**: vitest 도입 + `auth.ts` 단위 테스트 10건(세션 서명/검증·만료·계정 불일치, `sanitizeLocalPath` open-redirect, `verifyAdminLogin`, rate-limit). backend `test_api_auth.py`에 폐기 키 거부·deny-all·CIDR 밖 admin 거부·우회 플래그 음성 테스트 추가.
+
+검증: frontend type-check/lint/build + vitest 10/10 + `npm audit` 0, backend compileall. backend pytest는 Windows 호스트 venv 미가용으로 WSL2/Docker 환경에서 수행 필요. **운영 검증/배포는 prod SSH 접근 확보 후 진행 예정**(현재 리뷰어가 `digitie@192.168.1.14` 접근 불가).
+
 ## 2026-06-23: T-116 완료 — 관리자 로그인·공개 API 키 관리와 PR #399 후속 리뷰 반영
 
 사용자 요청: `kor-travel-geo` PR #399의 로그인/API 키 UX를 참고해 concierge에도 관리자 로그인, 보안 세션, 로그인 감사 로그, Web UI 기반 공개 API 키 생성·저장·검증, 관리자 API BFF 제한, `kor travel geo v2` 키 설정을 추가.

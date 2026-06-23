@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     # 신뢰 CIDR에서 들어온 외부 클라이언트는 공개 API key 검증을 생략할 수 있다.
     # 기본은 비어 있어 명시 설정 없이는 우회하지 않는다.
     API_TRUSTED_CLIENT_CIDRS: str = ""
+    # 키 없는 CIDR 우회는 client IP에 의존하는데, FORWARDED_ALLOW_IPS=*처럼 프록시가
+    # 모든 X-Forwarded-For를 신뢰하면 client IP가 위조 가능하다(우회 무력화). 그래서
+    # 이 우회는 기본 비활성이며, 위험을 이해한 운영자가 명시적으로 켜야 하고 반드시
+    # FORWARDED_ALLOW_IPS를 실제 프록시 IP로 고정해야 한다.
+    API_TRUSTED_CLIENT_BYPASS_ENABLED: bool = False
     # Next.js BFF가 관리자 요청임을 증명하는 서버 전용 shared secret.
     KTC_ADMIN_PROXY_SECRET: str = ""
     # 관리자 proxy로 신뢰할 수 있는 peer CIDR. Docker bridge와 localhost를 포함한다.
@@ -217,6 +222,13 @@ class Settings(BaseSettings):
             for cidr in self.API_TRUSTED_CLIENT_CIDRS.split(",")
             if cidr.strip()
         ]
+
+    @property
+    def api_trusted_client_bypass_active(self) -> bool:
+        """키 없는 신뢰 CIDR 우회가 실제로 활성인지(명시 활성 + CIDR 설정)."""
+        return self.API_TRUSTED_CLIENT_BYPASS_ENABLED and bool(
+            self.api_trusted_client_cidrs
+        )
 
     @property
     def admin_trusted_proxy_cidrs(self) -> list[str]:

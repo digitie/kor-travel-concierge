@@ -4,6 +4,7 @@
 작업은 직접 수행하지 않고, 라우터가 `crawl_runs` 작업만 생성한다.
 """
 
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -15,9 +16,27 @@ from ktc.core.config import get_settings
 from ktc.core.database import init_db
 
 
+def _warn_on_risky_auth_config() -> None:
+    """위험한 인증 구성을 기동 시 경고한다(차단하지는 않는다)."""
+    settings = get_settings()
+    logger = logging.getLogger("ktc.security")
+    if settings.api_trusted_client_bypass_active:
+        logger.warning(
+            "API_TRUSTED_CLIENT_CIDRS 키 없는 우회가 활성화되었다. client IP는 "
+            "FORWARDED_ALLOW_IPS=*에서 X-Forwarded-For로 위조될 수 있으니, "
+            "FORWARDED_ALLOW_IPS를 실제 프록시 IP로 고정했는지 반드시 확인하라."
+        )
+    if settings.auth_required and not settings.KTC_ADMIN_PROXY_SECRET.strip():
+        logger.warning(
+            "auth_required 환경이지만 KTC_ADMIN_PROXY_SECRET이 비어 있어 관리자 API가 "
+            "모두 403으로 차단된다(fail-closed). 관리자 기능을 쓰려면 비밀을 설정하라."
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """애플리케이션 lifespan: 시작 시 DB 테이블을 초기화한다."""
+    """애플리케이션 lifespan: 인증 구성 경고 후 DB를 준비한다."""
+    _warn_on_risky_auth_config()
     await init_db()
     yield
 
