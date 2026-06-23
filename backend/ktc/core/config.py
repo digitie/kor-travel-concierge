@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     )
     KTC_ADMIN_USERNAME: str = "admin"
+    # 로그인/로그아웃 감사 로그(login_events) 보존 행 수 상한. 미인증 경로(로그아웃·오설정
+    # 로그인)도 감사 행을 남길 수 있어 무한 적재를 막는다. 초과분은 오래된 것부터 정리,
+    # <=0이면 비활성.
+    LOGIN_AUDIT_MAX_ROWS: int = 5000
 
     # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
     DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge"
@@ -278,11 +282,15 @@ class Settings(BaseSettings):
 
     @property
     def cors_allow_origins(self) -> list[str]:
-        """쉼표 구분 CORS origin 목록."""
+        """쉼표 구분 CORS origin 목록.
+
+        `allow_credentials=True`(main.py)와 와일드카드 `*`는 함께 쓸 수 없으므로,
+        실수로 섞여 들어온 `*` 항목은 제거한다(자격증명 포함 CORS는 정확한 Origin 매칭).
+        """
         origins = [
             origin.strip()
             for origin in self.CORS_ALLOW_ORIGINS.split(",")
-            if origin.strip()
+            if origin.strip() and origin.strip() != "*"
         ]
         if self.NEXT_PUBLIC_API_BASE_URL.startswith("http"):
             origins.append(self.NEXT_PUBLIC_API_BASE_URL.rstrip("/"))

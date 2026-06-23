@@ -61,10 +61,11 @@ export async function verifyAdminLogin(
   if (!passwordHash || !sessionSecretIsStrong(sessionSecret)) {
     return "misconfigured";
   }
-  if (input.username.trim() !== expectedUsername) {
-    return "invalid";
-  }
-  return (await verifyPassword(input.password, passwordHash)) ? "ok" : "invalid";
+  // 사용자명이 불일치하더라도 PBKDF2 검증을 항상 수행한다. 불일치 시 즉시 반환하면
+  // 응답 시간이 사용자명 일치 여부에 의존해 username 열거 타이밍 사이드채널이 된다.
+  const usernameOk = constantTimeEqual(input.username.trim(), expectedUsername);
+  const passwordOk = await verifyPassword(input.password, passwordHash);
+  return usernameOk && passwordOk ? "ok" : "invalid";
 }
 
 export async function hashAdminPasswordForEnv(

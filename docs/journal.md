@@ -4,7 +4,21 @@
 
 ---
 
-## 2026-06-24: T-117 — PR #124(T-116) 인증 기능 사후 보안 리뷰 + High/Medium 보강
+## 2026-06-24: T-118 — 형제 프로젝트 docker-manager PR #37/#38 보안 수정 concierge 이식
+
+`kor-travel-docker-manager`의 관리자 인증 사후 리뷰 fix-forward(PR #37/#38, 이미 머지)에서 concierge에도 해당하는 보안 수정을 이식했다.
+
+- **AUTH-5 (username 열거 타이밍)**: `verifyAdminLogin`이 사용자명 불일치 시 즉시 반환해 PBKDF2를 건너뛰던 것을, 항상 PBKDF2를 수행하고 사용자명도 상수시간 비교하도록 변경(응답시간이 사용자명 일치 여부에 의존하지 않게 함). #124 리뷰가 놓친 항목.
+- **AUTH-1 (감사 로그 무한 적재)**: `login_events`에 보존 상한 `LOGIN_AUDIT_MAX_ROWS`(기본 5000)를 추가하고 record 시 초과분(오래된 행)을 정리. 로그아웃·오설정 등 미인증 경로 감사로 인한 무제한 증식 방지.
+- **AUTH-4 (CORS)**: `cors_allow_origins`에서 stray `*`를 제거(`allow_credentials=True`와 일관).
+- **APIKEY 주석**: 고엔트로피 키에 대한 의도적 fast unsalted SHA-256 설명 추가.
+- **FE-5/FE-6**: 로그인 비밀번호 autofocus, 생성된 공개 키 "지우기" 컨트롤(화면 노출 단축).
+
+이미 적용/무관: deprecated `datetime.utcnow`(concierge는 `now(timezone.utc)` 사용), 캐시 TTL 파싱(pydantic int), 모달 a11y(shadcn Dialog), `key_hint` 폭(미관·마이그레이션 필요). **분리(후속)**: durable rate-limit(#38)은 concierge의 Next(TS) 로그인 경로에 백엔드 왕복+백엔드 테스트가 필요하고 단일 인스턴스 운영에선 인메모리로 충분; trusted-proxy-secret(#38)은 concierge admin이 이미 `KTC_ADMIN_PROXY_SECRET`을 요구하므로 대체로 커버됨.
+
+검증: frontend type-check/lint/build/vitest(10/10), backend compileall + `test_api_auth.py`에 감사 retention 테스트 추가(backend pytest는 WSL/CI). prod 배포 후 smoke 검증.
+
+## 2026-06-24: T-117 — PR #124(T-116) 인증 기능 사후 보안 리뷰 + High/Medium 보강 (prod 배포·검증 완료)
 
 PR #124(관리자 로그인·공개 API 키)는 이미 squash 머지(`3fa933c`)되어 운영 배포된 상태였다. 다중 에이전트 사후 보안 리뷰(원시 32→반박 검증 후 확정 26: High 1/Medium 5/Low 16/Nit 4)를 PR에 코멘트로 남기고, High·Medium을 코드로 보강했다.
 
