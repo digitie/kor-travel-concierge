@@ -202,9 +202,14 @@ async def append_status_log(
 
 
 async def mark_done(
-    session: AsyncSession, run_id: int, *, result: dict[str, Any] | None = None
+    session: AsyncSession,
+    run_id: int,
+    *,
+    result: dict[str, Any] | None = None,
+    final_message: str = "작업을 완료했습니다.",
+    final_level: str = "success",
 ) -> None:
-    """작업을 완료 처리한다."""
+    """작업을 완료 처리한다(보류 등 비-성공 종료는 final_message/level로 명시)."""
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return
@@ -212,7 +217,7 @@ async def mark_done(
     run.progress = 1.0
     run.finished_at = utcnow()
     run.result_json = json.dumps(result, ensure_ascii=False) if result else None
-    _append_log_to_run(run, "작업을 완료했습니다.", progress=1.0, level="success")
+    _append_log_to_run(run, final_message, progress=1.0, level=final_level)
     await session.commit()
 
 

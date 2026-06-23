@@ -50,8 +50,8 @@ function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
     name: hit.name,
     description: null,
     gemini_enriched_description: null,
-    latitude: hit.latitude,
-    longitude: hit.longitude,
+    latitude: hit.latitude ?? 0,
+    longitude: hit.longitude ?? 0,
     category: hit.category,
     official_address: hit.road_address ?? hit.address,
     road_address: hit.road_address,
@@ -206,7 +206,9 @@ export default function ReviewPage() {
       ...(result?.google ?? []),
       ...(result?.kakao ?? []),
       ...(result?.naver ?? []),
-    ].map((h, i) => hitPlace(h, i + 1));
+    ]
+      .filter((h) => h.latitude != null && h.longitude != null)
+      .map((h, i) => hitPlace(h, i + 1));
     const lat = Number(form.latitude);
     const lng = Number(form.longitude);
     if (Number.isFinite(lat) && Number.isFinite(lng) && form.latitude) {
@@ -647,29 +649,35 @@ function ProviderSection({
           {loading ? "검색 중…" : "결과 없음"}
         </p>
       ) : (
-        hits.map((hit, index) => (
-          <button
-            key={`${label}-${index}`}
-            type="button"
-            onClick={() => onSelect(hit)}
-            className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted"
-          >
-            <span className="flex items-center justify-between gap-2">
-              <span className="truncate font-medium">{hit.name}</span>
-              {hit.category ? (
-                <span className="shrink-0 text-muted-foreground">
-                  {hit.category}
-                </span>
-              ) : null}
-            </span>
-            <span className="truncate text-muted-foreground">
-              {hit.road_address ?? hit.address ?? "-"}
-            </span>
-            <span className="text-muted-foreground">
-              {hit.latitude.toFixed(5)}, {hit.longitude.toFixed(5)}
-            </span>
-          </button>
-        ))
+        hits.map((hit, index) => {
+          const hasCoords = hit.latitude != null && hit.longitude != null;
+          return (
+            <button
+              key={`${label}-${index}`}
+              type="button"
+              disabled={!hasCoords}
+              onClick={() => onSelect(hit)}
+              className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium">{hit.name}</span>
+                {hit.category ? (
+                  <span className="shrink-0 text-muted-foreground">
+                    {hit.category}
+                  </span>
+                ) : null}
+              </span>
+              <span className="truncate text-muted-foreground">
+                {hit.road_address ?? hit.address ?? "-"}
+              </span>
+              <span className="text-muted-foreground">
+                {hasCoords
+                  ? `${hit.latitude!.toFixed(5)}, ${hit.longitude!.toFixed(5)}`
+                  : "좌표 없음(선택 불가)"}
+              </span>
+            </button>
+          );
+        })
       )}
     </div>
   );

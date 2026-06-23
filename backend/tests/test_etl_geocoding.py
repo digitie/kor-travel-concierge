@@ -244,6 +244,17 @@ def test_evaluate_single_matched():
     assert d.candidate is cand
 
 
+def test_evaluate_single_unrefined_vworld_goes_to_review():
+    # VWorld가 정제 주소 없이 질의를 임의 좌표에 snap한 단일 결과(refined=False, 우버/GS25
+    # 같은 비-POI)는 자동 확정하지 않고 검수 큐로 보낸다.
+    cand = GeocodeCandidate(
+        latitude=37.478, longitude=127.486, source="vworld", refined=False
+    )
+    d = evaluate_geocode([cand])
+    assert d.status == "needs_review"
+    assert d.reason == "vworld_unrefined_single"
+
+
 def test_evaluate_ambiguous_needs_review():
     kakao = [
         GeocodeCandidate(latitude=35.10, longitude=129.10),

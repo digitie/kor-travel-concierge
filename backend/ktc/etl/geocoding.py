@@ -39,6 +39,9 @@ class GeocodeCandidate:
     official_address: str | None = None
     category: str | None = None
     source: str = "kakao"
+    # VWorld get_coord가 실제 정제 주소(refined.text)를 반환했는지 여부. False면 질의를
+    # 임의 좌표에 snap하고 입력을 echo만 한 것 → 자동 확정 금지(검수 큐로).
+    refined: bool = True
 
 
 @dataclass
@@ -321,7 +324,8 @@ def _candidate_from_vworld_get_coord(
     if not isinstance(point, dict) or "x" not in point or "y" not in point:
         return None
     lng, lat = normalize_to_wgs84(float(point["x"]), float(point["y"]))
-    text = _vworld_result_text(result) or original_address
+    refined_text = _vworld_result_text(result)
+    text = refined_text or original_address
     return GeocodeCandidate(
         latitude=lat,
         longitude=lng,
@@ -329,6 +333,7 @@ def _candidate_from_vworld_get_coord(
         road_address=text if addr_type == "road" else None,
         official_address=text if addr_type == "parcel" else None,
         source="vworld",
+        refined=bool(refined_text),
     )
 
 
@@ -386,7 +391,14 @@ def evaluate_geocode(
         return GeocodeDecision("needs_review", None, 0.0, "no_result", 0, evidence)
 
     if count == 1:
-        return GeocodeDecision("matched", primary[0], 1.0, "single_result", 1, evidence)
+        only = primary[0]
+        # VWorld가 정제 주소 없이 질의를 임의 좌표에 snap한 단일 결과(우버/GS25/대한민국
+        # 같은 비-POI 또는 매칭 실패)는 자동 확정하지 않고 검수 큐로 보낸다.
+        if not getattr(only, "refined", True):
+            return GeocodeDecision(
+                "needs_review", only, 0.3, "vworld_unrefined_single", 1, evidence
+            )
+        return GeocodeDecision("matched", only, 1.0, "single_result", 1, evidence)
 
     # 후보 과다: 보조 공급자 최상위와 좌표가 근접하면 확정, 아니면 검수 대기
     top = primary[0]

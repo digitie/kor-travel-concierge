@@ -508,8 +508,9 @@ export type PlaceSearchHit = {
   name: string;
   address: string | null;
   road_address: string | null;
-  latitude: number;
-  longitude: number;
+  // 일부 provider 결과는 좌표가 없을 수 있다(역/주차장/플랫폼명 등) → null 허용.
+  latitude: number | null;
+  longitude: number | null;
   category: string | null;
 };
 
