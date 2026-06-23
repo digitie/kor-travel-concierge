@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-23: T-113 — "대구 맛집" 라이브 e2e 전수 점검 후 데이터 품질·검수·파이프라인 버그 일괄 수정
+
+다영역 병렬 감사(파이프라인/검수/결과/지오코딩 + 적대 재검증)로 14건 확인, 그중 고영향 7건 수정:
+- **#1 timestamp 컬럼 미적용 migration**: dev/prod DB의 `extracted_place_candidates`/`video_place_mappings` `timestamp_start/end`가 `varchar(16)`로 남아(20260620_0007 미적용) 16자 초과 timestamp가 `StringDataRightTruncationError`+세션 롤백 캐스케이드. → 양 DB `ALTER ... TYPE varchar(64)`.
+- **#2 지오코딩 echo 자동확정**(쓰레기 POI 1차 원인): VWorld get_coord가 정제 주소 없이 질의를 임의 좌표에 snap하고 입력을 echo만 한 단일 결과를 `evaluate_geocode`가 confidence 1.0으로 자동 확정. → `GeocodeCandidate.refined` 플래그, count==1+`refined=False`면 `needs_review`(우버/GS25/대한민국 비-POI 자동확정 차단) + 회귀 테스트.
+- **#4 비-POI 추출**: `batch_poi` 시스템 프롬프트에 브랜드·체인·앱·국가 단독·일반명사 제외 지시 추가.
+- **#6 검수 페이지 크래시**: 좌표 없는 provider 결과에서 `hit.latitude.toFixed` null 크래시 → `PlaceSearchHit` 좌표 `number|null`, 없으면 "좌표 없음(선택 불가)"+비활성, `mapPlaces`/`hitPlace` null 필터.
+- **#8 보류 은폐**: quota_deferred poi_batch가 "완료"로 마감 → `mark_done` final_message/level + 워커가 보류 시 "일일 쿼터로 POI 추출을 보류했습니다(추후 재처리)"+warning.
+- **#10 검수 큐 100건 캡**: 144 중 100만 노출+배지 오류 → `/destinations/unmatched` limit(기본 500, ≤2000)+서비스 기본 500.
+- **#11 후보 삭제 차단**: `feature_exports` FK가 미확정 후보 삭제까지 막음 → 삭제 전 해당 후보 export ledger 정리, 확정 장소 연결만 409.
+
+검증: backend 282 pytest+compileall, frontend tsc/lint/build, dev 라이브 점검. dev/prod 배포.
+
+**남은 항목**: #5 키워드 harvest 400 쿼터 낭비, #7 좌표 dedup+match_existing UI, #9 discovered 백로그 자동 재처리, #12 export None 방어(LOW), #14 category 정규화(LOW). **운영 블로커**: Gemini 키 gemini-2.5-flash 쿼터 소진(429) → 쿼터 전까지 신규 POI 미생성(코드 정상).
+
 ## 2026-06-23: T-112 완료 — poi_batch "알 수 없는 asset_type" 실패 수정 + 작업 로그·오류 상세 다이얼로그(복사)
 
 사용자 보고: "대구 맛집" 검색 중 "작업이 실패했습니다: 알 수 없는 asset_type:.,". 로그가 잘리고 실패.

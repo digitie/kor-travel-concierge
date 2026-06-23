@@ -15,7 +15,7 @@ from typing import Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -917,10 +917,13 @@ async def export_destinations(
 
 @router.get("/destinations/unmatched")
 async def list_unmatched_candidates(
+    limit: int = 500,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     """매칭 실패(`needs_review`) 후보 검수 큐."""
-    candidates = await place_service.list_unmatched_candidates(session)
+    candidates = await place_service.list_unmatched_candidates(
+        session, limit=max(1, min(limit, 2000))
+    )
     return [_candidate_payload(candidate) for candidate in candidates]
 
 
@@ -1147,6 +1150,12 @@ async def delete_candidate(
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="candidate not found")
+    # export ledger row(feature_exports)는 검수 거부와 무관하지만 FK로 삭제를 막는다.
+    # 후보 삭제 시 먼저 정리해, 진짜 삭제 거부 사유(확정 장소 연결=video_place_mappings)만
+    # 409로 남긴다. (미확정 needs_review 후보가 영구 삭제되지 못하던 문제 해소.)
+    await session.execute(
+        sa_delete(FeatureExport).where(FeatureExport.candidate_id == candidate_id)
+    )
     await session.delete(candidate)
     try:
         await session.flush()

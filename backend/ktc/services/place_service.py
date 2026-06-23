@@ -613,7 +613,7 @@ async def delete_place(
 
 
 async def list_unmatched_candidates(
-    session: AsyncSession, *, limit: int = 100
+    session: AsyncSession, *, limit: int = 500
 ) -> list[ExtractedPlaceCandidate]:
     """`needs_review` 상태의 매칭 실패 후보를 조회한다."""
     stmt = (

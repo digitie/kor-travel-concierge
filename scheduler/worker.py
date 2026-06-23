@@ -589,10 +589,20 @@ async def _run_handler_with_session(
         if fresh_run is None:
             raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
         result = await handler(session, fresh_run)
-        await crawl_run_service.append_status_log(
-            session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
-        )
-        await crawl_run_service.mark_done(session, run.id, result=result)
+        # 쿼터 보류 등 비-성공 종료는 "완료"로 덮어쓰지 않고 경고로 명시한다(사용자 오해 방지).
+        if isinstance(result, dict) and result.get("quota_deferred"):
+            await crawl_run_service.mark_done(
+                session,
+                run.id,
+                result=result,
+                final_message="일일 쿼터로 POI 추출을 보류했습니다(추후 재처리).",
+                final_level="warning",
+            )
+        else:
+            await crawl_run_service.append_status_log(
+                session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
+            )
+            await crawl_run_service.mark_done(session, run.id, result=result)
 
 
 async def _heartbeat_and_cancel_watch(
