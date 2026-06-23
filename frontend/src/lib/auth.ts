@@ -188,20 +188,25 @@ export function requestHasSameOrigin(request: RequestLike): boolean {
 export function checkLoginRateLimit(
   request: RequestLike,
   nowMs = Date.now(),
+  identifier?: string,
 ): LoginRateLimitResult {
   const nowSeconds = Math.floor(nowMs / 1000);
   cleanupLoginFailures(nowSeconds);
-  const bucket = loginFailures.get(loginAttemptKey(request));
+  const bucket = loginFailures.get(loginAttemptKey(request, identifier));
   if (!bucket || bucket.resetAt <= nowSeconds || bucket.count < LOGIN_FAILURE_LIMIT) {
     return { allowed: true };
   }
   return { allowed: false, retryAfterSeconds: Math.max(bucket.resetAt - nowSeconds, 1) };
 }
 
-export function recordLoginFailure(request: RequestLike, nowMs = Date.now()): void {
+export function recordLoginFailure(
+  request: RequestLike,
+  nowMs = Date.now(),
+  identifier?: string,
+): void {
   const nowSeconds = Math.floor(nowMs / 1000);
   cleanupLoginFailures(nowSeconds);
-  const key = loginAttemptKey(request);
+  const key = loginAttemptKey(request, identifier);
   const current = loginFailures.get(key);
   if (!current || current.resetAt <= nowSeconds) {
     loginFailures.set(key, {
@@ -213,8 +218,8 @@ export function recordLoginFailure(request: RequestLike, nowMs = Date.now()): vo
   loginFailures.set(key, { ...current, count: current.count + 1 });
 }
 
-export function clearLoginFailures(request: RequestLike): void {
-  loginFailures.delete(loginAttemptKey(request));
+export function clearLoginFailures(request: RequestLike, identifier?: string): void {
+  loginFailures.delete(loginAttemptKey(request, identifier));
 }
 
 export function sanitizeLocalPath(raw: string | null | undefined, fallback = "/"): string {
@@ -468,8 +473,14 @@ function isHttpsRequest(request: RequestLike | null): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-function loginAttemptKey(request: RequestLike): string {
-  return (clientIpForSecurity(request) ?? "local").slice(0, 128);
+function loginAttemptKey(request: RequestLike, identifier?: string): string {
+  // 신뢰 가능한 client IP가 있으면 IP+계정으로 버킷을 나눠 정확한 per-client 제한을
+  // 적용한다. 신뢰 IP가 없으면(KTC_UI_TRUST_FORWARDED_IPS=off) IP가 'local'로 떨어지므로
+  // 모든 시도가 계정 단위로만 묶인다. 효과적인 per-client 제한을 위해서는 운영에서
+  // (리버스 프록시 IP 고정을 전제로) KTC_UI_TRUST_FORWARDED_IPS 활성화를 권장한다.
+  const ip = (clientIpForSecurity(request) ?? "local").slice(0, 128);
+  const who = (identifier ?? "").trim().toLowerCase().slice(0, 64);
+  return `${ip}|${who}`;
 }
 
 function cleanupLoginFailures(nowSeconds: number): void {

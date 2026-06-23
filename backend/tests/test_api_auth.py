@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
@@ -16,6 +17,14 @@ from ktc.services import public_api_key_service
 from main import app
 
 PROD_API_KEY = "secret-key-1"
+
+
+@pytest.fixture(autouse=True)
+def _clear_public_api_key_cache():
+    """프로세스 전역 공개 키 캐시가 테스트 간 오염되지 않도록 초기화한다."""
+    public_api_key_service.invalidate_public_api_key_cache()
+    yield
+    public_api_key_service.invalidate_public_api_key_cache()
 
 
 def _make_client(session_factory, settings: Settings) -> AsyncClient:
@@ -139,16 +148,88 @@ async def test_admin_proxy_rejects_missing_or_wrong_secret(session_factory):
     app.dependency_overrides.clear()
 
 
-async def test_trusted_client_cidr_bypasses_key(session_factory):
+async def test_trusted_client_cidr_bypasses_key_when_enabled(session_factory):
+    """키 없는 CIDR 우회는 명시 활성화 시에만 동작한다."""
     settings = Settings(
         APP_ENV="production",
         API_AUTH_ENABLED=True,
         API_KEYS="",
         API_TRUSTED_CLIENT_CIDRS="127.0.0.0/8",
+        API_TRUSTED_CLIENT_BYPASS_ENABLED=True,
     )
     async with _make_client(session_factory, settings) as ac:
         resp = await ac.get("/api/v1/runs")
         assert resp.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_trusted_client_cidr_ignored_without_enable_flag(session_factory):
+    """활성 플래그 없이 CIDR만 설정하면 우회되지 않는다(스푸핑 위험 차단)."""
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        API_TRUSTED_CLIENT_CIDRS="127.0.0.0/8",
+        # API_TRUSTED_CLIENT_BYPASS_ENABLED 기본 False
+    )
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get("/api/v1/runs")
+        assert resp.status_code == 401
+    app.dependency_overrides.clear()
+
+
+async def test_revoked_public_api_key_rejected(session_factory):
+    """폐기된 공개 API 키는 더 이상 통과하지 못한다."""
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        PUBLIC_API_KEY_CACHE_TTL_SECONDS=0,
+    )
+    async with session_factory() as session:
+        api_key, item = await public_api_key_service.create_key(
+            session, label="폐기 대상", created_by="test"
+        )
+    async with _make_client(session_factory, settings) as ac:
+        ok = await ac.get(f"/api/v1/runs?key={api_key}")
+        assert ok.status_code == 200
+        async with session_factory() as session:
+            await public_api_key_service.revoke_key(
+                session, item.id, revoked_by="test"
+            )
+        revoked = await ac.get(f"/api/v1/runs?key={api_key}")
+        assert revoked.status_code == 401
+    app.dependency_overrides.clear()
+
+
+async def test_deny_all_when_auth_required_but_no_keys(session_factory):
+    """인증이 필요한데 정적/공개 키가 모두 없으면 전부 거부한다."""
+    settings = Settings(APP_ENV="production", API_AUTH_ENABLED=True, API_KEYS="")
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get("/api/v1/runs")
+        assert resp.status_code == 401
+    app.dependency_overrides.clear()
+
+
+async def test_admin_proxy_rejected_outside_trusted_cidr(session_factory):
+    """올바른 secret이어도 peer가 신뢰 CIDR 밖이면 관리자 API는 403."""
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        KTC_ADMIN_PROXY_SECRET="proxy-secret-with-enough-length",
+        # 127.0.0.1(테스트 peer)을 포함하지 않는 CIDR로 좁힌다.
+        KTC_ADMIN_TRUSTED_PROXY_CIDRS="10.123.0.0/24",
+    )
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get(
+            "/api/v1/admin/login-events",
+            headers={
+                "X-KTC-Actor": "admin",
+                "X-KTC-Admin-Proxy-Secret": "proxy-secret-with-enough-length",
+            },
+        )
+        assert resp.status_code == 403
     app.dependency_overrides.clear()
 
 
