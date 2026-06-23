@@ -2,10 +2,14 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2Icon, SettingsIcon } from "lucide-react";
+import { KeyRoundIcon, Loader2Icon, SettingsIcon } from "lucide-react";
 
 import {
+  createPublicApiKey,
   getRuntimeSettings,
+  listLoginEvents,
+  listPublicApiKeys,
+  revokePublicApiKey,
   updateRuntimeSettings,
   type ApiKeyName,
   type RuntimeSettingsUpdate,
@@ -42,6 +46,7 @@ const API_KEY_LABELS: { name: ApiKeyName; label: string }[] = [
   { name: "naver_search_client_id", label: "Naver 검색 Client ID" },
   { name: "naver_search_client_secret", label: "Naver 검색 Client Secret" },
   { name: "vworld_service_key", label: "VWorld 서비스 키" },
+  { name: "kor_travel_geo_v2_api_key", label: "kor travel geo v2 API" },
 ];
 
 export function SettingsDialog() {
@@ -52,12 +57,24 @@ export function SettingsDialog() {
     queryFn: getRuntimeSettings,
     enabled: open,
   });
+  const publicKeysQuery = useQuery({
+    queryKey: ["public-api-keys"],
+    queryFn: listPublicApiKeys,
+    enabled: open,
+  });
+  const loginEventsQuery = useQuery({
+    queryKey: ["login-events"],
+    queryFn: listLoginEvents,
+    enabled: open,
+  });
   const settings = settingsQuery.data;
 
   // 가져온 설정 위에 사용자 편집만 덮어쓰는 파생 상태(effect 없이).
   const [engineEdit, setEngineEdit] = useState<string | null>(null);
   const [prepromptEdit, setPrepromptEdit] = useState<string | null>(null);
   const [keyEdits, setKeyEdits] = useState<Record<string, string>>({});
+  const [publicKeyLabel, setPublicKeyLabel] = useState("");
+  const [createdPublicKey, setCreatedPublicKey] = useState<string | null>(null);
   const engine = engineEdit ?? settings?.gemini_engine_version ?? "";
   const preprompt = prepromptEdit ?? settings?.ai_preprompt ?? "";
 
@@ -65,6 +82,8 @@ export function SettingsDialog() {
     setEngineEdit(null);
     setPrepromptEdit(null);
     setKeyEdits({});
+    setPublicKeyLabel("");
+    setCreatedPublicKey(null);
   }
 
   const mutation = useMutation({
@@ -83,6 +102,20 @@ export function SettingsDialog() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runtime-settings"] });
       resetEdits();
+    },
+  });
+  const createKeyMutation = useMutation({
+    mutationFn: () => createPublicApiKey(publicKeyLabel),
+    onSuccess: (result) => {
+      setCreatedPublicKey(result.key);
+      setPublicKeyLabel("");
+      queryClient.invalidateQueries({ queryKey: ["public-api-keys"] });
+    },
+  });
+  const revokeKeyMutation = useMutation({
+    mutationFn: (id: number) => revokePublicApiKey(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["public-api-keys"] });
     },
   });
 
@@ -104,7 +137,7 @@ export function SettingsDialog() {
           </Button>
         }
       />
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>설정</DialogTitle>
           <DialogDescription>
@@ -180,6 +213,118 @@ export function SettingsDialog() {
                   </Field>
                 );
               })}
+            </div>
+
+            <div className="flex flex-col gap-3 border-t pt-4">
+              <div className="flex flex-col gap-0.5">
+                <p className="text-sm font-medium">외부 공개 API 키</p>
+                <p className="text-xs text-muted-foreground">
+                  VWorld와 같은 `key` 파라미터 형태로 사용합니다. 원문 키는 생성 직후에만 표시됩니다.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  aria-label="공개 API 키 라벨"
+                  placeholder="라벨"
+                  value={publicKeyLabel}
+                  onChange={(event) => setPublicKeyLabel(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => createKeyMutation.mutate()}
+                  disabled={createKeyMutation.isPending}
+                >
+                  {createKeyMutation.isPending ? (
+                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <KeyRoundIcon data-icon="inline-start" />
+                  )}
+                  생성
+                </Button>
+              </div>
+              {createdPublicKey ? (
+                <Input
+                  readOnly
+                  aria-label="생성된 공개 API 키"
+                  value={createdPublicKey}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              ) : null}
+              <div className="max-h-40 overflow-y-auto rounded-lg border">
+                {(publicKeysQuery.data ?? []).length > 0 ? (
+                  (publicKeysQuery.data ?? []).map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-2 border-b px-3 py-2 last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                          {item.label || "무제"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          끝자리 {item.key_hint} · {item.state === "active" ? "활성" : "폐기"}
+                        </p>
+                      </div>
+                      {item.state === "active" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => revokeKeyMutation.mutate(item.id)}
+                          disabled={revokeKeyMutation.isPending}
+                        >
+                          폐기
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))
+                ) : (
+                  <p className="px-3 py-2 text-sm text-muted-foreground">
+                    생성된 공개 API 키가 없습니다.
+                  </p>
+                )}
+              </div>
+              {createKeyMutation.error || revokeKeyMutation.error ? (
+                <p className="text-xs text-destructive">
+                  {(createKeyMutation.error ?? revokeKeyMutation.error)?.message}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-col gap-3 border-t pt-4">
+              <p className="text-sm font-medium">로그인 기록</p>
+              <div className="max-h-44 overflow-y-auto rounded-lg border">
+                {(loginEventsQuery.data ?? []).length > 0 ? (
+                  (loginEventsQuery.data ?? []).map((event) => (
+                    <div key={event.id} className="border-b px-3 py-2 last:border-b-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">
+                          {event.event_type === "logout" ? "로그아웃" : "로그인"}
+                        </span>
+                        <Badge
+                          variant={
+                            event.outcome === "succeeded" ? "secondary" : "outline"
+                          }
+                        >
+                          {event.outcome}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {new Date(event.created_at).toLocaleString()} ·{" "}
+                        {event.attempted_username || "-"} · {event.reason || "-"}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {event.client_ip || "unknown ip"}
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="px-3 py-2 text-sm text-muted-foreground">
+                    저장된 로그인 기록이 없습니다.
+                  </p>
+                )}
+              </div>
             </div>
 
             {mutation.error ? (

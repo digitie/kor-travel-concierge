@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
-from ktc.core.security import require_api_key
+from ktc.core.security import require_admin_proxy, require_api_key
 from ktc.etl import place_search, source_resolve
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
@@ -44,8 +44,10 @@ from ktc.services import (
     audit_service,
     crawl_run_service,
     feature_export_service,
+    login_event_service,
     place_export_service,
     place_service,
+    public_api_key_service,
     settings_service,
     source_scan_service,
 )
@@ -153,6 +155,50 @@ class DeepResearchRequest(BaseModel):
 
     prompt: str | None = None
     max_sources: int = Field(default=8, ge=1, le=20)
+
+
+class AuthEventRequest(BaseModel):
+    """Next 로그인/로그아웃 라우트가 기록하는 인증 이벤트."""
+
+    event_type: Literal["login", "logout"]
+    outcome: Literal["succeeded", "failed", "denied"]
+    attempted_username: str | None = Field(default=None, max_length=64)
+    reason: str | None = Field(default=None, max_length=64)
+    client_ip: str | None = Field(default=None, max_length=128)
+    user_agent: str | None = None
+    next_path: str | None = Field(default=None, max_length=1024)
+
+
+class LoginEventSummary(BaseModel):
+    id: int
+    event_type: str
+    outcome: str
+    attempted_username: str | None
+    reason: str | None
+    client_ip: str | None
+    user_agent: str | None
+    next_path: str | None
+    created_at: datetime
+
+
+class PublicApiKeySummary(BaseModel):
+    id: int
+    label: str | None
+    key_hint: str
+    state: str
+    created_at: datetime
+    created_by: str | None
+    revoked_at: datetime | None
+    revoked_by: str | None
+
+
+class PublicApiKeyCreateRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+
+
+class PublicApiKeyCreateResponse(BaseModel):
+    key: str
+    item: PublicApiKeySummary
 
 
 # --- 수집 작업 (crawl_runs) ---
@@ -1560,6 +1606,96 @@ async def features_changes(
     }
 
 
+# --- 관리자 인증/공개 API 키 ---
+
+
+@router.post("/admin/auth-events", response_model=LoginEventSummary)
+async def record_auth_event(
+    payload: AuthEventRequest,
+    request: Request,
+    _actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> LoginEventSummary:
+    """Next 로그인/로그아웃 라우트가 인증 이벤트를 DB에 남긴다."""
+    event = await login_event_service.record(
+        session,
+        event_type=payload.event_type,
+        outcome=payload.outcome,
+        attempted_username=payload.attempted_username,
+        reason=payload.reason,
+        client_ip=payload.client_ip or (request.client.host if request.client else None),
+        user_agent=payload.user_agent,
+        next_path=payload.next_path,
+    )
+    return _login_event_payload(event)
+
+
+@router.get("/admin/login-events", response_model=list[LoginEventSummary])
+async def list_login_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    _actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> list[LoginEventSummary]:
+    events = await login_event_service.list_recent(session, limit=limit)
+    return [_login_event_payload(event) for event in events]
+
+
+@router.get("/admin/public-api-keys", response_model=list[PublicApiKeySummary])
+async def list_public_api_keys(
+    limit: int = Query(default=100, ge=1, le=500),
+    _actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> list[PublicApiKeySummary]:
+    keys = await public_api_key_service.list_keys(session, limit=limit)
+    return [_public_api_key_payload(item) for item in keys]
+
+
+@router.post("/admin/public-api-keys", response_model=PublicApiKeyCreateResponse)
+async def create_public_api_key(
+    payload: PublicApiKeyCreateRequest,
+    actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> PublicApiKeyCreateResponse:
+    api_key, item = await public_api_key_service.create_key(
+        session,
+        label=payload.label,
+        created_by=actor,
+    )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="public_api_key.create",
+        target_type="public_api_key",
+        target_id=str(item.id),
+        payload={"label": item.label, "key_hint": item.key_hint},
+    )
+    return PublicApiKeyCreateResponse(key=api_key, item=_public_api_key_payload(item))
+
+
+@router.delete("/admin/public-api-keys/{key_id}", response_model=PublicApiKeySummary)
+async def revoke_public_api_key(
+    key_id: int,
+    actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> PublicApiKeySummary:
+    item = await public_api_key_service.revoke_key(
+        session,
+        key_id,
+        revoked_by=actor,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="active public API key not found")
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="public_api_key.revoke",
+        target_type="public_api_key",
+        target_id=str(item.id),
+        payload={"key_hint": item.key_hint},
+    )
+    return _public_api_key_payload(item)
+
+
 # --- 설정 ---
 
 
@@ -1598,6 +1734,33 @@ async def update_settings_endpoint(
         payload=audit_payload,
     )
     return {"status": "updated", "settings": await settings_service.get_all(session)}
+
+
+def _login_event_payload(event) -> LoginEventSummary:
+    return LoginEventSummary(
+        id=event.id,
+        event_type=event.event_type,
+        outcome=event.outcome,
+        attempted_username=event.attempted_username,
+        reason=event.reason,
+        client_ip=event.client_ip,
+        user_agent=event.user_agent,
+        next_path=event.next_path,
+        created_at=event.created_at,
+    )
+
+
+def _public_api_key_payload(item) -> PublicApiKeySummary:
+    return PublicApiKeySummary(
+        id=item.id,
+        label=item.label,
+        key_hint=item.key_hint,
+        state=item.state,
+        created_at=item.created_at,
+        created_by=item.created_by,
+        revoked_at=item.revoked_at,
+        revoked_by=item.revoked_by,
+    )
 
 
 def _place_payload(place) -> dict[str, Any]:

@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-23: T-116 완료 — 관리자 로그인·공개 API 키 관리와 PR #399 후속 리뷰 반영
+
+사용자 요청: `kor-travel-geo` PR #399의 로그인/API 키 UX를 참고해 concierge에도 관리자 로그인, 보안 세션, 로그인 감사 로그, Web UI 기반 공개 API 키 생성·저장·검증, 관리자 API BFF 제한, `kor travel geo v2` 키 설정을 추가.
+
+- **관리자 로그인**: `/login` 화면 + `/api/auth/login|logout`. 단일 계정 기본 아이디는 `admin`, 초기 비밀번호는 PBKDF2-SHA256 해시(`KTC_ADMIN_PASSWORD_HASH`)로 gitignore된 `.env`에만 저장. 세션은 httpOnly `SameSite=Strict` HMAC 쿠키, 8시간 TTL, user-agent fingerprint, 서버측 폐기 Map, Origin 검증, JSON-only 요청, 실패 rate-limit(5회/10분).
+- **로그인 감사**: `login_events` 테이블과 관리자 API(`POST /admin/auth-events`, `GET /admin/login-events`)를 추가. 로그인 시도·성공·실패·거부·로그아웃, 사용자명, 사유, user-agent, next path, 신뢰 가능한 경우 client_ip를 저장하고 설정 모달에서 조회.
+- **공개 API 키**: `public_api_keys` 테이블 + Alembic `20260623_0010`. UI에서 VWorld 호환 32자 영문/숫자 key를 랜덤 생성하고, 평문은 1회만 보여 주며 DB에는 SHA-256 hash와 끝 6자리 hint만 저장. 활성 hash는 `PUBLIC_API_KEY_CACHE_TTL_SECONDS` 동안 프로세스 메모리에 캐시하고 생성·폐기 시 즉시 무효화. 외부 API는 `X-API-Key` 또는 `?key=`를 검증하고, 명시 CIDR(`API_TRUSTED_CLIENT_CIDRS`)은 key 검증을 생략할 수 있음.
+- **관리자 API 제한**: Next BFF가 유효 세션을 확인한 뒤 `X-KTC-Actor`와 서버 전용 `KTC_ADMIN_PROXY_SECRET`을 백엔드에 주입한다. 백엔드는 trusted proxy peer CIDR과 shared secret을 모두 만족한 요청만 `/api/v1/admin/*`에 허용한다. 브라우저가 보낸 `x-api-key`/관리자 헤더는 BFF에서 전달하지 않는다.
+- **kor-travel-geo v2 키**: 설정 키 `kor_travel_geo_v2_api_key`와 env `KOR_TRAVEL_GEO_V2_API_KEY`를 추가. 값이 비어 있으면 코드에서 `VWORLD_SERVICE_KEY`와 동일하게 사용하고, 현재 `.env`에도 같은 값으로 맞춤.
+- **PR #399 후속 리뷰 반영**: 최신 코멘트(2026-06-23 23:22 KST) 기준으로 검증되지 않은 `X-Forwarded-For`는 기본 미신뢰(`KTC_UI_TRUST_FORWARDED_IPS=false`), admin proxy secret 403/403/200 테스트 추가, 프런트 API 401 시 `/login?next=...` 리다이렉트, 로그인 오류 `role=alert`/`aria-live`/`aria-describedby`/`aria-invalid` 적용.
+
+검증: backend compileall, backend auth/settings pytest(테스트 DB 미설정 항목 skip), frontend type-check/lint/build. 운영 호스트에 rsync 배포 후 docker-manager prod override에 UI env_file을 보강하고 API/MCP/scheduler/UI를 재빌드·재시작했다. 운영 smoke: API health 200, 무키 공개 API 401, admin API 무proxy 403, 로그인 페이지 200, 루트 로그인 redirect 307, 틀린 로그인 401. Windows Playwright E2E는 로그인 흐름을 포함하도록 하니스를 보강해 4/4 통과.
+
 ## 2026-06-23: T-115 — 은퇴된 Gemini 1.5 옵션 제거 + AI 엔진 DeepSeek v4-pro 전환
 
 라이브 테스트 중 발견: `gemini-1.5-flash`/`gemini-1.5-pro`는 Google이 API에서 은퇴시켜 **404**(model not found)를 반환한다(`gemini-2.5-flash`는 키 쿼터 429). 사용자가 드롭다운에서 선택하면 작업이 실패하므로 `config.GEMINI_ENGINE_OPTIONS`에서 두 모델을 제거(남은 Gemini: 2.5-flash·2.0-flash·flash-latest). 관련 테스트(`test_settings_and_audit`·`test_api`·`test_scheduler_worker`·e2e `ktc.spec.ts`)의 1.5 참조를 `gemini-2.0-flash`/`gemini-flash-latest`로 교체.

@@ -94,6 +94,18 @@ class Settings(BaseSettings):
     API_AUTH_ENABLED: bool = False
     # 허용 API 키 목록(쉼표 구분). 외부 노출 배포에서 반드시 설정한다.
     API_KEYS: str = ""
+    # Web UI에서 생성한 공개 API 키를 public request hot path에서 캐시하는 시간(초).
+    PUBLIC_API_KEY_CACHE_TTL_SECONDS: int = 60
+    # 신뢰 CIDR에서 들어온 외부 클라이언트는 공개 API key 검증을 생략할 수 있다.
+    # 기본은 비어 있어 명시 설정 없이는 우회하지 않는다.
+    API_TRUSTED_CLIENT_CIDRS: str = ""
+    # Next.js BFF가 관리자 요청임을 증명하는 서버 전용 shared secret.
+    KTC_ADMIN_PROXY_SECRET: str = ""
+    # 관리자 proxy로 신뢰할 수 있는 peer CIDR. Docker bridge와 localhost를 포함한다.
+    KTC_ADMIN_TRUSTED_PROXY_CIDRS: str = (
+        "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    )
+    KTC_ADMIN_USERNAME: str = "admin"
 
     # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
     DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge"
@@ -160,6 +172,8 @@ class Settings(BaseSettings):
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""
     VWORLD_SERVICE_KEY: str = ""
+    # kor-travel-geo v2 연동 키. 별도 값이 없으면 현재 VWorld 서버 키와 동일하게 쓴다.
+    KOR_TRAVEL_GEO_V2_API_KEY: str = ""
     # 검수 페이지 멀티 provider 장소 검색용 (geocoding 키와 별개).
     GOOGLE_PLACES_API_KEY: str = ""
     NAVER_SEARCH_CLIENT_ID: str = ""
@@ -194,6 +208,29 @@ class Settings(BaseSettings):
     def api_keys(self) -> list[str]:
         """`API_KEYS`를 허용 키 목록으로 파싱한다."""
         return [key.strip() for key in self.API_KEYS.split(",") if key.strip()]
+
+    @property
+    def api_trusted_client_cidrs(self) -> list[str]:
+        """공개 API 키 검증을 우회할 신뢰 클라이언트 CIDR 목록."""
+        return [
+            cidr.strip()
+            for cidr in self.API_TRUSTED_CLIENT_CIDRS.split(",")
+            if cidr.strip()
+        ]
+
+    @property
+    def admin_trusted_proxy_cidrs(self) -> list[str]:
+        """관리자 proxy header를 신뢰할 peer CIDR 목록."""
+        return [
+            cidr.strip()
+            for cidr in self.KTC_ADMIN_TRUSTED_PROXY_CIDRS.split(",")
+            if cidr.strip()
+        ]
+
+    @property
+    def kor_travel_geo_v2_api_key(self) -> str:
+        """kor-travel-geo v2 키는 미설정 시 VWorld 서버 키로 폴백한다."""
+        return self.KOR_TRAVEL_GEO_V2_API_KEY or self.VWORLD_SERVICE_KEY
 
     @property
     def is_local_env(self) -> bool:

@@ -25,7 +25,9 @@ from ktc.models.feature_export import (
     feature_export_sequence,
 )
 from ktc.models.gemini_rate_state import GeminiRateState
+from ktc.models.login_event import LoginEvent
 from ktc.models.media_asset import AssetType, MediaAsset
+from ktc.models.public_api_key import PublicApiKey
 from ktc.models.search_keyword import SearchKeyword
 from ktc.models.source_target import SourceTarget, TargetType
 from ktc.models.system_setting import SystemSetting
@@ -53,6 +55,8 @@ __all__ = [
     "AuditLog",
     "SystemSetting",
     "GeminiRateState",
+    "LoginEvent",
+    "PublicApiKey",
     # 도메인/공간
     "SearchKeyword",
     "SourceTarget",

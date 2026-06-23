@@ -7,6 +7,8 @@ const backendURL = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:18080';
 const repoRoot = path.resolve(__dirname, '../..');
 const backendDir = path.join(repoRoot, 'backend');
 const seedScript = path.join(repoRoot, 'tests/scripts/seed_e2e.py');
+const e2eAdminUsername = process.env.KTC_E2E_ADMIN_USERNAME ?? 'admin';
+const e2eAdminPassword = process.env.KTC_E2E_ADMIN_PASSWORD ?? 'e2e-admin-password';
 
 test.describe('Kor Travel Concierge E2E 검증', () => {
   test.beforeEach(() => {
@@ -17,7 +19,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     const errors = collectConsoleErrors(page);
 
     await expectSeedReady(page);
-    await page.goto('/');
+    await loginAsAdmin(page, '/');
 
     await expect(page).toHaveTitle(/Kor Travel Concierge/);
     // 결과(/) = 확정 장소 목록 + 지도 + 간단 실행 큐 상태(상세는 /collect·/review로 분리, T-097+)
@@ -43,7 +45,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
   test('수집 화면에서 수집 시작 시 job_id·pending을 표시한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    await page.goto('/collect');
+    await loginAsAdmin(page, '/collect');
 
     await page.locator('#harvest-target').fill('제주 카페');
     await page.locator('#harvest-max-videos').fill('3');
@@ -71,7 +73,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     await expectSeedReady(page);
 
     // Part A: 결과 화면에서 장소 상세 모달을 열고 Deep Research(상세 모달로 이동, T-107)
-    await page.goto('/');
+    await loginAsAdmin(page, '/');
     await page.getByRole('button', { name: '월정리 해변 상세' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
@@ -120,7 +122,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
   test('설정 화면에서 AI 엔진을 저장한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
-    await page.goto('/settings');
+    await loginAsAdmin(page, '/settings');
 
     await expect(page.locator('#ai-engine-select')).toBeVisible();
     await page.locator('#ai-engine-select').click();
@@ -187,7 +189,18 @@ async function expectSeedReady(page: Page) {
     .toBe('1:1:1');
 }
 
+async function loginAsAdmin(page: Page, nextPath: string) {
+  await page.goto(`/login?next=${encodeURIComponent(nextPath)}`);
+  await page.locator('#login-username').fill(e2eAdminUsername);
+  await page.locator('#login-password').fill(e2eAdminPassword);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await page.waitForURL((url) => url.pathname === nextPath, { timeout: 10_000 });
+}
+
 function resolvePython() {
+  if (process.env.KTC_E2E_PYTHON) {
+    return process.env.KTC_E2E_PYTHON;
+  }
   const local = path.join(
     backendDir,
     '.venv',

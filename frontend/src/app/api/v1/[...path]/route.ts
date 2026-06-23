@@ -7,6 +7,8 @@
 // 인증 환경에서 정상 동작한다.
 import { type NextRequest } from "next/server";
 
+import { adminUsernameFromEnv, requestHasValidSession } from "@/lib/auth";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,7 @@ const BACKEND_ORIGIN = (process.env.BACKEND_ORIGIN ?? "http://localhost:12601").
 );
 // 서버 사이드 전용 인증 코드. 비어 있으면(로컬/E2E 무인증) 헤더를 붙이지 않는다.
 const BACKEND_API_KEY = process.env.BACKEND_API_KEY ?? "";
+const ADMIN_PROXY_SECRET = process.env.KTC_ADMIN_PROXY_SECRET?.trim() ?? "";
 
 // 프록시가 그대로 전달하면 안 되는 hop-by-hop / 자동 설정 헤더.
 const SKIP_HEADERS = new Set([
@@ -27,6 +30,9 @@ const SKIP_HEADERS = new Set([
   "keep-alive",
   "upgrade",
   "accept-encoding",
+  "x-api-key",
+  "x-ktc-actor",
+  "x-ktc-admin-proxy-secret",
 ]);
 
 async function proxy(request: NextRequest, path: string[]): Promise<Response> {
@@ -41,6 +47,10 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   });
   if (BACKEND_API_KEY) {
     headers.set("X-API-Key", BACKEND_API_KEY);
+  }
+  if (ADMIN_PROXY_SECRET && (await requestHasValidSession(request))) {
+    headers.set("X-KTC-Actor", adminUsernameFromEnv());
+    headers.set("X-KTC-Admin-Proxy-Secret", ADMIN_PROXY_SECRET);
   }
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";

@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   ClipboardCheckIcon,
   DownloadCloudIcon,
+  LogOutIcon,
   MapIcon,
 } from "lucide-react";
 
 import { OpsMetricsDialog } from "@/components/OpsMetricsDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
@@ -20,6 +23,14 @@ const LINKS = [
 
 export function AppNav() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    router.replace("/login");
+    router.refresh();
+  }
+
   return (
     <header className="flex flex-col gap-2 border-b bg-background px-4 py-2">
       <div className="flex items-center justify-between gap-3">
@@ -29,6 +40,10 @@ export function AppNav() {
         <div className="flex shrink-0 items-center gap-1.5">
           <OpsMetricsDialog />
           <SettingsDialog />
+          <Button type="button" variant="outline" size="sm" onClick={logout}>
+            <LogOutIcon data-icon="inline-start" />
+            로그아웃
+          </Button>
         </div>
       </div>
       <nav className="flex items-center gap-1 overflow-x-auto">

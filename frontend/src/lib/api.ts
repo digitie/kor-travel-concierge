@@ -194,6 +194,7 @@ export const API_KEY_NAMES = [
   "naver_search_client_secret",
   "kakao_rest_api_key",
   "vworld_service_key",
+  "kor_travel_geo_v2_api_key",
   "deepseek_api_key",
 ] as const;
 export type ApiKeyName = (typeof API_KEY_NAMES)[number];
@@ -210,6 +211,35 @@ export type RuntimeSettingsUpdate = {
   naver_search_client_secret?: string;
   kakao_rest_api_key?: string;
   vworld_service_key?: string;
+  kor_travel_geo_v2_api_key?: string;
+};
+
+export type PublicApiKeySummary = {
+  id: number;
+  label: string | null;
+  key_hint: string;
+  state: "active" | "revoked" | string;
+  created_at: string;
+  created_by: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+};
+
+export type PublicApiKeyCreateResponse = {
+  key: string;
+  item: PublicApiKeySummary;
+};
+
+export type LoginEventSummary = {
+  id: number;
+  event_type: "login" | "logout" | string;
+  outcome: "succeeded" | "failed" | "denied" | string;
+  attempted_username: string | null;
+  reason: string | null;
+  client_ip: string | null;
+  user_agent: string | null;
+  next_path: string | null;
+  created_at: string;
 };
 
 export type ResolveCandidateInput = {
@@ -255,6 +285,14 @@ async function requestJson<T>(
     headers: buildHeaders(init.headers),
   });
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      typeof window !== "undefined" &&
+      window.location.pathname !== "/login"
+    ) {
+      const next = `${window.location.pathname}${window.location.search}`;
+      window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+    }
     const body = await response.text();
     const message = body.length > 240 ? `${body.slice(0, 240)}...` : body;
     throw new Error(
@@ -382,6 +420,29 @@ export async function updateRuntimeSettings(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function listPublicApiKeys(): Promise<PublicApiKeySummary[]> {
+  return requestJson<PublicApiKeySummary[]>("/api/v1/admin/public-api-keys");
+}
+
+export async function createPublicApiKey(
+  label?: string,
+): Promise<PublicApiKeyCreateResponse> {
+  return requestJson<PublicApiKeyCreateResponse>("/api/v1/admin/public-api-keys", {
+    method: "POST",
+    body: JSON.stringify({ label: label?.trim() || null }),
+  });
+}
+
+export async function revokePublicApiKey(id: number): Promise<PublicApiKeySummary> {
+  return requestJson<PublicApiKeySummary>(`/api/v1/admin/public-api-keys/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listLoginEvents(): Promise<LoginEventSummary[]> {
+  return requestJson<LoginEventSummary[]>("/api/v1/admin/login-events?limit=20");
 }
 
 export async function resolveCandidate(
