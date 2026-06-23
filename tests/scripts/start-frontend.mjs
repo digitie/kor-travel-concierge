@@ -13,6 +13,10 @@ const normalizeNextEnvScript = path.join(
 );
 const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
+const e2eAdminUsername = process.env.KTC_E2E_ADMIN_USERNAME ?? "admin";
+const e2eAdminPasswordHash =
+  process.env.KTC_E2E_ADMIN_PASSWORD_HASH ??
+  "pbkdf2_sha256$310000$a29yLXRyYXZlbC1jb25jaWVyZ2UtZTJlLXNhbHQ$Y0tGbvmqUxgWO8uumrRi27UGDXF2tb0w7RHtilooFAg";
 const command = process.execPath;
 process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY = "";
 const args = [
@@ -48,6 +52,14 @@ const child = spawn(
       NEXT_PUBLIC_API_BASE_URL: "",
       // BFF Route Handler가 서버 사이드에서 E2E 백엔드로 프록시한다(APP_ENV=e2e 무인증).
       BACKEND_ORIGIN: `http://127.0.0.1:${backendPort}`,
+      KTC_ADMIN_USERNAME: e2eAdminUsername,
+      KTC_ADMIN_PASSWORD_HASH: e2eAdminPasswordHash,
+      KTC_UI_SESSION_SECRET:
+        process.env.KTC_E2E_UI_SESSION_SECRET ??
+        "kor-travel-concierge-e2e-session-secret-32-bytes",
+      KTC_ADMIN_PROXY_SECRET:
+        process.env.KTC_E2E_ADMIN_PROXY_SECRET ??
+        "kor-travel-concierge-e2e-admin-proxy-secret",
     },
     stdio: "inherit",
   },

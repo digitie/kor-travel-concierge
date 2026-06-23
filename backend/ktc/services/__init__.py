@@ -18,8 +18,10 @@ from ktc.services import (
     audit_service,
     crawl_run_service,
     feature_export_service,
+    login_event_service,
     place_export_service,
     place_service,
+    public_api_key_service,
     settings_service,
     source_scan_service,
 )
@@ -32,4 +34,6 @@ __all__ = [
     "place_export_service",
     "feature_export_service",
     "source_scan_service",
+    "public_api_key_service",
+    "login_event_service",
 ]

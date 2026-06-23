@@ -30,6 +30,7 @@ SECRET_ENV_ATTRS = {
     "naver_search_client_secret": "NAVER_SEARCH_CLIENT_SECRET",
     "kakao_rest_api_key": "KAKAO_REST_API_KEY",
     "vworld_service_key": "VWORLD_SERVICE_KEY",
+    "kor_travel_geo_v2_api_key": "kor_travel_geo_v2_api_key",
     "deepseek_api_key": "DEEPSEEK_API_KEY",
 }
 

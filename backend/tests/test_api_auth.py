@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from ktc.core.config import Settings, get_settings
 from ktc.core.database import get_session
+from ktc.services import public_api_key_service
 from main import app
 
 PROD_API_KEY = "secret-key-1"
@@ -70,6 +71,85 @@ async def test_non_local_rejects_wrong_key(prod_client):
 async def test_non_local_accepts_valid_key(prod_client):
     resp = await prod_client.get("/api/v1/runs", headers={"X-API-Key": PROD_API_KEY})
     assert resp.status_code == 200
+
+
+async def test_non_local_accepts_db_public_api_key(session_factory):
+    settings = Settings(APP_ENV="production", API_AUTH_ENABLED=True, API_KEYS="")
+    async with session_factory() as session:
+        api_key, _item = await public_api_key_service.create_key(
+            session,
+            label="테스트 키",
+            created_by="test",
+        )
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get(f"/api/v1/runs?key={api_key}")
+        assert resp.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_admin_proxy_bypasses_public_api_key(session_factory):
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        KTC_ADMIN_PROXY_SECRET="proxy-secret-with-enough-length",
+    )
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get(
+            "/api/v1/admin/login-events",
+            headers={
+                "X-KTC-Actor": "admin",
+                "X-KTC-Admin-Proxy-Secret": "proxy-secret-with-enough-length",
+            },
+        )
+        assert resp.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_admin_proxy_rejects_missing_or_wrong_secret(session_factory):
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        KTC_ADMIN_PROXY_SECRET="proxy-secret-with-enough-length",
+    )
+    async with _make_client(session_factory, settings) as ac:
+        missing = await ac.get(
+            "/api/v1/admin/login-events",
+            headers={"X-KTC-Actor": "admin"},
+        )
+        wrong = await ac.get(
+            "/api/v1/admin/login-events",
+            headers={
+                "X-KTC-Actor": "admin",
+                "X-KTC-Admin-Proxy-Secret": "wrong-secret",
+            },
+        )
+        ok = await ac.get(
+            "/api/v1/admin/login-events",
+            headers={
+                "X-KTC-Actor": "admin",
+                "X-KTC-Admin-Proxy-Secret": "proxy-secret-with-enough-length",
+            },
+        )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert ok.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_trusted_client_cidr_bypasses_key(session_factory):
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        API_TRUSTED_CLIENT_CIDRS="127.0.0.0/8",
+    )
+    async with _make_client(session_factory, settings) as ac:
+        resp = await ac.get("/api/v1/runs")
+        assert resp.status_code == 200
+    app.dependency_overrides.clear()
 
 
 async def test_health_is_open_without_key(prod_client):

@@ -66,6 +66,9 @@ forwardSignals(child);
 function resolvePython() {
   // E2E 하니스는 Windows 호스트에서도 실행한다(ADR-23 예외). venv interpreter와
   // PATH fallback을 OS별로 해석한다(앱 런타임이 아니라 테스트 런처에 한정된 분기).
+  if (process.env.KTC_E2E_PYTHON) {
+    return process.env.KTC_E2E_PYTHON;
+  }
   const isWindows = process.platform === "win32";
   const local = path.join(
     backendDir,

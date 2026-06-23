@@ -670,6 +670,27 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 
 ---
 
+## ADR-32: 관리자 로그인, 관리자 BFF proxy, 공개 API 키 발급
+
+- **상태**: 채택 (2026-06-23)
+- **결정자**: 사용자, AI agent
+- **맥락**: 외부 공급용 REST API는 ADR-24에서 `X-API-Key` 인증과 same-origin Next BFF 경계를 정했지만, 관리자 화면 자체는 별도 로그인 없이 열려 있었고 공개 API 키도 `.env` 기반 정적 목록에 의존했다. 사용자는 형제 프로젝트 `kor-travel-geo` PR #399와 같은 형태로 단일 관리자 로그인, 보안 세션, 로그인 기록 조회, Web UI 기반 공개 API 키 생성·폐기, 관리자 API의 프론트엔드 전용 호출 제한, `kor travel geo v2` 키 설정을 요구했다.
+- **결정**:
+  - **단일 관리자 계정**: 관리자 아이디는 기본 `admin` 하나만 둔다. 초기 비밀번호는 평문을 코드·문서·git에 남기지 않고, `KTC_ADMIN_PASSWORD_HASH`에 PBKDF2-SHA256 해시로만 저장한다. 해시와 세션 secret은 gitignore된 `.env`에만 둔다.
+  - **Next 서버 세션**: 로그인은 Next Route Handler(`/api/auth/login`)가 처리한다. 성공 시 httpOnly `SameSite=Strict` HMAC 세션 쿠키를 발급하고, 세션 payload에는 audience, issue/expire time, session id, admin subject, user-agent fingerprint를 넣는다. 로그아웃과 재로그인은 서버 프로세스 메모리의 revoked session id Map으로 현재 세션을 폐기한다. 로그인 요청은 same-origin Origin, JSON-only, 실패 rate-limit을 통과해야 한다.
+  - **관리자 화면 보호**: Next `proxy.ts`가 `/login`, `/api/auth/*`, 정적 자산을 제외한 모든 페이지와 BFF API 요청에 세션을 요구한다. 세션이 없으면 페이지는 `/login?next=...`로 보내고 API는 401을 반환한다. 프런트 API 클라이언트는 401을 받으면 로그인 화면으로 이동한다.
+  - **로그인 감사 로그**: `login_events` 테이블을 만들고 로그인 시도·성공·실패·거부·로그아웃을 저장한다. 사용자는 설정 UI에서 최근 로그인 기록을 조회한다. client IP는 기본적으로 `X-Forwarded-For`를 신뢰하지 않으며, 운영 리버스 프록시가 클라이언트 제공 헤더를 덮어쓴다는 확신이 있을 때만 `KTC_UI_TRUST_FORWARDED_IPS=true`로 켠다.
+  - **관리자 API proxy 인증**: 백엔드 `/api/v1/admin/*`는 공개 API key로 접근할 수 없다. Next BFF가 유효 세션을 확인한 뒤 서버 전용 `KTC_ADMIN_PROXY_SECRET`과 actor header를 주입하고, 백엔드는 peer IP가 `KTC_ADMIN_TRUSTED_PROXY_CIDRS` 안에 있으며 shared secret이 일치할 때만 관리자 API를 허용한다. BFF는 브라우저가 보낸 `x-api-key`/관리자 proxy 헤더를 그대로 전달하지 않는다.
+  - **공개 API 키 발급**: Web UI에서 VWorld와 같은 wire shape의 32자 영문/숫자 key를 CSPRNG로 생성한다. 평문 key는 생성 응답에서 1회만 보여 주고, DB `public_api_keys`에는 SHA-256 hash와 끝 6자리 hint, 상태, 생성/폐기 actor만 저장한다. 공개 API는 `X-API-Key` 또는 VWorld식 `?key=`를 받는다.
+  - **성능과 갱신 전략**: 공개 API hot path는 활성 key hash 목록을 `PUBLIC_API_KEY_CACHE_TTL_SECONDS` 동안 프로세스 메모리에 캐시한다. key 생성·폐기 직후에는 캐시를 즉시 무효화하고, 설정 UI는 화면이 열릴 때와 mutation 완료 후 목록을 다시 불러온다.
+  - **신뢰 클라이언트 우회**: 외부 노출 API라도 운영자가 `API_TRUSTED_CLIENT_CIDRS`에 명시한 CIDR에서 들어온 요청은 공개 API key 검증을 생략할 수 있다. 기본값은 비어 있어 명시 설정 없이는 우회가 없다.
+  - **kor-travel-geo v2 키**: `KOR_TRAVEL_GEO_V2_API_KEY`와 런타임 설정명 `kor_travel_geo_v2_api_key`를 추가한다. 값이 비어 있으면 현재 요구대로 `VWORLD_SERVICE_KEY`와 동일하게 사용한다.
+- **결과 (긍정)**: 관리자 UI는 브라우저에 백엔드 비밀을 노출하지 않고 세션으로 보호된다. 공개 API key는 사용자가 UI에서 발급·폐기할 수 있고, DB에는 평문 key가 남지 않는다. 관리자 API는 Next BFF와 백엔드 shared secret을 모두 통과해야 하므로 공개 API key만으로는 관리자 기능에 접근할 수 없다.
+- **결과 (부정)**: 세션 폐기와 공개 key cache는 프로세스 메모리라 서버 재시작 또는 다중 replica 환경에서는 공유되지 않는다. 현재 단일 호스트·소형 운영에는 충분하지만 다중 인스턴스가 되면 Redis/PostgreSQL 기반 세션 폐기 저장소와 cache invalidation이 필요하다. 관리자 계정은 단일 계정이므로 세분 권한과 개인별 추적은 후속 범위다.
+- **관련**: ADR-24(`/api/v1`와 `X-API-Key`)를 관리자 UI 인증과 DB 발급 공개 key로 확장한다. ADR-28(공개 도메인 노출), ADR-31(API 키 DB 관리)와 함께 적용한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.
