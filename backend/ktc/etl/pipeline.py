@@ -131,6 +131,15 @@ async def _collect_keyword_video_ids(
             f'YouTube에서 검색어 "{query}"의 새 동영상 후보 {found_in_query}개를 찾았습니다.',
             0.32 + (0.22 * (index + 1) / total),
         )
+        # 증분 수집(watermark)에서 시드(첫 검색어)가 신규 0건이면 더 좁은 파생 검색어도
+        # 신규가 없을 가능성이 높다 → 나머지 search.list(각 100 units) 호출을 생략(쿼터 절감).
+        if published_after is not None and index == 0 and found_in_query == 0:
+            await _report(
+                status_reporter,
+                "시드 검색어에 신규 동영상이 없어 파생 검색어 조회를 건너뜁니다(쿼터 절감).",
+                0.5,
+            )
+            break
     await _report(
         status_reporter,
         f"YouTube에서 총 {len(ids[:max_videos])}개의 중복 없는 동영상을 찾았습니다.",

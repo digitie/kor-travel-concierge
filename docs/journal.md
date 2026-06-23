@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-23: T-114 — 쓰레기 데이터 정리(dev/prod) + 남은 배치(#5/#7/#9)
+
+T-113 후속. **데이터 정리**: 보수적 분류기(행정구역명·F코드·앱/브랜드·일반명사·"불확실/어딘가" 패턴; 정상 영문 POI[Coex Mall/Starfield Library 등]는 보존)로 dry-run 검증 후 FK-safe 트랜잭션 삭제. dev 장소 79→71·후보 229→197, prod 장소·후보 14건 삭제(사용자 확정). **남은 배치 3건**:
+- **#5** 키워드 harvest 쿼터 낭비: 증분(watermark) 수집에서 시드(첫 검색어)가 신규 0건이면 파생 검색어 `search.list`(각 100 units)를 조기 종료.
+- **#7** 확정 시 좌표 중복: `resolve_candidate` create_place에서 `find_duplicate_candidates`로 근접 기존 장소가 있으면 신규 생성 대신 그 장소에 매핑(동일 좌표 무한 중복 방지). (검수 'match_existing' UI는 후속.)
+- **#9** discovered 백로그 자동 재처리: `source_scan_handler`가 대기/실행 중 poi_batch가 없을 때 DISCOVERED 영상(≤50)을 poi_batch로 재투입.
+
+남은 LOW: #12 export 좌표 None 방어(NOT NULL로 비도달), #14 category 정규화, #7 검수 match_existing UI. 검증: backend 282 pytest+compileall. dev/prod 배포.
+
 ## 2026-06-23: T-113 — "대구 맛집" 라이브 e2e 전수 점검 후 데이터 품질·검수·파이프라인 버그 일괄 수정
 
 다영역 병렬 감사(파이프라인/검수/결과/지오코딩 + 적대 재검증)로 14건 확인, 그중 고영향 7건 수정:
