@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-23: T-115 — 은퇴된 Gemini 1.5 옵션 제거 + AI 엔진 DeepSeek v4-pro 전환
+
+라이브 테스트 중 발견: `gemini-1.5-flash`/`gemini-1.5-pro`는 Google이 API에서 은퇴시켜 **404**(model not found)를 반환한다(`gemini-2.5-flash`는 키 쿼터 429). 사용자가 드롭다운에서 선택하면 작업이 실패하므로 `config.GEMINI_ENGINE_OPTIONS`에서 두 모델을 제거(남은 Gemini: 2.5-flash·2.0-flash·flash-latest). 관련 테스트(`test_settings_and_audit`·`test_api`·`test_scheduler_worker`·e2e `ktc.spec.ts`)의 1.5 참조를 `gemini-2.0-flash`/`gemini-flash-latest`로 교체.
+
+**AI 엔진 전환**: dev/prod 모두 `deepseek-v4-pro`로 변경(DB 설정). DeepSeek는 별도 API/쿼터라 Gemini 쿼터·은퇴 문제를 우회한다. 직접 스모크로 검증: 자막 교정(complete_text)→`PONG`, POI 배치(complete_json/JSON 모드)→`부산 감천문화마을` 정상 추출. DeepSeek는 Gemini rate limiter를 거치지 않는다(별도 쿼터). 라이브 poi_batch(2969/2970)가 0 교정 실패로 진행.
+
+검증: backend 282 pytest+compileall. dev/prod 배포.
+
 ## 2026-06-23: T-114 — 쓰레기 데이터 정리(dev/prod) + 남은 배치(#5/#7/#9)
 
 T-113 후속. **데이터 정리**: 보수적 분류기(행정구역명·F코드·앱/브랜드·일반명사·"불확실/어딘가" 패턴; 정상 영문 POI[Coex Mall/Starfield Library 등]는 보존)로 dry-run 검증 후 FK-safe 트랜잭션 삭제. dev 장소 79→71·후보 229→197, prod 장소·후보 14건 삭제(사용자 확정). **남은 배치 3건**:

@@ -19,8 +19,7 @@ GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
     GEMINI_ENGINE_VERSION_DEFAULT,
     "gemini-2.0-flash",
     "gemini-flash-latest",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    # gemini-1.5-flash / gemini-1.5-pro는 Google이 API에서 은퇴시켜 404가 나므로 제외(T-115).
 )
 
 # DeepSeek V4 (OpenAI 호환, base_url=https://api.deepseek.com). 두 모델 모두 1M context,

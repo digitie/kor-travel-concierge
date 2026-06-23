@@ -244,13 +244,13 @@ async def test_restart_run_creates_new_run(client):
 
 
 async def test_settings_roundtrip(client):
-    resp = await client.post("/api/v1/settings", json={"gemini_engine_version": "gemini-1.5-pro"})
+    resp = await client.post("/api/v1/settings", json={"gemini_engine_version": "gemini-2.0-flash"})
     assert resp.status_code == 200
-    assert resp.json()["settings"]["gemini_engine_version"] == "gemini-1.5-pro"
-    assert "gemini-1.5-pro" in resp.json()["settings"]["gemini_engine_options"]
+    assert resp.json()["settings"]["gemini_engine_version"] == "gemini-2.0-flash"
+    assert "gemini-2.0-flash" in resp.json()["settings"]["gemini_engine_options"]
 
     get_resp = await client.get("/api/v1/settings")
-    assert get_resp.json()["gemini_engine_version"] == "gemini-1.5-pro"
+    assert get_resp.json()["gemini_engine_version"] == "gemini-2.0-flash"
     assert get_resp.json()["gemini_engine_default"] == "gemini-2.5-flash"
     assert "gemini-2.0-flash" in get_resp.json()["gemini_engine_options"]
 
