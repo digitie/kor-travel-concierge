@@ -124,7 +124,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
     await expect(page.locator('#ai-engine-select')).toBeVisible();
     await page.locator('#ai-engine-select').click();
-    await page.getByRole('option', { name: 'gemini-1.5-pro', exact: true }).click();
+    await page.getByRole('option', { name: 'gemini-2.0-flash', exact: true }).click();
     await page.locator('#settings-save-button').click();
 
     await expect(page.locator('#success-toast')).toBeVisible();
@@ -134,7 +134,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
         const settings = (await response.json()) as Record<string, string>;
         return settings.gemini_engine_version;
       })
-      .toBe('gemini-1.5-pro');
+      .toBe('gemini-2.0-flash');
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });

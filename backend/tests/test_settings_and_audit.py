@@ -10,9 +10,9 @@ from ktc.services import audit_service, settings_service
 
 
 async def test_settings_upsert_and_get(session):
-    await settings_service.set_setting(session, "gemini_engine_version", "gemini-1.5-pro")
+    await settings_service.set_setting(session, "gemini_engine_version", "gemini-flash-latest")
     value = await settings_service.get_setting(session, "gemini_engine_version")
-    assert value == "gemini-1.5-pro"
+    assert value == "gemini-flash-latest"
 
     # 같은 키 재설정은 갱신된다.
     await settings_service.set_setting(session, "gemini_engine_version", "gemini-2.0-flash")
@@ -38,7 +38,7 @@ async def test_get_all_merges_env_default(session):
     assert "gemini_engine_version" in merged
     assert merged["gemini_engine_default"] == "gemini-2.5-flash"
     assert merged["gemini_engine_version"] in merged["gemini_engine_options"]
-    assert "gemini-1.5-pro" in merged["gemini_engine_options"]
+    assert "gemini-2.0-flash" in merged["gemini_engine_options"]
 
     with pytest.raises(ValueError, match="지원하지 않는 설정 키"):
         await settings_service.set_setting(session, "custom_key", "custom_value")
@@ -47,10 +47,10 @@ async def test_get_all_merges_env_default(session):
 async def test_set_many_commits_allowed_settings_together(session):
     await settings_service.set_many(
         session,
-        {"gemini_engine_version": "gemini-1.5-flash"},
+        {"gemini_engine_version": "gemini-2.0-flash"},
     )
     merged2 = await settings_service.get_all(session)
-    assert merged2["gemini_engine_version"] == "gemini-1.5-flash"
+    assert merged2["gemini_engine_version"] == "gemini-2.0-flash"
 
 
 async def test_get_secret_db_override_and_env_fallback(session, monkeypatch):

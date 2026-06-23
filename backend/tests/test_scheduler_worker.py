@@ -401,7 +401,7 @@ async def test_run_once_executes_deep_research_default_handler(
     session.add(place)
     await session.commit()
     await session.refresh(place)
-    await settings_service.set_setting(session, "gemini_engine_version", "gemini-1.5-pro")
+    await settings_service.set_setting(session, "gemini_engine_version", "gemini-2.0-flash")
     run = await crawl_run_service.create_run(
         session,
         job_type="deep_research",
@@ -418,7 +418,7 @@ async def test_run_once_executes_deep_research_default_handler(
 
     assert executed_id == run.id
     assert "역사와 포토존 중심" in captured["prompt"]
-    assert captured_model["model"] == "gemini-1.5-pro"
+    assert captured_model["model"] == "gemini-2.0-flash"
     refreshed = await _fresh_run(session_factory, run.id)
     assert refreshed.state == RunState.DONE
     assert refreshed.progress == 1.0
