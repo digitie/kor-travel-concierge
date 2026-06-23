@@ -419,11 +419,41 @@ async def source_scan_handler(session: AsyncSession, run: CrawlRun) -> dict[str,
             str(payload["api_budget_group"]) if payload.get("api_budget_group") else None
         ),
     )
+    # 백로그 재처리: 처리되지 않은 DISCOVERED 영상(쿼터 보류·실패 잔여)을 poi_batch로
+    # 재투입한다. 이미 대기/실행 중인 poi_batch가 있으면 쌓지 않는다(중복·폭주 방지).
+    backlog_runs: list[int] = []
+    existing_poi = await session.scalar(
+        select(CrawlRun.id)
+        .where(
+            CrawlRun.job_type == "poi_batch",
+            CrawlRun.state.in_(["pending", "running"]),
+        )
+        .limit(1)
+    )
+    if existing_poi is None:
+        discovered = list(
+            (
+                await session.execute(
+                    select(YoutubeVideo.video_id)
+                    .where(YoutubeVideo.crawl_status == CrawlStatus.DISCOVERED)
+                    .order_by(YoutubeVideo.crawled_at.desc().nullslast())
+                    .limit(50)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if discovered:
+            backlog_runs = await _enqueue_poi_batches(
+                session, discovered, source=RunSource.SCHEDULER.value
+            )
+    summary["poi_backlog_runs"] = backlog_runs
     await crawl_run_service.append_status_log(
         session,
         run.id,
         f"source target {summary['scanned_targets']}건을 확인하고 "
-        f"후속 작업 {summary['enqueued_runs']}건을 등록했습니다.",
+        f"후속 작업 {summary['enqueued_runs']}건을 등록했습니다"
+        + (f" (미처리 영상 백로그 {len(backlog_runs)}건 추가)." if backlog_runs else "."),
         progress=0.75,
     )
     return summary

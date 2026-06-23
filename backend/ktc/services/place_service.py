@@ -479,27 +479,37 @@ async def resolve_candidate(
         missing = [key for key in required if data.get(key) is None]
         if missing:
             raise ValueError(f"신규 장소 생성에는 {', '.join(missing)} 값이 필요하다")
-        place = TravelPlace(
-            name=data["name"],
-            description=data.get("description"),
-            gemini_enriched_description=data.get("gemini_enriched_description"),
-            official_address=data.get("official_address"),
-            road_address=data.get("road_address"),
-            latitude=data["latitude"],
-            longitude=data["longitude"],
-            api_source=data.get("api_source") or "manual",
-            category=data.get("category") or candidate.candidate_category,
-            is_geocoded=True,
-            last_reviewed_at=utcnow(),
+        # 좌표 근접 중복: 같은 위치에 기존 장소가 있으면 신규 생성 대신 그 장소에 매핑한다
+        # (여러 영상이 같은 장소를 가리킬 때 동일 좌표 장소가 무한 중복되던 문제 방지).
+        dups = await find_duplicate_candidates(
+            session, lat=data["latitude"], lng=data["longitude"]
         )
-        session.add(place)
-        await session.flush()
-        await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
-        # 8자리 카테고리 코드는 POI 추출 때 후보 evidence에 저장해 둔 값을 복사한다
-        # (별도 Gemini 호출 없음, A안). 없으면 비워 둔다(best-effort, null 허용).
-        code = candidate_category_code(candidate)
-        if code:
-            place.category_code_suggestion = code
+        if dups:
+            place = dups[0][0]
+        else:
+            place = TravelPlace(
+                name=data["name"],
+                description=data.get("description"),
+                gemini_enriched_description=data.get("gemini_enriched_description"),
+                official_address=data.get("official_address"),
+                road_address=data.get("road_address"),
+                latitude=data["latitude"],
+                longitude=data["longitude"],
+                api_source=data.get("api_source") or "manual",
+                category=data.get("category") or candidate.candidate_category,
+                is_geocoded=True,
+                last_reviewed_at=utcnow(),
+            )
+            session.add(place)
+            await session.flush()
+            await sync_place_geometry(
+                session, place.place_id, place.latitude, place.longitude
+            )
+            # 8자리 카테고리 코드는 POI 추출 때 후보 evidence에 저장해 둔 값을 복사한다
+            # (별도 Gemini 호출 없음, A안). 없으면 비워 둔다(best-effort, null 허용).
+            code = candidate_category_code(candidate)
+            if code:
+                place.category_code_suggestion = code
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value
