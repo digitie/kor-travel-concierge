@@ -244,12 +244,21 @@ export function SettingsDialog() {
                 </Button>
               </div>
               {createdPublicKey ? (
-                <Input
-                  readOnly
-                  aria-label="생성된 공개 API 키"
-                  value={createdPublicKey}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    aria-label="생성된 공개 API 키"
+                    value={createdPublicKey}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setCreatedPublicKey(null)}
+                  >
+                    지우기
+                  </Button>
+                </div>
               ) : null}
               <div className="max-h-40 overflow-y-auto rounded-lg border">
                 {(publicKeysQuery.data ?? []).length > 0 ? (

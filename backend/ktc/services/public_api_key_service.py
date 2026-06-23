@@ -38,6 +38,9 @@ def generate_public_api_key() -> str:
 
 
 def hash_public_api_key(api_key: str) -> str:
+    # 키는 32자 CSPRNG 토큰(~190비트)이라 brute-force가 불가능하므로, 활성 해시 집합에 대한
+    # O(1) 멤버십 검사를 위해 의도적으로 빠른 무염 SHA-256을 사용한다(저엔트로피 패스워드용
+    # 느린 KDF는 불필요). 평문 키는 저장·로깅하지 않는다.
     return hashlib.sha256(api_key.strip().encode("utf-8")).hexdigest()
 
 

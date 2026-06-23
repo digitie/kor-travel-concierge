@@ -78,6 +78,7 @@ export function LoginForm() {
           id="login-password"
           type="password"
           autoComplete="current-password"
+          autoFocus
           aria-describedby={error ? "login-error" : undefined}
           aria-invalid={Boolean(error)}
           value={password}

@@ -239,6 +239,30 @@ async def test_health_is_open_without_key(prod_client):
     assert resp.status_code == 200
 
 
+async def test_login_event_retention_cap(session_factory, monkeypatch):
+    """감사 로그가 보존 상한을 넘으면 오래된 행부터 정리된다."""
+    from ktc.services import login_event_service
+
+    class _CappedSettings:
+        LOGIN_AUDIT_MAX_ROWS = 3
+
+    monkeypatch.setattr(login_event_service, "get_settings", lambda: _CappedSettings())
+    async with session_factory() as session:
+        for _ in range(6):
+            await login_event_service.record(
+                session,
+                event_type="login",
+                outcome="denied",
+                attempted_username="admin",
+                reason="invalid_credentials",
+                client_ip=None,
+                user_agent=None,
+                next_path=None,
+            )
+        rows = await login_event_service.list_recent(session, limit=100)
+        assert len(rows) == 3
+
+
 def test_settings_auth_required_rules():
     """auth_required 규칙: local 우회, 비-local 요구, 플래그 강제."""
     assert Settings(APP_ENV="local").auth_required is False
