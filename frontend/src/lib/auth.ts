@@ -19,6 +19,11 @@ const LOGIN_FAILURE_WINDOW_SECONDS = 10 * 60;
 const MAX_COOKIE_VALUE_LENGTH = 2048;
 const BASE64URL_RE = /^[0-9A-Za-z_-]+$/;
 const TRUST_FORWARDED_IPS_ENV = "KTC_UI_TRUST_FORWARDED_IPS";
+// TLS 종단 리버스 프록시(HAProxy 등)가 X-Forwarded-Proto를 주입하지 않아 requestOrigin이
+// http로 재구성되는 환경에서도 same-origin 검사가 https 공개 도메인을 허용하도록, 신뢰할
+// 브라우저 origin을 쉼표로 명시한다(예: https://concierge.example.org). 비우면 헤더 기반
+// 재구성에만 의존한다(기존 동작).
+const PUBLIC_ORIGINS_ENV = "KTC_UI_PUBLIC_ORIGINS";
 
 type Env = Record<string, string | undefined>;
 type HeaderReader = { get(name: string): string | null };
@@ -174,13 +179,23 @@ export function expiredSessionCookieOptions(request: RequestLike | null = null) 
   };
 }
 
-export function requestHasSameOrigin(request: RequestLike): boolean {
+export function requestHasSameOrigin(
+  request: RequestLike,
+  env: Env = process.env,
+): boolean {
   const origin = request.headers.get("origin");
   if (!origin) {
     return true;
   }
   try {
-    return normalizeOrigin(origin) === requestOrigin(request);
+    const normalized = normalizeOrigin(origin);
+    if (normalized === requestOrigin(request)) {
+      return true;
+    }
+    // TLS 종단 프록시가 X-Forwarded-Proto를 주입하지 않으면 requestOrigin이 http로
+    // 재구성돼 https 공개 도메인과 불일치한다. 명시적으로 신뢰한 공개 origin과 일치하면
+    // 허용한다(브라우저가 보낸 Origin을 화이트리스트와 대조하므로 CSRF 방어는 유지).
+    return trustedPublicOrigins(env).includes(normalized);
   } catch {
     return false;
   }
@@ -461,6 +476,26 @@ function requestOrigin(request: RequestLike): string {
 function normalizeOrigin(value: string): string {
   const url = new URL(value);
   return `${url.protocol}//${url.host}`.toLowerCase();
+}
+
+function trustedPublicOrigins(env: Env): string[] {
+  const raw = env[PUBLIC_ORIGINS_ENV];
+  if (!raw) {
+    return [];
+  }
+  const result: string[] = [];
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      result.push(normalizeOrigin(trimmed));
+    } catch {
+      // 잘못된 origin 항목은 무시한다.
+    }
+  }
+  return result;
 }
 
 function isHttpsRequest(request: RequestLike | null): boolean {

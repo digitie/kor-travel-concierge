@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-24: T-119 — 공개 도메인 로그인 403(INVALID_ORIGIN) 수정 — 신뢰 origin 화이트리스트
+
+라이브 브라우저 E2E(prod n150, 공개 도메인 `concierge.digitie.mywire.org`)에서 관리자 **로그인 POST가 403 INVALID_ORIGIN**으로 막히는 버그를 발견했다(curl/LAN-http smoke로는 안 잡힘). 원인: T-116의 same-origin(CSRF) 검사 + 운영 TLS 종단 프록시(라우터 `192.168.1.1`의 **HAProxy**)가 `X-Forwarded-Proto: https`를 주입하지 않아 `requestOrigin`이 `http://…`로 재구성돼 브라우저의 `https://…` Origin과 불일치. LAN(`http://192.168.1.14:12605`) 접속은 정상.
+
+라우터 직접 수정이 막혀(SSH 자격 불일치) **앱 측 보완**으로 해결:
+- `auth.ts` `requestHasSameOrigin`에 신뢰 공개 origin 화이트리스트(`KTC_UI_PUBLIC_ORIGINS`) 추가. 헤더 재구성 origin과 불일치해도 브라우저 Origin이 명시 화이트리스트와 일치하면 허용한다(화이트리스트 대조이므로 CSRF 방어 유지). 미설정 시 기존 헤더 기반 검사 유지.
+- prod `~/kor-travel-concierge/.env`에 `KTC_UI_PUBLIC_ORIGINS=https://concierge.digitie.mywire.org` 설정.
+
+정석 인프라 수정(HAProxy concierge 백엔드에 `http-request set-header X-Forwarded-Proto https`)도 별도 권장 — 적용 시 화이트리스트는 무해한 이중 안전망이 된다.
+
+검증: frontend vitest 15/15(origin 5건 추가)·type-check·lint·build. prod 배포 후 로그인 POST 403→401, 실제 브라우저 로그인 검증.
+
 ## 2026-06-24: T-118 — 형제 프로젝트 docker-manager PR #37/#38 보안 수정 concierge 이식
 
 `kor-travel-docker-manager`의 관리자 인증 사후 리뷰 fix-forward(PR #37/#38, 이미 머지)에서 concierge에도 해당하는 보안 수정을 이식했다.
