@@ -6,6 +6,7 @@ import {
   createSessionCookieValue,
   hashAdminPasswordForEnv,
   recordLoginFailure,
+  requestHasSameOrigin,
   sanitizeLocalPath,
   verifyAdminLogin,
   verifySessionCookieValue,
@@ -70,6 +71,35 @@ describe("session cookie sign/verify", () => {
     const value = await createSessionCookieValue(null, baseEnv, 1_000_000);
     const otherEnv = { ...baseEnv, KTC_ADMIN_USERNAME: "someone-else" };
     expect(await verifySessionCookieValue(value, otherEnv, 1_000_000, null)).toBe(false);
+  });
+});
+
+describe("requestHasSameOrigin (CSRF origin check)", () => {
+  // 프록시가 X-Forwarded-Proto를 안 보내 내부적으로 http로 보이는 요청을 모사.
+  function req(origin: string | null, extra: Record<string, string> = {}) {
+    const all: Record<string, string | null> = { origin, ...extra };
+    return {
+      headers: { get: (n: string) => all[n.toLowerCase()] ?? null },
+      nextUrl: { host: "internal:12605", protocol: "http:" },
+    } as never;
+  }
+  const env = { KTC_UI_PUBLIC_ORIGINS: "https://concierge.example.org, https://www.concierge.example.org" };
+
+  it("Origin 헤더가 없으면 통과", () => {
+    expect(requestHasSameOrigin(req(null), env)).toBe(true);
+  });
+  it("재구성된 same-origin이면 통과(화이트리스트 불필요)", () => {
+    expect(requestHasSameOrigin(req("http://internal:12605"), env)).toBe(true);
+  });
+  it("프록시가 proto를 빼먹어도, 신뢰 공개 origin이면 통과", () => {
+    // requestOrigin은 http://internal:12605로 재구성되어 불일치하지만 화이트리스트가 허용.
+    expect(requestHasSameOrigin(req("https://concierge.example.org"), env)).toBe(true);
+  });
+  it("화이트리스트에 없는 외부 origin은 거부(CSRF 방어 유지)", () => {
+    expect(requestHasSameOrigin(req("https://evil.example"), env)).toBe(false);
+  });
+  it("화이트리스트 미설정이면 헤더 기반 검사만(불일치 origin 거부)", () => {
+    expect(requestHasSameOrigin(req("https://concierge.example.org"), {})).toBe(false);
   });
 });
 
