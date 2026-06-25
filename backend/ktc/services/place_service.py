@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from geoalchemy2 import Geography
-from sqlalchemy import cast, delete, func, or_, select, update
+from sqlalchemy import cast, delete, distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.spatial import sync_place_geometry
@@ -18,6 +18,8 @@ from ktc.models import (
     MediaAsset,
     TravelPlace,
     VideoPlaceMapping,
+    YoutubeChannel,
+    YoutubePlaylist,
     YoutubeVideo,
     utcnow,
 )
@@ -118,11 +120,31 @@ async def list_place_summaries(
     sort: str = "latest",
     place_ids: list[int] | None = None,
     limit: int | None = 100,
+    channel_id: str | None = None,
+    playlist_id: str | None = None,
+    keyword: str | None = None,
 ) -> list[PlaceSummary]:
-    """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다."""
+    """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다.
+
+    `channel_id`/`playlist_id`/`keyword`가 주어지면 해당 출처(유튜버/재생목록/검색어)에서
+    수집된 장소만 반환한다(결과 보기 그룹화·필터).
+    """
+    matched = await _filtered_place_ids(
+        session, channel_id=channel_id, playlist_id=playlist_id, keyword=keyword
+    )
+    effective_ids: list[int] | None = None
+    if place_ids is not None and matched is not None:
+        effective_ids = list(set(place_ids) & matched)
+    elif place_ids is not None:
+        effective_ids = place_ids
+    elif matched is not None:
+        effective_ids = list(matched)
+
     stmt = select(TravelPlace)
-    if place_ids:
-        stmt = stmt.where(TravelPlace.place_id.in_(place_ids))
+    if effective_ids is not None:
+        if not effective_ids:
+            return []
+        stmt = stmt.where(TravelPlace.place_id.in_(effective_ids))
     result = await session.execute(stmt)
     places = list(result.scalars().all())
     if not places:
@@ -181,6 +203,90 @@ async def _list_mentions_by_place(
             )
         )
     return mentions_by_place
+
+
+async def _filtered_place_ids(
+    session: AsyncSession,
+    *,
+    channel_id: str | None,
+    playlist_id: str | None,
+    keyword: str | None,
+) -> set[int] | None:
+    """출처 필터(유튜버/재생목록/검색어)에 해당하는 place_id 집합. 필터 없으면 None."""
+    if not (channel_id or playlist_id or keyword):
+        return None
+    stmt = select(VideoPlaceMapping.place_id).join(
+        YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id
+    )
+    if channel_id:
+        stmt = stmt.where(
+            or_(
+                VideoPlaceMapping.source_channel_id == channel_id,
+                YoutubeVideo.channel_id == channel_id,
+            )
+        )
+    if playlist_id:
+        stmt = stmt.where(VideoPlaceMapping.source_playlist_id == playlist_id)
+    if keyword:
+        stmt = stmt.where(YoutubeVideo.source_search_query == keyword)
+    result = await session.execute(stmt)
+    return {int(pid) for pid in result.scalars().all()}
+
+
+async def list_place_facets(session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
+    """확정 장소를 출처별(유튜버/재생목록/검색어)로 묶을 facet 목록을 반환한다.
+
+    각 항목은 해당 출처에서 수집된 확정 장소 수(`place_count`)를 함께 제공해
+    결과 보기의 그룹/필터 셀렉터를 구성할 수 있게 한다.
+    """
+    place_count = func.count(distinct(VideoPlaceMapping.place_id))
+
+    channel_stmt = (
+        select(YoutubeVideo.channel_id, YoutubeChannel.title, place_count)
+        .select_from(VideoPlaceMapping)
+        .join(YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id)
+        .join(
+            YoutubeChannel,
+            YoutubeVideo.channel_id == YoutubeChannel.channel_id,
+            isouter=True,
+        )
+        .where(YoutubeVideo.channel_id.isnot(None))
+        .group_by(YoutubeVideo.channel_id, YoutubeChannel.title)
+        .order_by(place_count.desc())
+    )
+    playlist_stmt = (
+        select(VideoPlaceMapping.source_playlist_id, YoutubePlaylist.title, place_count)
+        .join(
+            YoutubePlaylist,
+            VideoPlaceMapping.source_playlist_id == YoutubePlaylist.playlist_id,
+            isouter=True,
+        )
+        .where(VideoPlaceMapping.source_playlist_id.isnot(None))
+        .group_by(VideoPlaceMapping.source_playlist_id, YoutubePlaylist.title)
+        .order_by(place_count.desc())
+    )
+    keyword_stmt = (
+        select(YoutubeVideo.source_search_query, place_count)
+        .select_from(VideoPlaceMapping)
+        .join(YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id)
+        .where(YoutubeVideo.source_search_query.isnot(None))
+        .group_by(YoutubeVideo.source_search_query)
+        .order_by(place_count.desc())
+    )
+
+    channels = [
+        {"id": cid, "title": title or cid, "place_count": int(cnt)}
+        for cid, title, cnt in (await session.execute(channel_stmt)).all()
+    ]
+    playlists = [
+        {"id": pid, "title": title or pid, "place_count": int(cnt)}
+        for pid, title, cnt in (await session.execute(playlist_stmt)).all()
+    ]
+    keywords = [
+        {"value": kw, "place_count": int(cnt)}
+        for kw, cnt in (await session.execute(keyword_stmt)).all()
+    ]
+    return {"channels": channels, "playlists": playlists, "keywords": keywords}
 
 
 def _place_summary_sort_key(sort: str):

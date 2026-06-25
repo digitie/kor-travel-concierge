@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-25: T-121 — 수집 입력 자동분류 + 결과 출처별 그룹화 + 자막교정 hung 방지
+
+- **A 자동분류**: `source_resolve.classify_source_input`(재생목록>영상>채널>키워드 우선) + `parse_video_id`/`is_video_id`. `/harvest`에 `auto_input`(자동)·`video_id`(영상) 추가, 단일 영상은 `run_harvest`의 `direct_video_ids` 경로로 fetch+적재(`scheduler/worker.py` harvest_handler가 video target 지원). 프런트 `HarvestConsole`에 "자동(링크·검색어 판별)" 기본 + "영상" 옵션. 즉 링크를 붙여넣으면 재생목록/유튜버/영상/키워드를 스스로 구분.
+- **B 결과 그룹화**: `place_service.list_place_summaries`에 channel/playlist/keyword 필터 + `list_place_facets`. `/destinations`에 출처 필터 쿼리, `/destinations/facets` 신규. 프런트 `DestinationWorkspace`에 그룹 기준(유튜버별/재생목록별/검색어별) + 값 셀렉터. 데이터는 `video_place_mappings.source_channel_id/source_playlist_id` + `youtube_videos.source_search_query`로 이미 존재해 스키마 변경 없음.
+- **E hung 방지**: 자막 교정에 영상당 시간예산 `LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS`(기본 240s) — 초과 시 원본 자막으로 진행. prod 작업 1557이 강릉 긴 영상 교정에서 ~51분 단일 워커를 점유한 hung의 근본 방지. (asset_type `TRANSCRIPT_CORRECTED` 버그는 이미 수정돼 있어 제외.)
+- 검증: `source_resolve` 자동분류 단위테스트(11+케이스), backend compileall, facet/필터 SQL을 n150 실데이터로 확인(유튜버 빵이네 63, 재생목록 강원도 37/부산 25), frontend type-check/lint/build/vitest(15/15). **C(작업 상세 대상필드)·D(누적 수집수)는 후속 PR.**
+
 ## 2026-06-25: T-120 — feature export source title/provenance 추가 + PinVi 명칭 정리
 
 `kor-travel-map` curated feature가 YouTube 후보를 곧바로 PinVi curated feature로 올릴 수 있도록

@@ -13,11 +13,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildDestinationExportUrl,
+  listDestinationFacets,
   listDestinations,
   listRunQueue,
   USER_JOB_TYPES,
   type CrawlRunSummary,
   type DestinationExportFormat,
+  type DestinationFacets,
+  type DestinationGroupDim,
   type DestinationSort,
   type DestinationSummary,
   type PlaceSourceVideo,
@@ -47,10 +50,31 @@ export function DestinationWorkspace() {
   const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
   const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
+  // 결과 보기 그룹화: 출처 기준(유튜버/재생목록/검색어) + 선택 값.
+  const [groupDim, setGroupDim] = useState<DestinationGroupDim>("none");
+  const [groupValue, setGroupValue] = useState<string | null>(null);
+
+  const facetsQuery = useQuery({
+    queryKey: ["destination-facets"],
+    queryFn: listDestinationFacets,
+    refetchInterval: 30_000,
+  });
+  const filter = useMemo(() => {
+    if (!groupValue || groupDim === "none") {
+      return undefined;
+    }
+    if (groupDim === "channel") {
+      return { channelId: groupValue };
+    }
+    if (groupDim === "playlist") {
+      return { playlistId: groupValue };
+    }
+    return { keyword: groupValue };
+  }, [groupDim, groupValue]);
 
   const destinationsQuery = useQuery({
-    queryKey: ["destinations", destinationSort],
-    queryFn: () => listDestinations(destinationSort),
+    queryKey: ["destinations", destinationSort, groupDim, groupValue],
+    queryFn: () => listDestinations(destinationSort, filter),
     refetchInterval: 10_000,
   });
   const runQueueQuery = useQuery({
@@ -135,6 +159,13 @@ export function DestinationWorkspace() {
             onToggleAllExportSelection={toggleAllExportSelection}
             onExport={exportPlaces}
             onShowDetail={openPlaceDetail}
+            groupDim={groupDim}
+            groupValue={groupValue}
+            facets={facetsQuery.data}
+            onGroupChange={(dim, value) => {
+              setGroupDim(dim);
+              setGroupValue(value);
+            }}
           />
         </div>
         <div className="min-h-[22rem]">
@@ -215,6 +246,10 @@ function DestinationList({
   onToggleAllExportSelection,
   onExport,
   onShowDetail,
+  groupDim,
+  groupValue,
+  facets,
+  onGroupChange,
 }: {
   places: DestinationSummary[];
   selectedPlace: DestinationSummary | null;
@@ -231,6 +266,10 @@ function DestinationList({
   onToggleAllExportSelection: () => void;
   onExport: () => void;
   onShowDetail: (placeId: number) => void;
+  groupDim: DestinationGroupDim;
+  groupValue: string | null;
+  facets: DestinationFacets | undefined;
+  onGroupChange: (dim: DestinationGroupDim, value: string | null) => void;
 }) {
   // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -249,6 +288,49 @@ function DestinationList({
   return (
     <section aria-label="장소 목록" className="flex flex-col gap-4 p-4">
       <PanelHeader title="장소" count={places.length} />
+      <div className="grid grid-cols-2 gap-2">
+        <Select
+          value={groupDim}
+          onValueChange={(value) =>
+            onGroupChange(value as DestinationGroupDim, null)
+          }
+        >
+          <SelectTrigger className="w-full" aria-label="결과 그룹 기준">
+            <SelectValue>{groupDimLabel(groupDim)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="none">전체</SelectItem>
+              <SelectItem value="channel">유튜버별</SelectItem>
+              <SelectItem value="playlist">재생목록별</SelectItem>
+              <SelectItem value="keyword">검색어별</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        {groupDim !== "none" ? (
+          <Select
+            value={groupValue ?? ""}
+            onValueChange={(value) => onGroupChange(groupDim, value || null)}
+          >
+            <SelectTrigger className="w-full" aria-label="그룹 값 선택">
+              <SelectValue placeholder={`${groupDimLabel(groupDim)} 선택`}>
+                {groupValueLabel(groupDim, groupValue, facets)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {groupOptions(groupDim, facets).map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label} ({opt.count})
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        ) : (
+          <div />
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Select value={sort} onValueChange={(value) => onSortChange(value as DestinationSort)}>
           <SelectTrigger id="destination-sort-select" className="w-full" aria-label="장소 정렬">
@@ -389,6 +471,62 @@ function sortLabel(sort: DestinationSort) {
     return "카테고리 순";
   }
   return "최신 등록 순";
+}
+
+function groupDimLabel(dim: DestinationGroupDim) {
+  if (dim === "channel") {
+    return "유튜버별";
+  }
+  if (dim === "playlist") {
+    return "재생목록별";
+  }
+  if (dim === "keyword") {
+    return "검색어별";
+  }
+  return "전체";
+}
+
+function groupOptions(
+  dim: DestinationGroupDim,
+  facets: DestinationFacets | undefined,
+): { value: string; label: string; count: number }[] {
+  if (!facets) {
+    return [];
+  }
+  if (dim === "channel") {
+    return facets.channels.map((c) => ({
+      value: c.id,
+      label: c.title,
+      count: c.place_count,
+    }));
+  }
+  if (dim === "playlist") {
+    return facets.playlists.map((p) => ({
+      value: p.id,
+      label: p.title,
+      count: p.place_count,
+    }));
+  }
+  if (dim === "keyword") {
+    return facets.keywords.map((k) => ({
+      value: k.value,
+      label: k.value,
+      count: k.place_count,
+    }));
+  }
+  return [];
+}
+
+function groupValueLabel(
+  dim: DestinationGroupDim,
+  value: string | null,
+  facets: DestinationFacets | undefined,
+) {
+  if (!value) {
+    return "";
+  }
+  const option = groupOptions(dim, facets).find((opt) => opt.value === value);
+  return option ? `${option.label} (${option.count})` : value;
 }
 
 function sourceLine(source: PlaceSourceVideo | undefined) {

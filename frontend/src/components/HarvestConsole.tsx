@@ -42,15 +42,19 @@ import {
 } from "@/components/ui/select";
 
 const targetLabels: Record<HarvestTargetType, string> = {
+  auto: "링크 또는 검색어",
   keyword: "검색어",
   channel: "채널명 또는 URL",
   playlist: "재생목록 URL",
+  video: "영상 URL 또는 ID",
 };
 
 const targetPlaceholders: Record<HarvestTargetType, string> = {
+  auto: "링크(재생목록·채널·영상)나 검색어를 붙여넣으면 자동 판별합니다",
   keyword: "예: 부산 맛집",
   channel: "예: @빵이네tv · youtube.com/@... · 채널 URL · UC...",
   playlist: "예: youtube.com/playlist?list=... · PL...",
+  video: "예: youtube.com/watch?v=... · youtu.be/... · 11자 ID",
 };
 
 // 반복 검색 간격 선택지(분).
@@ -86,7 +90,7 @@ function contentFilterLabel(value: HarvestContentFilter): string {
 }
 
 const harvestFormSchema = z.object({
-  targetType: z.enum(["keyword", "channel", "playlist"]),
+  targetType: z.enum(["auto", "keyword", "channel", "playlist", "video"]),
   targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
   maxVideos: z.coerce
     .number()
@@ -134,8 +138,8 @@ export function HarvestConsole() {
   const form = useForm<HarvestFormValues>({
     resolver: zodResolver(harvestFormSchema),
     defaultValues: {
-      targetType: "keyword",
-      targetValue: "부산 맛집",
+      targetType: "auto",
+      targetValue: "",
       maxVideos: 10,
       repeat: false,
       repeatIntervalMinutes: 1440,
@@ -256,9 +260,11 @@ export function HarvestConsole() {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
+                  <SelectItem value="auto">자동 (링크·검색어 판별)</SelectItem>
                   <SelectItem value="keyword">검색어</SelectItem>
-                  <SelectItem value="channel">채널</SelectItem>
+                  <SelectItem value="channel">채널(유튜버)</SelectItem>
                   <SelectItem value="playlist">재생목록</SelectItem>
+                  <SelectItem value="video">영상</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>

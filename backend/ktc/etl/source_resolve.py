@@ -14,11 +14,15 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
 
 ChannelInputKind = Literal["id", "handle", "username", "custom", "search"]
+# 수집 입력 자동분류 종류.
+SourceInputKind = Literal["keyword", "channel", "playlist", "video"]
 
 # UC + 22자 base64url. 채널 ID 형식.
 _CHANNEL_ID_RE = re.compile(r"^UC[0-9A-Za-z_-]{22}$")
 # 재생목록 ID 접두사(사용자/업로드/즐겨찾기/기타). RD/믹스 등 비안정 ID는 제외한다.
 _PLAYLIST_ID_RE = re.compile(r"^(?:PL|UU|FL|OL|LL)[0-9A-Za-z_-]{10,}$")
+# YouTube 영상 ID: 11자 base64url.
+_VIDEO_ID_RE = re.compile(r"^[0-9A-Za-z_-]{11}$")
 
 
 def _looks_like_url(raw: str) -> bool:
@@ -88,6 +92,68 @@ def parse_playlist_id(raw: str) -> str | None:
     if _PLAYLIST_ID_RE.match(value):
         return value
     return None
+
+
+def parse_video_id(raw: str) -> str | None:
+    """영상 입력에서 영상 ID(11자)를 추출한다.
+
+    `watch?v=`, `youtu.be/<id>`, `/shorts/<id>`, `/embed/<id>`, `/v/<id>`, `/live/<id>`
+    URL을 처리한다. bare 문자열은 키워드와 구분이 모호해 영상으로 보지 않는다(None).
+    """
+    value = raw.strip()
+    if not value or not _looks_like_url(value):
+        return None
+    parsed = urlparse(_with_scheme(value))
+    host = parsed.netloc.lower()
+    segments = [unquote(seg) for seg in parsed.path.split("/") if seg]
+    if "youtu.be" in host:
+        if segments and _VIDEO_ID_RE.match(segments[0]):
+            return segments[0]
+        return None
+    v = parse_qs(parsed.query).get("v")
+    if v and _VIDEO_ID_RE.match(v[0]):
+        return v[0]
+    if (
+        len(segments) >= 2
+        and segments[0] in {"shorts", "embed", "v", "live"}
+        and _VIDEO_ID_RE.match(segments[1])
+    ):
+        return segments[1]
+    return None
+
+
+def is_video_id(value: str) -> bool:
+    """문자열이 YouTube 영상 ID(11자) 형식인지 판별한다."""
+    return bool(_VIDEO_ID_RE.match(value.strip()))
+
+
+def classify_source_input(raw: str) -> tuple[SourceInputKind, str]:
+    """수집 입력 문자열을 (종류, 정규화 값)으로 자동 분류한다.
+
+    우선순위: 재생목록(`list=`/`PL...`) → 영상(`watch?v=`/`youtu.be`/shorts) → 채널
+    (`/channel/`·`/@handle`·`/c/`·`/user/`·`@handle`·`UC...`) → 키워드(기본).
+    `watch?v=X&list=Y`처럼 둘 다면 재생목록으로 본다(사용자가 공유한 목록 우선).
+
+    반환 값은 후속 해석에 넘길 표준 값이다: 재생목록·영상은 추출한 ID, 채널은
+    원본 입력(라우터가 `resolve_channel_id`로 `UC...` 변환), 키워드는 원본 문자열.
+    """
+    value = raw.strip()
+    if not value:
+        return "keyword", ""
+    playlist = parse_playlist_id(value)
+    if playlist:
+        return "playlist", playlist
+    video = parse_video_id(value)
+    if video:
+        return "video", video
+    if _looks_like_url(value):
+        kind, _ = parse_channel_input(value)
+        if kind in ("id", "handle", "username", "custom"):
+            return "channel", value
+        return "keyword", value
+    if value.startswith("@") or _CHANNEL_ID_RE.match(value):
+        return "channel", value
+    return "keyword", value
 
 
 def _first_channel_id_from_channels(data: dict[str, Any]) -> str | None:

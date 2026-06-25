@@ -71,6 +71,10 @@ class HarvestRequest(BaseModel):
     channel_id: str | None = None
     # playlist_id는 `PL...` ID뿐 아니라 재생목록/시청 URL을 받아 백엔드가 `list=` ID로 해석한다.
     playlist_id: str | None = None
+    # 단일 영상 URL/ID(`watch?v=`·`youtu.be`·`/shorts/`·11자 ID). 백엔드가 영상 ID로 해석한다.
+    video_id: str | None = None
+    # 자동분류 입력: 링크/검색어를 넣으면 백엔드가 재생목록/채널/영상/키워드를 스스로 판별한다.
+    auto_input: str | None = None
     max_videos: int = 20
     # True면 영상 수집만 수행하고 자막/POI/지오코딩(자막 생성)은 건너뛴다. 사용자가
     # 자막 생성 전에 확인 단계를 거칠 수 있도록 별도 `transcript` 작업으로 분리한다.
@@ -214,10 +218,38 @@ async def start_harvest(
     재생목록 URL은 표준 ID(`UC...`/`PL...`)로 해석해 저장한다. `repeat_interval_minutes`가
     있으면 반복 수집 대상(source_target)으로도 등록한다.
     """
+    # 자동분류: auto_input만 들어오면 재생목록/채널/영상/키워드를 판별해 해당 필드를 채운다.
+    if payload.auto_input and not (
+        payload.query
+        or payload.channel_id
+        or payload.playlist_id
+        or payload.video_id
+    ):
+        kind, value = source_resolve.classify_source_input(payload.auto_input)
+        field_by_kind = {
+            "playlist": "playlist_id",
+            "channel": "channel_id",
+            "video": "video_id",
+            "keyword": "query",
+        }
+        payload = payload.model_copy(update={field_by_kind[kind]: value})
+
     canonical_channel: str | None = None
     canonical_playlist: str | None = None
+    canonical_video: str | None = None
 
-    if payload.channel_id:
+    if payload.video_id:
+        raw_video = payload.video_id.strip()
+        canonical_video = source_resolve.parse_video_id(raw_video) or (
+            raw_video if source_resolve.is_video_id(raw_video) else None
+        )
+        if not canonical_video:
+            raise HTTPException(
+                status_code=400,
+                detail=f"영상 URL/ID를 인식할 수 없습니다: {payload.video_id}",
+            )
+        target_type, target_id = "video", canonical_video
+    elif payload.channel_id:
         kind, _value = source_resolve.parse_channel_input(payload.channel_id)
         if kind == "id":
             canonical_channel = _value
@@ -261,6 +293,8 @@ async def start_harvest(
     run_payload = payload.model_dump()
     run_payload["channel_id"] = canonical_channel
     run_payload["playlist_id"] = canonical_playlist
+    if canonical_video:
+        run_payload["video_ids"] = [canonical_video]
 
     run = await crawl_run_service.create_run(
         session,
@@ -271,7 +305,8 @@ async def start_harvest(
         payload=run_payload,
         commit=False,
     )
-    if payload.repeat_interval_minutes:
+    # 단일 영상은 반복 대상 등록을 생략한다(영상 자체는 변하지 않음).
+    if payload.repeat_interval_minutes and target_type != "video":
         await source_scan_service.upsert_recurring_target(
             session,
             target_type=target_type,
@@ -917,14 +952,33 @@ async def list_keywords() -> list[dict[str, Any]]:
 async def list_destinations(
     sort: str = "latest",
     limit: int = 100,
+    channel_id: str | None = None,
+    playlist_id: str | None = None,
+    keyword: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    """확정 여행지 목록을 반환한다."""
+    """확정 여행지 목록을 반환한다.
+
+    `channel_id`/`playlist_id`/`keyword`로 출처(유튜버/재생목록/검색어)별 필터링한다.
+    """
     _validate_destination_sort(sort)
     summaries = await place_service.list_place_summaries(
-        session, sort=sort, limit=max(1, min(limit, 500))
+        session,
+        sort=sort,
+        limit=max(1, min(limit, 500)),
+        channel_id=channel_id,
+        playlist_id=playlist_id,
+        keyword=keyword,
     )
     return [_place_summary_payload(summary) for summary in summaries]
+
+
+@router.get("/destinations/facets")
+async def list_destination_facets(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """결과 보기 그룹화용 출처 facet(유튜버/재생목록/검색어별 장소 수)을 반환한다."""
+    return await place_service.list_place_facets(session)
 
 
 @router.get("/destinations/export")

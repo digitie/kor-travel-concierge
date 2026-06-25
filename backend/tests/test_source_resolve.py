@@ -70,6 +70,54 @@ def test_parse_playlist_id_bare_and_invalid():
     assert source_resolve.parse_playlist_id("") is None
 
 
+def test_parse_video_id_variants():
+    assert source_resolve.parse_video_id("https://youtu.be/ZLONY_jLGC4") == "ZLONY_jLGC4"
+    assert (
+        source_resolve.parse_video_id("https://www.youtube.com/watch?v=ZLONY_jLGC4")
+        == "ZLONY_jLGC4"
+    )
+    assert (
+        source_resolve.parse_video_id("https://www.youtube.com/shorts/abcDEF12345")
+        == "abcDEF12345"
+    )
+    assert (
+        source_resolve.parse_video_id("https://www.youtube.com/embed/abcDEF12345")
+        == "abcDEF12345"
+    )
+    # bare 문자열은 키워드와 모호해 영상으로 보지 않는다.
+    assert source_resolve.parse_video_id("부산 맛집") is None
+    # list= 만 있는 재생목록 URL은 영상 ID가 아니다.
+    assert source_resolve.parse_video_id("https://www.youtube.com/playlist?list=PLx") is None
+
+
+def test_is_video_id():
+    assert source_resolve.is_video_id("ZLONY_jLGC4") is True
+    assert source_resolve.is_video_id("too-short") is False
+    assert source_resolve.is_video_id(_UC) is False
+
+
+def test_classify_source_input_auto():
+    cls = source_resolve.classify_source_input
+    assert cls("https://www.youtube.com/watch?v=ZLONY_jLGC4") == ("video", "ZLONY_jLGC4")
+    assert cls("https://youtu.be/ZLONY_jLGC4") == ("video", "ZLONY_jLGC4")
+    assert cls("https://www.youtube.com/playlist?list=PLabc123def456") == (
+        "playlist",
+        "PLabc123def456",
+    )
+    # watch + list 둘 다면 재생목록 우선.
+    assert cls("https://www.youtube.com/watch?v=ZLONY_jLGC4&list=PLabc123def456") == (
+        "playlist",
+        "PLabc123def456",
+    )
+    assert cls(f"https://www.youtube.com/channel/{_UC}")[0] == "channel"
+    assert cls("https://www.youtube.com/@bbang_tv")[0] == "channel"
+    assert cls(_UC) == ("channel", _UC)
+    assert cls("@bbang_tv") == ("channel", "@bbang_tv")
+    assert cls("PLabcdefghij123") == ("playlist", "PLabcdefghij123")
+    assert cls("부산 맛집") == ("keyword", "부산 맛집")
+    assert cls("") == ("keyword", "")
+
+
 class _FakeClient:
     def __init__(self, *, handle=None, username=None, search=None):
         self._handle = handle

@@ -150,6 +150,12 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
     playlist_id = payload.get("playlist_id") or (
         run.target_id if target_type == "playlist" else None
     )
+    raw_video_ids = payload.get("video_ids")
+    direct_video_ids: list[str] | None = None
+    if isinstance(raw_video_ids, list) and raw_video_ids:
+        direct_video_ids = [str(v) for v in raw_video_ids if v]
+    elif target_type == "video" and run.target_id:
+        direct_video_ids = [str(run.target_id)]
 
     if target_type == "keyword" and not query:
         raise ValueError("keyword harvest 작업에는 query 또는 target_id가 필요하다")
@@ -157,7 +163,9 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
         raise ValueError("channel harvest 작업에는 channel_id 또는 target_id가 필요하다")
     if target_type == "playlist" and not playlist_id:
         raise ValueError("playlist harvest 작업에는 playlist_id 또는 target_id가 필요하다")
-    if target_type not in ("keyword", "channel", "playlist"):
+    if target_type == "video" and not direct_video_ids:
+        raise ValueError("video harvest 작업에는 video_ids 또는 target_id가 필요하다")
+    if target_type not in ("keyword", "channel", "playlist", "video"):
         raise ValueError(f"지원하지 않는 harvest target_type: {target_type}")
 
     settings = get_settings()
@@ -184,6 +192,7 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             seed_keyword=str(query) if query else None,
             channel_id=str(channel_id) if channel_id else None,
             playlist_id=str(playlist_id) if playlist_id else None,
+            direct_video_ids=direct_video_ids,
             max_videos=_max_videos_from_payload(payload),
             content_filter=str(payload.get("content_filter") or "both"),
             shorts_max_seconds=settings.SHORTS_MAX_DURATION_SECONDS,

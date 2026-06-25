@@ -332,6 +332,7 @@ async def run_harvest(
     seed_keyword: str | None = None,
     channel_id: str | None = None,
     playlist_id: str | None = None,
+    direct_video_ids: list[str] | None = None,
     max_videos: int = 20,
     content_filter: str = "both",
     shorts_max_seconds: int = 60,
@@ -362,7 +363,13 @@ async def run_harvest(
     playlist_links: list[dict[str, Any]] = []
     source_query_by_video_id: dict[str, str] = {}
 
-    if playlist_id:
+    if direct_video_ids:
+        # 단일/지정 영상 수집: 검색·재생목록 조회 없이 주어진 영상 ID를 그대로 받아
+        # 공통 videos.list 적재 경로를 탄다(입력 순서 유지 + 중복 제거 + 상한).
+        target_type = "video"
+        target_id = direct_video_ids[0]
+        video_ids = list(dict.fromkeys(direct_video_ids))[: max(1, max_videos)]
+    elif playlist_id:
         target_type = "playlist"
         target_id = playlist_id
         playlist_details = await client.playlists_list(playlist_id)
