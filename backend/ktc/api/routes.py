@@ -1373,6 +1373,39 @@ async def delete_place(
     }
 
 
+class ExcludeVideoRequest(BaseModel):
+    """동영상 제외 요청(선택 사유)."""
+
+    reason: str | None = None
+
+
+@router.post("/destinations/videos/{video_id}/exclude")
+async def exclude_video(
+    video_id: str,
+    payload: ExcludeVideoRequest | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """관련 없거나 질 낮은 동영상을 제외(블록리스트)하고 관련 POI를 삭제한다.
+
+    영상을 `is_excluded`로 표시해 이후 수집에서 다시 받지 않고 스킵하며, 이 영상의
+    추출 후보·언급 매핑을 삭제하고 고아가 된 장소만 함께 삭제한다(다른 영상이
+    언급하는 장소는 보존). 영상을 찾지 못하면 404.
+    """
+    reason = payload.reason if payload else None
+    result = await place_service.exclude_video(session, video_id, reason=reason)
+    if result is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="video.exclude",
+        target_type="youtube_video",
+        target_id=video_id,
+        payload=result,
+    )
+    return result
+
+
 @router.get("/destinations/{place_id}/detail")
 async def get_destination_detail(
     place_id: int, session: AsyncSession = Depends(get_session)
@@ -1919,6 +1952,7 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "match_status": candidate.match_status,
         "matched_place_id": candidate.matched_place_id,
         "confidence_score": candidate.confidence_score,
+        "is_domestic": candidate.is_domestic,
         "provider_evidence_json": candidate.provider_evidence_json,
         "feature_export_status": candidate.feature_export_status,
         "reviewed_by": candidate.reviewed_by,

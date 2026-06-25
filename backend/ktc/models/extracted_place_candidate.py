@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -77,6 +77,8 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         index=True,
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # POI 추출 LLM이 판정한 국내 여부. None=미판정, True=대한민국, False=해외(검수만, 미확정).
+    is_domestic: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     provider_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )

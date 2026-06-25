@@ -116,6 +116,8 @@ export type UnmatchedCandidate = {
   candidate_category: string | null;
   match_status: string;
   timestamp_start: string | null;
+  // POI 추출 LLM의 국내 여부 판정. null=미판정, true=국내, false=해외.
+  is_domestic: boolean | null;
 };
 
 export type CrawlRunSummary = {
@@ -419,6 +421,25 @@ export async function reprocessVideos(
     method: "POST",
     body: JSON.stringify({ video_ids: videoIds, start_stage: startStage }),
   });
+}
+
+// 검수에서 관련 없거나 질 낮은 동영상을 제외(삭제) — 관련 POI 삭제 + 이후 수집 스킵.
+export async function excludeVideo(
+  videoId: string,
+  reason?: string,
+): Promise<{
+  video_id: string;
+  deleted_candidates: number;
+  deleted_mappings: number;
+  deleted_places: number;
+}> {
+  return requestJson(
+    `/api/v1/destinations/videos/${encodeURIComponent(videoId)}/exclude`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? null }),
+    },
+  );
 }
 
 export async function listRuns({

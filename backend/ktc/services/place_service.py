@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.spatial import sync_place_geometry
 from ktc.models import (
     ExtractedPlaceCandidate,
+    FeatureExport,
     FeatureExportStatus,
     MatchStatus,
     MediaAsset,
@@ -763,3 +764,88 @@ async def list_unmatched_candidates(
     stmt = stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def exclude_video(
+    session: AsyncSession, video_id: str, *, reason: str | None = None
+) -> dict[str, Any] | None:
+    """동영상을 제외(블록리스트)하고 관련 POI를 삭제한다.
+
+    영상을 `is_excluded=True`로 표시(이후 수집에서 스킵), 이 영상의 추출 후보·언급
+    매핑을 삭제하고, 다른 영상이 더 이상 언급하지 않아 고아가 된 장소만 삭제한다.
+    다른 영상이 같은 장소를 언급하면 그 장소·언급은 보존한다. 반환: 삭제 건수 요약.
+    영상을 찾지 못하면 None.
+    """
+    video = await session.get(YoutubeVideo, video_id)
+    if video is None:
+        return None
+    video.is_excluded = True
+    if reason:
+        video.exclusion_reason = reason[:255]
+
+    # 고아 판정 대상: 이 영상이 매핑한 place_id 집합.
+    place_ids = {
+        pid
+        for pid in (
+            await session.execute(
+                select(VideoPlaceMapping.place_id).where(
+                    VideoPlaceMapping.video_id == video_id
+                )
+            )
+        ).scalars()
+        if pid is not None
+    }
+    candidate_ids = list(
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate.id).where(
+                    ExtractedPlaceCandidate.video_id == video_id
+                )
+            )
+        ).scalars()
+    )
+    # feature_exports.candidate_id FK(NO ACTION) 때문에 후보 삭제 전에 ledger 행을 정리한다.
+    # TODO: 이미 외부로 export된 장소의 다운스트림 tombstone은 feature_export_service 경유로
+    #       후속 보강(현재는 ledger 행만 제거해 FK 충돌을 막는다).
+    if candidate_ids:
+        await session.execute(
+            delete(FeatureExport).where(FeatureExport.candidate_id.in_(candidate_ids))
+        )
+    mapping_result = await session.execute(
+        delete(VideoPlaceMapping).where(VideoPlaceMapping.video_id == video_id)
+    )
+    candidate_result = await session.execute(
+        delete(ExtractedPlaceCandidate).where(
+            ExtractedPlaceCandidate.video_id == video_id
+        )
+    )
+
+    deleted_places = 0
+    for pid in place_ids:
+        remaining_maps = (
+            await session.execute(
+                select(func.count())
+                .select_from(VideoPlaceMapping)
+                .where(VideoPlaceMapping.place_id == pid)
+            )
+        ).scalar_one()
+        remaining_cands = (
+            await session.execute(
+                select(func.count())
+                .select_from(ExtractedPlaceCandidate)
+                .where(ExtractedPlaceCandidate.place_id == pid)
+            )
+        ).scalar_one()
+        if remaining_maps == 0 and remaining_cands == 0:
+            await session.execute(
+                delete(TravelPlace).where(TravelPlace.place_id == pid)
+            )
+            deleted_places += 1
+
+    await session.commit()
+    return {
+        "video_id": video_id,
+        "deleted_candidates": candidate_result.rowcount or 0,
+        "deleted_mappings": mapping_result.rowcount or 0,
+        "deleted_places": deleted_places,
+    }

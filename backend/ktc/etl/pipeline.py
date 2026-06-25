@@ -469,6 +469,16 @@ async def run_harvest(
             status_reporter=status_reporter,
         )
 
+    # 사용자가 제외(블록리스트)한 영상은 다시 받지 않고 스킵한다(재탐색금지).
+    if video_ids:
+        excluded = await ingest_service.get_excluded_video_ids(session, video_ids)
+        if excluded:
+            video_ids = [vid for vid in video_ids if vid not in excluded]
+            await _report(
+                status_reporter,
+                f"제외(블록리스트)된 영상 {len(excluded)}개를 건너뜁니다.",
+            )
+
     candidates: list[dict[str, Any]] = []
     if video_ids:
         await _report(

@@ -273,6 +273,10 @@ async def process_video_batch(
             timestamp_end=poi.timestamp_end,
             candidate_category=category_label,
             match_status=MatchStatus.NEEDS_REVIEW,
+            is_domestic=poi.is_domestic,
+            review_note=(
+                "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
+            ),
             provider_evidence_json={
                 "transcript": {
                     "source": item["transcript_source"],
@@ -303,11 +307,20 @@ async def process_video_batch(
     )
 
     # 4) 새 후보 지오코딩(자동 확정/검수 큐). 카테고리 8자리 코드는 evidence 값 그대로.
-    if created_candidates:
+    #    단, 해외(is_domestic=False)는 지오코딩/자동확정을 생략하고 needs_review로만 남긴다
+    #    (이 서비스는 국내 여행지만 다룬다 — 기록은 남기고 사용자가 검수에서 재시도/제외).
+    geocode_targets = [c for c in created_candidates if c.is_domestic is not False]
+    foreign_count = len(created_candidates) - len(geocode_targets)
+    if foreign_count:
+        await _report(
+            status_reporter,
+            f"해외로 판정된 후보 {foreign_count}개는 지오코딩을 생략하고 검수 큐에 남깁니다.",
+        )
+    if geocode_targets:
         from ktc.etl import postprocess_service  # 지연 import(순환 회피)
 
         geo = await postprocess_service.geocode_candidates(
-            session, created_candidates, status_reporter=status_reporter
+            session, geocode_targets, status_reporter=status_reporter
         )
         summary["matched_places"] = geo.get("matched_places", 0)
         summary["needs_review_candidates"] = geo.get("needs_review_candidates", 0)
