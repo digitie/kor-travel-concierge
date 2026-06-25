@@ -729,14 +729,37 @@ async def delete_place(
 
 
 async def list_unmatched_candidates(
-    session: AsyncSession, *, limit: int = 500
+    session: AsyncSession,
+    *,
+    limit: int = 500,
+    channel_id: str | None = None,
+    playlist_id: str | None = None,
+    keyword: str | None = None,
 ) -> list[ExtractedPlaceCandidate]:
-    """`needs_review` 상태의 매칭 실패 후보를 조회한다."""
-    stmt = (
-        select(ExtractedPlaceCandidate)
-        .where(ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW)
-        .order_by(ExtractedPlaceCandidate.id.desc())
-        .limit(limit)
+    """`needs_review` 상태의 매칭 실패 후보를 조회한다.
+
+    결과 보기와 동일하게 유튜버(channel)/재생목록(playlist)/검색어(keyword) 출처로
+    필터할 수 있다. channel/keyword 필터는 후보의 출처 영상(youtube_videos)을 조인한다.
+    """
+    stmt = select(ExtractedPlaceCandidate).where(
+        ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW
     )
+    if channel_id or keyword:
+        stmt = stmt.join(
+            YoutubeVideo,
+            YoutubeVideo.video_id == ExtractedPlaceCandidate.video_id,
+        )
+    if channel_id:
+        stmt = stmt.where(
+            or_(
+                ExtractedPlaceCandidate.source_channel_id == channel_id,
+                YoutubeVideo.channel_id == channel_id,
+            )
+        )
+    if playlist_id:
+        stmt = stmt.where(ExtractedPlaceCandidate.source_playlist_id == playlist_id)
+    if keyword:
+        stmt = stmt.where(YoutubeVideo.source_search_query == keyword)
+    stmt = stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())

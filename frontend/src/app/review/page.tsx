@@ -15,9 +15,13 @@ import {
 
 import {
   getPlaceOpinion,
+  listDestinationFacets,
   listUnmatchedCandidates,
   resolveCandidate,
   searchPlaces,
+  type DestinationFacets,
+  type DestinationFilter,
+  type DestinationGroupDim,
   type DestinationSummary,
   type PlaceOpinion,
   type PlaceSearchHit,
@@ -33,6 +37,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AppNav } from "@/components/AppNav";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
@@ -87,9 +99,27 @@ function buildHintedQuery(candidate: UnmatchedCandidate): string {
 
 export default function ReviewPage() {
   const queryClient = useQueryClient();
+  // 결과 보기와 동일한 출처 필터(유튜버/재생목록/검색어별).
+  const [groupDim, setGroupDim] = useState<DestinationGroupDim>("none");
+  const [groupValue, setGroupValue] = useState<string | null>(null);
+  const facetsQuery = useQuery({
+    queryKey: ["destination-facets"],
+    queryFn: listDestinationFacets,
+    refetchInterval: 60_000,
+  });
+  const filter = useMemo<DestinationFilter | undefined>(() => {
+    if (!groupValue || groupDim === "none") return undefined;
+    if (groupDim === "channel") return { channelId: groupValue };
+    if (groupDim === "playlist") return { playlistId: groupValue };
+    return { keyword: groupValue };
+  }, [groupDim, groupValue]);
+  const candidatesKey = useMemo(
+    () => ["unmatched-candidates", groupDim, groupValue] as const,
+    [groupDim, groupValue],
+  );
   const candidatesQuery = useQuery({
-    queryKey: ["unmatched-candidates"],
-    queryFn: listUnmatchedCandidates,
+    queryKey: candidatesKey,
+    queryFn: () => listUnmatchedCandidates(filter),
     refetchInterval: 15_000,
   });
   const candidates = useMemo(
@@ -255,12 +285,11 @@ export default function ReviewPage() {
       // 실패 시 onError에서 원래 목록을 복구한다.
       const removedId = selected?.id ?? null;
       await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      const previous = queryClient.getQueryData<UnmatchedCandidate[]>([
-        "unmatched-candidates",
-      ]);
+      const previous =
+        queryClient.getQueryData<UnmatchedCandidate[]>(candidatesKey);
       if (removedId != null) {
         queryClient.setQueryData<UnmatchedCandidate[]>(
-          ["unmatched-candidates"],
+          candidatesKey,
           (old) => (old ?? []).filter((c) => c.id !== removedId),
         );
       }
@@ -268,7 +297,7 @@ export default function ReviewPage() {
     },
     onError: (_error, _action, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(["unmatched-candidates"], context.previous);
+        queryClient.setQueryData(candidatesKey, context.previous);
       }
     },
     onSuccess: () => {
@@ -308,6 +337,50 @@ export default function ReviewPage() {
           <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
             검수 대기 후보
           </p>
+          <div className="grid grid-cols-2 gap-1.5 pb-1">
+            <Select
+              value={groupDim}
+              onValueChange={(value) => {
+                setGroupDim(value as DestinationGroupDim);
+                setGroupValue(null);
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label="검수 그룹 기준">
+                <SelectValue>{groupDimLabel(groupDim)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="none">전체</SelectItem>
+                  <SelectItem value="channel">유튜버별</SelectItem>
+                  <SelectItem value="playlist">재생목록별</SelectItem>
+                  <SelectItem value="keyword">검색어별</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {groupDim !== "none" ? (
+              <Select
+                value={groupValue ?? ""}
+                onValueChange={(value) => setGroupValue(value || null)}
+              >
+                <SelectTrigger className="w-full" aria-label="그룹 값 선택">
+                  <SelectValue placeholder={`${groupDimLabel(groupDim)} 선택`}>
+                    {groupValueLabel(groupDim, groupValue, facetsQuery.data)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {groupOptions(groupDim, facetsQuery.data).map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label} ({opt.count})
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : (
+              <div />
+            )}
+          </div>
           {candidates.length === 0 ? (
             <p className="rounded-lg border p-3 text-xs text-muted-foreground">
               검수할 후보가 없습니다.
@@ -588,6 +661,49 @@ export default function ReviewPage() {
       </Dialog>
     </main>
   );
+}
+
+function groupDimLabel(dim: DestinationGroupDim) {
+  if (dim === "channel") return "유튜버별";
+  if (dim === "playlist") return "재생목록별";
+  if (dim === "keyword") return "검색어별";
+  return "전체";
+}
+
+function groupOptions(
+  dim: DestinationGroupDim,
+  facets: DestinationFacets | undefined,
+): { value: string; label: string; count: number }[] {
+  if (!facets) return [];
+  if (dim === "channel")
+    return facets.channels.map((c) => ({
+      value: c.id,
+      label: c.title,
+      count: c.place_count,
+    }));
+  if (dim === "playlist")
+    return facets.playlists.map((p) => ({
+      value: p.id,
+      label: p.title,
+      count: p.place_count,
+    }));
+  if (dim === "keyword")
+    return facets.keywords.map((k) => ({
+      value: k.value,
+      label: k.value,
+      count: k.place_count,
+    }));
+  return [];
+}
+
+function groupValueLabel(
+  dim: DestinationGroupDim,
+  value: string | null,
+  facets: DestinationFacets | undefined,
+) {
+  if (!value) return "";
+  const option = groupOptions(dim, facets).find((opt) => opt.value === value);
+  return option ? `${option.label} (${option.count})` : value;
 }
 
 function GeminiCard({

@@ -336,6 +336,8 @@ async def run_harvest(
     max_videos: int = 20,
     content_filter: str = "both",
     shorts_max_seconds: int = 60,
+    # True면 증분 워터마크를 무시하고 처음부터 max_videos까지 다시 수집한다(강제 재실행).
+    ignore_watermark: bool = False,
     now: datetime | None = None,
     generator: KeywordGenerator | None = None,
     status_reporter: StatusReporter | None = None,
@@ -377,9 +379,13 @@ async def run_harvest(
             ingest_service.build_playlist_metadata(item, now=now)
             for item in _metadata_items(playlist_details)
         ]
-        watermark = _as_utc_aware(
-            await ingest_service.get_source_target_watermark(
-                session, target_type=target_type, source_value=playlist_id
+        watermark = (
+            None
+            if ignore_watermark
+            else _as_utc_aware(
+                await ingest_service.get_source_target_watermark(
+                    session, target_type=target_type, source_value=playlist_id
+                )
             )
         )
         video_ids, playlist_links = await _collect_playlist_video_ids(
@@ -397,7 +403,11 @@ async def run_harvest(
             ingest_service.build_channel_metadata(item, now=now)
             for item in _metadata_items(channel_details)
         ]
-        watermark = _as_utc_aware(await ingest_service.get_channel_watermark(session, channel_id))
+        watermark = (
+            None
+            if ignore_watermark
+            else _as_utc_aware(await ingest_service.get_channel_watermark(session, channel_id))
+        )
         uploads_playlist_id = _uploads_playlist_id_from_channels(channel_details)
         video_ids, uploads_playlist_id, playlist_links = await _collect_channel_video_ids(
             client,
@@ -437,9 +447,13 @@ async def run_harvest(
             0.24,
         )
         queries = [seed_keyword, *derived]
-        watermark = _as_utc_aware(
-            await ingest_service.get_source_target_watermark(
-                session, target_type=target_type, source_value=seed_keyword
+        watermark = (
+            None
+            if ignore_watermark
+            else _as_utc_aware(
+                await ingest_service.get_source_target_watermark(
+                    session, target_type=target_type, source_value=seed_keyword
+                )
             )
         )
         await _report(

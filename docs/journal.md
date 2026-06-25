@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-26: T-124 — 강제 재실행 워터마크 무시 + 검수큐 출처 필터
+
+- **강제 재실행이 신규 0개로 즉시 끝나던 버그**: 채널 수집은 워터마크를 `get_channel_watermark`(DB 기존 영상 기준)로 가져와, force가 *target* 워터마크만 리셋해도 무시돼 기존 영상 지점에서 멈췄다(둘시네아 채널을 50→300으로 바꿔 강제 재실행했더니 "재생목록 UU…에서 0개" 후 즉시 완료). `run_harvest`에 `ignore_watermark` 추가 — keyword/playlist/channel 모든 분기에서 True면 워터마크를 무시하고 처음부터 `max_videos`까지 재수집한다. `harvest_handler`가 payload `force`를 `ignore_watermark`로 전달.
+- **검수큐 출처 필터(결과 보기와 동일)**: `list_unmatched_candidates`에 channel/playlist/keyword 필터 추가(후보의 `source_channel_id`/`source_playlist_id` + `video_id`로 youtube_videos 조인해 channel fallback·검색어). `GET /destinations/unmatched`에 필터 쿼리. 프런트 `app/review/page.tsx`에 결과와 동일한 그룹 기준(유튜버별/재생목록별/검색어별) + 값 셀렉터(facets 재사용), 낙관적 업데이트 키를 필터별로 보정.
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). 스키마 변경 없음.
+
 ## 2026-06-26: T-123 — 최대 영상 300 + 결과 지도/리스트 상하 교체 + 반복 대상 수집개수·반복여부 편집
 
 - **최대 영상 수 50→300**: 백엔드 캡 `YOUTUBE_MAX_VIDEOS_PER_RUN` 20→300(상한 겸 기본값; `_max_videos_from_payload`가 이 값으로 캡하고 있어 UI만 올리면 20에 머물렀음), 프런트 `HarvestConsole` 폼 max·검증·설명을 1-300으로. 수집 함수는 pageToken 페이지네이션이 있어 50개 초과 수집 가능.
