@@ -196,6 +196,8 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             max_videos=_max_videos_from_payload(payload),
             content_filter=str(payload.get("content_filter") or "both"),
             shorts_max_seconds=settings.SHORTS_MAX_DURATION_SECONDS,
+            # 강제 재실행(force)이면 증분 워터마크를 무시하고 처음부터 다시 수집한다.
+            ignore_watermark=bool(payload.get("force")),
             status_reporter=report_status,
         )
         if payload.get("skip_transcript"):

@@ -386,8 +386,17 @@ export function buildDestinationExportUrl({
   return `${API_BASE_URL}/api/v1/destinations/export?${params.toString()}`;
 }
 
-export async function listUnmatchedCandidates(): Promise<UnmatchedCandidate[]> {
-  return requestJson<UnmatchedCandidate[]>("/api/v1/destinations/unmatched");
+export async function listUnmatchedCandidates(
+  filter?: DestinationFilter,
+): Promise<UnmatchedCandidate[]> {
+  const params = new URLSearchParams();
+  if (filter?.channelId) params.set("channel_id", filter.channelId);
+  if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
+  if (filter?.keyword) params.set("keyword", filter.keyword);
+  const qs = params.toString();
+  return requestJson<UnmatchedCandidate[]>(
+    `/api/v1/destinations/unmatched${qs ? `?${qs}` : ""}`,
+  );
 }
 
 export async function listRuns({
