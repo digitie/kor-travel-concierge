@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:live": "next dev --hostname 127.0.0.1 --port 12605",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "type-check": "next typegen && tsc --noEmit",
