@@ -67,8 +67,16 @@ async def process_video_batch(
     runtime: llm_client.LlmRuntime,
     transcript_fetcher: TranscriptFetcher,
     status_reporter: StatusReporter | None = None,
+    start_stage: str = "transcript",
 ) -> dict[str, Any]:
-    """영상 묶음(≤10)을 교정→배치 추출→후보 생성까지 처리한다."""
+    """영상 묶음(≤10)을 교정→배치 추출→후보 생성까지 처리한다.
+
+    `start_stage`로 어느 단계부터 다시 할지 고른다(검수 재처리):
+    - "transcript": 기본. YouTube에서 자막을 새로 받아 교정→POI까지.
+    - "correction": 저장된 원본 자막을 재사용해 자막 fetch를 건너뛰고 교정→POI.
+    - "poi": 저장된 교정본을 재사용해 fetch·교정을 건너뛰고 POI만 다시 추출.
+    저장된 자막/교정본이 없으면 한 단계 앞(없으면 fetch)으로 자동 폴백한다.
+    """
     summary = {
         "processed_videos": 0,
         "corrected_videos": 0,
@@ -80,58 +88,102 @@ async def process_video_batch(
     for index, video in enumerate(videos, start=1):
         alias = f"video_{index:03d}"
         label = video.title or video.video_id
-        transcript = await transcript_fetcher(video.video_id)
-        if transcript is None or not transcript.segments:
-            video.crawl_status = CrawlStatus.FAILED
-            summary["failed_videos"] += 1
-            await _report(status_reporter, f"{label}의 자막을 찾지 못해 건너뜁니다.")
-            continue
-        raw_text = transcript.to_timestamped_text()
-        raw_asset = await media_store.store_and_record(
-            session,
-            store,
-            asset_type=AssetType.TRANSCRIPT,
-            object_key=f"{video.video_id}/transcript_{transcript.source}.txt",
-            data=raw_text.encode("utf-8"),
-            content_type="text/plain; charset=utf-8",
-            video_id=video.video_id,
-        )
-        await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
-        correction_timeout = get_settings().LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS
-        try:
-            corrected = await asyncio.wait_for(
-                transcript_correction.correct_transcript(
-                    runtime,
-                    transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
-                    description=video.description_raw,
-                ),
-                timeout=correction_timeout,
+        transcript_source = "cached"
+        raw_asset_id: int | None = None
+        corrected: str | None = None
+
+        # POI부터: 저장된 교정본을 그대로 재사용해 fetch·교정을 건너뛴다.
+        if start_stage == "poi":
+            corrected = await media_store.load_latest_asset_text(
+                session,
+                store,
+                video_id=video.video_id,
+                asset_type=AssetType.TRANSCRIPT_CORRECTED,
             )
-            summary["corrected_videos"] += 1
-        except TimeoutError:
-            # 한 영상의 교정이 시간예산을 넘으면(긴 자막·느린 LLM) 단일 워커를 무한
-            # 점유하지 않도록 원본 자막으로 진행하고 다음 영상으로 넘어간다.
-            corrected = raw_text
-            await _report(
-                status_reporter,
-                f"{label} 자막 교정 시간 초과({correction_timeout}s) — 원본으로 진행합니다.",
+            if corrected is not None:
+                raw_asset = await media_store.load_latest_asset(
+                    session, video_id=video.video_id, asset_type=AssetType.TRANSCRIPT
+                )
+                raw_asset_id = raw_asset.id if raw_asset is not None else None
+                await _report(
+                    status_reporter,
+                    f"{label} 저장된 교정본으로 POI만 다시 추출합니다.",
+                )
+
+        # 교정본이 없으면(또는 transcript/correction 단계면) 원본 자막을 확보해 교정한다.
+        if corrected is None:
+            raw_text: str | None = None
+            # 교정부터/POI부터(교정본 없음): 저장된 원본 자막을 재사용해 fetch를 건너뛴다.
+            if start_stage in ("correction", "poi"):
+                raw_asset = await media_store.load_latest_asset(
+                    session, video_id=video.video_id, asset_type=AssetType.TRANSCRIPT
+                )
+                if raw_asset is not None:
+                    raw_bytes = await asyncio.to_thread(
+                        store.get_object, raw_asset.bucket, raw_asset.object_key
+                    )
+                    raw_text = raw_bytes.decode("utf-8")
+                    raw_asset_id = raw_asset.id
+                    await _report(
+                        status_reporter, f"{label} 저장된 자막으로 교정부터 다시 합니다."
+                    )
+            # 자막부터 또는 저장된 자막이 없으면: YouTube에서 새로 가져온다.
+            if raw_text is None:
+                transcript = await transcript_fetcher(video.video_id)
+                if transcript is None or not transcript.segments:
+                    video.crawl_status = CrawlStatus.FAILED
+                    summary["failed_videos"] += 1
+                    await _report(status_reporter, f"{label}의 자막을 찾지 못해 건너뜁니다.")
+                    continue
+                raw_text = transcript.to_timestamped_text()
+                transcript_source = transcript.source
+                raw_asset = await media_store.store_and_record(
+                    session,
+                    store,
+                    asset_type=AssetType.TRANSCRIPT,
+                    object_key=f"{video.video_id}/transcript_{transcript.source}.txt",
+                    data=raw_text.encode("utf-8"),
+                    content_type="text/plain; charset=utf-8",
+                    video_id=video.video_id,
+                )
+                raw_asset_id = raw_asset.id
+            await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
+            correction_timeout = get_settings().LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS
+            try:
+                corrected = await asyncio.wait_for(
+                    transcript_correction.correct_transcript(
+                        runtime,
+                        transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
+                        description=video.description_raw,
+                    ),
+                    timeout=correction_timeout,
+                )
+                summary["corrected_videos"] += 1
+            except TimeoutError:
+                # 한 영상의 교정이 시간예산을 넘으면(긴 자막·느린 LLM) 단일 워커를 무한
+                # 점유하지 않도록 원본 자막으로 진행하고 다음 영상으로 넘어간다.
+                corrected = raw_text
+                await _report(
+                    status_reporter,
+                    f"{label} 자막 교정 시간 초과({correction_timeout}s) — 원본으로 진행합니다.",
+                )
+            except Exception as exc:  # 교정 실패는 best-effort: 원본 자막으로 진행
+                corrected = raw_text
+                await _report(status_reporter, f"{label} 자막 교정 실패({exc}) — 원본으로 진행합니다.")
+            await media_store.store_and_record(
+                session,
+                store,
+                asset_type=AssetType.TRANSCRIPT_CORRECTED,
+                object_key=f"{video.video_id}/transcript_corrected.txt",
+                data=corrected.encode("utf-8"),
+                content_type="text/plain; charset=utf-8",
+                video_id=video.video_id,
             )
-        except Exception as exc:  # 교정 실패는 best-effort: 원본 자막으로 진행
-            corrected = raw_text
-            await _report(status_reporter, f"{label} 자막 교정 실패({exc}) — 원본으로 진행합니다.")
-        await media_store.store_and_record(
-            session,
-            store,
-            asset_type=AssetType.TRANSCRIPT_CORRECTED,
-            object_key=f"{video.video_id}/transcript_corrected.txt",
-            data=corrected.encode("utf-8"),
-            content_type="text/plain; charset=utf-8",
-            video_id=video.video_id,
-        )
+
         batch[alias] = {
             "video": video,
-            "transcript_source": transcript.source,
-            "asset_id": raw_asset.id,
+            "transcript_source": transcript_source,
+            "asset_id": raw_asset_id,
             "corrected": corrected,
         }
     await session.commit()
