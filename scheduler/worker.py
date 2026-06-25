@@ -292,6 +292,9 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
     video_ids = [str(v) for v in (payload.get("video_ids") or [])]
     if not video_ids:
         raise ValueError("poi_batch 작업에는 video_ids가 필요하다")
+    # 검수 재처리(start_stage 지정)면 이미 완료된 영상도 어느 단계부터든 다시 처리한다.
+    start_stage = str(payload.get("start_stage") or "transcript")
+    reprocess = bool(payload.get("start_stage"))
 
     async def report_status(message: str, progress: float | None = None) -> None:
         await crawl_run_service.append_status_log(
@@ -299,26 +302,21 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         )
 
     await report_status("자막 교정·POI 배치 추출을 시작합니다.", 0.1)
-    # 이미 처리된 영상(SUMMARIZED/GEOCODED/DONE)은 건너뛴다 — 재실행/강제/재시작 시
-    # 중복 후보가 생기지 않도록(멱등성). DISCOVERED/FAILED만 처리.
-    videos = list(
-        (
-            await session.execute(
-                select(YoutubeVideo).where(
-                    YoutubeVideo.video_id.in_(video_ids),
-                    YoutubeVideo.crawl_status.notin_(
-                        [
-                            CrawlStatus.SUMMARIZED,
-                            CrawlStatus.GEOCODED,
-                            CrawlStatus.DONE,
-                        ]
-                    ),
-                )
+    # 일반 처리: 이미 처리된 영상(SUMMARIZED/GEOCODED/DONE)은 건너뛴다 — 재실행/강제/
+    # 재시작 시 중복 후보가 생기지 않도록(멱등성). DISCOVERED/FAILED만 처리.
+    # 단, 명시적 재처리(reprocess)면 완료 영상도 포함한다(후보 dedup은 batch service가 보장).
+    stmt = select(YoutubeVideo).where(YoutubeVideo.video_id.in_(video_ids))
+    if not reprocess:
+        stmt = stmt.where(
+            YoutubeVideo.crawl_status.notin_(
+                [
+                    CrawlStatus.SUMMARIZED,
+                    CrawlStatus.GEOCODED,
+                    CrawlStatus.DONE,
+                ]
             )
         )
-        .scalars()
-        .all()
-    )
+    videos = list((await session.execute(stmt)).scalars().all())
     if not videos:
         return {"video_ids": video_ids, "processed_videos": 0, "skipped_done": True}
     runtime = await settings_service.get_llm_runtime(session)
@@ -330,6 +328,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         runtime=runtime,
         transcript_fetcher=postprocess_service._default_transcript_fetcher,
         status_reporter=report_status,
+        start_stage=start_stage,
     )
     # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
     # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).

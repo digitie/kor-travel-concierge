@@ -369,6 +369,59 @@ async def trigger_poi_batch(
     return {"enqueued_jobs": len(job_ids), "videos": len(video_ids), "job_ids": job_ids}
 
 
+class ReprocessRequest(BaseModel):
+    """검수 재처리 요청: 선택한 영상들을 어느 단계부터 다시 처리할지."""
+
+    video_ids: list[str]
+    # transcript=자막부터 / correction=교정부터 / poi=POI 추출부터.
+    start_stage: Literal["transcript", "correction", "poi"] = "transcript"
+
+
+@router.post("/destinations/reprocess")
+async def reprocess_videos(
+    payload: ReprocessRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """검수에서 선택한 영상들을 지정 단계부터 다시 처리(poi_batch enqueue).
+
+    `start_stage`가 실리면 이미 완료된 영상도 다시 처리한다(worker가 DONE 필터 우회).
+    """
+    video_ids = list(
+        dict.fromkeys(v.strip() for v in payload.video_ids if v and v.strip())
+    )[:200]
+    if not video_ids:
+        raise HTTPException(status_code=400, detail="video_ids required")
+    size = max(1, get_settings().POI_BATCH_MAX_VIDEOS)
+    job_ids: list[str] = []
+    for start in range(0, len(video_ids), size):
+        chunk = video_ids[start : start + size]
+        run = await crawl_run_service.create_run(
+            session,
+            job_type="poi_batch",
+            source=RunSource.WEB,
+            payload={"video_ids": chunk, "start_stage": payload.start_stage},
+            commit=False,
+        )
+        job_ids.append(str(run.id))
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="video.reprocess",
+        target_type="crawl_run",
+        payload={
+            "videos": len(video_ids),
+            "jobs": len(job_ids),
+            "start_stage": payload.start_stage,
+        },
+    )
+    return {
+        "enqueued_jobs": len(job_ids),
+        "videos": len(video_ids),
+        "job_ids": job_ids,
+        "start_stage": payload.start_stage,
+    }
+
+
 @router.get("/harvest/{job_id}", response_model=HarvestStatus)
 async def get_harvest_status(
     job_id: int, session: AsyncSession = Depends(get_session)

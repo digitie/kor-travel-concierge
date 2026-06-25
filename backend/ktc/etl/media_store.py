@@ -68,6 +68,10 @@ class MediaStore(Protocol):
         """file-like 객체를 업로드하고 접근 URI를 반환한다."""
         ...
 
+    def get_object(self, bucket: str, key: str) -> bytes:
+        """객체를 다운로드해 바이트로 반환한다(저장된 자막 재사용 등)."""
+        ...
+
 
 class InMemoryMediaStore:
     """테스트·드라이런용 in-memory 저장소."""
@@ -87,6 +91,9 @@ class InMemoryMediaStore:
     ) -> str:
         self.objects[(bucket, key)] = fileobj.read()
         return f"{self.endpoint}/{bucket}/{key}"
+
+    def get_object(self, bucket: str, key: str) -> bytes:
+        return self.objects[(bucket, key)]
 
 
 class RustFSMediaStore:
@@ -133,6 +140,10 @@ class RustFSMediaStore:
         if self._public_base_url:
             return f"{self._public_base_url}/{key}"
         return f"{self._endpoint}/{bucket}/{key}"
+
+    def get_object(self, bucket: str, key: str) -> bytes:
+        response = self._client.get_object(Bucket=bucket, Key=key)
+        return response["Body"].read()
 
 
 class HashingReader:
@@ -204,6 +215,43 @@ async def store_and_record(
     await session.commit()
     await session.refresh(asset)
     return asset
+
+
+async def load_latest_asset(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    asset_type: str,
+) -> MediaAsset | None:
+    """영상의 특정 asset_type 중 가장 최근 `media_assets` 행을 반환한다."""
+    result = await session.execute(
+        select(MediaAsset)
+        .where(
+            MediaAsset.video_id == video_id,
+            MediaAsset.asset_type == asset_type,
+        )
+        .order_by(MediaAsset.id.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def load_latest_asset_text(
+    session: AsyncSession,
+    store: MediaStore,
+    *,
+    video_id: str,
+    asset_type: str,
+) -> str | None:
+    """저장된 자막/교정본 텍스트를 다시 읽어 반환한다(단계별 재처리 재사용용).
+
+    해당 asset이 없으면 None. RustFS 다운로드는 blocking이라 thread로 offload한다.
+    """
+    asset = await load_latest_asset(session, video_id=video_id, asset_type=asset_type)
+    if asset is None:
+        return None
+    data = await asyncio.to_thread(store.get_object, asset.bucket, asset.object_key)
+    return data.decode("utf-8")
 
 
 async def store_stream_and_record(

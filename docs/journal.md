@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-26: T-126 — 검수 동영상 선택 장바구니 + 단계별 재처리
+
+- **장바구니 선택**: 검수큐(`app/review`)의 각 후보 행에 체크박스를 추가해 영상을 선택한다. 선택은 `usePersistedState`(sessionStorage, key `ktc.review.cart`)로 보존되어 **그룹 필터를 바꿔도(테이블 필터링) 선택이 유지**된다(쇼핑몰 장바구니). 영상 단위 dedup.
+- **단계별 재처리**: 장바구니 바에서 시작 단계(자막 수집부터/교정부터/POI 추출부터)를 고르고 "선택 재처리"를 누르면 선택 영상들을 `poi_batch`로 enqueue한다. `POST /api/v1/destinations/reprocess {video_ids, start_stage}` 신규.
+- **백엔드 단계 인지**: `media_store`에 `get_object`(RustFS 다운로드)·`load_latest_asset`/`load_latest_asset_text`를 추가. `batch_poi_service.process_video_batch`에 `start_stage`를 추가해 — transcript=자막 새로 받기, correction=저장된 원본 자막 재사용해 교정부터, poi=저장된 교정본 재사용해 POI만 — 단계를 건너뛴다(저장본 없으면 한 단계 앞으로 자동 폴백). `poi_batch_handler`는 `start_stage`가 실리면 이미 완료된(SUMMARIZED/GEOCODED/DONE) 영상도 다시 처리한다(후보 dedup은 (video_id, 장소명) 기준으로 batch service가 보장 → 중복 후보 없이 새 장소만 추가).
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). 스키마 변경 없음(마이그레이션 불필요).
+
 ## 2026-06-26: T-125 — 강제 다운로드 체크박스 + 필터 상태 영속
 
 - **강제 다운로드 옵션(증분 vs 전체 재수집 구분)**: 수집 폼(`HarvestConsole`)에 "강제 다운로드(전체 재수집)" 체크박스를 추가. 기본은 증분 추가 수집(이미 본 영상 이후), 체크 시 워터마크 무시하고 처음부터 재수집. `HarvestRequest.force`(→ `run_payload` → harvest_handler `ignore_watermark`, T-124 경로 재사용), api `StartHarvestInput.force`.

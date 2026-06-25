@@ -17,6 +17,7 @@ import {
   getPlaceOpinion,
   listDestinationFacets,
   listUnmatchedCandidates,
+  reprocessVideos,
   resolveCandidate,
   searchPlaces,
   type DestinationFacets,
@@ -25,6 +26,7 @@ import {
   type DestinationSummary,
   type PlaceOpinion,
   type PlaceSearchHit,
+  type ReprocessStage,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -129,6 +131,25 @@ export default function ReviewPage() {
     queryKey: candidatesKey,
     queryFn: () => listUnmatchedCandidates(filter),
     refetchInterval: 15_000,
+  });
+  // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
+  // 선택이 유지된다(쇼핑몰 장바구니). 영상 단위로 dedup.
+  const [cart, setCart] = usePersistedState<string[]>("ktc.review.cart", []);
+  const [reprocessStage, setReprocessStage] =
+    useState<ReprocessStage>("transcript");
+  const cartSet = useMemo(() => new Set(cart), [cart]);
+  function toggleCart(videoId: string) {
+    setCart((prev) =>
+      prev.includes(videoId)
+        ? prev.filter((v) => v !== videoId)
+        : [...prev, videoId],
+    );
+  }
+  const reprocessMutation = useMutation({
+    mutationFn: () => reprocessVideos(cart, reprocessStage),
+    onSuccess: () => {
+      setCart([]);
+    },
   });
   const candidates = useMemo(
     () => candidatesQuery.data ?? [],
@@ -389,6 +410,59 @@ export default function ReviewPage() {
               <div />
             )}
           </div>
+          {reprocessMutation.isSuccess && reprocessMutation.data ? (
+            <p className="rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">
+              영상 {reprocessMutation.data.videos}개를{" "}
+              {reprocessMutation.data.enqueued_jobs}개 작업으로 재처리 등록했습니다.
+            </p>
+          ) : null}
+          {cart.length > 0 ? (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-primary/40 bg-primary/5 p-2">
+              <p className="text-xs font-medium">
+                선택한 영상 {cart.length}개 재처리
+              </p>
+              <Select
+                value={reprocessStage}
+                onValueChange={(value) =>
+                  setReprocessStage(value as ReprocessStage)
+                }
+              >
+                <SelectTrigger className="w-full" aria-label="재처리 시작 단계">
+                  <SelectValue>{reprocessStageLabel(reprocessStage)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="transcript">자막 수집부터</SelectItem>
+                    <SelectItem value="correction">교정부터</SelectItem>
+                    <SelectItem value="poi">POI 추출부터</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button
+                  type="button"
+                  size="xs"
+                  onClick={() => reprocessMutation.mutate()}
+                  disabled={reprocessMutation.isPending}
+                >
+                  선택 재처리
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setCart([])}
+                >
+                  비우기
+                </Button>
+              </div>
+              {reprocessMutation.error ? (
+                <p className="text-xs text-destructive">
+                  {reprocessMutation.error.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {candidates.length === 0 ? (
             <p className="rounded-lg border p-3 text-xs text-muted-foreground">
               검수할 후보가 없습니다.
@@ -400,6 +474,13 @@ export default function ReviewPage() {
                 data-selected={candidate.id === selected?.id}
                 className="flex items-center gap-1 rounded-lg border p-1 transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
               >
+                <input
+                  type="checkbox"
+                  className="ml-1 size-4 shrink-0 rounded border"
+                  checked={cartSet.has(candidate.video_id)}
+                  onChange={() => toggleCart(candidate.video_id)}
+                  aria-label={`${candidate.ai_place_name} 영상 재처리 선택`}
+                />
                 <button
                   type="button"
                   onClick={() => pickCandidate(candidate)}
@@ -669,6 +750,12 @@ export default function ReviewPage() {
       </Dialog>
     </main>
   );
+}
+
+function reprocessStageLabel(stage: ReprocessStage) {
+  if (stage === "correction") return "교정부터";
+  if (stage === "poi") return "POI 추출부터";
+  return "자막 수집부터";
 }
 
 function groupDimLabel(dim: DestinationGroupDim) {

@@ -403,6 +403,24 @@ export async function listUnmatchedCandidates(
   );
 }
 
+export type ReprocessStage = "transcript" | "correction" | "poi";
+
+// 검수에서 선택한 영상들을 지정 단계부터 다시 처리(자막/교정/POI). 장바구니 재처리.
+export async function reprocessVideos(
+  videoIds: string[],
+  startStage: ReprocessStage,
+): Promise<{
+  enqueued_jobs: number;
+  videos: number;
+  job_ids: string[];
+  start_stage: ReprocessStage;
+}> {
+  return requestJson("/api/v1/destinations/reprocess", {
+    method: "POST",
+    body: JSON.stringify({ video_ids: videoIds, start_stage: startStage }),
+  });
+}
+
 export async function listRuns({
   state,
   limit = 12,
