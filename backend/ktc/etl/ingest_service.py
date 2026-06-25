@@ -180,6 +180,23 @@ async def get_channel_watermark(
     return result.scalar()
 
 
+async def get_excluded_video_ids(
+    session: AsyncSession, video_ids: list[str]
+) -> set[str]:
+    """주어진 영상 ID 중 사용자가 제외(블록리스트)한 영상의 ID 집합을 반환한다.
+
+    수집 단계에서 이 집합을 빼면 제외된 영상을 다시 받지 않고 스킵한다(재탐색금지).
+    """
+    if not video_ids:
+        return set()
+    stmt = select(YoutubeVideo.video_id).where(
+        YoutubeVideo.video_id.in_(video_ids),
+        YoutubeVideo.is_excluded.is_(True),
+    )
+    result = await session.execute(stmt)
+    return {str(v) for v in result.scalars()}
+
+
 async def get_source_target_watermark(
     session: AsyncSession, *, target_type: str, source_value: str
 ) -> datetime | None:

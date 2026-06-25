@@ -37,6 +37,9 @@ _SYSTEM_TEMPLATE = (
     "장소의 성격을 분석한 뒤 아래 코드표의 8자리 코드 중 하나를 category_code로 선택하라. "
     "적합한 코드가 없거나 불확실하면 category_code를 빈 문자열로 두어라.\n"
     "각 결과의 video_id에는 입력에 준 video_id(예: video_001)를 그대로 써라.\n\n"
+    "각 장소가 대한민국(한국) 안에 있으면 is_domestic을 true로, 해외(국외)면 false로 "
+    "설정하라. 이 서비스는 국내 여행지만 다루므로 해외 장소는 검수용으로만 남는다. "
+    "국내인지 해외인지 확실하지 않으면 true로 둔다.\n\n"
     "### [카테고리 마스터 테이블] (코드<TAB>분류 경로)\n{catalog}\n"
 )
 
@@ -57,6 +60,7 @@ BATCH_RESPONSE_SCHEMA: dict = {
                     "timestamp_start": {"type": "string"},
                     "timestamp_end": {"type": "string"},
                     "speaker_note": {"type": "string"},
+                    "is_domestic": {"type": "boolean"},
                 },
                 "required": ["video_id", "official_name"],
             },
@@ -74,6 +78,8 @@ class BatchExtractedPOI(BaseModel):
     timestamp_start: str | None = None
     timestamp_end: str | None = None
     speaker_note: str | None = None
+    # 국내 여부(LLM 판정). None=미판정, True=대한민국, False=해외.
+    is_domestic: bool | None = None
 
 
 class BatchPOIResult(BaseModel):

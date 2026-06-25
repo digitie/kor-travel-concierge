@@ -11,9 +11,11 @@ import {
   SearchIcon,
   SparklesIcon,
   SquareIcon,
+  Trash2Icon,
 } from "lucide-react";
 
 import {
+  excludeVideo,
   getPlaceOpinion,
   listDestinationFacets,
   listUnmatchedCandidates,
@@ -137,6 +139,11 @@ export default function ReviewPage() {
   const [cart, setCart] = usePersistedState<string[]>("ktc.review.cart", []);
   const [reprocessStage, setReprocessStage] =
     useState<ReprocessStage>("transcript");
+  // 해외(국내 아님) 후보 숨기기 토글(기본 보기). 상세 왕복에도 유지(sessionStorage).
+  const [hideForeign, setHideForeign] = usePersistedState<boolean>(
+    "ktc.review.hideForeign",
+    false,
+  );
   const cartSet = useMemo(() => new Set(cart), [cart]);
   function toggleCart(videoId: string) {
     setCart((prev) =>
@@ -151,9 +158,25 @@ export default function ReviewPage() {
       setCart([]);
     },
   });
+  // 제외(삭제) — 관련 없거나 질 낮은 동영상을 제외하고 관련 POI 삭제 + 이후 수집 스킵.
+  const excludeMutation = useMutation({
+    mutationFn: (videoId: string) => excludeVideo(videoId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["destinations"] });
+    },
+  });
   const candidates = useMemo(
     () => candidatesQuery.data ?? [],
     [candidatesQuery.data],
+  );
+  // 해외 후보 숨기기 토글 적용(장바구니/그룹 필터는 그대로 — 순수 표시 필터).
+  const visibleCandidates = useMemo(
+    () =>
+      hideForeign
+        ? candidates.filter((c) => c.is_domestic !== false)
+        : candidates,
+    [candidates, hideForeign],
   );
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const selected = useMemo(
@@ -463,12 +486,21 @@ export default function ReviewPage() {
               ) : null}
             </div>
           ) : null}
-          {candidates.length === 0 ? (
+          <label className="flex items-center gap-1.5 px-1 pb-1 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              className="size-3.5 rounded border"
+              checked={hideForeign}
+              onChange={(event) => setHideForeign(event.target.checked)}
+            />
+            해외(국내 아님) 후보 숨기기
+          </label>
+          {visibleCandidates.length === 0 ? (
             <p className="rounded-lg border p-3 text-xs text-muted-foreground">
               검수할 후보가 없습니다.
             </p>
           ) : (
-            candidates.map((candidate) => (
+            visibleCandidates.map((candidate) => (
               <div
                 key={candidate.id}
                 data-selected={candidate.id === selected?.id}
@@ -486,8 +518,16 @@ export default function ReviewPage() {
                   onClick={() => pickCandidate(candidate)}
                   className="flex min-w-0 flex-1 flex-col gap-0.5 px-1.5 py-1 text-left text-sm"
                 >
-                  <span className="truncate font-medium">
-                    {candidate.ai_place_name}
+                  <span className="flex items-center gap-1 font-medium">
+                    <span className="truncate">{candidate.ai_place_name}</span>
+                    {candidate.is_domestic === false ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 px-1 text-[10px]"
+                      >
+                        해외
+                      </Badge>
+                    ) : null}
                   </span>
                   <span className="truncate text-xs text-muted-foreground">
                     {candidate.location_hint ?? candidate.video_id}
@@ -501,6 +541,24 @@ export default function ReviewPage() {
                   onClick={() => openDetail(candidate.id)}
                 >
                   <InfoIcon className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`${candidate.ai_place_name} 영상 제외`}
+                  disabled={excludeMutation.isPending}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "이 동영상과 관련 POI를 삭제하고 이후 수집에서 제외합니다. 계속할까요?",
+                      )
+                    ) {
+                      excludeMutation.mutate(candidate.video_id);
+                    }
+                  }}
+                >
+                  <Trash2Icon className="size-4 text-destructive" />
                 </Button>
               </div>
             ))
