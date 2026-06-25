@@ -96,7 +96,7 @@ const harvestFormSchema = z.object({
     .number()
     .int("정수로 입력하세요.")
     .min(1, "최소 1개 이상 입력하세요.")
-    .max(50, "한 번에 최대 50개까지 요청할 수 있습니다."),
+    .max(300, "한 번에 최대 300개까지 요청할 수 있습니다."),
   repeat: z.boolean(),
   repeatIntervalMinutes: z.coerce.number().int().min(1),
   repeatMaxRuns: z.coerce.number().int().min(0),
@@ -290,11 +290,11 @@ export function HarvestConsole() {
               id="harvest-max-videos"
               type="number"
               min={1}
-              max={50}
+              max={300}
               aria-invalid={Boolean(form.formState.errors.maxVideos)}
               {...form.register("maxVideos", { valueAsNumber: true })}
             />
-            <FieldDescription>1-50</FieldDescription>
+            <FieldDescription>1-300</FieldDescription>
             <FieldError errors={[form.formState.errors.maxVideos]} />
           </Field>
 

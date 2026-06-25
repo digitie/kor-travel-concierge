@@ -53,13 +53,19 @@ export function RecurringEditDialog({
   const open = Boolean(target);
   const [intervalEdit, setIntervalEdit] = useState<number | null>(null);
   const [maxRunsEdit, setMaxRunsEdit] = useState<number | null>(null);
+  const [maxVideosEdit, setMaxVideosEdit] = useState<number | null>(null);
+  const [activeEdit, setActiveEdit] = useState<boolean | null>(null);
 
   const interval = intervalEdit ?? target?.scan_interval_minutes ?? 1440;
   const maxRuns = maxRunsEdit ?? target?.max_runs ?? 0;
+  const maxVideos = maxVideosEdit ?? target?.max_videos ?? 20;
+  const active = activeEdit ?? target?.is_active ?? true;
 
   function close() {
     setIntervalEdit(null);
     setMaxRunsEdit(null);
+    setMaxVideosEdit(null);
+    setActiveEdit(null);
     onClose();
   }
 
@@ -68,6 +74,8 @@ export function RecurringEditDialog({
       updateSourceTarget(target!.id, {
         scanIntervalMinutes: interval,
         maxRuns,
+        maxVideos,
+        isActive: active,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["source-targets"] });
@@ -121,6 +129,33 @@ export function RecurringEditDialog({
             0이면 무한. 현재 {target?.run_count ?? 0}회 실행됨.
           </FieldDescription>
         </Field>
+
+        <Field>
+          <FieldLabel htmlFor="recurring-edit-max-videos">수집개수(영상 수)</FieldLabel>
+          <Input
+            id="recurring-edit-max-videos"
+            type="number"
+            min={1}
+            max={300}
+            value={String(maxVideos)}
+            onChange={(event) =>
+              setMaxVideosEdit(
+                Math.max(1, Math.min(300, Number(event.target.value) || 1)),
+              )
+            }
+          />
+          <FieldDescription>반복 1회당 받을 영상 수 (1-300).</FieldDescription>
+        </Field>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4 rounded border"
+            checked={active}
+            onChange={(event) => setActiveEdit(event.target.checked)}
+          />
+          반복 수집 사용
+        </label>
 
         {mutation.error ? (
           <p className="text-xs text-destructive">{mutation.error.message}</p>

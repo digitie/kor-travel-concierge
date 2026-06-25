@@ -45,6 +45,7 @@ export type SourceTargetSummary = {
   is_active: boolean;
   scan_interval_minutes: number | null;
   max_runs: number;
+  max_videos: number | null;
   run_count: number;
   next_crawl_at: string | null;
   last_crawled_at: string | null;
@@ -543,6 +544,7 @@ export type SourceTargetUpdate = {
   scanIntervalMinutes?: number;
   maxRuns?: number;
   isActive?: boolean;
+  maxVideos?: number;
 };
 
 export async function updateSourceTarget(
@@ -555,6 +557,7 @@ export async function updateSourceTarget(
       scan_interval_minutes: input.scanIntervalMinutes,
       max_runs: input.maxRuns,
       is_active: input.isActive,
+      max_videos: input.maxVideos,
     }),
   });
 }

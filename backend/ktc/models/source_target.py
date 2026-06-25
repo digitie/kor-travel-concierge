@@ -62,6 +62,8 @@ class SourceTarget(TimestampMixin, Base):
     last_scan_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 반복 수집 1회당 받을 영상 수. NULL이면 enqueue 시 기본값(YOUTUBE_MAX_VIDEOS_PER_RUN).
+    max_videos: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 반복 실행 상한(0이면 무한)과 그동안 enqueue된 누적 횟수.
     max_runs: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"

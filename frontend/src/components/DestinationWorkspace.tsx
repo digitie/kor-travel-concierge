@@ -142,7 +142,8 @@ export function DestinationWorkspace() {
       <RunQueueStatus runs={runQueueQuery.data ?? []} />
       {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
       <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[0.7fr_1.6fr]">
-        <div className="flex min-h-[22rem] flex-col overflow-y-auto border-b lg:border-b-0 lg:border-r">
+        {/* 좁은 화면(스택): 지도가 위, 리스트가 아래(order). 데스크톱(lg): 좌 리스트 / 우 지도 유지. */}
+        <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto lg:order-none lg:border-r">
           <DestinationList
             places={places}
             selectedPlace={selectedPlace}
@@ -168,7 +169,7 @@ export function DestinationWorkspace() {
             }}
           />
         </div>
-        <div className="min-h-[22rem]">
+        <div className="order-1 min-h-[22rem] border-b lg:order-none lg:border-b-0">
           <VWorldMap
             places={places}
             selectedPlaceId={selectedPlace?.place_id ?? null}

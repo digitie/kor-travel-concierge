@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-26: T-123 — 최대 영상 300 + 결과 지도/리스트 상하 교체 + 반복 대상 수집개수·반복여부 편집
+
+- **최대 영상 수 50→300**: 백엔드 캡 `YOUTUBE_MAX_VIDEOS_PER_RUN` 20→300(상한 겸 기본값; `_max_videos_from_payload`가 이 값으로 캡하고 있어 UI만 올리면 20에 머물렀음), 프런트 `HarvestConsole` 폼 max·검증·설명을 1-300으로. 수집 함수는 pageToken 페이지네이션이 있어 50개 초과 수집 가능.
+- **결과 UI 지도/리스트 상하 교체**: `DestinationWorkspace` 스택(좁은 화면)에서 지도가 위·리스트가 아래로 오도록 `order` 클래스 + 구분선 보정. 데스크톱(lg) 좌 리스트 / 우 지도 배치는 유지.
+- **반복 대상 편집(이미 수집한 것)**: `source_targets`에 `max_videos` 컬럼 추가(migration `20260626_0012`). PATCH `/source-targets/{id}`·`update_recurring_target`에 `max_videos` 추가(기존 interval/max_runs/is_active 편집은 이미 존재), `build_followup_run`이 대상의 `max_videos`를 우선 사용, `upsert_recurring_target`이 새 반복 대상에 폼 max_videos를 저장. 프런트 `RecurringEditDialog`에 수집개수 입력 + 반복 사용(is_active) 토글 추가, api 타입·`updateSourceTarget` 반영.
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). prod 배포 시 `source_targets.max_videos` 컬럼 추가(migration) 필요.
+
 ## 2026-06-26: T-122 — UI 빌드 webpack 고정 (prod 503 핫픽스)
 
 T-121 배포로 UI 이미지를 재빌드한 뒤 prod(n150) UI 컨테이너가 크래시 루프 → 공개도메인 **503**. 원인: 런타임 `npm run build`(`next build`)가 **Turbopack 네이티브 바인딩(linux/x64)이 없어**(이미지 `npm ci`가 WASM 바인딩만 설치) 빌드 실패. Next 에러 메시지 권고대로 `frontend/package.json`의 `build`를 `next build --webpack`으로 고정해 플랫폼 무관 빌드로 전환(webpack은 네이티브 바인딩 불필요). 로컬·prod webpack 빌드 모두 통과, prod UI 정상 서빙(`/login` 200) 복구. (api/scheduler/백엔드는 영향 없었음 — facets 200 정상이었음.)
