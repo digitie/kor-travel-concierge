@@ -4,6 +4,10 @@
 
 ---
 
+## 2026-06-26: T-122 — UI 빌드 webpack 고정 (prod 503 핫픽스)
+
+T-121 배포로 UI 이미지를 재빌드한 뒤 prod(n150) UI 컨테이너가 크래시 루프 → 공개도메인 **503**. 원인: 런타임 `npm run build`(`next build`)가 **Turbopack 네이티브 바인딩(linux/x64)이 없어**(이미지 `npm ci`가 WASM 바인딩만 설치) 빌드 실패. Next 에러 메시지 권고대로 `frontend/package.json`의 `build`를 `next build --webpack`으로 고정해 플랫폼 무관 빌드로 전환(webpack은 네이티브 바인딩 불필요). 로컬·prod webpack 빌드 모두 통과, prod UI 정상 서빙(`/login` 200) 복구. (api/scheduler/백엔드는 영향 없었음 — facets 200 정상이었음.)
+
 ## 2026-06-25: T-121 — 수집 입력 자동분류 + 결과 출처별 그룹화 + 자막교정 hung 방지
 
 - **A 자동분류**: `source_resolve.classify_source_input`(재생목록>영상>채널>키워드 우선) + `parse_video_id`/`is_video_id`. `/harvest`에 `auto_input`(자동)·`video_id`(영상) 추가, 단일 영상은 `run_harvest`의 `direct_video_ids` 경로로 fetch+적재(`scheduler/worker.py` harvest_handler가 video target 지원). 프런트 `HarvestConsole`에 "자동(링크·검색어 판별)" 기본 + "영상" 옵션. 즉 링크를 붙여넣으면 재생목록/유튜버/영상/키워드를 스스로 구분.
