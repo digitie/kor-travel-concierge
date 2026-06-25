@@ -207,6 +207,14 @@ async def test_run_harvest_persists_and_scores(session, yt_client):
 
     videos = (await session.execute(select(YoutubeVideo))).scalars().all()
     assert {v.video_id for v in videos} == {"v1", "v2", "v3"}
+    assert {v.source_target_type for v in videos} == {"keyword"}
+    assert {v.source_target_value for v in videos} == {"제주도 맛집"}
+    assert {v.source_search_query for v in videos} <= {
+        "제주도 맛집",
+        "제주도 맛집 여름 여행",
+        "제주도 맛집 가족 여행",
+        "제주도 맛집 실내 여행",
+    }
 
     # 파생 키워드가 저장된다.
     kws = (await session.execute(select(SearchKeyword))).scalars().all()
@@ -530,8 +538,17 @@ async def test_channel_harvest_stops_at_existing_watermark(session):
 
 async def test_build_candidate_scoring():
     item = _VIDEOS_RESPONSE["items"][0]
-    cand = pipeline.build_candidate(item, seed="제주도 맛집", now=NOW)
+    cand = pipeline.build_candidate(
+        item,
+        seed="제주도 맛집",
+        now=NOW,
+        source_target_type="keyword",
+        source_target_value="제주도 맛집",
+        source_search_query="제주 여름 맛집",
+    )
     assert cand["video_id"] == "v1"
+    assert cand["source_target_type"] == "keyword"
+    assert cand["source_search_query"] == "제주 여름 맛집"
     assert cand["view_count"] == 10000
     assert cand["like_count"] == 1000
     assert 0 < cand["engagement_score"] <= 1

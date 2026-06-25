@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-06-25: T-120 — feature export source title/provenance 추가 + PinVi 명칭 정리
+
+`kor-travel-map` curated feature가 YouTube 후보를 곧바로 PinVi curated feature로 올릴 수 있도록
+feature export payload에 수집 원천 title/provenance를 추가했다.
+
+- `youtube_videos`에 `source_target_type`, `source_target_value`, `source_search_query` 컬럼을 추가했다.
+  keyword 수집은 실제 사용한 보정 검색어를 영상별로 보존하고, channel/playlist 수집은 target type/value를
+  보존한다.
+- `/api/v1/features/snapshot`의 `youtube` block에 `source_type`, `source_value`, `source_title`,
+  `source_search_query`, `corrected_search_query`를 추가했다. title은 keyword 보정 검색어, playlist title,
+  channel title 순서로 안정적으로 채운다.
+- 기존 TripMate 문구가 남은 현재 계약 문서/테스트 표면을 PinVi로 정리했다. 과거 journal/tasks 히스토리는
+  원문 보존 대상으로 남겼다.
+- 검증: `backend/tests/test_feature_export_api.py` + `backend/tests/test_etl_pipeline.py` 26건,
+  backend 전체 pytest, backend `compileall` 통과
+  (`KTC_TEST_PG_DSN=postgresql+asyncpg://addr:addr@127.0.0.1:5432/ktc_test_codex`).
+  backend venv에는 ruff/mypy가 없어 별도 lint/type gate는 실행하지 못했다.
+
 ## 2026-06-24: T-119 — 공개 도메인 로그인 403(INVALID_ORIGIN) 수정 — 신뢰 origin 화이트리스트
 
 라이브 브라우저 E2E(prod n150, 공개 도메인 `concierge.digitie.mywire.org`)에서 관리자 **로그인 POST가 403 INVALID_ORIGIN**으로 막히는 버그를 발견했다(curl/LAN-http smoke로는 안 잡힘). 원인: T-116의 same-origin(CSRF) 검사 + 운영 TLS 종단 프록시(라우터 `192.168.1.1`의 **HAProxy**)가 `X-Forwarded-Proto: https`를 주입하지 않아 `requestOrigin`이 `http://…`로 재구성돼 브라우저의 `https://…` Origin과 불일치. LAN(`http://192.168.1.14:12605`) 접속은 정상.

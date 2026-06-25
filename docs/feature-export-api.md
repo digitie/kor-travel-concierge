@@ -13,13 +13,13 @@
   `X-API-Key`를 보내는 방식으로 검증한다.
 - `kor-travel-concierge`는 `feature_id`를 만들지 않는다. `feature_id`와 최종
   `feature_snapshot` 생성은 `python-krtour-map` 책임이다.
-- TripMate는 `kor-travel-concierge` DB에 직접 붙지 않는다. TripMate의 여행 POI와 curated
+- PinVi는 `kor-travel-concierge` DB에 직접 붙지 않는다. PinVi의 여행 POI와 curated
   plan POI는 `python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 자체
   POI row(`app.trip_day_pois`, `app.notice_pois`)에 저장한다.
-- Curated plan은 feature row 자체의 모음이 아니라 TripMate가 소유한 feature 연계
+- Curated plan은 feature row 자체의 모음이 아니라 PinVi가 소유한 feature 연계
   POI row들의 모음이다.
-- 자동 TripMate POI 또는 curated plan 등록은 현재 범위가 아니다. 운영자는
-  `python-krtour-map`에 적재된 YouTube 발 feature를 골라 TripMate POI 작성 흐름에
+- 자동 PinVi POI 또는 curated plan 등록은 현재 범위가 아니다. 운영자는
+  `python-krtour-map`에 적재된 YouTube 발 feature를 골라 PinVi POI 작성 흐름에
   넣고, curated plan은 저장된 POI row들을 묶어서 만든다.
 
 ## `GET /api/v1/features/snapshot`
@@ -70,19 +70,19 @@ X-API-Key: ...
 - `source_record`: provider `kor-travel-concierge-youtube`, dataset
   `youtube_place_candidates`, 원본 candidate id, payload hash.
 
-TripMate feature 연계 POI row까지 이어지는 최소 입력은 다음과 같다.
+PinVi feature 연계 POI row까지 이어지는 최소 입력은 다음과 같다.
 
 | 용도 | export 필드 | 소비 흐름 |
 | --- | --- | --- |
-| 표시명 | `place.name` | `python-krtour-map` feature name → TripMate POI `feature_snapshot.name` |
-| 좌표 | `place.longitude`, `place.latitude` | feature coord → TripMate POI `feature_snapshot.coord` |
-| 카테고리 | `place.category_code_suggestion` | krtour category → marker icon/color와 TripMate POI 표시 카테고리 |
-| 영상 근거 | `youtube.video_url`, `evidence.timestamp_*`, `evidence.confidence_score` | krtour feature detail → TripMate POI 출처 배지/운영 추적 |
+| 표시명 | `place.name` | `python-krtour-map` feature name → PinVi POI `feature_snapshot.name` |
+| 좌표 | `place.longitude`, `place.latitude` | feature coord → PinVi POI `feature_snapshot.coord` |
+| 카테고리 | `place.category_code_suggestion` | krtour category → marker icon/color와 PinVi POI 표시 카테고리 |
+| 영상 근거 | `youtube.video_url`, `evidence.timestamp_*`, `evidence.confidence_score` | krtour feature detail → PinVi POI 출처 배지/운영 추적 |
 | 원천 추적 | `source_record.raw_payload_hash`, `source_record.source_entity_id` | krtour `SourceRecord`/`SourceLink` lineage |
 
-TripMate curated plan smoke는 이 API item을 곧바로 plan item으로 간주하지 않는다.
+PinVi curated plan smoke는 이 API item을 곧바로 plan item으로 간주하지 않는다.
 먼저 `python-krtour-map` feature 적재 결과에서 `feature_id`와 `feature_snapshot`을
-얻고, TripMate가 `app.notice_pois` row를 만든 뒤 curated plan이 그 POI row를
+얻고, PinVi가 `app.notice_pois` row를 만든 뒤 curated plan이 그 POI row를
 포함하는지 확인한다.
 
 ## Operation 의미

@@ -20,7 +20,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
 - `kor-travel-concierge`는 YouTube 장소 후보 provider가 되고, 범용
   `/api/v1/features/*` API를 제공한다. `python-krtour-map`은 이 API를 주기적으로
   pull하는 첫 consumer로서 후보를 feature로 승격한다.
-- TripMate는 `python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 자체
+- PinVi는 `python-krtour-map`이 만든 `feature_id`와 `feature_snapshot`을 자체
   feature 연계 POI row에 저장하고, curated plan은 그 POI row들의 모음으로 구성한다.
 
 상세 테이블 후보와 API 계약은 `docs/youtube-feature-pipeline-plan.md`를 따른다.
@@ -466,7 +466,7 @@ enqueue한다. APScheduler의 persistent job store는 job 정의와 next run tim
 
 ### 6.11 YouTube source 정규화 테이블
 
-`python-krtour-map`과 TripMate feature 연계 POI/curated plan에서 영상·유튜버·재생목록
+`python-krtour-map`과 PinVi feature 연계 POI/curated plan에서 영상·유튜버·재생목록
 근거를 사용할 수 있도록 YouTube source를 분리한다. 상세 컬럼은
 `docs/youtube-feature-pipeline-plan.md`가 우선한다.
 
@@ -510,9 +510,9 @@ Full snapshot API와 incremental changes API는 `/api/v1/features/*` 아래에
 추가한다. 특정 consumer 이름을 REST path에 넣지 않으며, 외부 호출이므로 ADR-24의
 `X-API-Key` 인증을 그대로 따른다.
 
-계약 정본은 `docs/feature-export-api.md`다. T-068/T-069 기준 TripMate 소비는
+계약 정본은 `docs/feature-export-api.md`다. T-068/T-069 기준 PinVi 소비는
 `kor-travel-concierge` DB 직접 접근이나 자동 등록이 아니라, `python-krtour-map`이 만든
-`feature_id`와 `feature_snapshot`을 TripMate의 feature 연계 POI row
+`feature_id`와 `feature_snapshot`을 PinVi의 feature 연계 POI row
 (`app.trip_day_pois`, `app.notice_pois`)에 저장하는 흐름으로 유지한다. Curated
 plan은 feature row 자체가 아니라 그 POI row들의 모음이다. 따라서 export item은 이름,
 좌표, 8자리 카테고리 제안, YouTube 영상·채널·재생목록 근거와 confidence를 빠짐없이

@@ -53,7 +53,15 @@ def _best_thumbnail_url(thumbnails: dict[str, Any] | None) -> str | None:
     return ingest_service.best_thumbnail_url(thumbnails)
 
 
-def build_candidate(item: dict[str, Any], *, seed: str, now: datetime) -> dict[str, Any]:
+def build_candidate(
+    item: dict[str, Any],
+    *,
+    seed: str,
+    now: datetime,
+    source_target_type: str | None = None,
+    source_target_value: str | None = None,
+    source_search_query: str | None = None,
+) -> dict[str, Any]:
     """`videos.list` 항목을 점수가 매겨진 후보 dict로 변환한다."""
     snippet = item.get("snippet", {})
     stats = item.get("statistics", {})
@@ -86,6 +94,9 @@ def build_candidate(item: dict[str, Any], *, seed: str, now: datetime) -> dict[s
         "default_language": snippet.get("defaultAudioLanguage")
         or snippet.get("defaultLanguage"),
         "tags_json": snippet.get("tags") if isinstance(snippet.get("tags"), list) else None,
+        "source_target_type": source_target_type,
+        "source_target_value": source_target_value,
+        "source_search_query": source_search_query,
         "view_count": view_count,
         "like_count": like_count,
         "description_raw": snippet.get("description"),
@@ -101,9 +112,10 @@ async def _collect_keyword_video_ids(
     max_videos: int,
     published_after: datetime | None = None,
     status_reporter: StatusReporter | None = None,
-) -> list[str]:
-    """여러 검색어로 검색해 중복 없는 video_id를 모은다."""
+) -> tuple[list[str], dict[str, str]]:
+    """여러 검색어로 검색해 중복 없는 video_id와 첫 발견 검색어를 모은다."""
     ids: list[str] = []
+    query_by_video_id: dict[str, str] = {}
     seen: set[str] = set()
     total = max(1, len(queries))
     for index, query in enumerate(queries):
@@ -125,6 +137,7 @@ async def _collect_keyword_video_ids(
             if vid and vid not in seen:
                 seen.add(vid)
                 ids.append(vid)
+                query_by_video_id[vid] = query
                 found_in_query += 1
         await _report(
             status_reporter,
@@ -145,7 +158,7 @@ async def _collect_keyword_video_ids(
         f"YouTube에서 총 {len(ids[:max_videos])}개의 중복 없는 동영상을 찾았습니다.",
         0.55,
     )
-    return ids[:max_videos]
+    return ids[:max_videos], query_by_video_id
 
 
 def _video_id_from_playlist_item(item: dict[str, Any]) -> str | None:
@@ -347,6 +360,7 @@ async def run_harvest(
     channel_metadata: list[dict[str, Any]] = []
     playlist_metadata: list[dict[str, Any]] = []
     playlist_links: list[dict[str, Any]] = []
+    source_query_by_video_id: dict[str, str] = {}
 
     if playlist_id:
         target_type = "playlist"
@@ -426,7 +440,7 @@ async def run_harvest(
             f"YouTube에서 검색어 {len(queries)}개로 영상을 검색 중입니다.",
             0.32,
         )
-        video_ids = await _collect_keyword_video_ids(
+        video_ids, source_query_by_video_id = await _collect_keyword_video_ids(
             client,
             queries,
             max_videos=collect_limit,
@@ -443,7 +457,14 @@ async def run_harvest(
         )
         details = await client.videos_list(video_ids)
         candidates = [
-            build_candidate(item, seed=seed_keyword or "", now=now)
+            build_candidate(
+                item,
+                seed=seed_keyword or "",
+                now=now,
+                source_target_type=target_type,
+                source_target_value=target_id,
+                source_search_query=source_query_by_video_id.get(str(item.get("id") or "")),
+            )
             for item in details.get("items", [])
         ]
         candidates = filter_candidates_by_content(

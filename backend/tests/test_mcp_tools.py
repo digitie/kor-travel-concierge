@@ -1,4 +1,4 @@
-"""TripMate MCP 도구 runtime 테스트."""
+"""PinVi MCP 도구 runtime 테스트."""
 
 from __future__ import annotations
 
