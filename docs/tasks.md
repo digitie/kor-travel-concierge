@@ -18,6 +18,7 @@
 
 ## 완료
 
+- [~] **T-121**: 수집 입력 자동분류 + 결과 출처별 그룹화 + 자막교정 hung 방지 — A: 링크/검색어를 붙여넣으면 재생목록/유튜버/영상/키워드 자동 판별(`source_resolve.classify_source_input`), `/harvest` auto/video 경로 + 단일영상 harvest(`run_harvest.direct_video_ids`), 프런트 "자동" 기본·"영상" 옵션. B: `/destinations` 출처 필터(channel/playlist/keyword) + `/destinations/facets`, 결과 보기 그룹 셀렉터(유튜버별/재생목록별/검색어별). E: 자막 교정 영상당 타임아웃(`LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS`=240s)으로 단일 워커 hung 방지(prod 1557 강릉 51분 점유 원인). source_resolve 단위테스트·compileall·n150 facet SQL·frontend type-check/lint/build/vitest(15/15) 통과. C(작업 상세 대상필드)·D(누적 수집수)는 후속. (2026-06-25)
 - [x] **T-120**: feature export source title/provenance 추가 + PinVi 명칭 정리 — `youtube_videos`에
   `source_target_type`/`source_target_value`/`source_search_query`를 추가하고, keyword 수집이 실제 보정
   검색어를 영상별 source provenance로 보존하게 했다. `/api/v1/features/snapshot`의 `youtube` block은

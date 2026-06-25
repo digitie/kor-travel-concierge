@@ -11,7 +11,12 @@ export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace
 export const VWORLD_SERVICE_KEY =
   process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY ?? "";
 
-export type HarvestTargetType = "keyword" | "channel" | "playlist";
+export type HarvestTargetType =
+  | "auto"
+  | "keyword"
+  | "channel"
+  | "playlist"
+  | "video";
 export type HarvestContentFilter = "both" | "shorts" | "videos";
 export type DestinationSort = "latest" | "mention_count" | "name" | "category";
 export type DestinationExportFormat = "xlsx" | "gpx" | "kml";
@@ -259,6 +264,9 @@ function harvestPayload(input: StartHarvestInput) {
     query: input.targetType === "keyword" ? input.targetValue : undefined,
     channel_id: input.targetType === "channel" ? input.targetValue : undefined,
     playlist_id: input.targetType === "playlist" ? input.targetValue : undefined,
+    video_id: input.targetType === "video" ? input.targetValue : undefined,
+    // 자동: 링크/검색어를 그대로 보내면 백엔드가 종류를 판별한다.
+    auto_input: input.targetType === "auto" ? input.targetValue : undefined,
     max_videos: input.maxVideos,
     skip_transcript: input.skipTranscript ?? false,
     repeat_interval_minutes: input.repeatIntervalMinutes ?? undefined,
@@ -329,10 +337,36 @@ export async function startTranscript(jobId: string): Promise<HarvestJob> {
   });
 }
 
+export type DestinationGroupDim = "none" | "channel" | "playlist" | "keyword";
+
+export type DestinationFilter = {
+  channelId?: string | null;
+  playlistId?: string | null;
+  keyword?: string | null;
+};
+
+export type DestinationFacets = {
+  channels: { id: string; title: string; place_count: number }[];
+  playlists: { id: string; title: string; place_count: number }[];
+  keywords: { value: string; place_count: number }[];
+};
+
 export async function listDestinations(
   sort: DestinationSort = "latest",
+  filter?: DestinationFilter,
 ): Promise<DestinationSummary[]> {
-  return requestJson<DestinationSummary[]>(`/api/v1/destinations?sort=${sort}`);
+  const params = new URLSearchParams({ sort });
+  if (filter?.channelId) params.set("channel_id", filter.channelId);
+  if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
+  if (filter?.keyword) params.set("keyword", filter.keyword);
+  return requestJson<DestinationSummary[]>(
+    `/api/v1/destinations?${params.toString()}`,
+  );
+}
+
+// 결과 보기 그룹화용 출처 facet(유튜버/재생목록/검색어별 장소 수).
+export async function listDestinationFacets(): Promise<DestinationFacets> {
+  return requestJson<DestinationFacets>("/api/v1/destinations/facets");
 }
 
 export function buildDestinationExportUrl({

@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     LLM_RETRY_BASE_DELAY_SECONDS: float = 15.0
     LLM_RETRY_MAX_DELAY_SECONDS: float = 90.0
     LLM_RETRY_JITTER: float = 0.3
+    # 영상 1건 자막 교정의 시간예산(초). 긴 자막·느린 LLM이 단일 워커를 무한 점유하지
+    # 않도록 초과 시 원본 자막으로 진행(best-effort)하고 다음 영상으로 넘어간다.
+    LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS: int = 240
 
     # --- Gemini API 키 전역 rate limit (gemini-2.5-flash 기준 가정값). DeepSeek는 별도 쿼터라
     # 이 한도에 잡히지 않는다. 키 전역(API+scheduler) 공유를 위해 DB 카운터로 강제한다(순차). ---

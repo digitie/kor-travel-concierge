@@ -8,6 +8,7 @@ AI가 마스터 코드표에서 고른 8자리 코드를 그대로 후보 eviden
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -96,13 +97,25 @@ async def process_video_batch(
             video_id=video.video_id,
         )
         await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
+        correction_timeout = get_settings().LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS
         try:
-            corrected = await transcript_correction.correct_transcript(
-                runtime,
-                transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
-                description=video.description_raw,
+            corrected = await asyncio.wait_for(
+                transcript_correction.correct_transcript(
+                    runtime,
+                    transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
+                    description=video.description_raw,
+                ),
+                timeout=correction_timeout,
             )
             summary["corrected_videos"] += 1
+        except TimeoutError:
+            # 한 영상의 교정이 시간예산을 넘으면(긴 자막·느린 LLM) 단일 워커를 무한
+            # 점유하지 않도록 원본 자막으로 진행하고 다음 영상으로 넘어간다.
+            corrected = raw_text
+            await _report(
+                status_reporter,
+                f"{label} 자막 교정 시간 초과({correction_timeout}s) — 원본으로 진행합니다.",
+            )
         except Exception as exc:  # 교정 실패는 best-effort: 원본 자막으로 진행
             corrected = raw_text
             await _report(status_reporter, f"{label} 자막 교정 실패({exc}) — 원본으로 진행합니다.")
