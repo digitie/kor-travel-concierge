@@ -28,6 +28,7 @@ import {
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,9 +100,16 @@ function buildHintedQuery(candidate: UnmatchedCandidate): string {
 
 export default function ReviewPage() {
   const queryClient = useQueryClient();
-  // 결과 보기와 동일한 출처 필터(유튜버/재생목록/검색어별).
-  const [groupDim, setGroupDim] = useState<DestinationGroupDim>("none");
-  const [groupValue, setGroupValue] = useState<string | null>(null);
+  // 결과 보기와 동일한 출처 필터(유튜버/재생목록/검색어별). 상세 페이지를 다녀와도
+  // 필터가 유지되도록 sessionStorage에 보존한다.
+  const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
+    "ktc.review.groupDim",
+    "none",
+  );
+  const [groupValue, setGroupValue] = usePersistedState<string | null>(
+    "ktc.review.groupValue",
+    null,
+  );
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,

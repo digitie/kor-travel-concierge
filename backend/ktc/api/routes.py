@@ -85,6 +85,9 @@ class HarvestRequest(BaseModel):
     repeat_max_runs: int | None = Field(default=None, ge=0)
     # 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
     content_filter: Literal["both", "shorts", "videos"] = "both"
+    # True면 증분 워터마크를 무시하고 처음부터 max_videos까지 다시 수집한다(강제 다운로드).
+    # 기본(False)은 증분 추가 수집(이미 본 영상 이후만).
+    force: bool = False
 
 
 class HarvestJob(BaseModel):
