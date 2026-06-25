@@ -49,19 +49,21 @@ def build_followup_run(
     max_videos: int,
 ) -> tuple[str, str, str, dict[str, Any]]:
     """source target을 follow-up crawl_run 입력으로 변환한다."""
+    # 대상에 저장된 수집 개수(max_videos)가 있으면 우선 사용한다(없으면 호출부 기본값).
+    effective_max = target.max_videos if target.max_videos is not None else max_videos
     payload: dict[str, Any] = {
         "source_target_id": target.id,
         "source_value": target.source_value,
         "api_budget_group": target.api_budget_group,
     }
     if target.target_type == TargetType.KEYWORD:
-        payload.update({"query": target.source_value, "max_videos": max_videos})
+        payload.update({"query": target.source_value, "max_videos": effective_max})
         return "harvest", "keyword", target.source_value, payload
     if target.target_type == TargetType.CHANNEL:
-        payload.update({"channel_id": target.source_value, "max_videos": max_videos})
+        payload.update({"channel_id": target.source_value, "max_videos": effective_max})
         return "harvest", "channel", target.source_value, payload
     if target.target_type == TargetType.PLAYLIST:
-        payload.update({"playlist_id": target.source_value, "max_videos": max_videos})
+        payload.update({"playlist_id": target.source_value, "max_videos": effective_max})
         return "harvest", "playlist", target.source_value, payload
     if target.target_type == TargetType.VIDEO:
         payload.update(
@@ -248,6 +250,7 @@ async def upsert_recurring_target(
     display_name: str | None = None,
     scan_interval_minutes: int,
     max_runs: int = 0,
+    max_videos: int | None = None,
     now: datetime | None = None,
 ) -> SourceTarget:
     """반복 수집 대상을 등록/갱신한다.
@@ -270,6 +273,8 @@ async def upsert_recurring_target(
     target.is_active = True
     target.scan_interval_minutes = interval
     target.max_runs = max(0, int(max_runs))
+    if max_videos is not None:
+        target.max_videos = max(1, int(max_videos))
     target.run_count = 0
     if display_name:
         target.display_name = display_name
@@ -304,9 +309,10 @@ async def update_recurring_target(
     scan_interval_minutes: int | None = None,
     max_runs: int | None = None,
     is_active: bool | None = None,
+    max_videos: int | None = None,
     now: datetime | None = None,
 ) -> SourceTarget | None:
-    """반복 수집 대상의 주기/횟수/활성 여부를 수정한다(제공된 필드만 갱신)."""
+    """반복 수집 대상의 주기/횟수/활성 여부/수집개수를 수정한다(제공된 필드만 갱신)."""
     target = await session.get(SourceTarget, target_id)
     if target is None:
         return None
@@ -317,6 +323,8 @@ async def update_recurring_target(
         target.next_crawl_at = scan_now + timedelta(minutes=interval)
     if max_runs is not None:
         target.max_runs = max(0, int(max_runs))
+    if max_videos is not None:
+        target.max_videos = max(1, int(max_videos))
     if is_active is not None:
         target.is_active = bool(is_active)
         if (

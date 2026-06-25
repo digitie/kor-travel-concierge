@@ -314,6 +314,7 @@ async def start_harvest(
             display_name=target_id,
             scan_interval_minutes=payload.repeat_interval_minutes,
             max_runs=payload.repeat_max_runs or 0,
+            max_videos=payload.max_videos,
         )
     await audit_service.record(
         session,
@@ -793,6 +794,7 @@ def _source_target_dict(
         "is_active": target.is_active,
         "scan_interval_minutes": target.scan_interval_minutes,
         "max_runs": target.max_runs,
+        "max_videos": target.max_videos,
         "run_count": target.run_count,
         "next_crawl_at": target.next_crawl_at.isoformat()
         if target.next_crawl_at
@@ -843,6 +845,8 @@ class SourceTargetUpdate(BaseModel):
     scan_interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
     max_runs: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    # 반복 수집 1회당 영상 수(수집개수).
+    max_videos: int | None = Field(default=None, ge=1, le=300)
 
 
 @router.patch("/source-targets/{target_id}")
@@ -858,6 +862,7 @@ async def update_source_target(
         scan_interval_minutes=payload.scan_interval_minutes,
         max_runs=payload.max_runs,
         is_active=payload.is_active,
+        max_videos=payload.max_videos,
     )
     if target is None:
         raise HTTPException(status_code=404, detail="source target not found")

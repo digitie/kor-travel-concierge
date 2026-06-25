@@ -153,7 +153,9 @@ class Settings(BaseSettings):
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_USE_OFFICIAL_API: bool = True
     YOUTUBE_SEARCH_DAILY_BUDGET_UNITS: int = 1000
-    YOUTUBE_MAX_VIDEOS_PER_RUN: int = 20
+    # 한 수집 실행이 받을 수 있는 최대 영상 수(상한 겸 미지정 시 기본값). UI/소스 대상에서
+    # 이 값까지 요청할 수 있다(수집 함수는 pageToken으로 50개 초과도 페이지네이션 수집).
+    YOUTUBE_MAX_VIDEOS_PER_RUN: int = 300
     # 콘텐츠 유형 필터(숏츠/동영상)의 숏츠 판정 기준(초). duration이 이 값 이하면 숏츠로 본다.
     SHORTS_MAX_DURATION_SECONDS: int = 60
 
