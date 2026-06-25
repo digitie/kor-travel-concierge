@@ -17,7 +17,7 @@
    요약을 만들고, 자막 기반 결과와 비교·조정하는 분석 절차를 추가한다.
 6. `python-krtour-map`은 `kor-travel-concierge` REST API를 주기적으로 스캔해 full 또는
    incremental 방식으로 후보를 가져가 `FeatureBundle`로 변환한다.
-7. TripMate가 자체 feature 연계 POI row를 만들 수 있도록 `feature_id` 생성 이후
+7. PinVi가 자체 feature 연계 POI row를 만들 수 있도록 `feature_id` 생성 이후
    `feature_snapshot`에 필요한 이름, 좌표, 카테고리, 설명, 영상 근거를 제공한다.
    Curated plan은 feature 모음이 아니라 이 POI row들의 모음으로 구성한다.
 
@@ -37,18 +37,18 @@
 운영 배포에서는 같은 변수명(`DATABASE_URL`)에 운영 DSN을 주입한다. 개발 기본값을
 문서화하더라도 실제 비밀값은 `.env`에만 둔다.
 
-### 2.2 TripMate feature 연계 POI와 curated plan
+### 2.2 PinVi feature 연계 POI와 curated plan
 
-TripMate의 여행 POI(`app.trip_day_pois`)와 notice/curated plan POI
+PinVi의 여행 POI(`app.trip_day_pois`)와 notice/curated plan POI
 (`app.notice_pois`)는 `feature_id TEXT`와 `feature_snapshot JSONB`를 통해
-`python-krtour-map` feature를 참조한다. TripMate DB에는 feature 외래키가 없고,
+`python-krtour-map` feature를 참조한다. PinVi DB에는 feature 외래키가 없고,
 `feature_snapshot`은 이름, 좌표, 카테고리, 마커 정보의 적재 시점 캐시다. 즉
-TripMate curated plan은 feature row 자체의 모음이 아니라, TripMate가 소유한
+PinVi curated plan은 feature row 자체의 모음이 아니라, PinVi가 소유한
 feature 연계 POI row들의 모음이다.
 
-따라서 첫 단계에서 `kor-travel-concierge`가 TripMate DB에 직접 POI나 curated plan을 쓰지
-않는다. `python-krtour-map`이 feature를 만든 뒤 TripMate의 POI 또는 curated plan
-작성 화면이 그 `feature_id`를 선택하고, `feature_snapshot`을 TripMate POI row에
+따라서 첫 단계에서 `kor-travel-concierge`가 PinVi DB에 직접 POI나 curated plan을 쓰지
+않는다. `python-krtour-map`이 feature를 만든 뒤 PinVi의 POI 또는 curated plan
+작성 화면이 그 `feature_id`를 선택하고, `feature_snapshot`을 PinVi POI row에
 저장하는 흐름을 기본으로 둔다. T-068에서 이 흐름을 다시 확인했고, 자동 POI/curated
 plan 등록은 현재 범위에서 제외한다.
 
@@ -444,17 +444,17 @@ X-API-Key: ...
   `psycopg` 계열로 맞출지 확인한다. 본 문서는 우선 `asyncpg`를 목표로 둔다.
 - `python-krtour-map`이 pull API를 직접 호출할지, 별도 provider 모듈을
   `python-krtour-map` repo에 추가할지 구현 위치를 확정한다.
-- `python-krtour-map` category 8자리 코드와 TripMate 표시 카테고리 간 mapping 표가
+- `python-krtour-map` category 8자리 코드와 PinVi 표시 카테고리 간 mapping 표가
   필요하다. T-066은 `category_code_suggestion`을 `null`로 두고 `category_label`만
   제안한다. **확정 방식(2026-06-11)**: `python-krtour-map`의 8자리 category 코드표를
   `kor-travel-concierge`로 복사해 넣고, Gemini가 그 목록 중 적절한 코드 하나를 고르게 해서
   `category_code_suggestion`을 채운다(T-070). 런타임 참조는 순환참조(provider↔consumer)가
   되므로 복사로 끊는다. 표 복사의 정합성 drift 위험은 카테고리가 거의 바뀌지 않아
   실무상 수용 가능하다고 판단한다.
-- TripMate POI 또는 curated plan에 자동 등록까지 할지, admin이 feature를 골라
-  TripMate POI row로 저장하는 수동 흐름을 유지할지 확인한다. **확정 방식(2026-06-11,
+- PinVi POI 또는 curated plan에 자동 등록까지 할지, admin이 feature를 골라
+  PinVi POI row로 저장하는 수동 흐름을 유지할지 확인한다. **확정 방식(2026-06-11,
   T-068/T-069 정렬)**: 자동 등록은 하지 않는다. `python-krtour-map`이
-  `kor-travel-concierge-youtube` provider로 feature를 만든 뒤, TripMate admin/작성 흐름에서
+  `kor-travel-concierge-youtube` provider로 feature를 만든 뒤, PinVi admin/작성 흐름에서
   그 `feature_id`와 `feature_snapshot`을 `app.trip_day_pois` 또는 `app.notice_pois`
   row에 저장한다. Curated plan은 저장된 POI row들의 모음이다.
 - YouTube URL 직접 Gemini 호출의 현재 모델 지원 범위는 T-064 구현 직전에 공식
@@ -470,6 +470,6 @@ X-API-Key: ...
 5. `T-065`: 장소 후보 보강 스키마와 외부 API evidence 저장.
 6. `T-066`: 범용 full/incremental feature 수집 API.
 7. `T-067`: `python-krtour-map` provider/import 쪽 후속 PR.
-8. `T-068`: TripMate feature 연계 POI와 curated plan 소비 흐름, `feature_snapshot`
+8. `T-068`: PinVi feature 연계 POI와 curated plan 소비 흐름, `feature_snapshot`
    호환 검증.
 9. `T-069`: 통합 검증, E2E, 운영 문서 정리.

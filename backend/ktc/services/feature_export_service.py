@@ -94,6 +94,30 @@ def _video_summary(video: YoutubeVideo | None) -> str | None:
     return video.reconciled_summary or video.transcript_summary or video.gemini_url_summary
 
 
+def _source_title(
+    *,
+    video: YoutubeVideo | None,
+    channel: YoutubeChannel | None,
+    playlist: YoutubePlaylist | None,
+) -> str | None:
+    if video is not None:
+        if video.source_target_type == "keyword":
+            return video.source_search_query or video.source_target_value
+        if video.source_target_type == "playlist":
+            return (
+                playlist.title
+                if playlist is not None
+                else video.source_target_value
+            )
+        if video.source_target_type == "channel":
+            return channel.title if channel is not None else video.source_target_value
+    if playlist is not None:
+        return playlist.title
+    if channel is not None:
+        return channel.title
+    return None
+
+
 def _providers(candidate: ExtractedPlaceCandidate) -> dict[str, Any]:
     evidence = candidate.provider_evidence_json or {}
     if not isinstance(evidence, dict):
@@ -153,6 +177,15 @@ def _build_payload(
         "video_url": (video.canonical_url or video.url) if video else None,
         "video_title": video.title if video else None,
         "video_summary": _video_summary(video),
+        "source_type": video.source_target_type if video else None,
+        "source_value": video.source_target_value if video else None,
+        "source_title": _source_title(video=video, channel=channel, playlist=playlist),
+        "source_search_query": video.source_search_query if video else None,
+        "corrected_search_query": (
+            video.source_search_query
+            if video is not None and video.source_target_type == "keyword"
+            else None
+        ),
         "channel_id": channel.channel_id if channel else candidate.source_channel_id,
         "channel_title": channel.title if channel else None,
         "channel_summary": channel.gemini_summary if channel else None,

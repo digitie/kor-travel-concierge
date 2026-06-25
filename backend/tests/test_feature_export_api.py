@@ -32,6 +32,10 @@ async def _seed_ready_candidate(
     video_id: str = "vid1",
     place_name: str = "월정리 해변",
     candidate_name: str | None = None,
+    include_playlist: bool = True,
+    source_target_type: str | None = None,
+    source_target_value: str | None = None,
+    source_search_query: str | None = None,
 ):
     """확정(`ready`) 후보 1건과 연결 장소/영상/채널을 시드한다."""
     from ktc.models import (
@@ -59,12 +63,19 @@ async def _seed_ready_candidate(
             channel_id=channel_id,
             channel_name="제주 여행 채널",
             transcript_summary="월정리 방문",
+            source_target_type=source_target_type,
+            source_target_value=source_target_value,
+            source_search_query=source_search_query,
         )
-        playlist = YoutubePlaylist(
-            playlist_id=f"playlist-{video_id}",
-            channel_id=channel_id,
-            title="제주 동쪽 코스",
-            description="월정리와 성산을 묶은 여행 코스",
+        playlist = (
+            YoutubePlaylist(
+                playlist_id=f"playlist-{video_id}",
+                channel_id=channel_id,
+                title="제주 동쪽 코스",
+                description="월정리와 성산을 묶은 여행 코스",
+            )
+            if include_playlist
+            else None
         )
         place = TravelPlace(
             name=place_name,
@@ -78,13 +89,16 @@ async def _seed_ready_candidate(
             road_address="제주특별자치도 제주시 구좌읍 해맞이해안로",
             is_geocoded=True,
         )
-        s.add_all([video, playlist, place])
+        rows = [video, place]
+        if playlist is not None:
+            rows.append(playlist)
+        s.add_all(rows)
         await s.commit()
         await s.refresh(place)
         candidate = ExtractedPlaceCandidate(
             video_id=video_id,
             source_channel_id=channel_id,
-            source_playlist_id=playlist.playlist_id,
+            source_playlist_id=playlist.playlist_id if playlist is not None else None,
             source_text="월정리 해변이 정말 예뻐요",
             ai_place_name=candidate_name or place_name,
             timestamp_start="00:03:12",
@@ -134,12 +148,34 @@ async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factor
     assert item["youtube"]["video_id"] == "vid1"
     assert item["youtube"]["channel_title"] == "제주 여행 채널"
     assert item["youtube"]["playlist_title"] == "제주 동쪽 코스"
+    assert item["youtube"]["source_title"] == "제주 동쪽 코스"
     assert item["youtube"]["video_summary"] == "월정리 방문"
     assert item["evidence"]["timestamp_start"] == "00:03:12"
     assert item["evidence"]["confidence_score"] == 0.86
     assert item["source_record"]["provider"] == "kor-travel-concierge-youtube"
     assert item["source_record"]["source_entity_id"] == str(candidate_id)
     assert item["source_record"]["raw_payload_hash"].startswith("sha256:")
+
+
+async def test_snapshot_surfaces_keyword_source_title(client, session_factory):
+    await _seed_ready_candidate(
+        session_factory,
+        video_id="keyword-source",
+        include_playlist=False,
+        source_target_type="keyword",
+        source_target_value="제주 여행",
+        source_search_query="제주 여름 해변 여행",
+    )
+
+    resp = await client.get("/api/v1/features/snapshot")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["youtube"]["source_type"] == "keyword"
+    assert item["youtube"]["source_value"] == "제주 여행"
+    assert item["youtube"]["source_search_query"] == "제주 여름 해변 여행"
+    assert item["youtube"]["corrected_search_query"] == "제주 여름 해변 여행"
+    assert item["youtube"]["source_title"] == "제주 여름 해변 여행"
 
 
 async def test_snapshot_surfaces_category_code_suggestion(client, session_factory):
@@ -157,8 +193,8 @@ async def test_snapshot_surfaces_category_code_suggestion(client, session_factor
     assert item["place"]["category_code_suggestion"] == "01050100"
 
 
-async def test_snapshot_has_tripmate_feature_linked_poi_inputs(client, session_factory):
-    """T-068: TripMate feature 연계 POI row까지 이어질 입력을 보존한다."""
+async def test_snapshot_has_pinvi_feature_linked_poi_inputs(client, session_factory):
+    """T-068: PinVi feature 연계 POI row까지 이어질 입력을 보존한다."""
     await _seed_ready_candidate(session_factory)
 
     resp = await client.get("/api/v1/features/snapshot")
@@ -175,17 +211,17 @@ async def test_snapshot_has_tripmate_feature_linked_poi_inputs(client, session_f
         "marker_color": "P-13",
         "marker_icon": "krtour-map category mapping",
     }
-    tripmate_feature_linked_poi = {
+    pinvi_feature_linked_poi = {
         "feature_id": "python-krtour-map-generated-feature-id",
         "feature_snapshot": krtour_feature_snapshot,
     }
-    assert tripmate_feature_linked_poi["feature_id"]
-    assert tripmate_feature_linked_poi["feature_snapshot"]["name"] == "월정리 해변"
-    assert tripmate_feature_linked_poi["feature_snapshot"]["coord"] == {
+    assert pinvi_feature_linked_poi["feature_id"]
+    assert pinvi_feature_linked_poi["feature_snapshot"]["name"] == "월정리 해변"
+    assert pinvi_feature_linked_poi["feature_snapshot"]["coord"] == {
         "longitude": 126.7958,
         "latitude": 33.5563,
     }
-    assert tripmate_feature_linked_poi["feature_snapshot"]["category"] == "01050100"
+    assert pinvi_feature_linked_poi["feature_snapshot"]["category"] == "01050100"
 
     assert item["youtube"]["video_url"] == "https://www.youtube.com/watch?v=vid1"
     assert item["youtube"]["channel_id"] == "chan-vid1"

@@ -18,6 +18,14 @@
 
 ## 완료
 
+- [x] **T-120**: feature export source title/provenance 추가 + PinVi 명칭 정리 — `youtube_videos`에
+  `source_target_type`/`source_target_value`/`source_search_query`를 추가하고, keyword 수집이 실제 보정
+  검색어를 영상별 source provenance로 보존하게 했다. `/api/v1/features/snapshot`의 `youtube` block은
+  `source_type`/`source_value`/`source_title`/`source_search_query`/`corrected_search_query`를 노출한다.
+  현재 계약 문서와 테스트 표면의 TripMate 문구는 PinVi로 정리했다. 검증:
+  `backend/tests/test_feature_export_api.py` + `backend/tests/test_etl_pipeline.py` 26건, backend 전체 pytest,
+  backend `compileall` 통과. backend venv에 ruff/mypy가 없어 별도 lint/type gate는 실행하지 못했다.
+  (2026-06-25)
 - [~] **T-119**: 공개 도메인 로그인 403(INVALID_ORIGIN) 수정 — 라이브 브라우저 E2E가 발견. 운영 TLS 프록시(라우터 192.168.1.1 HAProxy)가 `X-Forwarded-Proto: https` 미주입 → same-origin(CSRF) 검사가 http로 재구성돼 https 공개 도메인 로그인 403(LAN-http는 정상). 라우터 직접 수정이 막혀(SSH 자격 불일치) `auth.ts`에 신뢰 origin 화이트리스트 `KTC_UI_PUBLIC_ORIGINS` 추가(브라우저 Origin 대조, CSRF 유지) + prod `.env` 설정. HAProxy XFProto 주입도 별도 권장(이중 안전망). vitest 15/15·type-check·lint·build. (2026-06-24)
 - [~] **T-118**: docker-manager PR #37/#38 보안 수정 concierge 이식 — 형제 프로젝트 관리자 인증 사후 리뷰의 해당 항목 이식. AUTH-5(username 열거 타이밍: 항상 PBKDF2+상수시간 username 비교), AUTH-1(`login_events` 보존 상한 `LOGIN_AUDIT_MAX_ROWS`=5000), AUTH-4(CORS stray `*` 제거), APIKEY 해시 주석, FE-5(비밀번호 autofocus)·FE-6(생성 키 지우기). durable rate-limit·trusted-proxy-secret(#38)은 분리(인메모리 충분/기존 secret 커버), `datetime.utcnow`·캐시 TTL·모달 a11y는 이미 적용/무관. frontend type-check/lint/build/vitest(10/10)·backend compileall 통과. (2026-06-24)
 - [x] **T-117**: PR #124(T-116) 인증 기능 사후 보안 리뷰 + High/Medium 보강 (prod 배포·검증 완료) — 다중 에이전트 보안 리뷰(원시 32→확정 26: High 1/Medium 5/Low 16/Nit 4)를 PR #124에 코멘트하고 High·Medium을 코드로 보강했다. High(운영 `FORWARDED_ALLOW_IPS=*`에서 `request.client.host`가 X-Forwarded-For로 위조되는 CIDR 신뢰)는 키 없는 우회를 `API_TRUSTED_CLIENT_BYPASS_ENABLED`(기본 false)로 게이트 + 기동 경고 + `.env.example` 가이드(프록시 IP 고정)로 보강. Medium: 비-local `init_db` create_all 비활성(Alembic 단독 소유), `?key=` 누출 가이드, LoginForm 오류 노출, rate-limit 계정+IP 키링, 프런트 vitest 도입(`auth.ts` 10건)+backend auth 음성 테스트. 검증: frontend type-check/lint/build/vitest(10/10)·audit 0, backend compileall. **운영 검증/배포는 prod SSH 접근 확보 후 진행 예정**. (2026-06-24)
