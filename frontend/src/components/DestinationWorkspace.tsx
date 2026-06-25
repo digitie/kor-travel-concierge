@@ -42,17 +42,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
 export function DestinationWorkspace() {
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
-  const [destinationSort, setDestinationSort] = useState<DestinationSort>("mention_count");
+  // 정렬·그룹 필터는 상세 페이지를 다녀와도 유지되도록 sessionStorage에 보존한다.
+  const [destinationSort, setDestinationSort] = usePersistedState<DestinationSort>(
+    "ktc.destinations.sort",
+    "mention_count",
+  );
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
   const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
   // 결과 보기 그룹화: 출처 기준(유튜버/재생목록/검색어) + 선택 값.
-  const [groupDim, setGroupDim] = useState<DestinationGroupDim>("none");
-  const [groupValue, setGroupValue] = useState<string | null>(null);
+  const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
+    "ktc.destinations.groupDim",
+    "none",
+  );
+  const [groupValue, setGroupValue] = usePersistedState<string | null>(
+    "ktc.destinations.groupValue",
+    null,
+  );
 
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],

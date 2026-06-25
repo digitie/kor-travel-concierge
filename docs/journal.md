@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-26: T-125 — 강제 다운로드 체크박스 + 필터 상태 영속
+
+- **강제 다운로드 옵션(증분 vs 전체 재수집 구분)**: 수집 폼(`HarvestConsole`)에 "강제 다운로드(전체 재수집)" 체크박스를 추가. 기본은 증분 추가 수집(이미 본 영상 이후), 체크 시 워터마크 무시하고 처음부터 재수집. `HarvestRequest.force`(→ `run_payload` → harvest_handler `ignore_watermark`, T-124 경로 재사용), api `StartHarvestInput.force`.
+- **필터가 상세 페이지 왕복 후 초기화되던 문제**: `usePersistedState`(sessionStorage 동기화 훅) 추가. 결과 보기(`DestinationWorkspace`)의 정렬·그룹 기준·그룹 값, 검수큐(`app/review`)의 그룹 기준·그룹 값을 sessionStorage에 보존해 상세 페이지(모바일 라우트 이동 등)를 다녀와도 유지된다. SSR 하이드레이션 안전(첫 렌더는 initial, 마운트 후 복원).
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). 스키마 변경 없음.
+- (후속) 검수 시 동영상 선택·재처리(자막/교정/POI를 어디서부터 다시 할지) "장바구니" 기능은 별도 작업으로 분리.
+
 ## 2026-06-26: T-124 — 강제 재실행 워터마크 무시 + 검수큐 출처 필터
 
 - **강제 재실행이 신규 0개로 즉시 끝나던 버그**: 채널 수집은 워터마크를 `get_channel_watermark`(DB 기존 영상 기준)로 가져와, force가 *target* 워터마크만 리셋해도 무시돼 기존 영상 지점에서 멈췄다(둘시네아 채널을 50→300으로 바꿔 강제 재실행했더니 "재생목록 UU…에서 0개" 후 즉시 완료). `run_harvest`에 `ignore_watermark` 추가 — keyword/playlist/channel 모든 분기에서 True면 워터마크를 무시하고 처음부터 `max_videos`까지 재수집한다. `harvest_handler`가 payload `force`를 `ignore_watermark`로 전달.

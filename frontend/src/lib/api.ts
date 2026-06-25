@@ -33,6 +33,8 @@ export type StartHarvestInput = {
   repeatMaxRuns?: number | null;
   // 콘텐츠 유형 필터: both(숏츠+동영상)/shorts(숏츠만)/videos(동영상만).
   contentFilter?: HarvestContentFilter;
+  // true면 강제 다운로드(증분 워터마크 무시, 처음부터 재수집).
+  force?: boolean;
 };
 
 export type SourceTargetSummary = {
@@ -273,6 +275,8 @@ function harvestPayload(input: StartHarvestInput) {
     repeat_interval_minutes: input.repeatIntervalMinutes ?? undefined,
     repeat_max_runs: input.repeatMaxRuns ?? undefined,
     content_filter: input.contentFilter ?? "both",
+    // 강제 다운로드: 증분 워터마크를 무시하고 처음부터 다시 수집.
+    force: input.force ?? false,
   };
 }
 

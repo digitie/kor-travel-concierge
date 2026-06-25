@@ -101,6 +101,8 @@ const harvestFormSchema = z.object({
   repeatIntervalMinutes: z.coerce.number().int().min(1),
   repeatMaxRuns: z.coerce.number().int().min(0),
   contentFilter: z.enum(["both", "shorts", "videos"]),
+  // 강제 다운로드: 증분 워터마크 무시하고 처음부터 재수집(기본은 증분 추가).
+  force: z.boolean(),
 });
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
@@ -145,6 +147,7 @@ export function HarvestConsole() {
       repeatIntervalMinutes: 1440,
       repeatMaxRuns: 0,
       contentFilter: "both",
+      force: false,
     },
   });
   const targetType = useWatch({
@@ -161,6 +164,7 @@ export function HarvestConsole() {
     control: form.control,
     name: "contentFilter",
   });
+  const force = useWatch({ control: form.control, name: "force" });
 
   const mutation = useMutation({
     mutationFn: startHarvest,
@@ -324,6 +328,29 @@ export function HarvestConsole() {
             </Select>
             <FieldDescription>
               숏츠는 길이 {`≤`}60초 기준으로 구분합니다.
+            </FieldDescription>
+          </Field>
+
+          <Field>
+            <label
+              htmlFor="harvest-force"
+              className="flex items-center gap-2 text-sm font-medium"
+            >
+              <input
+                id="harvest-force"
+                type="checkbox"
+                className="size-4 rounded border"
+                checked={force}
+                onChange={(event) =>
+                  form.setValue("force", event.target.checked, {
+                    shouldDirty: true,
+                  })
+                }
+              />
+              강제 다운로드(전체 재수집)
+            </label>
+            <FieldDescription>
+              체크하면 이미 수집한 영상 이후만 받는 증분 수집 대신, 처음부터 다시 받습니다.
             </FieldDescription>
           </Field>
 
