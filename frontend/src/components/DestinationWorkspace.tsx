@@ -54,7 +54,11 @@ export function DestinationWorkspace() {
     "mention_count",
   );
   const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
-  const [selectedExportIds, setSelectedExportIds] = useState<number[]>([]);
+  // 내보내기 장바구니: 필터를 바꿔도, 상세 페이지를 다녀와도 선택이 유지된다(쇼핑몰 장바구니).
+  const [selectedExportIds, setSelectedExportIds] = usePersistedState<number[]>(
+    "ktc.destinations.exportCart",
+    [],
+  );
   // 결과 보기 그룹화: 출처 기준(유튜버/재생목록/검색어) + 선택 값.
   const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
     "ktc.destinations.groupDim",
@@ -119,9 +123,10 @@ export function DestinationWorkspace() {
     () => selectedExportIds.filter((placeId) => visiblePlaceIds.has(placeId)),
     [selectedExportIds, visiblePlaceIds],
   );
+  // 체크 표시는 전체 장바구니 기준(보이는 행만 렌더되므로 결과는 visible와 동일).
   const selectedExportIdSet = useMemo(
-    () => new Set(selectedVisibleExportIds),
-    [selectedVisibleExportIds],
+    () => new Set(selectedExportIds),
+    [selectedExportIds],
   );
   const isAllSelected =
     places.length > 0 && selectedVisibleExportIds.length === places.length;
@@ -135,14 +140,21 @@ export function DestinationWorkspace() {
   }
 
   function toggleAllExportSelection() {
-    setSelectedExportIds(isAllSelected ? [] : places.map((place) => place.place_id));
+    // "전체 선택"은 현재 보이는 항목만 장바구니에 더하거나 뺀다(다른 필터의 선택은 보존).
+    const visibleIds = places.map((place) => place.place_id);
+    setSelectedExportIds((current) =>
+      isAllSelected
+        ? current.filter((id) => !visiblePlaceIds.has(id))
+        : Array.from(new Set([...current, ...visibleIds])),
+    );
   }
 
   function exportPlaces() {
     window.location.assign(
       buildDestinationExportUrl({
         format: exportFormat,
-        placeIds: selectedVisibleExportIds,
+        // 현재 필터에 보이는 것만이 아니라 장바구니 전체를 내보낸다(필터로 선택이 날아가지 않음).
+        placeIds: selectedExportIds,
         sort: destinationSort,
       }),
     );
@@ -165,7 +177,7 @@ export function DestinationWorkspace() {
             exportFormat={exportFormat}
             onExportFormatChange={setExportFormat}
             selectedExportIds={selectedExportIdSet}
-            selectedExportCount={selectedVisibleExportIds.length}
+            selectedExportCount={selectedExportIds.length}
             isAllSelected={isAllSelected}
             onToggleExportSelection={toggleExportSelection}
             onToggleAllExportSelection={toggleAllExportSelection}

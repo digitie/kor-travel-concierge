@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-26: T-127 — 결과 내보내기 장바구니 + 해외 내용 교정 제외(프롬프트)
+
+- **결과 내보내기 장바구니화**: 기존 내보내기는 `selectedVisibleExportIds`(현재 필터에 보이는 선택만)를 써서 필터를 바꾸면 다른 필터의 선택이 빠졌다. `DestinationWorkspace`의 선택을 전체 장바구니 기준으로 바꿔, 내보내기·카운트를 `selectedExportIds`(전체) 기준으로 하고, "전체 선택"은 보이는 항목만 합집/차집(다른 필터 선택 보존), 선택을 `usePersistedState`(sessionStorage)로 보존해 상세 페이지 왕복에도 유지.
+- **해외 내용 교정 제외(5-base)**: `TRANSCRIPT_CORRECTION_SYSTEM_INSTRUCTION`에 제약 6 추가 — 대한민국 외 해외 지역·장소 설명은 교정하지 말고 원문 유지(국내 여행지만 다룸). POI 추출 단계의 해외 판정·기록은 T-128(별도)에서 처리.
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). 스키마 변경 없음.
+
 ## 2026-06-26: T-126 — 검수 동영상 선택 장바구니 + 단계별 재처리
 
 - **장바구니 선택**: 검수큐(`app/review`)의 각 후보 행에 체크박스를 추가해 영상을 선택한다. 선택은 `usePersistedState`(sessionStorage, key `ktc.review.cart`)로 보존되어 **그룹 필터를 바꿔도(테이블 필터링) 선택이 유지**된다(쇼핑몰 장바구니). 영상 단위 dedup.
