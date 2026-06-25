@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-26: T-128 — POI 해외 판정·기록 + 동영상 제외/블록리스트
+
+- **POI 추출 해외 판정(5′·옵션 a)**: `batch_poi` 추출 스키마·프롬프트에 `is_domestic`(국내 여부) 추가. LLM이 후보별 대한민국/해외를 판정해 `ExtractedPlaceCandidate.is_domestic`에 저장. 해외(`is_domestic=False`)는 조용히 버리지 않고 `needs_review`+`review_note("해외(국내 아님) — 검수 필요")`로 기록하고, `batch_poi_service`가 지오코딩 대상에서 제외해 좌표·자동확정을 막는다.
+- **동영상 제외 + 블록리스트(6)**: `youtube_videos.is_excluded`/`exclusion_reason` 추가. `POST /destinations/videos/{id}/exclude`가 영상을 제외 표시(이후 수집 스킵), 그 영상의 후보·매핑을 삭제하고 **다른 영상이 더 이상 언급하지 않는 고아 장소만** 삭제(FeatureExport FK 선삭제). `run_harvest`가 수집 단계에서 `ingest_service.get_excluded_video_ids`로 제외 영상을 거른다. migration `20260626_0013`(revises 0012).
+- 검수 페이지: 해외 후보 **"해외" 배지** + 해외 숨기기 토글(영속) + **"제외(삭제)" 버튼**(확인 후 호출). "재시도"는 T-126 단계별 재처리가 담당.
+- 한계: 이미 export된 장소가 제외로 hard-delete되면 export ledger tombstone은 미발행(상태 기반 sync 한계) — 코드에 TODO.
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). prod migration 0013 적용.
+
 ## 2026-06-26: T-127 — 결과 내보내기 장바구니 + 해외 내용 교정 제외(프롬프트)
 
 - **결과 내보내기 장바구니화**: 기존 내보내기는 `selectedVisibleExportIds`(현재 필터에 보이는 선택만)를 써서 필터를 바꾸면 다른 필터의 선택이 빠졌다. `DestinationWorkspace`의 선택을 전체 장바구니 기준으로 바꿔, 내보내기·카운트를 `selectedExportIds`(전체) 기준으로 하고, "전체 선택"은 보이는 항목만 합집/차집(다른 필터 선택 보존), 선택을 `usePersistedState`(sessionStorage)로 보존해 상세 페이지 왕복에도 유지.
