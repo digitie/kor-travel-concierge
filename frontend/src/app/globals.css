@@ -14,28 +14,29 @@
   :root {
     /* --- StyleSeed 기반 semantic 토큰 (kor-travel-geo-ui docs/DESIGN-RULES.md 이식).
        단일 accent(brand), 5단계 text, surface/status/shadow/motion 토큰을 단일 출처로 둔다. --- */
-    --surface-page: #f8fafb;
+    /* kor-travel-map 매칭: 그린 #2f765f + 웜 그레이 surface/text/shadow (사용자 결정 2026-06-27). */
+    --surface-page: #f7f8f6;
     --surface-card: #ffffff;
-    --surface-subtle: #f3f6fa;
-    --surface-muted: #e8edf3;
-    --surface-row: #fafbfc;
-    --brand-tint: #e7f4f2;
-    --text-strong: #172033;
-    --text-primary: #344054;
-    --text-secondary: #667085;
-    --text-tertiary: #7a8597;
-    --text-disabled: #98a2b3;
-    --line: #d8dee8;
-    --brand: #0f766e;
-    --brand-ink: #084c48;
-    --info: #1d4ed8;
-    --warn: #b45309;
-    --danger: #b42318;
-    --ok: #15803d;
-    --shadow-card: 0 1px 3px rgb(15 23 42 / 4%);
-    --shadow-card-hover: 0 2px 4px rgb(15 23 42 / 8%);
-    --shadow-button: 0 1px 3px rgb(15 23 42 / 6%);
-    --shadow-modal: 0 8px 24px rgb(15 23 42 / 12%);
+    --surface-subtle: #f2f5f1;
+    --surface-muted: #e3e8e2;
+    --surface-row: #fafbf9;
+    --brand-tint: #e7f2ee;
+    --text-strong: #2a2d2b;
+    --text-primary: #3c3f3d;
+    --text-secondary: #68706b;
+    --text-tertiary: #858d87;
+    --text-disabled: #b5bdb7;
+    --line: #d7ded8;
+    --brand: #2f765f;
+    --brand-ink: #1f4d3f;
+    --info: #3b82f6;
+    --warn: #8a5a12;
+    --danger: #b3322c;
+    --ok: #33683f;
+    --shadow-card: 0 1px 3px rgb(60 63 61 / 0.04);
+    --shadow-card-hover: 0 2px 4px rgb(60 63 61 / 0.08);
+    --shadow-button: 0 1px 3px rgb(60 63 61 / 0.06);
+    --shadow-modal: 0 8px 24px rgb(60 63 61 / 0.12);
     --duration-fast: 120ms;
     --duration-normal: 200ms;
     --ease-default: cubic-bezier(0.2, 0, 0, 1);
@@ -65,8 +66,8 @@
     --chart-3: var(--ok);
     --chart-4: var(--warn);
     --chart-5: var(--danger);
-    /* DESIGN-RULES: 카드 반경 8px. shadcn rounded-lg = var(--radius). */
-    --radius: 0.5rem;
+    /* kor-travel-map 매칭: 카드 반경 0.625rem. */
+    --radius: 0.625rem;
     --sidebar: var(--surface-subtle);
     --sidebar-foreground: var(--text-strong);
     --sidebar-primary: var(--brand);

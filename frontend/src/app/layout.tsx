@@ -4,8 +4,8 @@ import { QueryProvider } from "@/components/QueryProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Kor Travel Concierge",
-  description: "Gemini 기반 YouTube 여행 컨텐츠 수집·정리·지도 시각화",
+  title: "Korea Travel Concierge",
+  description: "유튜브로 찾는 한국 여행지",
 };
 
 export default function RootLayout({
