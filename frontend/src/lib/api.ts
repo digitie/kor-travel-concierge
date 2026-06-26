@@ -133,6 +133,8 @@ export type CrawlRunSummary = {
   state: string;
   progress: number;
   current_message: string | null;
+  // 입력 payload의 최대 영상 수(진행 중에도 노출). result가 아니라 payload 출처.
+  max_videos?: number | null;
   status_logs: RunStatusLog[];
   retry_count: number;
   last_error: string | null;
@@ -625,6 +627,20 @@ export type CollectedVideo = {
 
 export async function getRunVideos(jobId: string): Promise<CollectedVideo[]> {
   return requestJson<CollectedVideo[]>(`/api/v1/runs/${jobId}/videos`);
+}
+
+// 작업이 추출한 POI(확정 장소 + 검수 대기 후보). 상태에 따라 결과/검수 뷰로 이동.
+export type RunPlace = {
+  kind: "place" | "candidate";
+  place_id: number | null;
+  candidate_id: number | null;
+  name: string;
+  status: "confirmed" | "needs_review";
+  is_domestic: boolean | null;
+};
+
+export async function getRunPlaces(jobId: string): Promise<RunPlace[]> {
+  return requestJson<RunPlace[]>(`/api/v1/runs/${jobId}/places`);
 }
 
 export async function getSourceTargetVideos(

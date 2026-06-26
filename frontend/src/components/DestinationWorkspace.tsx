@@ -69,6 +69,20 @@ export function DestinationWorkspace() {
     null,
   );
 
+  // 작업 상세에서 확정 POI를 누르면 `?place=<id>`로 들어온다. 그 장소가 필터에 가려지지
+  // 않도록 그룹 필터를 해제하고 해당 장소를 선택한다(딥링크, 최초 1회).
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const placeParam = new URLSearchParams(window.location.search).get("place");
+    if (!placeParam) return;
+    const placeId = Number(placeParam);
+    if (!Number.isFinite(placeId)) return;
+    setGroupDim("none");
+    setGroupValue(null);
+    setSelectedPlaceId(placeId);
+  }, [setGroupDim, setGroupValue]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,

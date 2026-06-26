@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -179,6 +179,23 @@ export default function ReviewPage() {
     [candidates, hideForeign],
   );
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // 작업 상세에서 검수 대기 POI를 누르면 `?candidate=<id>`로 들어온다. 그 후보가 필터에
+  // 가려지지 않도록 그룹 필터를 해제하고 해당 후보를 선택한다(딥링크, 최초 1회).
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const candidateParam = new URLSearchParams(window.location.search).get(
+      "candidate",
+    );
+    if (!candidateParam) return;
+    const candidateId = Number(candidateParam);
+    if (!Number.isFinite(candidateId)) return;
+    setGroupDim("none");
+    setGroupValue(null);
+    setSelectedId(candidateId);
+  }, [setGroupDim, setGroupValue]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const selected = useMemo(
     () => candidates.find((c) => c.id === selectedId) ?? candidates[0] ?? null,
     [candidates, selectedId],
