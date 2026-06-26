@@ -82,8 +82,8 @@ export function CollectWorkspace() {
   const isMutating = stopRunMutation.isPending || restartRunMutation.isPending;
 
   return (
-    <div className="flex min-h-[calc(100vh-3rem)] flex-col lg:flex-row">
-      <div className="shrink-0 border-b lg:w-[26rem] lg:border-b-0 lg:border-r">
+    <div className="flex min-h-[calc(100vh-3rem)] flex-col lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:flex-row lg:overflow-hidden">
+      <div className="shrink-0 border-b lg:w-[26rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
         <HarvestConsole />
         <div className="flex flex-col gap-1.5 border-t p-3">
           <Button
@@ -109,7 +109,7 @@ export function CollectWorkspace() {
           ) : null}
         </div>
       </div>
-      <div className="grid flex-1 grid-cols-1 md:grid-cols-2">
+      <div className="grid flex-1 grid-cols-1 md:grid-cols-2 lg:min-h-0">
         <RunQueuePanel
           queueRuns={runQueueQuery.data ?? []}
           errorMessage={runQueueQuery.error?.message ?? null}
@@ -230,7 +230,7 @@ function RunQueuePanel({
   return (
     <section
       aria-label="실행 큐"
-      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r"
+      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r lg:min-h-0"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -244,22 +244,24 @@ function RunQueuePanel({
           {errorMessage}
         </p>
       ) : null}
-      {queueRuns.length > 0 ? (
-        queueRuns.map((run) => (
-          <RunControlCard
-            key={run.job_id}
-            run={run}
-            onStop={onStop}
-            onRestart={onRestart}
-            onDetail={onDetail}
-            isMutating={isMutating}
-          />
-        ))
-      ) : (
-        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-          실행 중이거나 대기 중인 작업이 없습니다.
-        </p>
-      )}
+      <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        {queueRuns.length > 0 ? (
+          queueRuns.map((run) => (
+            <RunControlCard
+              key={run.job_id}
+              run={run}
+              onStop={onStop}
+              onRestart={onRestart}
+              onDetail={onDetail}
+              isMutating={isMutating}
+            />
+          ))
+        ) : (
+          <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+            실행 중이거나 대기 중인 작업이 없습니다.
+          </p>
+        )}
+      </div>
     </section>
   );
 }
@@ -294,7 +296,7 @@ function JobsPanel({
   isRunningNow: boolean;
 }) {
   return (
-    <section aria-label="작업" className="flex flex-col gap-3 p-3">
+    <section aria-label="작업" className="flex flex-col gap-3 p-3 lg:min-h-0 lg:overflow-y-auto">
       <Tabs defaultValue="recurring">
         <TabsList className="w-full">
           <TabsTrigger value="recurring">반복 {targets.length}</TabsTrigger>
