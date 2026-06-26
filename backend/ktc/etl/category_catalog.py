@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -82,3 +83,39 @@ def prompt_catalog() -> str:
     """Gemini 프롬프트에 넣을 `코드\\t경로` 목록 문자열."""
     lines = [f"{row['code']}\t{row['path']}" for row in selectable_categories()]
     return "\n".join(lines)
+
+
+def match_label(query: str | None) -> dict[str, Any] | None:
+    """외부 검색결과 카테고리 문자열을 카탈로그 행으로 근사 매핑한다(키워드 겹침, LLM 없이).
+
+    카카오 등의 카테고리(예: '음식점 > 한식 > 한정식')를 토큰화해, 각 카탈로그 행의
+    label/path/tier 이름에 겹치는 토큰 수가 가장 많고 가장 구체적(깊은) 행을 고른다.
+    겹치는 토큰이 없으면 None을 반환한다(자동으로 채우지 않음)."""
+    text = (query or "").strip()
+    if not text:
+        return None
+    tokens = [t for t in re.split(r"[>\s/,·\-_|]+", text) if len(t) >= 2]
+    if not tokens:
+        return None
+    best: dict[str, Any] | None = None
+    best_rank = (0, -1)
+    for row in selectable_categories():
+        haystack = " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "label",
+                "path",
+                "tier1_name",
+                "tier2_name",
+                "tier3_name",
+                "tier4_name",
+            )
+        )
+        score = sum(1 for token in tokens if token in haystack)
+        if score == 0:
+            continue
+        rank = (score, int(row.get("depth") or 0))
+        if rank > best_rank:
+            best_rank = rank
+            best = {"code": row["code"], "label": row["label"]}
+    return best

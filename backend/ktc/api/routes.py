@@ -22,9 +22,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
 from ktc.core.security import require_admin_proxy, require_api_key
-from ktc.etl import category_catalog, place_search, source_resolve
+from ktc.etl import (
+    category_catalog,
+    media_store,
+    place_search,
+    postprocess_service,
+    source_resolve,
+)
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
+    AssetType,
     CrawlRun,
     CrawlStatus,
     ExtractedPlaceCandidate,
@@ -1181,6 +1188,13 @@ async def list_categories() -> list[dict[str, Any]]:
     ]
 
 
+@router.get("/categories/match")
+async def match_category(q: str | None = None) -> dict[str, Any]:
+    """외부 검색결과 카테고리 문자열(예: '음식점 > 한식 > 한정식')을 카탈로그 8자리
+    코드로 근사 매핑한다(LLM 없이 키워드 겹침). 매칭이 없으면 `match`는 null."""
+    return {"match": category_catalog.match_label(q)}
+
+
 @router.post("/destinations/unmatched/{candidate_id}/resolve")
 async def resolve_unmatched_candidate(
     candidate_id: int,
@@ -1264,6 +1278,36 @@ async def _video_detail_dict(
         "duration_seconds": video.duration_seconds,
         "description": video.description_gemini_corrected or video.description_raw,
     }
+
+
+@router.get("/destinations/candidates/{candidate_id}/transcript")
+async def get_candidate_transcript(
+    candidate_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """후보의 출처 영상에 대한 보정 자막(없으면 원본 자막) 텍스트를 반환한다.
+
+    RustFS에 저장된 최신 `transcript_corrected` 자산을 우선 읽고, 없으면 원본
+    `transcript`로 폴백한다. 둘 다 없으면 `text`/`kind`는 null."""
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="candidate not found")
+    store = postprocess_service._make_media_store(get_settings())
+    text = await media_store.load_latest_asset_text(
+        session,
+        store,
+        video_id=candidate.video_id,
+        asset_type=AssetType.TRANSCRIPT_CORRECTED.value,
+    )
+    kind: str | None = "corrected" if text else None
+    if not text:
+        text = await media_store.load_latest_asset_text(
+            session,
+            store,
+            video_id=candidate.video_id,
+            asset_type=AssetType.TRANSCRIPT.value,
+        )
+        kind = "raw" if text else None
+    return {"text": text, "kind": kind, "video_id": candidate.video_id}
 
 
 @router.get("/destinations/candidates/{candidate_id}/detail")
