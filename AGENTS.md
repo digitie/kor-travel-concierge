@@ -127,6 +127,27 @@
 6. **RustFS 객체 자동 삭제 금지** — 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제, 매칭 실패, 영상 제외 처리만으로 RustFS 객체를 삭제하지 않는다.
 7. **매칭 실패 장소 자동 확정 금지** — 지오코딩 결과가 없거나 모호한 장소는 `needs_review` 후보로 남기고, 웹 UI 또는 MCP 검수 도구에서 사용자가 확정하도록 한다.
 8. **PowerShell/cmd 직접 작업 금지** — 에이전트/Codex는 `git` 명령과 Windows Playwright E2E를 제외한 작업 명령을 PowerShell/cmd에서 직접 실행하지 않는다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL2(Ubuntu) bash에서 실행한다.
+9. **remote 푸시 전 보안 감사 생략 금지** — `git push`(특히 PR 생성 직전) 전에 아래 **§보안 감사** 절차를 수행해, 비밀(API 키·세션 시크릿·비밀번호·prod 호스트/도메인 등)이나 `*.local.md`·`.env*`가 스테이징/커밋에 섞이지 않았는지 확인한다. 통과 전에는 푸시하지 않는다.
+10. **배포 후 로그인 검증 생략 금지** — prod에 UI를 배포/재생성한 뒤에는 `GET /login` 200만 보지 말고 **로그인 POST(200 + Set-Cookie)** 와 UI 컨테이너 `${#KTC_ADMIN_PASSWORD_HASH} != 0`을 반드시 확인한다(반복적으로 깨진 항목). 절차·근본원인·복구는 `docs/deploy-runbook.local.md`(gitignore, 로컬 전용) 참조.
+
+## prod 배포 & 보안 감사
+
+**prod(n150) 배포 절차·접속·반복 함정의 정본은 `docs/deploy-runbook.local.md`** (gitignore된 로컬 전용, 민감정보 포함)에 있다. 배포 전 반드시 읽고, 특히 **UI 재생성 후 로그인 POST 검증**을 빼먹지 않는다. (이 런북은 커밋되지 않으므로 각 git worktree에도 같은 경로로 복사해 둔다.)
+
+### remote 푸시 전 보안 감사 (필수 절차)
+
+`git push` / PR 생성 직전에 아래를 수행한다(WSL bash). **하나라도 걸리면 푸시 중지** 후 원인 제거.
+
+1. **스테이징 파일 점검**: `git diff --cached --name-only`에 `*.local.md`, `.env`(`.env.example` 제외), `.env.production`, `prod-access*`, 키/시크릿 파일이 **없어야** 한다.
+2. **diff 비밀 스캔**: 커밋 대상 diff에서 일반 비밀 패턴을 검색한다(이 파일은 커밋되므로 **여기에 실제 호스트/도메인/비밀번호 같은 구체 값을 적지 않는다**).
+   ```bash
+   git diff --cached -U0 | grep -nEi '(api[_-]?key|secret|password|passwd|token|pbkdf2_sha256|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY)' && echo '⛔ 의심 항목 발견 — 푸시 중지' || echo '✅ 일반 비밀 패턴 없음'
+   ```
+   - 매칭이 나오면 placeholder인지 실제 값인지 확인하고, 실제 값이면 제거하거나 `.local`/`.env`로 옮긴다.
+   - **프로젝트별 민감 문자열**(prod 호스트 IP·도메인·SSH 사용자·관리자 비밀번호 등)은 `docs/deploy-runbook.local.md`의 "푸시 전 추가 스캔" 패턴으로도 함께 검색한다(그 값들은 런북에만 두고 커밋 파일에는 절대 적지 않는다).
+3. **`.env.example`은 placeholder만** — 실제 키가 들어가지 않았는지 확인한다.
+4. **신규 파일이 비밀 운반체가 아닌지** — 덤프·로그·백업(`*.log`, `docker compose config` 출력 등)이 섞이지 않았는지 확인한다.
+5. 통과하면 푸시. 위 절차는 자동화/생략하지 말고 매 푸시 전에 실행한다.
 
 ## 작업 후 체크리스트
 

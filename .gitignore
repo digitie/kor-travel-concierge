@@ -66,8 +66,10 @@ Thumbs.db
 .local/
 .claude/settings.local.json
 
-# Local-only sensitive notes (prod access 등) — 커밋 금지
+# Local-only sensitive notes (prod access, 배포 런북 등) — 커밋 금지
 *.local.md
+docs/deploy-runbook.local.md
+docs/prod-access.local.md
 
 # Playwright MCP screenshot/snapshot artifacts
 .playwright-mcp/
