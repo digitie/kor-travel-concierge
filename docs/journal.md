@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-26: T-132 — 화면 고정+내부 스크롤(검수/수집/결과) + 언급횟수 동영상당 1회
+
+- **검수큐**: `app/review` 페이지를 `h-screen overflow-hidden`으로 뷰포트 고정, 상단(라벨·그룹 필터·장바구니·해외 토글)은 고정하고 **후보 리스트만** 내부 스크롤(`flex-1 min-h-0 overflow-y-auto`). 모바일 aside는 `max-h-[45vh]`.
+- **수집 실행큐**: `CollectWorkspace`를 lg에서 `h-[calc(100vh-3rem)] overflow-hidden`으로 고정, HarvestConsole 패널·실행 큐·작업 패널이 각각 내부 스크롤. 실행 큐는 헤더 고정 + 카드 목록만 스크롤. 모바일은 기존 페이지 스크롤 유지(폼이 큼).
+- **결과 리스트**: `DestinationWorkspace` 장소 리스트가 `max-h-80`(작게 고정)이라 큰 화면에서 안 채워지던 것을, lg에서 `flex-1 min-h-0`로 컬럼을 채우고 내부 스크롤(컨트롤 고정). 모바일은 기존 유지.
+- **언급횟수 동영상당 1회**: `place_service`의 `mention_count`를 매핑 행 수(`len(mentions)`)에서 **고유 영상 수**(`len({m.video_id …})`)로 변경 — 한 영상에서 반복 언급돼도 횟수가 부풀지 않는다(매핑/타임스탬프 근거는 보존).
+- 검증: backend compileall, frontend type-check/lint/build(WSL 워크트리). main node_modules는 Windows 네이티브 .node 잠금으로 복구 불가 상태(별도 처리 필요).
+
 ## 2026-06-26: T-131 — 검수 카테고리 강제 드롭다운
 
 - **검수 시 카테고리가 API(카카오 등) 카테고리로 덮어써지던 문제**: 장소 검색 hit 선택 시 `selectHit`이 `category`를 API hit 값으로 덮어썼다. 검수 폼의 "카테고리" 자유 입력을 **카탈로그 드롭다운(Select)** 으로 교체 — `GET /categories`(krtour 8자리 144개)에서 받아 사용자가 코드를 골라 강제한다. `selectHit`/`applyGemini`가 카테고리를 덮어쓰지 않게 정리.

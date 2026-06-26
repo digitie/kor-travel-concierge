@@ -402,7 +402,7 @@ export default function ReviewPage() {
     Boolean(form.longitude);
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
+    <main className="flex h-screen flex-col overflow-hidden bg-background">
       <AppNav />
       <header className="flex items-center justify-between gap-3 border-b px-5 py-2.5">
         <div className="flex items-center gap-3">
@@ -414,8 +414,8 @@ export default function ReviewPage() {
         </p>
       </header>
 
-      <div className="grid flex-1 grid-cols-1 lg:grid-cols-[18rem_1fr]">
-        <aside className="flex max-h-[40vh] flex-col gap-1 overflow-y-auto border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[18rem_1fr]">
+        <aside className="flex min-h-0 max-h-[45vh] flex-col gap-1 border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
           <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
             검수 대기 후보
           </p>
@@ -525,6 +525,7 @@ export default function ReviewPage() {
             />
             해외(국내 아님) 후보 숨기기
           </label>
+          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {visibleCandidates.length === 0 ? (
             <p className="rounded-lg border p-3 text-xs text-muted-foreground">
               검수할 후보가 없습니다.
@@ -593,6 +594,7 @@ export default function ReviewPage() {
               </div>
             ))
           )}
+          </div>
         </aside>
 
         <section className="flex flex-col gap-4 overflow-y-auto p-5">

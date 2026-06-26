@@ -175,12 +175,12 @@ export function DestinationWorkspace() {
   }
 
   return (
-    <div className="flex h-full min-h-[calc(100vh-3rem)] flex-col bg-background">
+    <div className="flex min-h-[calc(100vh-3rem)] flex-col bg-background lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:overflow-hidden">
       <RunQueueStatus runs={runQueueQuery.data ?? []} />
       {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
-      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:grid-cols-[0.7fr_1.6fr]">
+      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[0.7fr_1.6fr]">
         {/* 좁은 화면(스택): 지도가 위, 리스트가 아래(order). 데스크톱(lg): 좌 리스트 / 우 지도 유지. */}
-        <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto lg:order-none lg:border-r">
+        <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto lg:order-none lg:min-h-0 lg:overflow-hidden lg:border-r">
           <DestinationList
             places={places}
             selectedPlace={selectedPlace}
@@ -324,7 +324,7 @@ function DestinationList({
   }, [selectedPlaceId]);
 
   return (
-    <section aria-label="장소 목록" className="flex flex-col gap-4 p-4">
+    <section aria-label="장소 목록" className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1">
       <PanelHeader title="장소" count={places.length} />
       <div className="grid grid-cols-2 gap-2">
         <Select
@@ -411,7 +411,7 @@ function DestinationList({
           {selectedExportCount > 0 ? `선택 ${selectedExportCount}` : "전체"} 내보내기
         </Button>
       </div>
-      <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+      <div className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
         {places.map((place, index) => {
           const isSelected = place.place_id === selectedPlaceId;

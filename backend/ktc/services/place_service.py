@@ -158,7 +158,14 @@ async def list_place_summaries(
     summaries = [
         PlaceSummary(
             place=place,
-            mention_count=len(mentions_by_place.get(place.place_id, [])),
+            # 한 영상에서 여러 번 언급돼도 1회로 센다(동영상 distinct). 반복 언급으로
+            # 횟수가 부풀지 않도록 매핑 행 수가 아니라 고유 영상 수로 계산한다.
+            mention_count=len(
+                {
+                    mention.video_id
+                    for mention in mentions_by_place.get(place.place_id, [])
+                }
+            ),
             source_channel_count=len(
                 {
                     mention.channel_id
