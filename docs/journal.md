@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-26: T-130 — 배포 런북(로컬) + remote 푸시 전 보안 감사 절차
+
+- **반복되는 배포 실수 기록**: 하루에 로그인이 3번 깨진 근본원인(docker-manager override의 UI env_file이 상대경로+`required:false`라 일부 `docker compose` 재생성에서 조용히 스킵 → `KTC_ADMIN_PASSWORD_HASH` 빈값 → 로그인 503/무반응; `GET /login 200`만 보고 POST를 안 봐서 두 번 놓침)와 복구·표준 배포 절차를 `docs/deploy-runbook.local.md`에 상세 기록(민감정보 포함). `.gitignore`(`*.local.md` + 명시 항목)로 커밋 차단, 각 git worktree에 복사(gitignore라 자동 전파 안 됨).
+- **AGENTS.md 보강**: prod 배포는 런북 참조 + **UI 재생성 후 로그인 POST 검증 필수**(DO NOT 9·10). **remote 푸시 전 보안 감사 절차** 추가 — 스테이징에 `*.local.md`/`.env` 없는지, diff에 일반 비밀 패턴 없는지 스캔, 통과 전 푸시 금지. 프로젝트별 민감 구체값(prod 호스트/도메인/관리자 비번)은 커밋 파일에 적지 않고 런북에만 둔다.
+- 이 변경 자체에 보안 감사를 적용해 실제 비밀값 미포함 확인 후 커밋.
+
 ## 2026-06-26: T-129 — 진행중 작업 상세 정보 + 상세보기 POI 상태별 이동
 
 - **진행중 작업 상세가 비어 보이던 문제**: `JobDetailDialog`가 `result`(완료 시에만 채워짐)에서 최대 영상 수·수집/신규를 읽어 진행중엔 "-"였다. run summary에 **`max_videos`(payload)** 를 노출(`_run_max_videos`, runs-list dict)해 진행중에도 표시하고, 다이얼로그에 **진행률·현재 메시지** 필드 추가, 수집/신규는 완료 전 "진행 중" 표시. `list_run_videos`는 result ∪ payload `video_ids`로 확장(poi_batch/재처리는 진행중에도 영상 노출).
