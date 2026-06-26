@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-27: T-134 — 검수 화면 개선(#1-5)
+
+- **#1 리스트 폭 조절**: 검수 후보 리스트 컬럼을 데스크톱에서 드래그로 폭 조절(경량 핸들 + `--list-width` CSS var + `usePersistedState`로 영속, 224~512px). 모바일 스택은 유지.
+- **#2 검색결과/지도 비율**: 상세의 `[검색결과 | 지도]` 그리드를 `0.85fr/1.5fr`로 검색결과 좁게·지도 크게, 지도 높이 `h-[32rem] lg:h-full`.
+- **#3 확정 정보 폼 이동**: 지도 아래에 있던 확정 정보 폼을 **검색창 바로 아래·검색결과 위**의 전폭 패널로 이동(지도는 우측 컬럼 단독).
+- **#4 보정 자막 표시**: `GET /destinations/candidates/{id}/transcript`(최신 `TRANSCRIPT_CORRECTED` 로드, 없으면 raw fallback, `{text,kind,video_id}`) 추가. `CandidateDetailView`에 lazy 로드 보정 자막 섹션. RustFS 미구성(InMemory)이면 null→"보정 자막 없음".
+- **#5 카테고리 매핑**: `GET /categories/match?q=`가 검색결과 카테고리 문자열을 카탈로그 라벨/tier에 키워드 오버랩 매칭(LLM 없음). `selectHit` 시 드롭다운이 비어 있을 때만 자동 채움(수동 선택 보존). 동의어 표 없어 토큰 미공유 시 null로 보수적.
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15, WSL 워크트리). 마이그레이션 없음.
+
 ## 2026-06-27: T-133 — kor-travel-map UI 스타일 매칭(그린) + 페이지 제목
 
 - **참조 레포 매칭(#11)**: 사용자 요청으로 `kor-travel-map`(=`/mnt/f/dev/kor-travel-map-codex/packages/kor-travel-map-admin/frontend`)의 스타일에 맞췄다. 비교 결과 concierge는 이미 정제된 쿨 틸(ADR-29)이고 참조는 그린+사이드바였다. 사용자 결정: **브랜드를 그린 `#2f765f`로 변경**(ADR-29 틸을 그린으로 전환), `--radius` 0.5→0.625rem, surface/text/shadow를 kor-travel-map 웜 그레이 값으로, 배지를 알약형→**사각 대문자**(참조 형태). **상단바 유지(사이드바 P11 보류)**, **Label 대문자 유지**(ADR-29).
