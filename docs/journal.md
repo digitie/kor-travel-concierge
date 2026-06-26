@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-26: T-129 — 진행중 작업 상세 정보 + 상세보기 POI 상태별 이동
+
+- **진행중 작업 상세가 비어 보이던 문제**: `JobDetailDialog`가 `result`(완료 시에만 채워짐)에서 최대 영상 수·수집/신규를 읽어 진행중엔 "-"였다. run summary에 **`max_videos`(payload)** 를 노출(`_run_max_videos`, runs-list dict)해 진행중에도 표시하고, 다이얼로그에 **진행률·현재 메시지** 필드 추가, 수집/신규는 완료 전 "진행 중" 표시. `list_run_videos`는 result ∪ payload `video_ids`로 확장(poi_batch/재처리는 진행중에도 영상 노출).
+- **상세보기 POI 상태별 이동**: `GET /runs/{id}/places` 추가 — 그 작업이 만든 POI를 확정 장소(`VideoPlaceMapping`→`TravelPlace`)와 검수 대기 후보(`ExtractedPlaceCandidate` needs_review, `is_domestic` 포함)로 노출. `JobDetailDialog`에 "추출된 POI" 목록 + 상태 배지(확정/검수 대기/해외), 클릭 시 확정→결과 뷰(`/?place=ID`), 검수 대기→검수 뷰(`/review?candidate=ID`)로 이동. 결과/검수 페이지가 마운트 시 쿼리 파라미터를 읽어 해당 POI를 선택(딥링크일 때만 필터 클리어 — 가드 있어 영속 필터 안 깨짐).
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15). 마이그레이션 없음.
+
 ## 2026-06-26: T-128 — POI 해외 판정·기록 + 동영상 제외/블록리스트
 
 - **POI 추출 해외 판정(5′·옵션 a)**: `batch_poi` 추출 스키마·프롬프트에 `is_domestic`(국내 여부) 추가. LLM이 후보별 대한민국/해외를 판정해 `ExtractedPlaceCandidate.is_domestic`에 저장. 해외(`is_domestic=False`)는 조용히 버리지 않고 `needs_review`+`review_note("해외(국내 아님) — 검수 필요")`로 기록하고, `batch_poi_service`가 지오코딩 대상에서 제외해 좌표·자동확정을 막는다.
