@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-27: T-133 — kor-travel-map UI 스타일 매칭(그린) + 페이지 제목
+
+- **참조 레포 매칭(#11)**: 사용자 요청으로 `kor-travel-map`(=`/mnt/f/dev/kor-travel-map-codex/packages/kor-travel-map-admin/frontend`)의 스타일에 맞췄다. 비교 결과 concierge는 이미 정제된 쿨 틸(ADR-29)이고 참조는 그린+사이드바였다. 사용자 결정: **브랜드를 그린 `#2f765f`로 변경**(ADR-29 틸을 그린으로 전환), `--radius` 0.5→0.625rem, surface/text/shadow를 kor-travel-map 웜 그레이 값으로, 배지를 알약형→**사각 대문자**(참조 형태). **상단바 유지(사이드바 P11 보류)**, **Label 대문자 유지**(ADR-29).
+- **폰트**: 참조의 Geist 도입은 포크가 검토했으나 색/형태 위주로 진행(추가 폰트는 후속 여지).
+- **페이지 제목**: 탭(metadata)·헤더를 **"Korea Travel Concierge"** + 부제 **"유튜브로 찾는 한국 여행지"**로 변경.
+- 검증: frontend build/lint(WSL 워크트리). UI만 재빌드. (포크의 초기 스타일 비교 에이전트가 두 레포를 뒤바꿔 본 것을 직접 확인·정정함.)
+- 후속: 검수(#1-5, #5는 검색결과→카탈로그 매핑)·수집(#6-10) 화면 기능 배치.
+
 ## 2026-06-26: T-132 — 화면 고정+내부 스크롤(검수/수집/결과) + 언급횟수 동영상당 1회
 
 - **검수큐**: `app/review` 페이지를 `h-screen overflow-hidden`으로 뷰포트 고정, 상단(라벨·그룹 필터·장바구니·해외 토글)은 고정하고 **후보 리스트만** 내부 스크롤(`flex-1 min-h-0 overflow-y-auto`). 모바일 aside는 `max-h-[45vh]`.
