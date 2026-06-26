@@ -34,9 +34,14 @@ export function AppNav() {
   return (
     <header className="flex flex-col gap-2 border-b bg-background px-4 py-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="truncate text-sm font-semibold tracking-tight">
-          Kor Travel Concierge
-        </span>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-sm font-semibold tracking-tight">
+            Korea Travel Concierge
+          </span>
+          <span className="truncate text-xs text-muted-foreground">
+            유튜브로 찾는 한국 여행지
+          </span>
+        </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <OpsMetricsDialog />
           <SettingsDialog />
