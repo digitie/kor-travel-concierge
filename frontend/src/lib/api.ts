@@ -263,7 +263,16 @@ export type ResolveCandidateInput = {
   officialAddress?: string;
   roadAddress?: string;
   category?: string;
+  // 드롭다운으로 강제하는 8자리 카탈로그 코드(있으면 category를 label로 덮어씀).
+  categoryCode?: string;
   reviewNote?: string;
+};
+
+export type CategoryOption = {
+  code: string;
+  label: string;
+  depth: number | null;
+  tier1_name: string | null;
 };
 
 function harvestPayload(input: StartHarvestInput) {
@@ -551,10 +560,16 @@ export async function resolveCandidate(
         official_address: input.officialAddress,
         road_address: input.roadAddress,
         category: input.category,
+        category_code: input.categoryCode,
         review_note: input.reviewNote,
       }),
     },
   );
+}
+
+// 검수/보정 카테고리 강제용 8자리 카탈로그(정적이라 캐시 적극 활용).
+export async function listCategories(): Promise<CategoryOption[]> {
+  return requestJson<CategoryOption[]>("/api/v1/categories");
 }
 
 export async function triggerDeepResearch(

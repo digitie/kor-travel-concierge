@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-26: T-131 — 검수 카테고리 강제 드롭다운
+
+- **검수 시 카테고리가 API(카카오 등) 카테고리로 덮어써지던 문제**: 장소 검색 hit 선택 시 `selectHit`이 `category`를 API hit 값으로 덮어썼다. 검수 폼의 "카테고리" 자유 입력을 **카탈로그 드롭다운(Select)** 으로 교체 — `GET /categories`(krtour 8자리 144개)에서 받아 사용자가 코드를 골라 강제한다. `selectHit`/`applyGemini`가 카테고리를 덮어쓰지 않게 정리.
+- 강제 저장: `ResolveCandidateRequest`/`CorrectPlaceRequest`에 `category_code` 추가. 주어지면 `category_catalog.normalize_code`로 검증 후 `place.category_code_suggestion`(정식 8자리)과 표시 `category`(label)를 그 코드 기준으로 덮어쓴다. 코드 없으면 기존 자유 `category` 문자열 폴백.
+- 구현은 rate-limit으로 중단된 에이전트의 미커밋 변경을 회수해 마무리. 검증: backend compileall, frontend type-check/lint/build/vitest(15/15, WSL). 마이그레이션 없음.
+
 ## 2026-06-26: T-130 — 배포 런북(로컬) + remote 푸시 전 보안 감사 절차
 
 - **반복되는 배포 실수 기록**: 하루에 로그인이 3번 깨진 근본원인(docker-manager override의 UI env_file이 상대경로+`required:false`라 일부 `docker compose` 재생성에서 조용히 스킵 → `KTC_ADMIN_PASSWORD_HASH` 빈값 → 로그인 503/무반응; `GET /login 200`만 보고 POST를 안 봐서 두 번 놓침)와 복구·표준 배포 절차를 `docs/deploy-runbook.local.md`에 상세 기록(민감정보 포함). `.gitignore`(`*.local.md` + 명시 항목)로 커밋 차단, 각 git worktree에 복사(gitignore라 자동 전파 안 됨).

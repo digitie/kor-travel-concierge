@@ -17,6 +17,7 @@ import {
 import {
   excludeVideo,
   getPlaceOpinion,
+  listCategories,
   listDestinationFacets,
   listUnmatchedCandidates,
   reprocessVideos,
@@ -118,6 +119,12 @@ export default function ReviewPage() {
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
     refetchInterval: 60_000,
+  });
+  // 카테고리 강제 드롭다운 목록(정적 카탈로그 — 오래 캐시).
+  const categoriesQuery = useQuery({
+    queryKey: ["categories"],
+    queryFn: listCategories,
+    staleTime: 60 * 60 * 1000,
   });
   const filter = useMemo<DestinationFilter | undefined>(() => {
     if (!groupValue || groupDim === "none") return undefined;
@@ -243,6 +250,8 @@ export default function ReviewPage() {
     latitude: "",
     longitude: "",
     category: "",
+    // 강제 카테고리 코드(드롭다운). category(label)는 코드 선택 시 함께 채운다.
+    categoryCode: "",
   });
 
   function runSearch() {
@@ -280,23 +289,26 @@ export default function ReviewPage() {
     setOpinionRequested(false);
     setSearchNonce((n) => n + 1);
     setActiveQuery(buildHintedQuery(candidate));
-    setForm({ name: "", latitude: "", longitude: "", category: "" });
+    setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
   }
   function selectHit(hit: PlaceSearchHit) {
-    setForm({
+    // 좌표·이름만 채우고 카테고리는 건드리지 않는다 — 카테고리는 드롭다운으로 강제한다
+    // (외부 API 카테고리가 사용자가 고른 값을 덮어쓰지 않도록).
+    setForm((prev) => ({
+      ...prev,
       name: hit.name,
       latitude: String(hit.latitude),
       longitude: String(hit.longitude),
-      category: hit.category ?? "",
-    });
+    }));
   }
   function applyGemini(gemini: PlaceOpinion) {
+    // Gemini 의견도 카테고리는 덮어쓰지 않는다(드롭다운이 단일 출처).
     setForm((prev) => ({
+      ...prev,
       name: gemini.best_name ?? prev.name,
       latitude: gemini.latitude != null ? String(gemini.latitude) : prev.latitude,
       longitude:
         gemini.longitude != null ? String(gemini.longitude) : prev.longitude,
-      category: gemini.category ?? prev.category,
     }));
   }
 
@@ -346,6 +358,7 @@ export default function ReviewPage() {
         latitude: Number(form.latitude),
         longitude: Number(form.longitude),
         category: form.category || undefined,
+        categoryCode: form.categoryCode || undefined,
       });
     },
     onMutate: async () => {
@@ -371,7 +384,7 @@ export default function ReviewPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
-      setForm({ name: "", latitude: "", longitude: "", category: "" });
+      setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
       setQueryEdit(null);
       setActiveQuery("");
       setSelectedId(null);
@@ -712,12 +725,12 @@ export default function ReviewPage() {
                           (p) => p.place_id === placeId,
                         );
                         if (place && place.place_id !== 9999) {
-                          setForm({
+                          setForm((prev) => ({
+                            ...prev,
                             name: place.name,
                             latitude: String(place.latitude),
                             longitude: String(place.longitude),
-                            category: place.category ?? "",
-                          });
+                          }));
                         }
                       }}
                     />
@@ -762,17 +775,36 @@ export default function ReviewPage() {
                         }
                       />
                     </div>
-                    <Input
-                      aria-label="카테고리"
-                      placeholder="카테고리"
-                      value={form.category}
-                      onChange={(event) =>
+                    {/* 카테고리는 카탈로그 드롭다운으로 강제한다(외부 API 카테고리로 덮어쓰지 않음). */}
+                    <Select
+                      value={form.categoryCode}
+                      onValueChange={(value) => {
+                        const code = value ?? "";
+                        const option = (categoriesQuery.data ?? []).find(
+                          (c) => c.code === code,
+                        );
                         setForm((prev) => ({
                           ...prev,
-                          category: event.target.value,
-                        }))
-                      }
-                    />
+                          categoryCode: code,
+                          category: option?.label ?? prev.category,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="w-full" aria-label="카테고리">
+                        <SelectValue placeholder="카테고리 선택(강제)">
+                          {form.category}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        <SelectGroup>
+                          {(categoriesQuery.data ?? []).map((option) => (
+                            <SelectItem key={option.code} value={option.code}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                     <div className="grid grid-cols-2 gap-2">
                       <Button
                         type="button"

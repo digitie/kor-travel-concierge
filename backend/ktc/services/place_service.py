@@ -11,6 +11,7 @@ from sqlalchemy import cast, delete, distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.spatial import sync_place_geometry
+from ktc.etl import category_catalog
 from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExport,
@@ -432,11 +433,18 @@ async def correct_place(
         "category",
         "is_geocoded",
     }
+    # 강제 카테고리 코드(드롭다운): 표시 category(label)와 category_code_suggestion을 덮어쓴다.
+    forced_code = category_catalog.normalize_code(updates.pop("category_code", None))
     applied = {key: value for key, value in updates.items() if key in allowed}
-    if not applied:
+    if not applied and forced_code is None:
         raise ValueError("보정할 필드가 필요하다")
     for key, value in applied.items():
         setattr(place, key, value)
+    if forced_code:
+        place.category_code_suggestion = forced_code
+        forced_label = category_catalog.label_for(forced_code)
+        if forced_label:
+            place.category = forced_label
     if ("latitude" in applied or "longitude" in applied) and "is_geocoded" not in applied:
         place.is_geocoded = True
     if ("latitude" in applied or "longitude" in applied) and place.is_geocoded:
@@ -617,6 +625,14 @@ async def resolve_candidate(
             code = candidate_category_code(candidate)
             if code:
                 place.category_code_suggestion = code
+        # 사용자가 드롭다운으로 강제한 8자리 코드가 있으면 category_code_suggestion과 표시
+        # category(label)를 그 코드로 덮어쓴다(후보 evidence·외부 API 카테고리보다 우선).
+        forced_code = category_catalog.normalize_code(data.get("category_code"))
+        if forced_code:
+            place.category_code_suggestion = forced_code
+            forced_label = category_catalog.label_for(forced_code)
+            if forced_label:
+                place.category = forced_label
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value

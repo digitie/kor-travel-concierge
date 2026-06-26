@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
 from ktc.core.security import require_admin_proxy, require_api_key
-from ktc.etl import place_search, source_resolve
+from ktc.etl import category_catalog, place_search, source_resolve
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
     CrawlRun,
@@ -137,6 +137,9 @@ class CorrectPlaceRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     category: str | None = None
+    # 사용자가 드롭다운으로 강제하는 8자리 카탈로그 코드. 주어지면 category_code_suggestion과
+    # 표시 category(label)를 이 코드 기준으로 덮어쓴다(API 카테고리 대신).
+    category_code: str | None = None
     api_source: str | None = None
 
 
@@ -153,6 +156,8 @@ class ResolveCandidateRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     category: str | None = None
+    # 사용자가 드롭다운으로 강제하는 8자리 카탈로그 코드(있으면 label로 category도 덮어씀).
+    category_code: str | None = None
     api_source: str | None = "manual"
     reviewed_by: str = "web"
     review_note: str | None = None
@@ -1157,6 +1162,25 @@ async def trigger_deep_research(
     return {"job_id": str(run.id), "state": run.state, "place_id": place_id}
 
 
+@router.get("/categories")
+async def list_categories() -> list[dict[str, Any]]:
+    """검수/보정 시 강제 선택할 8자리 카테고리 카탈로그(krtour 코드표 사본, T-070).
+
+    프런트 드롭다운이 코드를 골라 `category_code`로 보내면, 확정 장소의
+    `category_code_suggestion`과 표시 `category`를 그 코드 기준으로 강제한다.
+    """
+    return [
+        {
+            "code": row["code"],
+            "label": row["label"],
+            "depth": row.get("depth"),
+            "tier1_name": row.get("tier1_name"),
+        }
+        for row in category_catalog.iter_categories()
+        if row.get("is_active", True)
+    ]
+
+
 @router.post("/destinations/unmatched/{candidate_id}/resolve")
 async def resolve_unmatched_candidate(
     candidate_id: int,
@@ -1175,6 +1199,7 @@ async def resolve_unmatched_candidate(
             "latitude": payload.latitude,
             "longitude": payload.longitude,
             "category": payload.category,
+            "category_code": payload.category_code,
             "api_source": payload.api_source,
         }
     try:
