@@ -29,6 +29,7 @@ from ktc.models import (
     CrawlStatus,
     ExtractedPlaceCandidate,
     FeatureExport,
+    MatchStatus,
     MediaAsset,
     RunSource,
     RunState,
@@ -632,6 +633,7 @@ async def list_runs(
             "state": run.state,
             "progress": run.progress,
             "current_message": run.current_message,
+            "max_videos": _run_max_videos(run),
             "status_logs": crawl_run_service.load_status_logs(run),
             "retry_count": run.retry_count,
             "last_error": run.last_error,
@@ -1657,6 +1659,31 @@ def _video_ids_from_result(result_json: str | None) -> list[str]:
     return [str(vid) for vid in (data.get("video_ids") or [])]
 
 
+def _run_payload(run: CrawlRun) -> dict[str, Any]:
+    """crawl_run의 입력 payload(dict)를 안전하게 파싱한다."""
+    if not run.payload_json:
+        return {}
+    try:
+        return json.loads(run.payload_json) or {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _run_max_videos(run: CrawlRun) -> int | None:
+    """입력 payload의 max_videos(최대 영상 수). 완료 전에도 노출되도록 result가 아닌
+    payload에서 읽는다."""
+    value = _run_payload(run).get("max_videos")
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def _video_ids_for_run(run: CrawlRun) -> list[str]:
+    """완료 결과(result_json)의 video_ids에 입력 payload의 video_ids를 합친다.
+    진행 중(결과 전)에도 이미 적재된 영상·POI를 노출하기 위함이다."""
+    ids = _video_ids_from_result(run.result_json)
+    ids.extend(str(vid) for vid in (_run_payload(run).get("video_ids") or []))
+    return ids
+
+
 async def _videos_for_source_target(
     session: AsyncSession, target: SourceTarget
 ) -> list[dict[str, Any]]:
@@ -1699,11 +1726,81 @@ async def _videos_for_source_target(
 async def list_run_videos(
     job_id: int, session: AsyncSession = Depends(get_session)
 ) -> list[dict[str, Any]]:
-    """해당 작업이 수집한 동영상 목록을 반환한다."""
+    """해당 작업이 수집한 동영상 목록을 반환한다(진행 중에도 적재분 노출)."""
     run = await crawl_run_service.get_run(session, job_id)
     if run is None:
         raise HTTPException(status_code=404, detail="job not found")
-    return await _video_rows(session, _video_ids_from_result(run.result_json))
+    return await _video_rows(session, _video_ids_for_run(run))
+
+
+@router.get("/runs/{job_id}/places")
+async def list_run_places(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """해당 작업의 영상에서 추출된 POI를 반환한다.
+
+    확정 장소(`confirmed`)와 검수 대기 후보(`needs_review`)를 함께 노출해, 프런트가
+    상태에 따라 결과 뷰/검수 뷰로 이동할 수 있게 한다(진행 중에도 적재분 노출).
+    """
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    video_ids = [vid for vid in dict.fromkeys(_video_ids_for_run(run)) if vid]
+    if not video_ids:
+        return []
+
+    places: list[dict[str, Any]] = []
+    seen_places: set[int] = set()
+    confirmed = await session.execute(
+        select(TravelPlace.place_id, TravelPlace.name)
+        .join(VideoPlaceMapping, VideoPlaceMapping.place_id == TravelPlace.place_id)
+        .where(VideoPlaceMapping.video_id.in_(video_ids))
+    )
+    for place_id, name in confirmed.all():
+        if place_id in seen_places:
+            continue
+        seen_places.add(place_id)
+        places.append(
+            {
+                "kind": "place",
+                "place_id": place_id,
+                "candidate_id": None,
+                "name": name,
+                "status": "confirmed",
+                "is_domestic": None,
+            }
+        )
+
+    candidates = await session.execute(
+        select(
+            ExtractedPlaceCandidate.id,
+            ExtractedPlaceCandidate.ai_place_name,
+            ExtractedPlaceCandidate.is_domestic,
+        )
+        .where(
+            ExtractedPlaceCandidate.video_id.in_(video_ids),
+            ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
+        )
+        .order_by(ExtractedPlaceCandidate.id.desc())
+    )
+    seen_candidate_names: set[str] = set()
+    for candidate_id, name, is_domestic in candidates.all():
+        key = (name or "").strip().lower()
+        if key and key in seen_candidate_names:
+            continue
+        if key:
+            seen_candidate_names.add(key)
+        places.append(
+            {
+                "kind": "candidate",
+                "place_id": None,
+                "candidate_id": candidate_id,
+                "name": name,
+                "status": "needs_review",
+                "is_domestic": is_domestic,
+            }
+        )
+    return places[:300]
 
 
 # --- 범용 feature 수집 API (ADR-26) ---

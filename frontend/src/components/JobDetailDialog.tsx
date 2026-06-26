@@ -1,12 +1,15 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLinkIcon } from "lucide-react";
 
 import {
+  getRunPlaces,
   getRunVideos,
   getSourceTargetVideos,
   type CrawlRunSummary,
+  type RunPlace,
   type SourceTargetSummary,
 } from "@/lib/api";
 import { JobLogView } from "@/components/JobLogDialog";
@@ -58,6 +61,23 @@ export function JobDetailDialog({
     enabled: open,
   });
   const videos = videosQuery.data ?? [];
+  const router = useRouter();
+  const placesQuery = useQuery({
+    queryKey: ["job-places", run?.job_id ?? null],
+    queryFn: () => getRunPlaces(run!.job_id),
+    enabled: open && Boolean(run),
+  });
+  const places = placesQuery.data ?? [];
+
+  // POI 클릭: 확정 장소는 결과 뷰로, 검수 대기 후보는 검수 뷰로 이동(딥링크).
+  function openPlace(place: RunPlace) {
+    if (place.status === "confirmed" && place.place_id != null) {
+      router.push(`/?place=${place.place_id}`);
+    } else if (place.candidate_id != null) {
+      router.push(`/review?candidate=${place.candidate_id}`);
+    }
+    onClose();
+  }
 
   const result = (run?.result ?? {}) as Record<string, unknown>;
   const fields: { label: string; value: string }[] = run
@@ -69,16 +89,21 @@ export function JobDetailDialog({
         { label: "대상", value: run.target_label ?? run.target_id ?? "-" },
         { label: "작업 유형", value: run.job_type_label ?? run.job_type },
         { label: "상태", value: run.state },
+        { label: "진행률", value: `${Math.round((run.progress ?? 0) * 100)}%` },
         {
           label: "최대 영상 수",
-          value: String((result.max_videos as number) ?? "-"),
+          value: run.max_videos != null ? String(run.max_videos) : "-",
         },
         {
+          // result는 완료 시에만 채워지므로 진행 중에는 "진행 중"으로 표기한다.
           label: "수집/신규",
-          value: `${(result.discovered as number) ?? "-"} / ${
-            (result.inserted as number) ?? "-"
-          }`,
+          value: run.result
+            ? `${(result.discovered as number) ?? "-"} / ${
+                (result.inserted as number) ?? "-"
+              }`
+            : "진행 중",
         },
+        { label: "현재 메시지", value: run.current_message ?? "-" },
       ]
     : target
       ? [
@@ -132,6 +157,52 @@ export function JobDetailDialog({
           <div className="flex flex-col gap-2 border-t pt-4">
             <p className="text-sm font-medium">상태 로그·오류</p>
             <JobLogView status={run} />
+          </div>
+        ) : null}
+
+        {run ? (
+          <div className="flex flex-col gap-2 border-t pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">추출된 POI</p>
+              <Badge variant="secondary">{places.length}</Badge>
+            </div>
+            {placesQuery.isLoading ? (
+              <p className="text-xs text-muted-foreground">불러오는 중…</p>
+            ) : places.length === 0 ? (
+              <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+                추출된 POI가 없습니다.
+              </p>
+            ) : (
+              <div className="flex max-h-60 flex-col gap-1.5 overflow-y-auto">
+                {places.map((place) => (
+                  <button
+                    key={`${place.kind}-${place.place_id ?? place.candidate_id}`}
+                    type="button"
+                    onClick={() => openPlace(place)}
+                    title={
+                      place.status === "confirmed"
+                        ? "결과 뷰로 이동"
+                        : "검수 뷰로 이동"
+                    }
+                    className="flex items-center justify-between gap-2 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted"
+                  >
+                    <span className="truncate font-medium">{place.name}</span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {place.is_domestic === false ? (
+                        <Badge variant="outline">해외</Badge>
+                      ) : null}
+                      <Badge
+                        variant={
+                          place.status === "confirmed" ? "secondary" : "outline"
+                        }
+                      >
+                        {place.status === "confirmed" ? "확정" : "검수 대기"}
+                      </Badge>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : null}
 
