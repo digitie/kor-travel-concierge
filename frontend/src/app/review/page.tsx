@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -18,6 +18,7 @@ import {
   excludeVideo,
   getPlaceOpinion,
   listCategories,
+  matchCategory,
   listDestinationFacets,
   listUnmatchedCandidates,
   reprocessVideos,
@@ -144,6 +145,27 @@ export default function ReviewPage() {
   // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
   // 선택이 유지된다(쇼핑몰 장바구니). 영상 단위로 dedup.
   const [cart, setCart] = usePersistedState<string[]>("ktc.review.cart", []);
+  // #1: 검수 후보 리스트 컬럼 폭(px). 데스크톱에서 구분선을 드래그해 조절, sessionStorage 보존.
+  const [listWidth, setListWidth] = usePersistedState<number>(
+    "ktc.review.listWidth",
+    288,
+  );
+  const gridRef = useRef<HTMLDivElement>(null);
+  function startListResize(event: React.PointerEvent) {
+    event.preventDefault();
+    const grid = gridRef.current;
+    if (!grid) return;
+    const left = grid.getBoundingClientRect().left;
+    const onMove = (moveEvent: PointerEvent) => {
+      setListWidth(Math.min(512, Math.max(224, moveEvent.clientX - left)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
   const [reprocessStage, setReprocessStage] =
     useState<ReprocessStage>("transcript");
   // 해외(국내 아님) 후보 숨기기 토글(기본 보기). 상세 왕복에도 유지(sessionStorage).
@@ -292,14 +314,26 @@ export default function ReviewPage() {
     setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
   }
   function selectHit(hit: PlaceSearchHit) {
-    // 좌표·이름만 채우고 카테고리는 건드리지 않는다 — 카테고리는 드롭다운으로 강제한다
-    // (외부 API 카테고리가 사용자가 고른 값을 덮어쓰지 않도록).
     setForm((prev) => ({
       ...prev,
       name: hit.name,
       latitude: String(hit.latitude),
       longitude: String(hit.longitude),
     }));
+    // #5: 검색결과 카테고리를 카탈로그 8자리 코드로 근사 매핑해 드롭다운을 미리 채운다.
+    // 사용자가 이미 카테고리를 고른 경우(categoryCode 존재)는 덮어쓰지 않는다(드롭다운으로 변경 가능).
+    if (hit.category) {
+      void matchCategory(hit.category)
+        .then((match) => {
+          if (!match) return;
+          setForm((prev) =>
+            prev.categoryCode
+              ? prev
+              : { ...prev, categoryCode: match.code, category: match.label },
+          );
+        })
+        .catch(() => {});
+    }
   }
   function applyGemini(gemini: PlaceOpinion) {
     // Gemini 의견도 카테고리는 덮어쓰지 않는다(드롭다운이 단일 출처).
@@ -414,8 +448,19 @@ export default function ReviewPage() {
         </p>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[18rem_1fr]">
-        <aside className="flex min-h-0 max-h-[45vh] flex-col gap-1 border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
+      <div
+        ref={gridRef}
+        style={{ "--list-width": `${listWidth}px` } as React.CSSProperties}
+        className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[var(--list-width)_1fr]"
+      >
+        <aside className="relative flex min-h-0 max-h-[45vh] flex-col gap-1 border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
+          {/* #1: 데스크톱에서 우측 경계를 드래그해 리스트 폭 조절(224~512px). */}
+          <div
+            onPointerDown={startListResize}
+            role="separator"
+            aria-label="리스트 폭 조절"
+            className="absolute inset-y-0 -right-0.5 z-10 hidden w-1.5 cursor-col-resize hover:bg-primary/20 lg:block"
+          />
           <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
             검수 대기 후보
           </p>
@@ -663,7 +708,101 @@ export default function ReviewPage() {
                 ) : null}
               </div>
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
+              {/* #3: 확정 정보 — 검색 필드 아래, 검색 결과/지도 위에 배치. */}
+              <div className="flex flex-col gap-2 rounded-xl border p-3">
+                <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <MapPinIcon className="size-4 text-muted-foreground" />
+                  확정 정보
+                </p>
+                <Input
+                  aria-label="확정 장소명"
+                  placeholder="장소명"
+                  value={form.name}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, name: event.target.value }))
+                  }
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    aria-label="위도"
+                    inputMode="decimal"
+                    placeholder="위도"
+                    value={form.latitude}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        latitude: event.target.value,
+                      }))
+                    }
+                  />
+                  <Input
+                    aria-label="경도"
+                    inputMode="decimal"
+                    placeholder="경도"
+                    value={form.longitude}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        longitude: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                {/* 카테고리 드롭다운으로 강제(검색결과 카테고리는 #5에서 매핑해 미리 채움). */}
+                <Select
+                  value={form.categoryCode}
+                  onValueChange={(value) => {
+                    const code = value ?? "";
+                    const option = (categoriesQuery.data ?? []).find(
+                      (c) => c.code === code,
+                    );
+                    setForm((prev) => ({
+                      ...prev,
+                      categoryCode: code,
+                      category: option?.label ?? prev.category,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="카테고리">
+                    <SelectValue placeholder="카테고리 선택(강제)">
+                      {form.category}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectGroup>
+                      {(categoriesQuery.data ?? []).map((option) => (
+                        <SelectItem key={option.code} value={option.code}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    disabled={!canSave || resolveMutation.isPending}
+                    onClick={() => resolveMutation.mutate("create_place")}
+                  >
+                    저장
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={resolveMutation.isPending}
+                    onClick={() => resolveMutation.mutate("ignore")}
+                  >
+                    제외
+                  </Button>
+                </div>
+                {resolveMutation.error ? (
+                  <p className="text-xs text-destructive">
+                    {resolveMutation.error.message}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[0.85fr_1.5fr]">
                 <div className="flex flex-col gap-3">
                   {!opinionRequested ? (
                     <Button
@@ -718,7 +857,7 @@ export default function ReviewPage() {
                 </div>
 
                 <div className="flex flex-col gap-3">
-                  <div className="h-72 overflow-hidden rounded-xl border">
+                  <div className="h-[32rem] overflow-hidden rounded-xl border lg:h-full lg:min-h-[28rem]">
                     <VWorldMap
                       places={mapPlaces}
                       selectedPlaceId={form.latitude ? 9999 : null}
@@ -736,99 +875,6 @@ export default function ReviewPage() {
                         }
                       }}
                     />
-                  </div>
-
-                  <div className="flex flex-col gap-2 rounded-xl border p-3">
-                    <p className="flex items-center gap-1.5 text-sm font-medium">
-                      <MapPinIcon className="size-4 text-muted-foreground" />
-                      확정 정보
-                    </p>
-                    <Input
-                      aria-label="확정 장소명"
-                      placeholder="장소명"
-                      value={form.name}
-                      onChange={(event) =>
-                        setForm((prev) => ({ ...prev, name: event.target.value }))
-                      }
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        aria-label="위도"
-                        inputMode="decimal"
-                        placeholder="위도"
-                        value={form.latitude}
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            latitude: event.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        aria-label="경도"
-                        inputMode="decimal"
-                        placeholder="경도"
-                        value={form.longitude}
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            longitude: event.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                    {/* 카테고리는 카탈로그 드롭다운으로 강제한다(외부 API 카테고리로 덮어쓰지 않음). */}
-                    <Select
-                      value={form.categoryCode}
-                      onValueChange={(value) => {
-                        const code = value ?? "";
-                        const option = (categoriesQuery.data ?? []).find(
-                          (c) => c.code === code,
-                        );
-                        setForm((prev) => ({
-                          ...prev,
-                          categoryCode: code,
-                          category: option?.label ?? prev.category,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger className="w-full" aria-label="카테고리">
-                        <SelectValue placeholder="카테고리 선택(강제)">
-                          {form.category}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent className="max-h-72">
-                        <SelectGroup>
-                          {(categoriesQuery.data ?? []).map((option) => (
-                            <SelectItem key={option.code} value={option.code}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        disabled={!canSave || resolveMutation.isPending}
-                        onClick={() => resolveMutation.mutate("create_place")}
-                      >
-                        저장
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={resolveMutation.isPending}
-                        onClick={() => resolveMutation.mutate("ignore")}
-                      >
-                        제외
-                      </Button>
-                    </div>
-                    {resolveMutation.error ? (
-                      <p className="text-xs text-destructive">
-                        {resolveMutation.error.message}
-                      </p>
-                    ) : null}
                   </div>
                 </div>
               </div>

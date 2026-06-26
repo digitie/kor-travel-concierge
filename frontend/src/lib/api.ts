@@ -572,6 +572,16 @@ export async function listCategories(): Promise<CategoryOption[]> {
   return requestJson<CategoryOption[]>("/api/v1/categories");
 }
 
+// 외부 검색결과 카테고리 문자열을 카탈로그 8자리 코드로 근사 매핑(LLM 없이). 없으면 null.
+export async function matchCategory(
+  q: string,
+): Promise<{ code: string; label: string } | null> {
+  const data = await requestJson<{
+    match: { code: string; label: string } | null;
+  }>(`/api/v1/categories/match?q=${encodeURIComponent(q)}`);
+  return data.match;
+}
+
 export async function triggerDeepResearch(
   placeId: number,
 ): Promise<{ job_id: string; state: string; place_id: number }> {
@@ -785,6 +795,21 @@ export type CandidateDetail = {
 
 export async function getCandidateDetail(id: number): Promise<CandidateDetail> {
   return requestJson<CandidateDetail>(`/api/v1/destinations/candidates/${id}/detail`);
+}
+
+export type CandidateTranscript = {
+  text: string | null;
+  kind: "corrected" | "raw" | null;
+  video_id: string;
+};
+
+// 후보의 출처 영상 보정 자막(없으면 원본 자막). 둘 다 없으면 text/kind=null.
+export async function getCandidateTranscript(
+  id: number,
+): Promise<CandidateTranscript> {
+  return requestJson<CandidateTranscript>(
+    `/api/v1/destinations/candidates/${id}/transcript`,
+  );
 }
 
 export async function deleteCandidate(

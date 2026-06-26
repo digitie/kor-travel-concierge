@@ -4,7 +4,11 @@ import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
 
-import { deleteCandidate, getCandidateDetail } from "@/lib/api";
+import {
+  deleteCandidate,
+  getCandidateDetail,
+  getCandidateTranscript,
+} from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -29,6 +33,11 @@ export function CandidateDetailView({
   const detailQuery = useQuery({
     queryKey: ["candidate-detail", candidateId],
     queryFn: () => getCandidateDetail(candidateId),
+  });
+  // 보정 자막은 상세가 열릴 때 함께(지연) 불러온다(RustFS에서 텍스트 로드).
+  const transcriptQuery = useQuery({
+    queryKey: ["candidate-transcript", candidateId],
+    queryFn: () => getCandidateTranscript(candidateId),
   });
   const detail = detailQuery.data;
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -119,6 +128,24 @@ export function CandidateDetailView({
           ) : null}
         </DetailSection>
       ) : null}
+
+      <DetailSection
+        title={
+          transcriptQuery.data?.kind === "raw"
+            ? "자막 (원본 — 보정본 없음)"
+            : "보정 자막"
+        }
+      >
+        {transcriptQuery.isLoading ? (
+          <p className="text-xs text-muted-foreground">불러오는 중…</p>
+        ) : transcriptQuery.data?.text ? (
+          <pre className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap">
+            {transcriptQuery.data.text}
+          </pre>
+        ) : (
+          <p className="text-xs text-muted-foreground">보정 자막 없음</p>
+        )}
+      </DetailSection>
 
       <DetailSection title="동영상 내 근거(어디에 나왔는지)">
         <DetailRow
