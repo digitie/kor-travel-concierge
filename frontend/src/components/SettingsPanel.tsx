@@ -7,7 +7,6 @@ import { KeyRoundIcon, Loader2Icon, SaveIcon } from "lucide-react";
 import {
   createPublicApiKey,
   getRuntimeSettings,
-  listLoginEvents,
   listPublicApiKeys,
   revokePublicApiKey,
   updateRuntimeSettings,
@@ -39,12 +38,6 @@ const API_KEY_LABELS: { name: ApiKeyName; label: string }[] = [
   { name: "kor_travel_geo_v2_api_key", label: "kor travel geo v2 API" },
 ];
 
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("ko-KR");
-}
-
 export function SettingsPanel() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({
@@ -54,10 +47,6 @@ export function SettingsPanel() {
   const publicKeysQuery = useQuery({
     queryKey: ["public-api-keys"],
     queryFn: listPublicApiKeys,
-  });
-  const loginEventsQuery = useQuery({
-    queryKey: ["login-events"],
-    queryFn: listLoginEvents,
   });
   const settings = settingsQuery.data;
 
@@ -302,47 +291,6 @@ export function SettingsPanel() {
           ) : (
             <p className="px-3 py-2 text-[13px] text-text-secondary">
               생성된 공개 API 키가 없습니다.
-            </p>
-          )}
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-4 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-        <div>
-          <h2 className="text-[16px] font-bold">로그인 기록</h2>
-          <p className="text-[13px] text-text-secondary">
-            최근 관리자 로그인과 로그아웃 이벤트입니다.
-          </p>
-        </div>
-        <div className="max-h-80 overflow-y-auto rounded-lg border border-surface-muted">
-          {(loginEventsQuery.data ?? []).length > 0 ? (
-            (loginEventsQuery.data ?? []).map((event) => (
-              <div
-                key={event.id}
-                className="border-b border-surface-muted px-3 py-2 last:border-b-0"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[14px] font-medium">
-                    {event.event_type === "logout" ? "로그아웃" : "로그인"}
-                  </span>
-                  <Badge
-                    variant={event.outcome === "succeeded" ? "secondary" : "outline"}
-                  >
-                    {event.outcome}
-                  </Badge>
-                </div>
-                <p className="mt-1 text-[12px] text-text-secondary">
-                  {formatDateTime(event.created_at)} · {event.attempted_username || "-"} ·{" "}
-                  {event.reason || "-"}
-                </p>
-                <p className="truncate text-[12px] text-text-secondary">
-                  {event.client_ip || "unknown ip"}
-                </p>
-              </div>
-            ))
-          ) : (
-            <p className="px-3 py-2 text-[13px] text-text-secondary">
-              저장된 로그인 기록이 없습니다.
             </p>
           )}
         </div>
