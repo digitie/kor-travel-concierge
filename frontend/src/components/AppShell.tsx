@@ -67,12 +67,30 @@ export function AppShell({
       <div className="grid min-h-screen min-w-0 lg:grid-cols-[17rem_1fr]">
         <aside className="min-w-0 border-b border-surface-muted bg-card shadow-[var(--shadow-card)] lg:border-r lg:border-b-0">
           <div className="flex h-full min-w-0 flex-col gap-5 p-4 lg:p-5">
-            <Link className="flex items-center gap-2 text-text-primary" href="/">
-              <span className="flex size-10 items-center justify-center rounded-xl bg-brand-tint text-brand">
-                <MapIcon className="size-4" />
-              </span>
-              <span className="text-[14px] font-bold">Korea Travel Concierge</span>
-            </Link>
+            <div className="flex min-w-0 items-center gap-2">
+              <Link
+                className="flex min-w-0 flex-1 items-center gap-2 text-text-primary"
+                href="/"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-brand">
+                  <MapIcon className="size-4" />
+                </span>
+                <span className="truncate text-[14px] font-bold">
+                  Korea Travel Concierge
+                </span>
+              </Link>
+              <JobStatusLink variant="menu" />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                onClick={logout}
+                aria-label="로그아웃"
+                title="로그아웃"
+              >
+                <LogOutIcon className="size-4" />
+              </Button>
+            </div>
             <nav className="flex max-w-full gap-1 overflow-x-auto lg:max-h-[calc(100vh-6rem)] lg:flex-col lg:overflow-y-auto lg:pr-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
@@ -110,7 +128,6 @@ export function AppShell({
                   </div>
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <h1 className="text-[24px] leading-snug font-bold">{title}</h1>
-                    <JobStatusLink className="max-w-full" />
                   </div>
                   {description ? (
                     <p className="max-w-4xl text-[13px] leading-normal text-text-secondary">
@@ -118,13 +135,11 @@ export function AppShell({
                     </p>
                   ) : null}
                 </div>
-                <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
-                  {actions}
-                  <Button type="button" variant="outline" size="sm" onClick={logout}>
-                    <LogOutIcon data-icon="inline-start" />
-                    로그아웃
-                  </Button>
-                </div>
+                {actions ? (
+                  <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                    {actions}
+                  </div>
+                ) : null}
               </div>
             </div>
           </header>

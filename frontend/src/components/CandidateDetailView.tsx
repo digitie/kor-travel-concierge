@@ -16,6 +16,7 @@ import {
   getCandidateDetail,
   getCandidateTranscript,
 } from "@/lib/api";
+import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -143,10 +144,12 @@ export function CandidateDetailView({
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-semibold">{c.ai_place_name}</h3>
-          {c.candidate_category ? (
-            <Badge variant="outline">{c.candidate_category}</Badge>
-          ) : null}
-          <Badge variant="secondary">{c.match_status}</Badge>
+          <Badge variant="outline">
+            {categoryDisplayLabel(c.candidate_category)}
+          </Badge>
+          <Badge variant="secondary">
+            {candidateStatusLabel(c.match_status)}
+          </Badge>
           {c.confidence_score != null ? (
             <Badge variant="outline">
               신뢰도 {Math.round(c.confidence_score * 100)}%
@@ -283,7 +286,9 @@ export function CandidateDetailView({
                 href={siblingHref(sibling)}
               >
                 <span className="truncate">{sibling.ai_place_name}</span>
-                <Badge variant="outline">{sibling.match_status}</Badge>
+                <Badge variant="outline">
+                  {candidateStatusLabel(sibling.match_status)}
+                </Badge>
               </Link>
             ))}
           </div>

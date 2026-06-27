@@ -4,6 +4,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useState } from "react";
 
 import type { RunStatusLog } from "@/lib/api";
+import { runStateLabel } from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,8 +39,9 @@ function formatLogTime(value: string): string {
 function stateVariant(
   state: string,
 ): "default" | "secondary" | "destructive" | "outline" {
-  if (state === "failed") return "destructive";
-  if (state === "done") return "default";
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "destructive";
+  if (normalized === "done") return "default";
   return "secondary";
 }
 
@@ -47,7 +49,7 @@ export function buildJobReport(status: JobLogLike): string {
   const lines = [
     "[작업 정보]",
     `job_id: ${status.job_id ?? "-"}`,
-    `상태: ${status.state}`,
+    `상태: ${runStateLabel(status.state)}`,
     `현재 메시지: ${status.current_message ?? "-"}`,
     `오류: ${status.last_error ?? "-"}`,
     "",
@@ -90,7 +92,9 @@ export function JobLogView({ status }: { status: JobLogLike }) {
   return (
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <Badge variant={stateVariant(status.state)}>{status.state}</Badge>
+        <Badge variant={stateVariant(status.state)}>
+          {runStateLabel(status.state)}
+        </Badge>
         <CopyButton text={buildJobReport(status)} />
       </div>
 

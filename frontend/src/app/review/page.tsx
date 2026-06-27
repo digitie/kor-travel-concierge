@@ -33,6 +33,7 @@ import {
   type ReprocessStage,
   type UnmatchedCandidate,
 } from "@/lib/api";
+import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
@@ -323,7 +324,9 @@ export default function ReviewPage() {
 
   function candidateCategoryForm(candidate: UnmatchedCandidate) {
     return {
-      category: candidate.candidate_category ?? "unknown",
+      category: categoryDisplayLabel(
+        candidate.candidate_category ?? candidate.candidate_category_code,
+      ),
       categoryCode: candidate.candidate_category_code ?? "0",
     };
   }
@@ -698,7 +701,7 @@ export default function ReviewPage() {
                             {candidate.ai_place_name}
                           </span>
                           <span className="text-[12px] text-text-secondary">
-                            {candidate.candidate_category ?? "카테고리 없음"}
+                            {categoryDisplayLabel(candidate.candidate_category)}
                           </span>
                         </button>
                       </TableCell>
@@ -717,7 +720,9 @@ export default function ReviewPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <Badge variant="outline">{candidate.match_status}</Badge>
+                          <Badge variant="outline">
+                            {candidateStatusLabel(candidate.match_status)}
+                          </Badge>
                           {candidate.is_domestic === false ? (
                             <Badge variant="outline">해외</Badge>
                           ) : null}
@@ -766,10 +771,12 @@ export default function ReviewPage() {
                   <span className="text-sm font-semibold">
                     {selected.ai_place_name}
                   </span>
-                  {selected.candidate_category ? (
-                    <Badge variant="outline">{selected.candidate_category}</Badge>
-                  ) : null}
-                  <Badge variant="secondary">{selected.match_status}</Badge>
+                  <Badge variant="outline">
+                    {categoryDisplayLabel(selected.candidate_category)}
+                  </Badge>
+                  <Badge variant="secondary">
+                    {candidateStatusLabel(selected.match_status)}
+                  </Badge>
                 </div>
                 {selected.location_hint ? (
                   <p className="text-xs text-muted-foreground">
