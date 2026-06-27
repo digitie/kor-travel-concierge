@@ -363,12 +363,17 @@ export type DestinationFilter = {
   playlistId?: string | null;
   keyword?: string | null;
   videoId?: string | null;
+  category?: string | null;
+  query?: string | null;
+  district?: string | null;
 };
 
 export type DestinationFacets = {
   channels: { id: string; title: string; place_count: number }[];
   playlists: { id: string; title: string; place_count: number }[];
   keywords: { value: string; place_count: number }[];
+  categories: { value: string; place_count: number }[];
+  districts: { value: string; place_count: number }[];
 };
 
 export async function listDestinations(
@@ -380,6 +385,9 @@ export async function listDestinations(
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
   if (filter?.videoId) params.set("video_id", filter.videoId);
+  if (filter?.category) params.set("category", filter.category);
+  if (filter?.query) params.set("q", filter.query);
+  if (filter?.district) params.set("district", filter.district);
   return requestJson<DestinationSummary[]>(
     `/api/v1/destinations?${params.toString()}`,
   );

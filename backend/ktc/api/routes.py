@@ -1011,6 +1011,9 @@ async def list_destinations(
     playlist_id: str | None = None,
     keyword: str | None = None,
     video_id: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    district: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     """확정 여행지 목록을 반환한다.
@@ -1027,6 +1030,9 @@ async def list_destinations(
         playlist_id=playlist_id,
         keyword=keyword,
         video_id=video_id,
+        category=category,
+        query=q,
+        district=district,
     )
     return [_place_summary_payload(summary) for summary in summaries]
 

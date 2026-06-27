@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
@@ -63,6 +64,18 @@ export function DestinationWorkspace() {
     "ktc.destinations.groupValue",
     null,
   );
+  const [categoryFilter, setCategoryFilter] = usePersistedState<string | null>(
+    "ktc.destinations.category",
+    null,
+  );
+  const [districtFilter, setDistrictFilter] = usePersistedState<string | null>(
+    "ktc.destinations.district",
+    null,
+  );
+  const [textFilter, setTextFilter] = usePersistedState<string>(
+    "ktc.destinations.query",
+    "",
+  );
 
   // 작업 상세에서 확정 POI를 누르면 `?place=<id>`로 들어온다. 그 장소가 필터에 가려지지
   // 않도록 그룹 필터를 해제하고 해당 장소를 선택한다(딥링크, 최초 1회).
@@ -74,8 +87,11 @@ export function DestinationWorkspace() {
     if (!Number.isFinite(placeId)) return;
     setGroupDim("none");
     setGroupValue(null);
+    setCategoryFilter(null);
+    setDistrictFilter(null);
+    setTextFilter("");
     setSelectedPlaceId(placeId);
-  }, [setGroupDim, setGroupValue]);
+  }, [setCategoryFilter, setDistrictFilter, setGroupDim, setGroupValue, setTextFilter]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // 작업 상세에서 영상별 POI를 누르면 `?video=<id>`로 들어온다 — 그 영상이 언급한
@@ -87,8 +103,11 @@ export function DestinationWorkspace() {
     if (!v) return;
     setGroupDim("none");
     setGroupValue(null);
+    setCategoryFilter(null);
+    setDistrictFilter(null);
+    setTextFilter("");
     setVideoFilter(v);
-  }, [setGroupDim, setGroupValue]);
+  }, [setCategoryFilter, setDistrictFilter, setGroupDim, setGroupValue, setTextFilter]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const facetsQuery = useQuery({
@@ -97,20 +116,27 @@ export function DestinationWorkspace() {
     refetchInterval: 30_000,
   });
   const filter = useMemo(() => {
+    const common = {
+      category: categoryFilter,
+      district: districtFilter,
+      query: textFilter.trim() || null,
+    };
     if (videoFilter) {
-      return { videoId: videoFilter };
+      return { ...common, videoId: videoFilter };
     }
     if (!groupValue || groupDim === "none") {
-      return undefined;
+      return common.category || common.district || common.query
+        ? common
+        : undefined;
     }
     if (groupDim === "channel") {
-      return { channelId: groupValue };
+      return { ...common, channelId: groupValue };
     }
     if (groupDim === "playlist") {
-      return { playlistId: groupValue };
+      return { ...common, playlistId: groupValue };
     }
-    return { keyword: groupValue };
-  }, [groupDim, groupValue, videoFilter]);
+    return { ...common, keyword: groupValue };
+  }, [categoryFilter, districtFilter, groupDim, groupValue, textFilter, videoFilter]);
 
   const destinationsQuery = useQuery({
     queryKey: [
@@ -119,6 +145,9 @@ export function DestinationWorkspace() {
       groupDim,
       groupValue,
       videoFilter,
+      categoryFilter,
+      districtFilter,
+      textFilter,
     ],
     queryFn: () => listDestinations(destinationSort, filter),
     refetchInterval: 10_000,
@@ -225,10 +254,16 @@ export function DestinationWorkspace() {
             groupDim={groupDim}
             groupValue={groupValue}
             facets={facetsQuery.data}
+            categoryFilter={categoryFilter}
+            districtFilter={districtFilter}
+            textFilter={textFilter}
             onGroupChange={(dim, value) => {
               setGroupDim(dim);
               setGroupValue(value);
             }}
+            onCategoryFilterChange={setCategoryFilter}
+            onDistrictFilterChange={setDistrictFilter}
+            onTextFilterChange={setTextFilter}
           />
         </div>
         <div className="order-1 min-h-[22rem] border-b lg:order-none lg:border-b-0">
@@ -244,7 +279,7 @@ export function DestinationWorkspace() {
         open={detailPlaceId != null}
         onOpenChange={(open) => !open && setDetailPlaceId(null)}
       >
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>장소 상세</DialogTitle>
           </DialogHeader>
@@ -279,7 +314,13 @@ function DestinationList({
   groupDim,
   groupValue,
   facets,
+  categoryFilter,
+  districtFilter,
+  textFilter,
   onGroupChange,
+  onCategoryFilterChange,
+  onDistrictFilterChange,
+  onTextFilterChange,
 }: {
   places: DestinationSummary[];
   selectedPlace: DestinationSummary | null;
@@ -299,7 +340,13 @@ function DestinationList({
   groupDim: DestinationGroupDim;
   groupValue: string | null;
   facets: DestinationFacets | undefined;
+  categoryFilter: string | null;
+  districtFilter: string | null;
+  textFilter: string;
   onGroupChange: (dim: DestinationGroupDim, value: string | null) => void;
+  onCategoryFilterChange: (value: string | null) => void;
+  onDistrictFilterChange: (value: string | null) => void;
+  onTextFilterChange: (value: string) => void;
 }) {
   // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -318,6 +365,58 @@ function DestinationList({
   return (
     <section aria-label="장소 목록" className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1">
       <PanelHeader title="장소" count={places.length} />
+      <Input
+        aria-label="장소 글자 검색"
+        placeholder="장소명, 주소, 설명 검색"
+        value={textFilter}
+        onChange={(event) => onTextFilterChange(event.target.value)}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <Select
+          value={categoryFilter ?? "all"}
+          onValueChange={(value) =>
+            onCategoryFilterChange(value === "all" ? null : value)
+          }
+        >
+          <SelectTrigger className="w-full" aria-label="카테고리 필터">
+            <SelectValue>
+              {categoryFilter ? categoryFilter : "카테고리 전체"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">카테고리 전체</SelectItem>
+              {(facets?.categories ?? []).map((category) => (
+                <SelectItem key={category.value} value={category.value}>
+                  {category.value} ({category.place_count})
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select
+          value={districtFilter ?? "all"}
+          onValueChange={(value) =>
+            onDistrictFilterChange(value === "all" ? null : value)
+          }
+        >
+          <SelectTrigger className="w-full" aria-label="시군구 필터">
+            <SelectValue>
+              {districtFilter ? districtFilter : "시군구 전체"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">시군구 전체</SelectItem>
+              {(facets?.districts ?? []).map((district) => (
+                <SelectItem key={district.value} value={district.value}>
+                  {district.value} ({district.place_count})
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Select
           value={groupDim}

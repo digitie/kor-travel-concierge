@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-06-27: T-141 — 결과 뷰 필터와 출처 동영상 상세 확장
+
+- **결과 필터**: `/api/v1/destinations`에 `category`, `q`, `district` 필터를 추가하고,
+  `/api/v1/destinations/facets`가 `categories`/`districts`를 함께 반환하게 했다. T-142의 행정코드
+  보강 전까지 시군구 facet은 주소 문자열의 앞 두 토큰으로 보수적으로 만든다. 결과 화면에는 카테고리
+  dropdown, 시군구 dropdown, 장소명·주소·설명 텍스트 검색 input을 추가하고 sessionStorage에 보존한다.
+- **출처 동영상 상세 확장**: 장소 상세의 출처 동영상 제목을 줄바꿈 가능한 버튼으로 바꾸고, 클릭 시
+  같은 다이얼로그 안에 `출처 동영상 상세` 패널을 펼친다. 상세 패널은 동영상 메타데이터, 등장 근거
+  목록, `YouTube` 링크, 보정 자막 원문/정리본 탭, 근거 위치 이동 버튼을 제공한다. 장소 상세
+  다이얼로그 폭은 자막과 근거를 함께 볼 수 있게 넓혔다.
+- **live UI E2E**: `tests/e2e/live-shell.spec.ts`에 결과 필터 컨트롤과 출처 동영상 상세 확장 케이스를
+  추가했다.
+- **검증**: backend `python3 -m compileall ktc`, frontend `npm run type-check`, `npm run lint`,
+  `npm run build`, `npm test`(vitest 15/15) 통과. n150 API/UI 재빌드 후 API health 200,
+  UI 인증 환경변수 non-zero, 로그인 POST 200 + Set-Cookie 1개 확인. Windows 호스트 Playwright
+  live spec(`KTC_LIVE_E2E=1`) 4건 통과.
+
 ## 2026-06-27: T-140 — 검수 큐 테이블·3분할 레이아웃·삭제/상세 UX 개선
 
 - **검수 큐 테이블화**: 검수 대기 후보를 카드 목록에서 테이블로 바꾸고 후보/출처/상태/액션 컬럼으로
