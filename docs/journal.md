@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-06-27: T-135 — 수집 화면 일부(#7·#8·#10·#6a) + 로그인 env 영구 수정
+
+- **수집 화면(partial)**: #10 HarvestConsole(검색) 패널을 `lg:w-[38rem]`로 3분할 중 최대폭. #8 `RunControlCard` 컴팩트(`p-1.5`/`gap-1`) + 대상 제목 `text-sm font-semibold`. #6a 카드에 실행 기록 라인(완료시각 + 수집/신규 영상 수, `result`에서). #7 반복 대상 "지금 진행"+"강제 재실행"을 하나의 "지금 실행" 버튼+다이얼로그(강제 다운로드 체크)로 통합.
+- **#6 b-e·#9는 후속**: 작업 상세 별도 페이지(`/jobs/[id]`)·동영상별 POI 집계(`/runs/{id}/video-stats`)·동영상별 보정 자막(`/videos/{id}/transcript`)·`?video=` 결과 필터·정밀 진행 카운트는 새 엔드포인트+라우트가 필요해 별도 작업으로 분리.
+- **★ 로그인 env 영구 수정(인프라)**: 반복되던 로그인 죽음(UI 컨테이너 `KTC_ADMIN_PASSWORD_HASH` 빈값)의 근본원인은 docker-manager override의 env_file이 **상대경로 + `required:false`** 라 일부 `docker compose` 호출에서 조용히 스킵된 것. 사용자 승인 후 prod override를 **절대경로 `/home/digitie/kor-travel-concierge/.env` + `required:true` + command 크래시 가드**(빈 env면 UI 컨테이너가 exit 1로 크래시→가시적)로 수정. `--build` 재빌드에서도 hash=87 확인. 상세는 `docs/deploy-runbook.local.md`. docker-manager repo 커밋 권장.
+- 검증: frontend type-check/lint/build/vitest(WSL), 로그인 POST 200(공개도메인).
+
 ## 2026-06-27: T-134 — 검수 화면 개선(#1-5)
 
 - **#1 리스트 폭 조절**: 검수 후보 리스트 컬럼을 데스크톱에서 드래그로 폭 조절(경량 핸들 + `--list-width` CSS var + `usePersistedState`로 영속, 224~512px). 모바일 스택은 유지.
