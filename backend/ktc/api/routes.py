@@ -850,6 +850,9 @@ def _source_target_dict(
         if target.last_crawled_at
         else None,
         "last_scan_at": target.last_scan_at.isoformat() if target.last_scan_at else None,
+        "last_seen_video_published_at": target.last_seen_video_published_at.isoformat()
+        if target.last_seen_video_published_at
+        else None,
         "scan_failure_count": target.scan_failure_count,
         "last_scan_error": target.last_scan_error,
         "created_at": target.created_at.isoformat() if target.created_at else None,

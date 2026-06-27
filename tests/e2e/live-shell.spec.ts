@@ -47,6 +47,41 @@ test.describe('n150 live UI 셸 검증', () => {
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
+
+  test('수집 반복 작업 테이블과 수정 다이얼로그가 누적 정보를 보여준다', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await loginAsAdmin(page, '/collect');
+
+    await expect(page.getByRole('heading', { name: '수집', exact: true })).toBeVisible();
+    const queueRegion = page.getByRole('region', { name: '실행 큐' });
+    await expect(queueRegion).toBeVisible();
+    await expect(queueRegion.getByText('실행 큐')).toBeVisible();
+
+    const jobsRegion = page.getByRole('region', { name: '작업' });
+    await expect(jobsRegion.getByRole('tab', { name: /반복/ })).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '대상' }).first()).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '주기' })).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '누적' })).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '일정' })).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '액션' })).toBeVisible();
+
+    await jobsRegion.getByRole('button', { name: '수정' }).first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: /작업 수정/ })).toBeVisible();
+    await expect(dialog.getByText('반복 작업 수정')).toHaveCount(0);
+    await expect(dialog.getByText('누적 수집 영상')).toBeVisible();
+    await expect(dialog.getByText('실행 횟수')).toBeVisible();
+    await expect(dialog.getByText('마지막 영상 날짜')).toBeVisible();
+    await expect(dialog.getByText('다음 실행')).toBeVisible();
+    await expect(dialog.locator('#recurring-edit-interval')).toBeVisible();
+    await expect(dialog.locator('#recurring-edit-count')).toBeVisible();
+    await expect(dialog.locator('#recurring-edit-max-videos')).toBeVisible();
+    await expect(dialog.getByText('강제 다운로드 (전체 재수집)')).toBeVisible();
+    await expect(dialog.getByText('저장 직후 한 번만 전체 재수집 작업을 실행합니다.')).toBeVisible();
+    await dialog.getByRole('button', { name: '닫기' }).first().click();
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
 });
 
 async function loginAsAdmin(page: Page, nextPath: string) {

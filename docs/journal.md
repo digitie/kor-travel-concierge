@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-06-27: T-139 — 수집 실행 큐 테이블화 + 반복 작업 수정 다이얼로그 개선
+
+- **수집 테이블 UI**: 수집 화면의 실행 큐, 반복 작업, 1회성 작업 목록을 카드에서 테이블로 변경했다.
+  `kor-travel-map` curated features 화면의 컬럼 분리 패턴을 맞춰 상태/대상/진행/메시지/시간/액션을
+  나누고, 반복 작업은 대상/주기/누적/일정/상태/액션을 별도 컬럼으로 표시한다.
+- **반복 작업 수정 다이얼로그**: 제목을 `반복 작업 수정`에서 `{검색어|재생목록명|유튜버명} 작업 수정`으로
+  바꾸고, 원시 playlist/channel ID 대신 `target_label`/`display_name` 우선의 사람이 읽는 값을 사용한다.
+  누적 수집 영상 수(`source-targets/{id}/videos` lazy 로드), 실행 횟수, 마지막 수집일, 마지막 영상 날짜,
+  마지막 스캔, 다음 실행을 상단 요약으로 보여주고 그 아래에서 파라미터를 수정한다.
+- **1회성 강제 다운로드**: 수정 다이얼로그에 `강제 다운로드 (전체 재수집)` 체크박스를 추가했다. 저장 직후
+  `run-now?force=true`를 한 번만 호출하고 체크 상태는 저장하지 않도록 UI 설명을 붙였다.
+- **API 노출 보강**: 기존 `source_targets.last_seen_video_published_at` 모델 필드를
+  `/source-targets` 응답에 추가했다. DB schema 변경은 없다.
+- **검증**: backend `python3 -m compileall ktc`, frontend `npm run type-check`, `npm run lint`,
+  `npm run build`, `npm test`(vitest 15/15) 통과. n150 API/UI 재빌드 후 API health 200,
+  UI `${#KTC_ADMIN_PASSWORD_HASH}`/세션 secret non-zero, 로그인 POST 200 + Set-Cookie 1개 확인.
+  Windows 호스트 Playwright live spec(`KTC_LIVE_E2E=1`) 2건 통과.
+
 ## 2026-06-27: T-138 — 운영 셸·상태 페이지·설정 페이지 분리
 
 - **공통 AppShell 도입**: `kor-travel-map`의 PC 좌측 메뉴/모바일 상단 메뉴 구조와 카드형
