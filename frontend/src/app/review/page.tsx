@@ -244,6 +244,15 @@ export default function ReviewPage() {
   });
   const result = searchQuery.data;
 
+  // 검색 결과가 도착하면(검색 버튼/후보 선택 자동검색 모두) 결과 영역을 화면에 보이도록
+  // 스크롤한다. 확정 정보 폼(#3)이 위에 있어 검색 결과가 폴드 아래로 밀리던 문제 해결.
+  const resultsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (result) {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [result]);
+
   // provider hits를 모아 Gemini 의견을 별도(비동기)로 호출 → 검색 자체는 빠르게.
   const allHits = useMemo(
     () => [
@@ -802,7 +811,10 @@ export default function ReviewPage() {
                 ) : null}
               </div>
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[0.85fr_1.5fr]">
+              <div
+                ref={resultsRef}
+                className="scroll-mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[0.85fr_1.5fr]"
+              >
                 <div className="flex flex-col gap-3">
                   {!opinionRequested ? (
                     <Button
