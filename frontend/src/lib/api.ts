@@ -429,8 +429,10 @@ export function buildDestinationExportUrl({
 
 export async function listUnmatchedCandidates(
   filter?: DestinationFilter,
+  limit = 2000,
 ): Promise<UnmatchedCandidate[]> {
   const params = new URLSearchParams();
+  params.set("limit", String(limit));
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);

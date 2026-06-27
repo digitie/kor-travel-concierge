@@ -123,6 +123,9 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(page.getByText('Kakao', { exact: true })).toBeVisible();
     await expect(page.getByText('Naver', { exact: true })).toBeVisible();
     await expect(page.locator('.maplibregl-map')).toBeVisible();
+    const mapBox = await page.locator('#vworld-map-container').boundingBox();
+    expect(mapBox?.height ?? 0).toBeGreaterThan(300);
+    expect(mapBox?.height ?? 0).toBeLessThan(1200);
 
     await page.getByRole('button', { name: /상세 보기/ }).click();
     const dialog = page.getByRole('dialog');

@@ -1109,7 +1109,7 @@ async def export_destinations(
 
 @router.get("/destinations/unmatched")
 async def list_unmatched_candidates(
-    limit: int = 500,
+    limit: int = Query(2000, ge=1, le=2000),
     channel_id: str | None = None,
     playlist_id: str | None = None,
     keyword: str | None = None,
@@ -1118,7 +1118,7 @@ async def list_unmatched_candidates(
     """매칭 실패(`needs_review`) 후보 검수 큐. 결과 보기와 동일한 출처 필터 지원."""
     candidates = await place_service.list_unmatched_candidates(
         session,
-        limit=max(1, min(limit, 2000)),
+        limit=limit,
         channel_id=channel_id,
         playlist_id=playlist_id,
         keyword=keyword,
