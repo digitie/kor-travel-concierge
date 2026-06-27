@@ -35,6 +35,8 @@ export type StartHarvestInput = {
   contentFilter?: HarvestContentFilter;
   // true면 강제 다운로드(증분 워터마크 무시, 처음부터 재수집).
   force?: boolean;
+  // 카테고리 매칭 실패 시 쓸 기본 카테고리 코드(unknown=0).
+  defaultCategoryCode?: string | null;
 };
 
 export type SourceTargetSummary = {
@@ -48,6 +50,8 @@ export type SourceTargetSummary = {
   scan_interval_minutes: number | null;
   max_runs: number;
   max_videos: number | null;
+  default_category_code: string | null;
+  default_category_label: string | null;
   run_count: number;
   next_crawl_at: string | null;
   last_crawled_at: string | null;
@@ -88,6 +92,11 @@ export type DestinationSummary = {
   latitude: number;
   longitude: number;
   category: string | null;
+  category_code_suggestion?: string | null;
+  sigungu_code?: string | null;
+  sigungu_name?: string | null;
+  legal_dong_code?: string | null;
+  legal_dong_name?: string | null;
   official_address: string | null;
   road_address?: string | null;
   is_geocoded: boolean;
@@ -115,6 +124,7 @@ export type UnmatchedCandidate = {
   ai_place_name: string;
   location_hint: string | null;
   candidate_category: string | null;
+  candidate_category_code: string | null;
   match_status: string;
   timestamp_start: string | null;
   // POI 추출 LLM의 국내 여부 판정. null=미판정, true=국내, false=해외.
@@ -136,6 +146,8 @@ export type CrawlRunSummary = {
   current_message: string | null;
   // 입력 payload의 최대 영상 수(진행 중에도 노출). result가 아니라 payload 출처.
   max_videos?: number | null;
+  default_category_code?: string | null;
+  default_category_label?: string | null;
   status_logs: RunStatusLog[];
   retry_count: number;
   last_error: string | null;
@@ -291,6 +303,7 @@ function harvestPayload(input: StartHarvestInput) {
     content_filter: input.contentFilter ?? "both",
     // 강제 다운로드: 증분 워터마크를 무시하고 처음부터 다시 수집.
     force: input.force ?? false,
+    default_category_code: input.defaultCategoryCode ?? undefined,
   };
 }
 
@@ -373,7 +386,7 @@ export type DestinationFacets = {
   playlists: { id: string; title: string; place_count: number }[];
   keywords: { value: string; place_count: number }[];
   categories: { value: string; place_count: number }[];
-  districts: { value: string; place_count: number }[];
+  districts: { value: string; label: string; place_count: number }[];
 };
 
 export async function listDestinations(
@@ -635,6 +648,7 @@ export type SourceTargetUpdate = {
   maxRuns?: number;
   isActive?: boolean;
   maxVideos?: number;
+  defaultCategoryCode?: string;
 };
 
 export async function updateSourceTarget(
@@ -648,6 +662,7 @@ export async function updateSourceTarget(
       max_runs: input.maxRuns,
       is_active: input.isActive,
       max_videos: input.maxVideos,
+      default_category_code: input.defaultCategoryCode,
     }),
   });
 }
@@ -883,6 +898,10 @@ export type PlaceDetail = {
     name: string;
     category: string | null;
     category_code_suggestion: string | null;
+    sigungu_code: string | null;
+    sigungu_name: string | null;
+    legal_dong_code: string | null;
+    legal_dong_name: string | null;
     official_address: string | null;
     road_address: string | null;
     latitude: number | null;

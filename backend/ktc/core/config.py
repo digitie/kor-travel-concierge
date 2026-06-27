@@ -190,6 +190,8 @@ class Settings(BaseSettings):
     VWORLD_SERVICE_KEY: str = ""
     # kor-travel-geo v2 연동 키. 별도 값이 없으면 현재 VWorld 서버 키와 동일하게 쓴다.
     KOR_TRAVEL_GEO_V2_API_KEY: str = ""
+    # kor-travel-geo v2 REST endpoint. 비우면 행정코드 보강을 건너뛴다.
+    KOR_TRAVEL_GEO_V2_BASE_URL: str = ""
     # 검수 페이지 멀티 provider 장소 검색용 (geocoding 키와 별개).
     GOOGLE_PLACES_API_KEY: str = ""
     NAVER_SEARCH_CLIENT_ID: str = ""

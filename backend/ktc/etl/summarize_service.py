@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
-from ktc.etl import media_store, poi_extraction
+from ktc.etl import category_catalog, media_store, poi_extraction
 from ktc.etl.poi_extraction import LlmCallable
 from ktc.etl.transcript import TranscriptResult
 from ktc.models import (
@@ -62,6 +62,7 @@ async def summarize_video(
     gemini_model: str | None = None,
     max_retries: int = 2,
     status_reporter: StatusReporter | None = None,
+    default_category_code: str | None = None,
 ) -> dict[str, Any]:
     """단일 영상에 대해 자막 저장·POI 추출·후보 생성을 수행한다."""
     video_label = video.title or video.video_id
@@ -137,7 +138,14 @@ async def summarize_video(
     # 4) 추출 장소를 needs_review 후보로 생성 (자동 확정 금지)
     created = 0
     source_playlist_id = await _source_playlist_id_for_video(session, video.video_id)
+    normalized_default_category = category_catalog.normalize_code(default_category_code)
     for poi in result.places:
+        category_code = (
+            poi.category_code
+            or normalized_default_category
+            or category_catalog.UNKNOWN_CATEGORY_CODE
+        )
+        category_label = category_catalog.label_for_or_unknown(category_code)
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
             source_channel_id=video.channel_id,
@@ -149,7 +157,7 @@ async def summarize_video(
             location_hint=poi.location_hint,
             timestamp_start=poi.timestamp_start,
             timestamp_end=poi.timestamp_end,
-            candidate_category=poi.category,
+            candidate_category=category_label,
             match_status=MatchStatus.NEEDS_REVIEW,
             provider_evidence_json={
                 "transcript": {
@@ -162,7 +170,10 @@ async def summarize_video(
                     "location_hint": poi.location_hint,
                     # POI 추출 단계에서 함께 받은 8자리 카테고리 코드(검증 통과분).
                     # 확정 시 별도 Gemini 호출 없이 이 값을 장소에 복사한다(호출 절감, A안).
-                    "category_code": poi.category_code,
+                    "category_code": category_code,
+                    "category_source": "llm"
+                    if poi.category_code
+                    else ("default" if normalized_default_category else "unknown"),
                 }
             },
             feature_export_status=FeatureExportStatus.PENDING.value,

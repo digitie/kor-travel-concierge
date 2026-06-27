@@ -27,6 +27,7 @@ from ktc.core.config import get_settings
 from ktc.core.database import async_session_factory, init_db
 from ktc.etl import (
     batch_poi_service,
+    category_catalog,
     deep_research_service,
     postprocess_service,
     video_analysis_service,
@@ -101,6 +102,11 @@ def _max_videos_from_payload(payload: Mapping[str, Any]) -> int:
     except (TypeError, ValueError):
         value = settings.YOUTUBE_MAX_VIDEOS_PER_RUN
     return max(1, min(value, settings.YOUTUBE_MAX_VIDEOS_PER_RUN))
+
+
+def _default_category_code_from_payload(payload: Mapping[str, Any]) -> str | None:
+    value = payload.get("default_category_code")
+    return category_catalog.normalize_code(str(value)) if value is not None else None
 
 
 async def _force_target_video_ids(
@@ -220,7 +226,10 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
         # 자막 교정·POI는 묶음(≤10) 단위 poi_batch 작업으로 분리 enqueue한다(키 전역 rate
         # limit·순차 처리를 위해 별도 job으로 돌린다). 개별 영상 작업은 없다.
         batch_run_ids = await _enqueue_poi_batches(
-            session, post_video_ids, source=RunSource.SCHEDULER.value
+            session,
+            post_video_ids,
+            source=RunSource.SCHEDULER.value,
+            default_category_code=_default_category_code_from_payload(payload),
         )
         await report_status(
             f"영상 {len(post_video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
@@ -247,7 +256,10 @@ async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, 
 
     await report_status("자막·POI 배치 작업을 등록합니다.", 0.1)
     batch_run_ids = await _enqueue_poi_batches(
-        session, video_ids, source=RunSource.WEB.value
+        session,
+        video_ids,
+        source=RunSource.WEB.value,
+        default_category_code=_default_category_code_from_payload(payload),
     )
     await report_status(
         f"영상 {len(video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
@@ -257,7 +269,11 @@ async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, 
 
 
 async def _enqueue_poi_batches(
-    session: AsyncSession, video_ids: list[str], *, source: str
+    session: AsyncSession,
+    video_ids: list[str],
+    *,
+    source: str,
+    default_category_code: str | None = None,
 ) -> list[int]:
     """video_ids를 ≤POI_BATCH_MAX_VIDEOS개씩 묶어 `poi_batch` 작업으로 enqueue한다.
 
@@ -270,11 +286,14 @@ async def _enqueue_poi_batches(
     run_ids: list[int] = []
     for start in range(0, len(unique), size):
         chunk = unique[start : start + size]
+        payload: dict[str, Any] = {"video_ids": chunk}
+        if default_category_code:
+            payload["default_category_code"] = default_category_code
         run = await crawl_run_service.create_run(
             session,
             job_type="poi_batch",
             source=source,
-            payload={"video_ids": chunk},
+            payload=payload,
             commit=False,
         )
         run_ids.append(run.id)
@@ -295,6 +314,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
     # 검수 재처리(start_stage 지정)면 이미 완료된 영상도 어느 단계부터든 다시 처리한다.
     start_stage = str(payload.get("start_stage") or "transcript")
     reprocess = bool(payload.get("start_stage"))
+    default_category_code = _default_category_code_from_payload(payload)
 
     async def report_status(message: str, progress: float | None = None) -> None:
         await crawl_run_service.append_status_log(
@@ -329,6 +349,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         transcript_fetcher=postprocess_service._default_transcript_fetcher,
         status_reporter=report_status,
         start_stage=start_stage,
+        default_category_code=default_category_code,
     )
     # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
     # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).

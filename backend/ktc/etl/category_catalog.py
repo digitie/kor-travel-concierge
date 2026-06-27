@@ -20,6 +20,9 @@ from typing import Any
 
 # 분류 미지정 루트 코드. 선택 결과가 이 코드면 "제안 없음"(None)으로 취급한다.
 UNCLASSIFIED_CODE = "00000000"
+# Concierge에 없는 카테고리는 명시적인 unknown/0으로 저장한다(T-142).
+UNKNOWN_CATEGORY_CODE = "0"
+UNKNOWN_CATEGORY_LABEL = "unknown"
 
 _DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "place_category_codes.json"
 
@@ -47,27 +50,41 @@ def synced_on() -> str:
 
 def is_known_code(code: str | None) -> bool:
     """8자리 코드가 카탈로그에 존재하는지 확인한다."""
-    return bool(code) and code in _by_code()
+    return bool(code) and (code == UNKNOWN_CATEGORY_CODE or code in _by_code())
 
 
 def normalize_code(code: str | None) -> str | None:
-    """카탈로그에 존재하는 유효 코드만 통과시킨다(미상·미분류·미지정은 None).
+    """카탈로그에 존재하는 유효 코드만 통과시킨다(미분류·미지정은 None).
 
     POI 추출이 장소별로 받은 후보 코드를 검증할 때 쓴다. 자동 확정을 막기 위해
     불확실한 결과는 강제로 채우지 않는다(`suggest_category_code`와 동일 정책).
     """
     code = (code or "").strip()
+    if code == UNKNOWN_CATEGORY_CODE:
+        return UNKNOWN_CATEGORY_CODE
     if not code or code == UNCLASSIFIED_CODE:
         return None
     return code if is_known_code(code) else None
+
+
+def normalize_code_or_unknown(code: str | None) -> str:
+    """유효 카테고리 코드를 반환하고, 없거나 모르면 unknown(0)을 반환한다."""
+    return normalize_code(code) or UNKNOWN_CATEGORY_CODE
 
 
 def label_for(code: str | None) -> str | None:
     """코드의 표시 label(계층 경로)을 반환한다."""
     if not code:
         return None
+    if code == UNKNOWN_CATEGORY_CODE:
+        return UNKNOWN_CATEGORY_LABEL
     row = _by_code().get(code)
     return row["label"] if row else None
+
+
+def label_for_or_unknown(code: str | None) -> str:
+    """표시 label을 반환하고, 없거나 모르면 unknown을 반환한다."""
+    return label_for(normalize_code_or_unknown(code)) or UNKNOWN_CATEGORY_LABEL
 
 
 def selectable_categories() -> list[dict[str, Any]]:
@@ -76,6 +93,21 @@ def selectable_categories() -> list[dict[str, Any]]:
         row
         for row in _document()["categories"]
         if row.get("is_active", True) and row["code"] != UNCLASSIFIED_CODE
+    ]
+
+
+def ui_categories() -> list[dict[str, Any]]:
+    """UI 드롭다운용 카테고리 목록. unknown(0)을 맨 앞에 둔다."""
+    return [
+        {
+            "code": UNKNOWN_CATEGORY_CODE,
+            "label": UNKNOWN_CATEGORY_LABEL,
+            "path": UNKNOWN_CATEGORY_LABEL,
+            "depth": 0,
+            "tier1_name": UNKNOWN_CATEGORY_LABEL,
+            "is_active": True,
+        },
+        *selectable_categories(),
     ]
 
 

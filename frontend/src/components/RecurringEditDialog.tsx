@@ -5,8 +5,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   getSourceTargetVideos,
+  listCategories,
   runSourceTargetNow,
   updateSourceTarget,
+  type CategoryOption,
   type SourceTargetSummary,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -84,6 +86,14 @@ function formatDate(value: string | null | undefined): string {
   });
 }
 
+function categoryLabel(
+  categories: CategoryOption[] | undefined,
+  code: string | null | undefined,
+): string {
+  if (!code) return "unknown";
+  return categories?.find((category) => category.code === code)?.label ?? "unknown";
+}
+
 export function RecurringEditDialog({
   target,
   onClose,
@@ -97,12 +107,17 @@ export function RecurringEditDialog({
   const [maxRunsEdit, setMaxRunsEdit] = useState<number | null>(null);
   const [maxVideosEdit, setMaxVideosEdit] = useState<number | null>(null);
   const [activeEdit, setActiveEdit] = useState<boolean | null>(null);
+  const [defaultCategoryEdit, setDefaultCategoryEdit] = useState<string | null>(
+    null,
+  );
   const [forceRunOnce, setForceRunOnce] = useState(false);
 
   const interval = intervalEdit ?? target?.scan_interval_minutes ?? 1440;
   const maxRuns = maxRunsEdit ?? target?.max_runs ?? 0;
   const maxVideos = maxVideosEdit ?? target?.max_videos ?? 20;
   const active = activeEdit ?? target?.is_active ?? true;
+  const defaultCategoryCode =
+    defaultCategoryEdit ?? target?.default_category_code ?? "0";
   const title = `${targetDisplayName(target)} 작업 수정`;
   const targetKind =
     target?.target_type_label ?? targetTypeLabel(target?.target_type);
@@ -111,6 +126,11 @@ export function RecurringEditDialog({
     queryKey: ["source-target-videos", target?.id],
     queryFn: () => getSourceTargetVideos(target!.id),
     enabled: open && target != null,
+  });
+  const categoriesQuery = useQuery({
+    queryKey: ["categories"],
+    queryFn: listCategories,
+    staleTime: 60 * 60 * 1000,
   });
   const videos = videosQuery.data ?? [];
   const lastVideoPublishedAt =
@@ -127,6 +147,7 @@ export function RecurringEditDialog({
     setMaxRunsEdit(null);
     setMaxVideosEdit(null);
     setActiveEdit(null);
+    setDefaultCategoryEdit(null);
     setForceRunOnce(false);
     onClose();
   }
@@ -138,6 +159,7 @@ export function RecurringEditDialog({
         maxRuns,
         maxVideos,
         isActive: active,
+        defaultCategoryCode,
       });
       if (forceRunOnce) {
         await runSourceTargetNow(target!.id, true);
@@ -190,6 +212,10 @@ export function RecurringEditDialog({
           <SummaryItem
             label="다음 실행"
             value={formatDateTime(target?.next_crawl_at)}
+          />
+          <SummaryItem
+            label="기본 카테고리"
+            value={categoryLabel(categoriesQuery.data, defaultCategoryCode)}
           />
         </section>
 
@@ -253,6 +279,32 @@ export function RecurringEditDialog({
               <FieldDescription>반복 1회당 받을 영상 수 (1-300).</FieldDescription>
             </Field>
           </div>
+
+          <Field>
+            <FieldLabel htmlFor="recurring-edit-category">기본 카테고리</FieldLabel>
+            <Select
+              value={defaultCategoryCode}
+              onValueChange={(value) => setDefaultCategoryEdit(value)}
+            >
+              <SelectTrigger id="recurring-edit-category" className="w-full">
+                <SelectValue>
+                  {categoryLabel(categoriesQuery.data, defaultCategoryCode)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectGroup>
+                  {(categoriesQuery.data ?? []).map((option) => (
+                    <SelectItem key={option.code} value={option.code}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              카테고리 매칭 실패 시 이 값으로 저장합니다.
+            </FieldDescription>
+          </Field>
 
           <label className="flex items-center gap-2 text-sm">
             <input

@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir \
     -r mcp/requirements.txt
 
 # 애플리케이션 소스
+COPY alembic.ini alembic.ini
 COPY backend backend
 COPY etl etl
 COPY scheduler scheduler

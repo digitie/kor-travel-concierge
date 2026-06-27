@@ -6,27 +6,32 @@
 
 ## 진행 중
 
-- [ ] **T-142 / PR-E**: 카테고리 강제화 + `kor-travel-geo` v2 행정코드 보강 — 카테고리를 필수
-  데이터로 만들고 Concierge 카테고리에 없는 값은 `unknown`/코드 `0`으로 저장한다. 작업별 기본
-  카테고리를 자동 저장과 검수 큐 수동 장소 검색에 적용하고, 카테고리 매칭 실패 시 기본값을 쓴다.
-  `kor-travel-geo` v2 API를 사용해 모든 자동/수동 매칭 결과에 법정동·시군구 코드를 저장하도록
-  DB schema와 Alembic migration을 추가한다. 기존 데이터는 API backfill로 빈 값을 채우고, 해당
-  시군구 정보를 T-141 필터 dropdown에 공급한다. 검증은 backend pytest, migration/backfill dry-run,
-  n150 live UI E2E의 자동/수동 매칭 행정코드 반영 확인을 포함한다. (담당: Codex, 2026-06-27 시작)
+없음.
 
 ---
 
 ## 대기 (우선순위 순)
 
-- [ ] **T-143 / PR-F**: 통합 n150 live UI E2E와 최종 배포 — T-138~T-142가 모두 병합된 뒤 각 기능의
-  live UI E2E 케이스를 n150 기준으로 촘촘하게 고정하고 전체 회귀를 실행한다. 보안 감사 후 PR을
-  머지하고, 최종 n150 배포에서는 UI 재생성 후 로그인 GET뿐 아니라 로그인 POST 200 + Set-Cookie와
-  `${KTC_ADMIN_PASSWORD_HASH}` 주입 여부까지 검증한다.
+없음.
 
 ---
 
 ## 완료
 
+- [x] **T-143 / PR-F**: 통합 n150 live UI E2E와 최종 배포 — T-138~T-142 기능을
+  `tests/e2e/live-shell.spec.ts`의 n150 live spec 4건으로 고정했다. 메뉴/상단 작업 상태/상태/설정,
+  수집 반복 작업 테이블과 수정 다이얼로그, 검수 큐 테이블·3분할·상세, 결과 필터와 출처 동영상 상세
+  확장을 한 파일에서 검증한다. n150 배포 후 API health 200, UI 인증 환경변수 non-zero, 로그인
+  GET 200, 로그인 POST 200 + Set-Cookie 1개, Windows 호스트 Playwright live spec 4건 통과를 확인했다.
+  (2026-06-27)
+- [x] **T-142 / PR-E**: 카테고리 강제화 + `kor-travel-geo` v2 행정코드 보강 — 수집 작업에 기본
+  카테고리를 추가하고 자동 저장·검수 큐 수동 검색 확정·반복 작업 실행 payload에 적용했다. 카테고리
+  매칭 실패와 Concierge 카테고리 외 값은 `unknown`/코드 `0`으로 정규화한다. `travel_places`에는
+  법정동/시군구 코드·이름과 보강 출처/시각을 추가하고, 자동/수동 매칭 저장 시 `kor-travel-geo`
+  v2 reverse API로 채운다. 산·해안처럼 reverse가 일부 코드만 주는 좌표는 v2 `regions/within-radius`
+  fallback으로 보완한다. n150 기존 장소 856건을 백필해 누락 0건을 확인했고, 결과 시군구 필터는
+  코드 기반 facet을 사용한다. backend 전체 pytest, frontend type-check/lint/vitest/build, n150
+  live UI E2E 4건을 통과했다. (2026-06-27)
 - [x] **T-141 / PR-D**: 결과 뷰 필터와 출처 동영상 상세 확장 — 결과 탭에 카테고리 필터, 텍스트
   검색, 시군구 필터를 추가했다. 시군구는 T-142 행정코드 보강 전까지 주소 문자열의 앞 두 토큰으로
   보수적으로 구성하고, T-142에서 코드 기반 dropdown으로 대체한다. 장소 상세의 출처 동영상을 클릭하면

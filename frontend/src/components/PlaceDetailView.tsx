@@ -144,6 +144,20 @@ export function PlaceDetailView({
         {address ? (
           <p className="mt-1 text-sm text-muted-foreground">{address}</p>
         ) : null}
+        {p.sigungu_code || p.legal_dong_code ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {p.sigungu_code ? (
+              <Badge variant="outline">
+                {p.sigungu_name ?? "시군구"} {p.sigungu_code}
+              </Badge>
+            ) : null}
+            {p.legal_dong_code ? (
+              <Badge variant="outline">
+                {p.legal_dong_name ?? "법정동"} {p.legal_dong_code}
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
         {p.latitude != null && p.longitude != null ? (
           <p className="text-xs text-muted-foreground">
             {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}

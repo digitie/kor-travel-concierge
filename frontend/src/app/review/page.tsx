@@ -319,6 +319,14 @@ export default function ReviewPage() {
     // 강제 카테고리 코드(드롭다운). category(label)는 코드 선택 시 함께 채운다.
     categoryCode: "",
   });
+  const [categoryEdited, setCategoryEdited] = useState(false);
+
+  function candidateCategoryForm(candidate: UnmatchedCandidate) {
+    return {
+      category: candidate.candidate_category ?? "unknown",
+      categoryCode: candidate.candidate_category_code ?? "0",
+    };
+  }
 
   function runSearch() {
     if (query.trim()) {
@@ -355,7 +363,13 @@ export default function ReviewPage() {
     setOpinionRequested(false);
     setSearchNonce((n) => n + 1);
     setActiveQuery(buildHintedQuery(candidate));
-    setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
+    setCategoryEdited(false);
+    setForm({
+      name: "",
+      latitude: "",
+      longitude: "",
+      ...candidateCategoryForm(candidate),
+    });
   }
   function selectHit(hit: PlaceSearchHit) {
     setForm((prev) => ({
@@ -364,17 +378,17 @@ export default function ReviewPage() {
       latitude: String(hit.latitude),
       longitude: String(hit.longitude),
     }));
-    // #5: 검색결과 카테고리를 카탈로그 8자리 코드로 근사 매핑해 드롭다운을 미리 채운다.
-    // 사용자가 이미 카테고리를 고른 경우(categoryCode 존재)는 덮어쓰지 않는다(드롭다운으로 변경 가능).
+    // 검색결과 카테고리 매칭이 되면 그 값을 쓰고, 실패하면 후보의 기본 카테고리를 유지한다.
+    // 사용자가 드롭다운을 직접 바꾼 뒤에는 자동 매칭으로 덮어쓰지 않는다.
     if (hit.category) {
       void matchCategory(hit.category)
         .then((match) => {
-          if (!match) return;
-          setForm((prev) =>
-            prev.categoryCode
-              ? prev
-              : { ...prev, categoryCode: match.code, category: match.label },
-          );
+          if (!match || categoryEdited) return;
+          setForm((prev) => ({
+            ...prev,
+            categoryCode: match.code,
+            category: match.label,
+          }));
         })
         .catch(() => {});
     }
@@ -463,6 +477,7 @@ export default function ReviewPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
       setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
+      setCategoryEdited(false);
       setQueryEdit(null);
       setActiveQuery("");
       setSelectedId(null);
@@ -857,6 +872,7 @@ export default function ReviewPage() {
                     const option = (categoriesQuery.data ?? []).find(
                       (c) => c.code === code,
                     );
+                    setCategoryEdited(true);
                     setForm((prev) => ({
                       ...prev,
                       categoryCode: code,
