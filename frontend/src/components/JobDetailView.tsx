@@ -106,17 +106,6 @@ export function JobDetailView({
   const result = (run?.result ?? {}) as Record<string, unknown>;
   const fields: { label: string; value: string }[] = run
     ? [
-        { label: "상태", value: runStateLabel(run.state) },
-        { label: "진행률", value: `${Math.round((run.progress ?? 0) * 100)}%` },
-        {
-          label: "작업 유형",
-          value: run.job_type_label ?? jobTypeDisplayLabel(run.job_type),
-        },
-        {
-          label: "대상 유형",
-          value: run.target_type_label ?? targetTypeLabel(run.target_type),
-        },
-        { label: "대상", value: run.target_label ?? run.target_id ?? "-" },
         {
           label: "기본 카테고리",
           value: categoryDisplayLabel(
@@ -174,11 +163,17 @@ export function JobDetailView({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
+      {run ? (
+        <RunOverview run={run} result={result} />
+      ) : target ? (
+        <TargetOverview target={target} />
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
         {fields.map((field) => (
           <div
             key={field.label}
-            className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-surface-muted bg-card p-3 shadow-[var(--shadow-card)]"
+            className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-surface-muted bg-surface-subtle p-2.5"
           >
             <span className="text-xs text-muted-foreground">{field.label}</span>
             <span className="break-words text-sm font-medium">{field.value}</span>
@@ -282,4 +277,95 @@ export function JobDetailView({
       ) : null}
     </div>
   );
+}
+
+function RunOverview({
+  run,
+  result,
+}: {
+  run: CrawlRunSummary;
+  result: Record<string, unknown>;
+}) {
+  const progress = Math.round((run.progress ?? 0) * 100);
+  const targetName = run.target_label ?? run.target_id ?? "-";
+  return (
+    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <Badge variant={runStateVariant(run.state)}>
+              {runStateLabel(run.state)}
+            </Badge>
+            <Badge variant="outline">
+              {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
+            </Badge>
+            <Badge variant="outline">
+              {run.target_type_label ?? targetTypeLabel(run.target_type)}
+            </Badge>
+          </div>
+          <h2 className="break-words text-[18px] font-bold leading-snug">
+            {targetName}
+          </h2>
+          <p className="mt-2 line-clamp-2 text-[13px] text-text-secondary">
+            {run.last_error ?? run.current_message ?? runResultLabel(result, Boolean(run.result))}
+          </p>
+        </div>
+        <div className="w-full shrink-0 lg:w-72">
+          <div className="mb-1 flex items-center justify-between text-[12px]">
+            <span className="font-medium text-text-secondary">진행률</span>
+            <span className="font-bold tabular-nums">{progress}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-surface-muted">
+            <div
+              className={progressBarClass(run.state)}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[12px] text-text-secondary">
+            <span>시작 {formatDateTime(run.started_at)}</span>
+            <span>종료 {formatDateTime(run.finished_at)}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TargetOverview({ target }: { target: SourceTargetSummary }) {
+  const targetName = target.target_label ?? target.display_name ?? target.source_value;
+  return (
+    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={target.is_active ? "secondary" : "outline"}>
+          {target.is_active ? "활성" : "중지"}
+        </Badge>
+        <Badge variant="outline">
+          {target.target_type_label ?? targetTypeLabel(target.target_type)}
+        </Badge>
+      </div>
+      <h2 className="mt-2 break-words text-[18px] font-bold leading-snug">
+        {targetName}
+      </h2>
+      <p className="mt-2 text-[13px] text-text-secondary">
+        다음 실행 {formatDateTime(target.next_crawl_at)} · 최근 실행{" "}
+        {formatDateTime(target.last_crawled_at)}
+      </p>
+    </section>
+  );
+}
+
+function runStateVariant(
+  state: string,
+): "outline" | "secondary" | "destructive" {
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "destructive";
+  if (normalized === "running" || normalized === "done") return "secondary";
+  return "outline";
+}
+
+function progressBarClass(state: string) {
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "h-full rounded-full bg-destructive";
+  if (normalized === "done") return "h-full rounded-full bg-success";
+  return "h-full rounded-full bg-primary";
 }

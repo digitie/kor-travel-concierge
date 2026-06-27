@@ -108,42 +108,46 @@ export function CollectWorkspace() {
     null;
 
   return (
-    <div className="grid h-full min-h-[40rem] grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
-      <div className="flex min-h-0 flex-col border-b lg:overflow-y-auto lg:border-r lg:border-b-0">
-        <HarvestConsole />
-        <ActiveRunPanel
-          run={activeRun}
-          errorMessage={runQueueQuery.error?.message ?? null}
-          onStop={(jobId) => stopRunMutation.mutate(jobId)}
-          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onDetail={openRunDetail}
-          isMutating={isMutating}
-        />
-        <div className="flex flex-col gap-1.5 border-t p-3">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="w-full"
-            disabled={poiBatchMutation.isPending}
-            onClick={() => poiBatchMutation.mutate()}
-          >
-            <ListChecksIcon data-icon="inline-start" />
-            미처리 영상 POI 추출(묶음)
-          </Button>
-          {poiBatchMutation.data ? (
-            <p className="text-xs text-muted-foreground">
-              영상 {poiBatchMutation.data.videos}개를 {poiBatchMutation.data.enqueued_jobs}개
-              작업으로 등록했습니다.
-            </p>
-          ) : poiBatchMutation.error ? (
-            <p className="text-xs text-destructive">
-              {poiBatchMutation.error.message}
-            </p>
-          ) : null}
+    <div className="flex h-full min-h-[40rem] flex-col lg:min-h-0 lg:overflow-hidden">
+      <div className="grid shrink-0 grid-cols-1 border-b lg:max-h-[34rem] lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
+        <div className="min-h-0 lg:overflow-y-auto lg:border-r">
+          <HarvestConsole />
+        </div>
+        <div className="flex min-h-0 flex-col lg:overflow-y-auto">
+          <ActiveRunPanel
+            run={activeRun}
+            errorMessage={runQueueQuery.error?.message ?? null}
+            onStop={(jobId) => stopRunMutation.mutate(jobId)}
+            onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+            onDetail={openRunDetail}
+            isMutating={isMutating}
+          />
+          <div className="flex flex-col gap-1.5 border-t p-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={poiBatchMutation.isPending}
+              onClick={() => poiBatchMutation.mutate()}
+            >
+              <ListChecksIcon data-icon="inline-start" />
+              미처리 영상 POI 추출(묶음)
+            </Button>
+            {poiBatchMutation.data ? (
+              <p className="text-xs text-muted-foreground">
+                영상 {poiBatchMutation.data.videos}개를{" "}
+                {poiBatchMutation.data.enqueued_jobs}개 작업으로 등록했습니다.
+              </p>
+            ) : poiBatchMutation.error ? (
+              <p className="text-xs text-destructive">
+                {poiBatchMutation.error.message}
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
-      <div className="min-h-0">
+      <div className="min-h-0 flex-1">
         <JobsPanel
           targets={sourceTargetsQuery.data ?? []}
           errorMessage={sourceTargetsQuery.error?.message ?? null}

@@ -12,7 +12,6 @@ import {
   reprocessVideos,
   type RunVideoStat,
 } from "@/lib/api";
-import { runStateLabel } from "@/lib/display-labels";
 import { AppShell } from "@/components/AppShell";
 import { JobDetailView } from "@/components/JobDetailView";
 import { Badge } from "@/components/ui/badge";
@@ -43,18 +42,15 @@ export default function JobDetailPage() {
       description="작업 진행, 결과, 영상별 처리 현황을 확인합니다."
       section="상태"
       actions={
-        <>
-          {run ? <Badge variant="secondary">{runStateLabel(run.state)}</Badge> : null}
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={() => router.back()}
-          >
-            <ArrowLeftIcon data-icon="inline-start" />
-            뒤로
-          </Button>
-        </>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => router.back()}
+        >
+          <ArrowLeftIcon data-icon="inline-start" />
+          뒤로
+        </Button>
       }
     >
       <div className="flex flex-col gap-4 overflow-y-auto p-5">
