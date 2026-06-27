@@ -126,6 +126,9 @@ async def list_place_summaries(
     playlist_id: str | None = None,
     keyword: str | None = None,
     video_id: str | None = None,
+    category: str | None = None,
+    query: str | None = None,
+    district: str | None = None,
 ) -> list[PlaceSummary]:
     """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다.
 
@@ -154,6 +157,16 @@ async def list_place_summaries(
         stmt = stmt.where(TravelPlace.place_id.in_(effective_ids))
     result = await session.execute(stmt)
     places = list(result.scalars().all())
+    places = [
+        place
+        for place in places
+        if _place_matches_result_filters(
+            place,
+            category=category,
+            query=query,
+            district=district,
+        )
+    ]
     if not places:
         return []
 
@@ -291,6 +304,12 @@ async def list_place_facets(session: AsyncSession) -> dict[str, list[dict[str, A
         .group_by(YoutubeVideo.source_search_query)
         .order_by(place_count.desc())
     )
+    category_stmt = (
+        select(TravelPlace.category, func.count(TravelPlace.place_id))
+        .where(TravelPlace.category.isnot(None))
+        .group_by(TravelPlace.category)
+        .order_by(func.count(TravelPlace.place_id).desc(), TravelPlace.category)
+    )
 
     channels = [
         {"id": cid, "title": title or cid, "place_count": int(cnt)}
@@ -304,7 +323,68 @@ async def list_place_facets(session: AsyncSession) -> dict[str, list[dict[str, A
         {"value": kw, "place_count": int(cnt)}
         for kw, cnt in (await session.execute(keyword_stmt)).all()
     ]
-    return {"channels": channels, "playlists": playlists, "keywords": keywords}
+    categories = [
+        {"value": category, "place_count": int(cnt)}
+        for category, cnt in (await session.execute(category_stmt)).all()
+        if category
+    ]
+    place_rows = (
+        await session.execute(
+            select(
+                TravelPlace.official_address,
+                TravelPlace.road_address,
+                TravelPlace.place_id,
+            )
+        )
+    ).all()
+    district_counts: dict[str, int] = {}
+    for official_address, road_address, _place_id in place_rows:
+        label = _district_label_from_address(road_address or official_address)
+        if not label:
+            continue
+        district_counts[label] = district_counts.get(label, 0) + 1
+    districts = [
+        {"value": label, "place_count": count}
+        for label, count in sorted(
+            district_counts.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+    return {
+        "channels": channels,
+        "playlists": playlists,
+        "keywords": keywords,
+        "categories": categories,
+        "districts": districts,
+    }
+
+
+def _place_matches_result_filters(
+    place: TravelPlace,
+    *,
+    category: str | None,
+    query: str | None,
+    district: str | None,
+) -> bool:
+    if category and (place.category or "") != category:
+        return False
+    if district and _district_label_from_address(
+        place.road_address or place.official_address
+    ) != district:
+        return False
+    if query:
+        needle = query.strip().lower()
+        if needle and needle not in _place_search_text(place).lower():
+            return False
+    return True
+
+
+def _district_label_from_address(address: str | None) -> str | None:
+    if not address:
+        return None
+    parts = address.split()
+    if len(parts) < 2:
+        return None
+    return " ".join(parts[:2])
 
 
 def _place_summary_sort_key(sort: str):

@@ -129,7 +129,7 @@ test.describe('n150 live UI 셸 검증', () => {
     if (await rawTab.isVisible().catch(() => false)) {
       await expect(dialog.getByRole('tab', { name: '정리본' })).toBeVisible();
       await dialog.getByRole('tab', { name: '정리본' }).click();
-      await expect(dialog.getByRole('tabpanel')).toBeVisible();
+      await expect(dialog.getByRole('tabpanel', { name: '정리본' })).toBeVisible();
       await dialog.getByRole('tab', { name: '타임스탬프 포함' }).click();
     } else {
       await expect(dialog.getByText(/보정 자막 없음|불러오는 중/)).toBeVisible();
@@ -143,6 +143,56 @@ test.describe('n150 live UI 셸 검증', () => {
       page.once('dialog', (confirmDialog) => confirmDialog.accept());
       await page.getByRole('button', { name: '선택 삭제' }).click();
       await expect(seededRow).toHaveCount(0);
+    }
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('결과 필터와 출처 동영상 상세 확장이 동작한다', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await loginAsAdmin(page, '/');
+
+    await expect(page.getByRole('heading', { name: '결과', exact: true })).toBeVisible();
+    await expect(page.getByLabel('장소 글자 검색')).toBeVisible();
+    await expect(page.getByLabel('카테고리 필터')).toBeVisible();
+    await expect(page.getByLabel('시군구 필터')).toBeVisible();
+
+    const placeList = page.locator('section[aria-label="장소 목록"]');
+    try {
+      await expect
+        .poll(() => placeList.getByRole('button', { name: /상세/ }).count(), {
+          timeout: 15_000,
+        })
+        .toBeGreaterThan(0);
+    } catch {
+      test.skip(true, 'n150 결과 장소가 없으면 장소 상세 UI 검증을 건너뛴다.');
+    }
+
+    await placeList.getByRole('button', { name: /상세/ }).first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: '장소 상세' })).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: /출처 동영상/ })).toBeVisible();
+
+    const sourceVideoButton = dialog.getByRole('button', {
+      name: /출처 동영상 상세/,
+    }).first();
+    try {
+      await expect(sourceVideoButton).toBeVisible({ timeout: 5_000 });
+    } catch {
+      test.skip(true, '출처 동영상이 없는 장소면 영상 상세 확장 검증을 건너뛴다.');
+    }
+    await sourceVideoButton.click();
+    await expect(dialog.getByRole('heading', { name: '출처 동영상 상세' })).toBeVisible();
+    await expect(dialog.getByRole('link', { name: /YouTube/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '근거 위치로 이동' })).toBeVisible();
+
+    const rawTab = dialog.getByRole('tab', { name: '타임스탬프 포함' });
+    if (await rawTab.isVisible().catch(() => false)) {
+      await dialog.getByRole('tab', { name: '정리본' }).click();
+      await expect(dialog.getByRole('tabpanel', { name: '정리본' })).toBeVisible();
+      await rawTab.click();
+    } else {
+      await expect(dialog.getByText(/보정 자막 없음|불러오는 중/)).toBeVisible();
     }
 
     expectRelevantConsoleErrors(errors).toEqual([]);
