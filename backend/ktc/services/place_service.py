@@ -125,14 +125,19 @@ async def list_place_summaries(
     channel_id: str | None = None,
     playlist_id: str | None = None,
     keyword: str | None = None,
+    video_id: str | None = None,
 ) -> list[PlaceSummary]:
     """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다.
 
-    `channel_id`/`playlist_id`/`keyword`가 주어지면 해당 출처(유튜버/재생목록/검색어)에서
-    수집된 장소만 반환한다(결과 보기 그룹화·필터).
+    `channel_id`/`playlist_id`/`keyword`/`video_id`가 주어지면 해당 출처(유튜버/재생목록/
+    검색어/영상)에서 수집된 장소만 반환한다(결과 보기 그룹화·필터, 영상별 필터).
     """
     matched = await _filtered_place_ids(
-        session, channel_id=channel_id, playlist_id=playlist_id, keyword=keyword
+        session,
+        channel_id=channel_id,
+        playlist_id=playlist_id,
+        keyword=keyword,
+        video_id=video_id,
     )
     effective_ids: list[int] | None = None
     if place_ids is not None and matched is not None:
@@ -220,9 +225,10 @@ async def _filtered_place_ids(
     channel_id: str | None,
     playlist_id: str | None,
     keyword: str | None,
+    video_id: str | None = None,
 ) -> set[int] | None:
-    """출처 필터(유튜버/재생목록/검색어)에 해당하는 place_id 집합. 필터 없으면 None."""
-    if not (channel_id or playlist_id or keyword):
+    """출처 필터(유튜버/재생목록/검색어/영상)에 해당하는 place_id 집합. 필터 없으면 None."""
+    if not (channel_id or playlist_id or keyword or video_id):
         return None
     stmt = select(VideoPlaceMapping.place_id).join(
         YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id
@@ -238,6 +244,9 @@ async def _filtered_place_ids(
         stmt = stmt.where(VideoPlaceMapping.source_playlist_id == playlist_id)
     if keyword:
         stmt = stmt.where(YoutubeVideo.source_search_query == keyword)
+    if video_id:
+        # 특정 영상이 언급한 장소만(작업 상세 → 결과 페이지 영상 필터).
+        stmt = stmt.where(VideoPlaceMapping.video_id == video_id)
     result = await session.execute(stmt)
     return {int(pid) for pid in result.scalars().all()}
 

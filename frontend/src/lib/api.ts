@@ -361,6 +361,7 @@ export type DestinationFilter = {
   channelId?: string | null;
   playlistId?: string | null;
   keyword?: string | null;
+  videoId?: string | null;
 };
 
 export type DestinationFacets = {
@@ -377,6 +378,7 @@ export async function listDestinations(
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
+  if (filter?.videoId) params.set("video_id", filter.videoId);
   return requestJson<DestinationSummary[]>(
     `/api/v1/destinations?${params.toString()}`,
   );
@@ -666,6 +668,35 @@ export type RunPlace = {
 
 export async function getRunPlaces(jobId: string): Promise<RunPlace[]> {
   return requestJson<RunPlace[]>(`/api/v1/runs/${jobId}/places`);
+}
+
+// 단일 작업 요약(작업 상세 페이지용).
+export async function getRun(jobId: string): Promise<CrawlRunSummary> {
+  return requestJson<CrawlRunSummary>(`/api/v1/runs/${jobId}`);
+}
+
+// 작업의 영상별 POI 집계(자동/검수필요/수동완료).
+export type RunVideoStat = {
+  video_id: string;
+  title: string;
+  url: string;
+  poi_auto: number;
+  poi_needs_review: number;
+  poi_resolved: number;
+  poi_total: number;
+};
+
+export async function getRunVideoStats(jobId: string): Promise<RunVideoStat[]> {
+  return requestJson<RunVideoStat[]>(`/api/v1/runs/${jobId}/video-stats`);
+}
+
+// 영상의 보정 자막(없으면 원본). CandidateTranscript와 동일 형태.
+export async function getVideoTranscript(
+  videoId: string,
+): Promise<CandidateTranscript> {
+  return requestJson<CandidateTranscript>(
+    `/api/v1/videos/${encodeURIComponent(videoId)}/transcript`,
+  );
 }
 
 export async function getSourceTargetVideos(
