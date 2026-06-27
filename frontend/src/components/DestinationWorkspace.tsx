@@ -83,12 +83,28 @@ export function DestinationWorkspace() {
   }, [setGroupDim, setGroupValue]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // 작업 상세에서 영상별 POI를 누르면 `?video=<id>`로 들어온다 — 그 영상이 언급한
+  // 장소만 필터로 보여준다(최초 1회, 그룹 필터는 해제).
+  const [videoFilter, setVideoFilter] = useState<string | null>(null);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("video");
+    if (!v) return;
+    setGroupDim("none");
+    setGroupValue(null);
+    setVideoFilter(v);
+  }, [setGroupDim, setGroupValue]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
     refetchInterval: 30_000,
   });
   const filter = useMemo(() => {
+    if (videoFilter) {
+      return { videoId: videoFilter };
+    }
     if (!groupValue || groupDim === "none") {
       return undefined;
     }
@@ -99,10 +115,16 @@ export function DestinationWorkspace() {
       return { playlistId: groupValue };
     }
     return { keyword: groupValue };
-  }, [groupDim, groupValue]);
+  }, [groupDim, groupValue, videoFilter]);
 
   const destinationsQuery = useQuery({
-    queryKey: ["destinations", destinationSort, groupDim, groupValue],
+    queryKey: [
+      "destinations",
+      destinationSort,
+      groupDim,
+      groupValue,
+      videoFilter,
+    ],
     queryFn: () => listDestinations(destinationSort, filter),
     refetchInterval: 10_000,
   });
@@ -177,6 +199,21 @@ export function DestinationWorkspace() {
   return (
     <div className="flex min-h-[calc(100vh-3rem)] flex-col bg-background lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:overflow-hidden">
       <RunQueueStatus runs={runQueueQuery.data ?? []} />
+      {videoFilter ? (
+        <div className="flex items-center justify-between gap-2 border-b bg-primary/5 px-4 py-1.5 text-xs">
+          <span className="truncate text-muted-foreground">
+            영상 필터: 이 영상이 언급한 장소만 표시 중
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => setVideoFilter(null)}
+          >
+            필터 해제
+          </Button>
+        </div>
+      ) : null}
       {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
       <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[0.7fr_1.6fr]">
         {/* 좁은 화면(스택): 지도가 위, 리스트가 아래(order). 데스크톱(lg): 좌 리스트 / 우 지도 유지. */}

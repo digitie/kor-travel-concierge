@@ -632,30 +632,7 @@ async def list_runs(
     titles = await _resolve_title_map(
         session, [(run.target_type, run.target_id) for run in runs]
     )
-    return [
-        {
-            "job_id": str(run.id),
-            "job_type": run.job_type,
-            "job_type_label": _job_type_label(run.job_type),
-            "source": run.source,
-            "target_type": run.target_type,
-            "target_type_label": _target_type_label(run.target_type),
-            "target_id": run.target_id,
-            "target_label": _target_label(run.target_type, run.target_id, titles),
-            "state": run.state,
-            "progress": run.progress,
-            "current_message": run.current_message,
-            "max_videos": _run_max_videos(run),
-            "status_logs": crawl_run_service.load_status_logs(run),
-            "retry_count": run.retry_count,
-            "last_error": run.last_error,
-            "result": json.loads(run.result_json) if run.result_json else None,
-            "created_at": run.created_at.isoformat(),
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-        }
-        for run in runs
-    ]
+    return [_run_summary_dict(run, titles) for run in runs]
 
 
 @router.get("/place-search")
@@ -1030,11 +1007,13 @@ async def list_destinations(
     channel_id: str | None = None,
     playlist_id: str | None = None,
     keyword: str | None = None,
+    video_id: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     """확정 여행지 목록을 반환한다.
 
-    `channel_id`/`playlist_id`/`keyword`로 출처(유튜버/재생목록/검색어)별 필터링한다.
+    `channel_id`/`playlist_id`/`keyword`/`video_id`로 출처(유튜버/재생목록/검색어/영상)별
+    필터링한다(작업 상세에서 특정 영상의 POI만 보기).
     """
     _validate_destination_sort(sort)
     summaries = await place_service.list_place_summaries(
@@ -1044,6 +1023,7 @@ async def list_destinations(
         channel_id=channel_id,
         playlist_id=playlist_id,
         keyword=keyword,
+        video_id=video_id,
     )
     return [_place_summary_payload(summary) for summary in summaries]
 
@@ -1745,6 +1725,31 @@ def _run_max_videos(run: CrawlRun) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
+def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
+    """crawl_run을 작업 목록/상세 공통 요약 dict로 직렬화한다."""
+    return {
+        "job_id": str(run.id),
+        "job_type": run.job_type,
+        "job_type_label": _job_type_label(run.job_type),
+        "source": run.source,
+        "target_type": run.target_type,
+        "target_type_label": _target_type_label(run.target_type),
+        "target_id": run.target_id,
+        "target_label": _target_label(run.target_type, run.target_id, titles),
+        "state": run.state,
+        "progress": run.progress,
+        "current_message": run.current_message,
+        "max_videos": _run_max_videos(run),
+        "status_logs": crawl_run_service.load_status_logs(run),
+        "retry_count": run.retry_count,
+        "last_error": run.last_error,
+        "result": json.loads(run.result_json) if run.result_json else None,
+        "created_at": run.created_at.isoformat(),
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }
+
+
 def _video_ids_for_run(run: CrawlRun) -> list[str]:
     """완료 결과(result_json)의 video_ids에 입력 payload의 video_ids를 합친다.
     진행 중(결과 전)에도 이미 적재된 영상·POI를 노출하기 위함이다."""
@@ -1870,6 +1875,94 @@ async def list_run_places(
             }
         )
     return places[:300]
+
+
+@router.get("/runs/{job_id}")
+async def get_run(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """단일 작업 요약(작업 상세 페이지용)."""
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    titles = await _resolve_title_map(session, [(run.target_type, run.target_id)])
+    return _run_summary_dict(run, titles)
+
+
+@router.get("/runs/{job_id}/video-stats")
+async def list_run_video_stats(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """작업의 영상별 POI 집계(자동/검수필요/수동완료).
+
+    버킷 정의: `poi_auto`=`matched`(자동 매칭 확정), `poi_needs_review`=`needs_review`
+    (검수 대기), `poi_resolved`=`user_corrected`(수동 검수 완료). `ignored`(제외)는
+    합계에서 뺀다.
+    """
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    video_ids = [vid for vid in dict.fromkeys(_video_ids_for_run(run)) if vid]
+    if not video_ids:
+        return []
+    rows = await session.execute(
+        select(
+            ExtractedPlaceCandidate.video_id,
+            ExtractedPlaceCandidate.match_status,
+            func.count(),
+        )
+        .where(ExtractedPlaceCandidate.video_id.in_(video_ids))
+        .group_by(
+            ExtractedPlaceCandidate.video_id, ExtractedPlaceCandidate.match_status
+        )
+    )
+    counts: dict[str, dict[str, int]] = {}
+    for vid, status, n in rows.all():
+        bucket = counts.setdefault(vid, {"auto": 0, "needs_review": 0, "resolved": 0})
+        if status == MatchStatus.MATCHED.value:
+            bucket["auto"] += int(n)
+        elif status == MatchStatus.NEEDS_REVIEW.value:
+            bucket["needs_review"] += int(n)
+        elif status == MatchStatus.USER_CORRECTED.value:
+            bucket["resolved"] += int(n)
+    out: list[dict[str, Any]] = []
+    for video in await _video_rows(session, video_ids):
+        c = counts.get(
+            video["video_id"], {"auto": 0, "needs_review": 0, "resolved": 0}
+        )
+        out.append(
+            {
+                "video_id": video["video_id"],
+                "title": video["title"],
+                "url": video["url"],
+                "poi_auto": c["auto"],
+                "poi_needs_review": c["needs_review"],
+                "poi_resolved": c["resolved"],
+                "poi_total": c["auto"] + c["needs_review"] + c["resolved"],
+            }
+        )
+    return out
+
+
+@router.get("/videos/{video_id}/transcript")
+async def get_video_transcript(
+    video_id: str, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """영상의 보정 자막(없으면 원본 자막) 텍스트. RustFS 최신 자산을 읽는다."""
+    store = postprocess_service._make_media_store(get_settings())
+    text = await media_store.load_latest_asset_text(
+        session,
+        store,
+        video_id=video_id,
+        asset_type=AssetType.TRANSCRIPT_CORRECTED.value,
+    )
+    kind: str | None = "corrected" if text else None
+    if not text:
+        text = await media_store.load_latest_asset_text(
+            session, store, video_id=video_id, asset_type=AssetType.TRANSCRIPT.value
+        )
+        kind = "raw" if text else None
+    return {"text": text, "kind": kind, "video_id": video_id}
 
 
 # --- 범용 feature 수집 API (ADR-26) ---

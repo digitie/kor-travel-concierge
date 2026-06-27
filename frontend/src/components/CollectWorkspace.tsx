@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ListChecksIcon,
@@ -42,10 +43,14 @@ import { RecurringEditDialog } from "@/components/RecurringEditDialog";
 
 export function CollectWorkspace() {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [detailRun, setDetailRun] = useState<CrawlRunSummary | null>(null);
   const [detailTarget, setDetailTarget] = useState<SourceTargetSummary | null>(
     null,
   );
+  // 1회성 작업 상세는 다이얼로그 대신 별도 페이지(/jobs/[id])로 이동한다.
+  const openRunDetail = (run: CrawlRunSummary) =>
+    router.push(`/jobs/${run.job_id}`);
   const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
   const runsQuery = useQuery({
@@ -124,7 +129,7 @@ export function CollectWorkspace() {
           errorMessage={runQueueQuery.error?.message ?? null}
           onStop={(jobId) => stopRunMutation.mutate(jobId)}
           onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onDetail={setDetailRun}
+          onDetail={openRunDetail}
           isMutating={isMutating}
         />
         <JobsPanel
@@ -136,7 +141,7 @@ export function CollectWorkspace() {
           onStop={(jobId) => stopRunMutation.mutate(jobId)}
           onRestart={(jobId) => restartRunMutation.mutate(jobId)}
           onRunNow={(id, force) => runNowMutation.mutate({ id, force })}
-          onDetailRun={setDetailRun}
+          onDetailRun={openRunDetail}
           onDetailTarget={setDetailTarget}
           onEditTarget={setEditTarget}
           onDeleteTarget={(id) => deleteTargetMutation.mutate(id)}
