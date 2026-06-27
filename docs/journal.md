@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-06-27: T-136 — 작업 상세 페이지(#6 b-e) + 검수 검색 자동 스크롤
+
+- **#6 b-e 작업 상세 별도 페이지**: `JobDetailDialog` 본문을 `JobDetailView`로 추출하고 `/jobs/[jobId]` 라우트 페이지 신설(run "상세"는 다이얼로그 대신 `router.push('/jobs/'+id)`; 반복 대상은 다이얼로그 유지). **동영상별 POI 집계** `GET /runs/{id}/video-stats`(`poi_auto`=matched, `poi_needs_review`=needs_review, `poi_resolved`=user_corrected; ignored 제외). **동영상별 보정 자막** `GET /videos/{id}/transcript`(corrected→raw fallback, RustFS 미구성 시 null). 영상 행에서 **재실행**(reprocess) + 보정 자막 펼치기. POI 카운트 클릭 시 **결과 페이지 `?video=` 필터**(`place_service` video_id 필터 + DestinationWorkspace 해제 chip). `GET /runs/{id}` 추가. **#9는 근사치**(처리수=poi_total>0 영상 수 + 진행%/현재 메시지; 백엔드가 단계별 카운트 미추적).
+- **검수 검색 자동 스크롤**: T-134 #3로 확정 정보 폼을 검색 결과 위로 올리면서 결과가 폴드 아래로 밀려 "검색 안 됨"처럼 보이던 문제를, 검색 완료 시 결과 영역으로 `scrollIntoView` 자동 스크롤해 해결(폼 위치는 #3대로 유지). 검색 API·렌더는 정상이었음(라이브 검증: 경복궁 16개 결과).
+- 검증: backend compileall, frontend type-check/lint/build/vitest(15/15, WSL). 마이그레이션 없음.
+
 ## 2026-06-27: T-135 — 수집 화면 일부(#7·#8·#10·#6a) + 로그인 env 영구 수정
 
 - **수집 화면(partial)**: #10 HarvestConsole(검색) 패널을 `lg:w-[38rem]`로 3분할 중 최대폭. #8 `RunControlCard` 컴팩트(`p-1.5`/`gap-1`) + 대상 제목 `text-sm font-semibold`. #6a 카드에 실행 기록 라인(완료시각 + 수집/신규 영상 수, `result`에서). #7 반복 대상 "지금 진행"+"강제 재실행"을 하나의 "지금 실행" 버튼+다이얼로그(강제 다운로드 체크)로 통합.
