@@ -15,7 +15,9 @@
   최근 작업, 저장소, DB/검수 후보 집계, 감사 로그를 함께 보이게 했다. 기존 설정 모달의 API 키,
   공개 API 키, 로그인 기록 관리 내용을 `SettingsPanel`로 옮겨 `/settings` 페이지에서 관리한다.
 - **검증**: frontend `npm run type-check`, `npm run lint`, `npm run build`, `npm test`
-  (vitest 15/15) 통과.
+  (vitest 15/15) 통과. n150 UI 재빌드 후 `${#KTC_ADMIN_PASSWORD_HASH}`/세션 secret non-zero,
+  로그인 POST 200 + Set-Cookie 1개, 인증 후 `/status`·`/settings` 200 확인. Windows 호스트
+  Playwright live spec(`KTC_LIVE_E2E=1`, `tests/e2e/live-shell.spec.ts`) 1건 통과.
 
 ## 2026-06-27: T-137 — `kor-travel-map` UI primitive/폰트 정렬 + VWorld 마커 위치 버그 수정
 

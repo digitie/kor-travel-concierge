@@ -135,6 +135,7 @@ export function SettingsPanel() {
             </p>
           </div>
           <Button
+            id="settings-save-button"
             type="button"
             disabled={mutation.isPending}
             onClick={() => mutation.mutate()}
@@ -149,9 +150,9 @@ export function SettingsPanel() {
         </div>
 
         <Field>
-          <FieldLabel htmlFor="settings-engine">AI 엔진</FieldLabel>
+          <FieldLabel htmlFor="ai-engine-select">AI 엔진</FieldLabel>
           <Select value={engine} onValueChange={(value) => setEngineEdit(value ?? "")}>
-            <SelectTrigger id="settings-engine" className="w-full">
+            <SelectTrigger id="ai-engine-select" className="w-full">
               <SelectValue>{engine || "선택"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -182,7 +183,9 @@ export function SettingsPanel() {
           <p className="text-[13px] text-destructive">{mutation.error.message}</p>
         ) : null}
         {mutation.isSuccess ? (
-          <p className="text-[13px] text-success">저장했습니다.</p>
+          <p id="success-toast" className="text-[13px] text-success">
+            저장했습니다.
+          </p>
         ) : null}
       </section>
 
