@@ -76,7 +76,7 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(dialog.getByText('실행 횟수')).toBeVisible();
     await expect(dialog.getByText('마지막 영상 날짜')).toBeVisible();
     await expect(dialog.getByText('다음 실행')).toBeVisible();
-    await expect(dialog.getByText('기본 카테고리')).toBeVisible();
+    await expect(dialog.getByText('기본 카테고리').first()).toBeVisible();
     await expect(dialog.locator('#recurring-edit-interval')).toBeVisible();
     await expect(dialog.locator('#recurring-edit-count')).toBeVisible();
     await expect(dialog.locator('#recurring-edit-max-videos')).toBeVisible();

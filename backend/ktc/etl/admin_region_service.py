@@ -97,11 +97,80 @@ async def fetch_admin_region(
         return None
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):
-        return None
+        candidates = []
+    best_region: AdminRegion | None = None
     for candidate in candidates:
         region = _region_from_candidate(candidate)
-        if region is not None:
+        if _is_complete(region):
             return region
+        if best_region is None:
+            best_region = region
+    radius_region = await _fetch_region_within_radius(
+        client,
+        lat=lat,
+        lon=lon,
+        base_url=base_url,
+        api_key=api_key,
+    )
+    if best_region is not None and radius_region is not None:
+        return _merge_region(best_region, radius_region)
+    if best_region is not None:
+        return best_region
+    return radius_region
+
+
+async def _fetch_region_within_radius(
+    client: httpx.AsyncClient,
+    *,
+    lat: float,
+    lon: float,
+    base_url: str,
+    api_key: str,
+) -> AdminRegion | None:
+    response = await client.post(
+        f"{base_url.rstrip('/')}/v2/regions/within-radius",
+        params={"key": api_key},
+        json={
+            "lon": lon,
+            "lat": lat,
+            "radius_km": 1,
+            "levels": ["sido", "sigungu", "emd"],
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") != "OK":
+        return None
+    return _region_from_radius_payload(payload)
+
+
+def _region_from_radius_payload(payload: Any) -> AdminRegion | None:
+    if not isinstance(payload, dict):
+        return None
+    sido = _first_region_item(payload.get("sido"))
+    sigungu = _first_region_item(payload.get("sigungu"))
+    emd = _first_region_item(payload.get("emd"))
+    sigungu_code = _clean_str(sigungu.get("code")) if sigungu else None
+    emd_code = _normalize_legal_dong_code(_clean_str(emd.get("code")) if emd else None)
+    if not sigungu_code and not emd_code:
+        return None
+    sido_name = _clean_str(sido.get("name")) if sido else None
+    sigungu_name = _clean_str(sigungu.get("name")) if sigungu else None
+    emd_name = _clean_str(emd.get("name")) if emd else None
+    return AdminRegion(
+        sigungu_code=sigungu_code,
+        sigungu_name=_join_name(sido_name, sigungu_name),
+        legal_dong_code=emd_code,
+        legal_dong_name=_join_name(sido_name, sigungu_name, emd_name),
+    )
+
+
+def _first_region_item(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return None
+    for item in value:
+        if isinstance(item, dict):
+            return item
     return None
 
 
@@ -128,6 +197,7 @@ def _region_from_candidate(candidate: Any) -> AdminRegion | None:
     legal_dong_code = _clean_str(region.get("bjd_cd")) or _clean_str(
         address.get("legal_dong_code")
     )
+    legal_dong_code = _normalize_legal_dong_code(legal_dong_code)
     if not sigungu_code and not legal_dong_code:
         return None
     sido = _clean_str(region.get("sido"))
@@ -141,6 +211,27 @@ def _region_from_candidate(candidate: Any) -> AdminRegion | None:
         legal_dong_code=legal_dong_code,
         legal_dong_name=_join_name(sido, sigungu, legal_dong),
     )
+
+
+def _merge_region(primary: AdminRegion, fallback: AdminRegion) -> AdminRegion:
+    return AdminRegion(
+        sigungu_code=primary.sigungu_code or fallback.sigungu_code,
+        sigungu_name=primary.sigungu_name or fallback.sigungu_name,
+        legal_dong_code=primary.legal_dong_code or fallback.legal_dong_code,
+        legal_dong_name=primary.legal_dong_name or fallback.legal_dong_name,
+    )
+
+
+def _is_complete(region: AdminRegion | None) -> bool:
+    return bool(region and region.sigungu_code and region.legal_dong_code)
+
+
+def _normalize_legal_dong_code(value: str | None) -> str | None:
+    if not value:
+        return None
+    if len(value) == 8 and value.isdigit():
+        return f"{value}00"
+    return value
 
 
 def _join_name(*parts: str | None) -> str | None:

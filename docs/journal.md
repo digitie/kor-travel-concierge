@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-27: T-142/T-143 — 기본 카테고리·행정코드 보강과 통합 n150 검증
+
+- **기본 카테고리**: 수집 입력, 반복 작업 수정 다이얼로그, 실행 큐/반복 작업 테이블에 기본 카테고리
+  설정과 표시를 추가했다. 자동 저장 경로와 검수 큐 수동 장소 검색 확정 경로는 작업 기본 카테고리를
+  fallback으로 쓰고, Concierge 카테고리 매칭이 없으면 `unknown`/코드 `0`으로 저장한다.
+- **행정코드 schema와 저장 경로**: `travel_places`에 법정동/시군구 코드·이름, 보강 출처, 보강 시각을
+  추가하고 Alembic migration을 작성했다. 자동 지오코딩, 수동 후보 확정, 장소 보정 경로에서
+  `kor-travel-geo` v2 reverse API를 best-effort로 호출해 행정코드를 채운다. reverse가 산·해안 좌표에서
+  일부 코드만 주는 경우 v2 `regions/within-radius` fallback으로 `sido/sigungu/emd`를 보완한다.
+- **기존 데이터 백필**: n150에 migration을 적용하고 `scripts/backfill-place-admin-codes.py`로 기존
+  확정 장소를 보강했다. dry-run 5/5 조회 성공 후 전체 856건 중 831건을 1차 보강했고, radius fallback
+  배포 후 남은 52건을 추가 보강해 최종 `complete=856`, `missing_any=0`을 확인했다.
+- **배포 보강**: Python 이미지에 루트 `alembic.ini`를 포함하도록 `Dockerfile.python`을 수정했다.
+  `docker-compose.yml`의 공통 Python env에 `KOR_TRAVEL_GEO_V2_API_KEY`와
+  `KOR_TRAVEL_GEO_V2_BASE_URL`을 명시했다. n150 app `.env`에는 내부 geo API base URL을 추가하고
+  API/scheduler를 재생성했다.
+- **통합 live UI E2E**: `tests/e2e/live-shell.spec.ts` 4건으로 메뉴/상단 작업 상태/상태/설정,
+  수집 반복 작업 테이블과 수정 다이얼로그, 검수 큐 테이블·3분할·상세, 결과 필터와 출처 동영상 상세를
+  n150에서 검증한다.
+- **검증**: backend 전체 pytest 통과, `git diff --check` 통과, frontend `npm run type-check`,
+  `npm run lint`, `npm test -- --run`, `npm run build` 통과. n150 API health 200, UI 인증 환경변수
+  non-zero, 로그인 GET 200, 로그인 POST 200 + Set-Cookie 1개 확인. Windows 호스트 Playwright live
+  spec(`KTC_LIVE_E2E=1`) 4건 통과.
+
 ## 2026-06-27: T-141 — 결과 뷰 필터와 출처 동영상 상세 확장
 
 - **결과 필터**: `/api/v1/destinations`에 `category`, `q`, `district` 필터를 추가하고,

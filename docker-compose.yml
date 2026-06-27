@@ -44,6 +44,8 @@ x-python-env: &python-env
   APP_ENV: ${APP_ENV:-local}
   API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
   API_KEYS: ${API_KEYS:-}
+  KOR_TRAVEL_GEO_V2_API_KEY: ${KOR_TRAVEL_GEO_V2_API_KEY:-}
+  KOR_TRAVEL_GEO_V2_BASE_URL: ${KOR_TRAVEL_GEO_V2_BASE_URL:-}
 
 services:
   rustfs:
