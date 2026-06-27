@@ -30,6 +30,8 @@ class TravelPlace(TimestampMixin, Base):
     __tablename__ = "travel_places"
     __table_args__ = (
         Index("ix_travel_places_geom_gist", "geom", postgresql_using="gist"),
+        Index("ix_travel_places_sigungu_code", "sigungu_code"),
+        Index("ix_travel_places_legal_dong_code", "legal_dong_code"),
     )
 
     place_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -48,11 +50,22 @@ class TravelPlace(TimestampMixin, Base):
         nullable=True,
     )
     api_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="unknown", server_default="unknown"
+    )
     # `python-krtour-map` 8자리 category 코드 제안값(T-070). Gemini가 복사된 코드표에서
     # 고른 결과이며, feature export `category_code_suggestion`으로 노출한다.
-    category_code_suggestion: Mapped[str | None] = mapped_column(
-        String(16), nullable=True
+    category_code_suggestion: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="0", server_default="0"
+    )
+    # kor-travel-geo v2 reverse 결과. 결과 필터와 외부 공급에서 행정구역 기준으로 쓴다.
+    legal_dong_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    legal_dong_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sigungu_code: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    sigungu_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    admin_code_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    admin_code_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     is_geocoded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     detailed_research_content: Mapped[str | None] = mapped_column(Text, nullable=True)

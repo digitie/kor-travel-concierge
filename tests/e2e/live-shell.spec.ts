@@ -56,11 +56,14 @@ test.describe('n150 live UI 셸 검증', () => {
     const queueRegion = page.getByRole('region', { name: '실행 큐' });
     await expect(queueRegion).toBeVisible();
     await expect(queueRegion.getByText('실행 큐')).toBeVisible();
+    await expect(page.getByText('기본 카테고리').first()).toBeVisible();
+    await expect(page.getByLabel('기본 카테고리').first()).toBeVisible();
 
     const jobsRegion = page.getByRole('region', { name: '작업' });
     await expect(jobsRegion.getByRole('tab', { name: /반복/ })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '대상' }).first()).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '주기' })).toBeVisible();
+    await expect(jobsRegion.getByRole('columnheader', { name: '기본' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '누적' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '일정' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '액션' })).toBeVisible();
@@ -73,9 +76,11 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(dialog.getByText('실행 횟수')).toBeVisible();
     await expect(dialog.getByText('마지막 영상 날짜')).toBeVisible();
     await expect(dialog.getByText('다음 실행')).toBeVisible();
+    await expect(dialog.getByText('기본 카테고리')).toBeVisible();
     await expect(dialog.locator('#recurring-edit-interval')).toBeVisible();
     await expect(dialog.locator('#recurring-edit-count')).toBeVisible();
     await expect(dialog.locator('#recurring-edit-max-videos')).toBeVisible();
+    await expect(dialog.locator('#recurring-edit-category')).toBeVisible();
     await expect(dialog.getByText('강제 다운로드 (전체 재수집)')).toBeVisible();
     await expect(dialog.getByText('저장 직후 한 번만 전체 재수집 작업을 실행합니다.')).toBeVisible();
     await dialog.getByRole('button', { name: '닫기' }).first().click();

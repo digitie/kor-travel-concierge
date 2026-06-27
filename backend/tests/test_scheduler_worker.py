@@ -295,7 +295,11 @@ async def test_harvest_handler_enqueues_poi_batch_after_ingest(monkeypatch, sess
         source="web",
         target_type="keyword",
         target_id="부산 맛집",
-        payload={"query": "부산 맛집", "max_videos": 1},
+        payload={
+            "query": "부산 맛집",
+            "max_videos": 1,
+            "default_category_code": "01050100",
+        },
     )
     claimed = await crawl_run_service.claim_next_pending(session)
 
@@ -311,6 +315,7 @@ async def test_harvest_handler_enqueues_poi_batch_after_ingest(monkeypatch, sess
         )
     ).scalars().all()
     assert len(poi_runs) == 1
+    assert '"default_category_code": "01050100"' in (poi_runs[0].payload_json or "")
 
 
 async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, session):
@@ -438,6 +443,7 @@ async def test_source_scan_handler_enqueues_due_harvest(session, session_factory
         is_active=True,
         next_crawl_at=now - timedelta(minutes=1),
         scan_interval_minutes=30,
+        default_category_code="01050100",
     )
     session.add(target)
     await session.commit()
@@ -472,6 +478,7 @@ async def test_source_scan_handler_enqueues_due_harvest(session, session_factory
         refreshed_target = await verify_session.get(SourceTarget, target.id)
     assert harvest.state == RunState.PENDING
     assert '"max_videos": 3' in (harvest.payload_json or "")
+    assert '"default_category_code": "01050100"' in (harvest.payload_json or "")
     assert refreshed_target.next_crawl_at is not None
     assert refreshed_target.next_crawl_at > now
     assert refreshed_target.scan_failure_count == 0

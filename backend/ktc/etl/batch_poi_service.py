@@ -68,6 +68,7 @@ async def process_video_batch(
     transcript_fetcher: TranscriptFetcher,
     status_reporter: StatusReporter | None = None,
     start_stage: str = "transcript",
+    default_category_code: str | None = None,
 ) -> dict[str, Any]:
     """영상 묶음(≤10)을 교정→배치 추출→후보 생성까지 처리한다.
 
@@ -83,6 +84,7 @@ async def process_video_batch(
         "created_candidates": 0,
         "failed_videos": 0,
     }
+    normalized_default_category = category_catalog.normalize_code(default_category_code)
     # 1) 영상별 자막 확보 → 교정 → raw/교정본 저장. (alias, video, asset_id, corrected) 수집.
     batch: dict[str, dict[str, Any]] = {}
     for index, video in enumerate(videos, start=1):
@@ -259,7 +261,12 @@ async def process_video_batch(
             continue
         existing_pairs.add((video.video_id, poi.official_name))
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
-        category_label = category_catalog.label_for(poi.category_code) if poi.category_code else None
+        category_code = (
+            poi.category_code
+            or normalized_default_category
+            or category_catalog.UNKNOWN_CATEGORY_CODE
+        )
+        category_label = category_catalog.label_for_or_unknown(category_code)
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
             source_channel_id=video.channel_id,
@@ -286,7 +293,10 @@ async def process_video_batch(
                     "speaker_note": poi.speaker_note,
                     "location_hint": poi.location_hint,
                     # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
-                    "category_code": poi.category_code,
+                    "category_code": category_code,
+                    "category_source": "llm"
+                    if poi.category_code
+                    else ("default" if normalized_default_category else "unknown"),
                 }
             },
             feature_export_status=FeatureExportStatus.PENDING.value,

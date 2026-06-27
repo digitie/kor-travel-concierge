@@ -93,7 +93,12 @@ async def test_recurring_source_target_lifecycle(client):
     cid = "UCnV8h6ZzQnLoFBFXqHGtxBg"
     resp = await client.post(
         "/api/v1/harvest",
-        json={"channel_id": cid, "max_videos": 3, "repeat_interval_minutes": 60},
+        json={
+            "channel_id": cid,
+            "max_videos": 3,
+            "repeat_interval_minutes": 60,
+            "default_category_code": "01050100",
+        },
     )
     assert resp.status_code == 200
 
@@ -105,6 +110,8 @@ async def test_recurring_source_target_lifecycle(client):
     assert target["target_type"] == "channel"
     assert target["source_value"] == cid
     assert target["scan_interval_minutes"] == 60
+    assert target["default_category_code"] == "01050100"
+    assert "해수욕장" in target["default_category_label"]
     assert target["is_active"] is True
     assert target["next_crawl_at"] is not None
 
@@ -158,12 +165,18 @@ async def test_recurring_max_runs_and_patch(client):
 
     patched = await client.patch(
         f"/api/v1/source-targets/{target['id']}",
-        json={"scan_interval_minutes": 720, "max_runs": 10},
+        json={
+            "scan_interval_minutes": 720,
+            "max_runs": 10,
+            "default_category_code": "0",
+        },
     )
     assert patched.status_code == 200
     body = patched.json()
     assert body["scan_interval_minutes"] == 720
     assert body["max_runs"] == 10
+    assert body["default_category_code"] == "0"
+    assert body["default_category_label"] == "unknown"
 
     missing = await client.patch(
         "/api/v1/source-targets/999999", json={"is_active": False}

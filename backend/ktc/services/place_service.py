@@ -328,27 +328,49 @@ async def list_place_facets(session: AsyncSession) -> dict[str, list[dict[str, A
         for category, cnt in (await session.execute(category_stmt)).all()
         if category
     ]
-    place_rows = (
+    district_rows = (
+        await session.execute(
+            select(
+                TravelPlace.sigungu_code,
+                TravelPlace.sigungu_name,
+                func.count(TravelPlace.place_id),
+            )
+            .where(TravelPlace.sigungu_code.isnot(None))
+            .group_by(TravelPlace.sigungu_code, TravelPlace.sigungu_name)
+            .order_by(func.count(TravelPlace.place_id).desc(), TravelPlace.sigungu_name)
+        )
+    ).all()
+    districts = [
+        {
+            "value": code,
+            "label": name or code,
+            "place_count": int(cnt),
+        }
+        for code, name, cnt in district_rows
+        if code
+    ]
+    fallback_place_rows = (
         await session.execute(
             select(
                 TravelPlace.official_address,
                 TravelPlace.road_address,
                 TravelPlace.place_id,
             )
+            .where(TravelPlace.sigungu_code.is_(None))
         )
     ).all()
-    district_counts: dict[str, int] = {}
-    for official_address, road_address, _place_id in place_rows:
+    fallback_counts: dict[str, int] = {}
+    for official_address, road_address, _place_id in fallback_place_rows:
         label = _district_label_from_address(road_address or official_address)
         if not label:
             continue
-        district_counts[label] = district_counts.get(label, 0) + 1
-    districts = [
-        {"value": label, "place_count": count}
+        fallback_counts[label] = fallback_counts.get(label, 0) + 1
+    districts.extend(
+        {"value": label, "label": label, "place_count": count}
         for label, count in sorted(
-            district_counts.items(), key=lambda item: (-item[1], item[0])
+            fallback_counts.items(), key=lambda item: (-item[1], item[0])
         )
-    ]
+    )
     return {
         "channels": channels,
         "playlists": playlists,
@@ -367,10 +389,12 @@ def _place_matches_result_filters(
 ) -> bool:
     if category and (place.category or "") != category:
         return False
-    if district and _district_label_from_address(
-        place.road_address or place.official_address
-    ) != district:
-        return False
+    if district:
+        place_district = place.sigungu_code or _district_label_from_address(
+            place.road_address or place.official_address
+        )
+        if place_district != district:
+            return False
     if query:
         needle = query.strip().lower()
         if needle and needle not in _place_search_text(place).lower():
@@ -545,6 +569,13 @@ async def correct_place(
         place.is_geocoded = True
     if ("latitude" in applied or "longitude" in applied) and place.is_geocoded:
         await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
+        place.sigungu_code = None
+        place.sigungu_name = None
+        place.legal_dong_code = None
+        place.legal_dong_name = None
+        from ktc.etl import admin_region_service
+
+        await admin_region_service.enrich_place_admin_codes(session, place)
     place.last_reviewed_at = utcnow()
     if commit:
         await session.commit()
@@ -646,7 +677,23 @@ def candidate_category_code(candidate: ExtractedPlaceCandidate) -> str | None:
     if not isinstance(transcript, dict):
         return None
     code = transcript.get("category_code")
-    return code if isinstance(code, str) and code else None
+    return category_catalog.normalize_code(code) if isinstance(code, str) else None
+
+
+def _place_category_from_code(code: str | None) -> tuple[str, str]:
+    normalized = category_catalog.normalize_code_or_unknown(code)
+    return normalized, category_catalog.label_for_or_unknown(normalized)
+
+
+def _place_category_for_candidate(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    forced_code: str | None = None,
+) -> tuple[str, str]:
+    code = category_catalog.normalize_code(forced_code) or candidate_category_code(
+        candidate
+    )
+    return _place_category_from_code(code)
 
 
 async def resolve_candidate(
@@ -680,6 +727,16 @@ async def resolve_candidate(
         place = await session.get(TravelPlace, place_id)
         if place is None:
             raise ValueError(f"place not found: {place_id}")
+        code = candidate_category_code(candidate)
+        if code and place.category_code_suggestion in (
+            None,
+            category_catalog.UNKNOWN_CATEGORY_CODE,
+        ):
+            place.category_code_suggestion = code
+            place.category = category_catalog.label_for_or_unknown(code)
+        from ktc.etl import admin_region_service
+
+        await admin_region_service.enrich_place_admin_codes(session, place)
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value
@@ -695,8 +752,19 @@ async def resolve_candidate(
         dups = await find_duplicate_candidates(
             session, lat=data["latitude"], lng=data["longitude"]
         )
+        forced_code = category_catalog.normalize_code(data.get("category_code"))
+        selected_code, selected_label = _place_category_for_candidate(
+            candidate, forced_code=forced_code
+        )
         if dups:
             place = dups[0][0]
+            if (
+                forced_code
+                or place.category_code_suggestion
+                in (None, category_catalog.UNKNOWN_CATEGORY_CODE)
+            ):
+                place.category_code_suggestion = selected_code
+                place.category = selected_label
         else:
             place = TravelPlace(
                 name=data["name"],
@@ -707,7 +775,8 @@ async def resolve_candidate(
                 latitude=data["latitude"],
                 longitude=data["longitude"],
                 api_source=data.get("api_source") or "manual",
-                category=data.get("category") or candidate.candidate_category,
+                category=selected_label,
+                category_code_suggestion=selected_code,
                 is_geocoded=True,
                 last_reviewed_at=utcnow(),
             )
@@ -716,19 +785,9 @@ async def resolve_candidate(
             await sync_place_geometry(
                 session, place.place_id, place.latitude, place.longitude
             )
-            # 8자리 카테고리 코드는 POI 추출 때 후보 evidence에 저장해 둔 값을 복사한다
-            # (별도 Gemini 호출 없음, A안). 없으면 비워 둔다(best-effort, null 허용).
-            code = candidate_category_code(candidate)
-            if code:
-                place.category_code_suggestion = code
-        # 사용자가 드롭다운으로 강제한 8자리 코드가 있으면 category_code_suggestion과 표시
-        # category(label)를 그 코드로 덮어쓴다(후보 evidence·외부 API 카테고리보다 우선).
-        forced_code = category_catalog.normalize_code(data.get("category_code"))
-        if forced_code:
-            place.category_code_suggestion = forced_code
-            forced_label = category_catalog.label_for(forced_code)
-            if forced_label:
-                place.category = forced_label
+        from ktc.etl import admin_region_service
+
+        await admin_region_service.enrich_place_admin_codes(session, place)
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value

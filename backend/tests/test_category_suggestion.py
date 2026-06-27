@@ -20,6 +20,7 @@ def test_catalog_loads_full_table():
 
 
 def test_catalog_is_known_code():
+    assert category_catalog.is_known_code("0") is True
     assert category_catalog.is_known_code("01050100") is True
     assert category_catalog.is_known_code("00000000") is True
     assert category_catalog.is_known_code("99999999") is False
@@ -27,6 +28,7 @@ def test_catalog_is_known_code():
 
 
 def test_catalog_label_for():
+    assert category_catalog.label_for("0") == "unknown"
     assert category_catalog.label_for("01000000") == "관광"
     assert "해수욕장" in (category_catalog.label_for("01050100") or "")
     assert category_catalog.label_for("99999999") is None

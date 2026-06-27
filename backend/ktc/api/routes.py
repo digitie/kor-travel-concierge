@@ -96,6 +96,8 @@ class HarvestRequest(BaseModel):
     # True면 증분 워터마크를 무시하고 처음부터 max_videos까지 다시 수집한다(강제 다운로드).
     # 기본(False)은 증분 추가 수집(이미 본 영상 이후만).
     force: bool = False
+    # POI 카테고리 매칭 실패 시 쓸 기본 카테고리 코드(unknown=0 포함).
+    default_category_code: str | None = None
 
 
 class HarvestJob(BaseModel):
@@ -306,7 +308,11 @@ async def start_harvest(
             )
         target_type, target_id = "keyword", payload.query
 
+    default_category_code = category_catalog.normalize_code(payload.default_category_code)
+    if payload.default_category_code and default_category_code is None:
+        raise HTTPException(status_code=400, detail="지원하지 않는 기본 카테고리 코드입니다")
     run_payload = payload.model_dump()
+    run_payload["default_category_code"] = default_category_code
     run_payload["channel_id"] = canonical_channel
     run_payload["playlist_id"] = canonical_playlist
     if canonical_video:
@@ -331,6 +337,7 @@ async def start_harvest(
             scan_interval_minutes=payload.repeat_interval_minutes,
             max_runs=payload.repeat_max_runs or 0,
             max_videos=payload.max_videos,
+            default_category_code=default_category_code,
         )
     await audit_service.record(
         session,
@@ -491,13 +498,22 @@ async def start_transcript(
             )
     else:
         video_ids = collected
+    source_payload = json.loads(source.payload_json) if source.payload_json else {}
+    transcript_payload: dict[str, Any] = {
+        "video_ids": video_ids,
+        "source_job_id": job_id,
+    }
+    if source_payload.get("default_category_code"):
+        transcript_payload["default_category_code"] = source_payload[
+            "default_category_code"
+        ]
     run = await crawl_run_service.create_run(
         session,
         job_type="transcript",
         source=RunSource.WEB,
         target_type=source.target_type,
         target_id=source.target_id,
-        payload={"video_ids": video_ids, "source_job_id": job_id},
+        payload=transcript_payload,
         commit=False,
     )
     await audit_service.record(
@@ -842,6 +858,10 @@ def _source_target_dict(
         "scan_interval_minutes": target.scan_interval_minutes,
         "max_runs": target.max_runs,
         "max_videos": target.max_videos,
+        "default_category_code": target.default_category_code,
+        "default_category_label": category_catalog.label_for(
+            target.default_category_code
+        ),
         "run_count": target.run_count,
         "next_crawl_at": target.next_crawl_at.isoformat()
         if target.next_crawl_at
@@ -897,6 +917,8 @@ class SourceTargetUpdate(BaseModel):
     is_active: bool | None = None
     # 반복 수집 1회당 영상 수(수집개수).
     max_videos: int | None = Field(default=None, ge=1, le=300)
+    # POI 카테고리 매칭 실패 시 쓸 기본 카테고리 코드(unknown=0 포함).
+    default_category_code: str | None = None
 
 
 @router.patch("/source-targets/{target_id}")
@@ -906,6 +928,11 @@ async def update_source_target(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """반복 수집 대상의 주기/횟수/활성 여부를 수정한다."""
+    if (
+        payload.default_category_code is not None
+        and category_catalog.normalize_code(payload.default_category_code) is None
+    ):
+        raise HTTPException(status_code=400, detail="지원하지 않는 기본 카테고리 코드입니다")
     target = await source_scan_service.update_recurring_target(
         session,
         target_id,
@@ -913,6 +940,7 @@ async def update_source_target(
         max_runs=payload.max_runs,
         is_active=payload.is_active,
         max_videos=payload.max_videos,
+        default_category_code=payload.default_category_code,
     )
     if target is None:
         raise HTTPException(status_code=404, detail="source target not found")
@@ -1172,8 +1200,7 @@ async def list_categories() -> list[dict[str, Any]]:
             "depth": row.get("depth"),
             "tier1_name": row.get("tier1_name"),
         }
-        for row in category_catalog.iter_categories()
-        if row.get("is_active", True)
+        for row in category_catalog.ui_categories()
     ]
 
 
@@ -1553,6 +1580,10 @@ async def get_destination_detail(
             "name": place.name,
             "category": place.category,
             "category_code_suggestion": place.category_code_suggestion,
+            "sigungu_code": place.sigungu_code,
+            "sigungu_name": place.sigungu_name,
+            "legal_dong_code": place.legal_dong_code,
+            "legal_dong_name": place.legal_dong_name,
             "official_address": place.official_address,
             "road_address": place.road_address,
             "latitude": place.latitude,
@@ -1744,6 +1775,11 @@ def _run_max_videos(run: CrawlRun) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
+def _run_default_category_code(run: CrawlRun) -> str | None:
+    value = _run_payload(run).get("default_category_code")
+    return category_catalog.normalize_code(str(value)) if value is not None else None
+
+
 def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
     """crawl_run을 작업 목록/상세 공통 요약 dict로 직렬화한다."""
     return {
@@ -1759,6 +1795,10 @@ def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
         "progress": run.progress,
         "current_message": run.current_message,
         "max_videos": _run_max_videos(run),
+        "default_category_code": _run_default_category_code(run),
+        "default_category_label": category_catalog.label_for(
+            _run_default_category_code(run)
+        ),
         "status_logs": crawl_run_service.load_status_logs(run),
         "retry_count": run.retry_count,
         "last_error": run.last_error,
@@ -2207,6 +2247,11 @@ def _place_payload(place) -> dict[str, Any]:
         "latitude": place.latitude,
         "longitude": place.longitude,
         "category": place.category,
+        "category_code_suggestion": place.category_code_suggestion,
+        "sigungu_code": place.sigungu_code,
+        "sigungu_name": place.sigungu_name,
+        "legal_dong_code": place.legal_dong_code,
+        "legal_dong_name": place.legal_dong_name,
         "api_source": place.api_source,
         "is_geocoded": place.is_geocoded,
     }
@@ -2227,6 +2272,7 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "timestamp_start": candidate.timestamp_start,
         "timestamp_end": candidate.timestamp_end,
         "candidate_category": candidate.candidate_category,
+        "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
         "matched_place_id": candidate.matched_place_id,
         "confidence_score": candidate.confidence_score,

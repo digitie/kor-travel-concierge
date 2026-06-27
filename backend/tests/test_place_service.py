@@ -118,7 +118,7 @@ async def test_resolve_create_place_copies_category_code_from_candidate(session)
     assert place.category_code_suggestion == "01050100"
 
 
-async def test_resolve_create_place_without_evidence_code_leaves_code_none(session):
+async def test_resolve_create_place_without_evidence_code_uses_unknown(session):
     session.add(YoutubeVideo(video_id="v2", title="t", url="u", channel_id="c"))
     await session.commit()
     candidate = ExtractedPlaceCandidate(
@@ -137,7 +137,8 @@ async def test_resolve_create_place_without_evidence_code_leaves_code_none(sessi
         place_data={"name": "장소", "latitude": 33.5, "longitude": 126.7},
     )
     assert place is not None
-    assert place.category_code_suggestion is None
+    assert place.category_code_suggestion == "0"
+    assert place.category == "unknown"
 
 
 async def test_delete_place_reverts_candidate_unlinks_media_removes_mapping(session):

@@ -80,7 +80,7 @@ async def test_apply_matched_copies_category_code_from_evidence(session):
     assert place.category_code_suggestion == "01050100"
 
 
-async def test_apply_matched_no_code_when_evidence_missing(session):
+async def test_apply_matched_uses_unknown_when_evidence_missing(session):
     candidate = await _make_candidate(session)  # evidence에 category_code 없음
     decision = GeocodeDecision(
         status="matched",
@@ -90,7 +90,8 @@ async def test_apply_matched_no_code_when_evidence_missing(session):
         candidate_count=1,
     )
     place = await apply_geocode_to_candidate(session, candidate, decision)
-    assert place.category_code_suggestion is None
+    assert place.category_code_suggestion == "0"
+    assert place.category == "unknown"
 
 
 async def test_apply_needs_review_keeps_candidate(session):

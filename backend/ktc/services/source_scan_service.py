@@ -56,6 +56,8 @@ def build_followup_run(
         "source_value": target.source_value,
         "api_budget_group": target.api_budget_group,
     }
+    if target.default_category_code:
+        payload["default_category_code"] = target.default_category_code
     if target.target_type == TargetType.KEYWORD:
         payload.update({"query": target.source_value, "max_videos": effective_max})
         return "harvest", "keyword", target.source_value, payload
@@ -251,6 +253,7 @@ async def upsert_recurring_target(
     scan_interval_minutes: int,
     max_runs: int = 0,
     max_videos: int | None = None,
+    default_category_code: str | None = None,
     now: datetime | None = None,
 ) -> SourceTarget:
     """반복 수집 대상을 등록/갱신한다.
@@ -275,6 +278,9 @@ async def upsert_recurring_target(
     target.max_runs = max(0, int(max_runs))
     if max_videos is not None:
         target.max_videos = max(1, int(max_videos))
+    from ktc.etl import category_catalog
+
+    target.default_category_code = category_catalog.normalize_code(default_category_code)
     target.run_count = 0
     if display_name:
         target.display_name = display_name
@@ -310,6 +316,7 @@ async def update_recurring_target(
     max_runs: int | None = None,
     is_active: bool | None = None,
     max_videos: int | None = None,
+    default_category_code: str | None = None,
     now: datetime | None = None,
 ) -> SourceTarget | None:
     """반복 수집 대상의 주기/횟수/활성 여부/수집개수를 수정한다(제공된 필드만 갱신)."""
@@ -325,6 +332,12 @@ async def update_recurring_target(
         target.max_runs = max(0, int(max_runs))
     if max_videos is not None:
         target.max_videos = max(1, int(max_videos))
+    if default_category_code is not None:
+        from ktc.etl import category_catalog
+
+        target.default_category_code = category_catalog.normalize_code(
+            default_category_code
+        )
     if is_active is not None:
         target.is_active = bool(is_active)
         if (

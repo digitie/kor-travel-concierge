@@ -28,6 +28,7 @@ from ktc.models import (
     utcnow,
 )
 from ktc.services import place_service
+from ktc.etl import category_catalog
 
 _MIN_CONTAINED_NAME_LENGTH = 4
 _MIN_CONTAINED_NAME_RATIO = 0.6
@@ -128,6 +129,13 @@ async def apply_geocode_to_candidate(
             candidate.feature_export_status = FeatureExportStatus.PENDING.value
             await session.commit()
             return None
+        code = place_service.candidate_category_code(candidate)
+        if code and place.category_code_suggestion in (
+            None,
+            category_catalog.UNKNOWN_CATEGORY_CODE,
+        ):
+            place.category_code_suggestion = code
+            place.category = category_catalog.label_for_or_unknown(code)
     else:
         road, official = c.road_address, c.official_address
         if vworld is not None:
@@ -138,13 +146,16 @@ async def apply_geocode_to_candidate(
                 candidate.provider_evidence_json,
                 geocoding=_geocode_evidence(decision, reverse_vworld=rev),
             )
+        code = place_service.candidate_category_code(candidate)
+        category_code = category_catalog.normalize_code_or_unknown(code)
         place = TravelPlace(
             name=candidate.ai_place_name,
             latitude=c.latitude,
             longitude=c.longitude,
             road_address=road,
             official_address=official,
-            category=candidate.candidate_category,
+            category=category_catalog.label_for_or_unknown(category_code),
+            category_code_suggestion=category_code,
             api_source=c.source,
             is_geocoded=True,
         )
@@ -157,15 +168,11 @@ async def apply_geocode_to_candidate(
     candidate.reviewed_at = utcnow()
     candidate.feature_export_status = FeatureExportStatus.READY.value
 
-    # 8자리 category 코드는 POI 추출 때 후보 evidence에 저장된 값을 복사한다
-    # (별도 Gemini 호출 없음, A안). 기존 제안이 없을 때만 채운다.
-    if place.category_code_suggestion is None:
-        code = place_service.candidate_category_code(candidate)
-        if code:
-            place.category_code_suggestion = code
-
     await place_service.ensure_candidate_mapping(session, candidate, place)
     await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
+    from ktc.etl import admin_region_service
+
+    await admin_region_service.enrich_place_admin_codes(session, place)
     await session.commit()
     await session.refresh(place)
     return place

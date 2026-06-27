@@ -50,6 +50,7 @@ async def process_harvest_videos(
     geocode_applier: GeocodeApplier | None = None,
     status_reporter: StatusReporter | None = None,
     max_retries: int = 2,
+    default_category_code: str | None = None,
 ) -> dict[str, Any]:
     """수집 영상에서 장소 후보와 확정 장소를 생성한다.
 
@@ -121,6 +122,7 @@ async def process_harvest_videos(
                     gemini_model=gemini_model,
                     max_retries=max_retries,
                     status_reporter=status_reporter,
+                    default_category_code=default_category_code,
                 )
                 if result.get("status") != "summarized":
                     summary["failed_videos"] += 1

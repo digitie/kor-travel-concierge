@@ -38,6 +38,7 @@ class SourceTarget(TimestampMixin, Base):
             "next_crawl_at",
             "id",
         ),
+        Index("ix_source_targets_default_category_code", "default_category_code"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -70,4 +71,8 @@ class SourceTarget(TimestampMixin, Base):
     )
     run_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # 작업에서 POI 카테고리 매칭이 실패하면 쓸 기본 카테고리 코드(unknown=0 포함).
+    default_category_code: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
     )

@@ -351,6 +351,9 @@ function DestinationList({
   // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
   const selectedPlaceId = selectedPlace?.place_id ?? null;
+  const districtFilterLabel =
+    (facets?.districts ?? []).find((district) => district.value === districtFilter)
+      ?.label ?? districtFilter;
 
   useEffect(() => {
     if (selectedPlaceId == null) {
@@ -402,7 +405,7 @@ function DestinationList({
         >
           <SelectTrigger className="w-full" aria-label="시군구 필터">
             <SelectValue>
-              {districtFilter ? districtFilter : "시군구 전체"}
+              {districtFilter ? districtFilterLabel : "시군구 전체"}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -410,7 +413,7 @@ function DestinationList({
               <SelectItem value="all">시군구 전체</SelectItem>
               {(facets?.districts ?? []).map((district) => (
                 <SelectItem key={district.value} value={district.value}>
-                  {district.value} ({district.place_count})
+                  {district.label} ({district.place_count})
                 </SelectItem>
               ))}
             </SelectGroup>

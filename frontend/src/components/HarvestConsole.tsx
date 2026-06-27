@@ -15,8 +15,10 @@ import { z } from "zod";
 
 import {
   getHarvestStatus,
+  listCategories,
   startHarvest,
   startTranscript,
+  type CategoryOption,
   type HarvestContentFilter,
   type HarvestStatus,
   type HarvestTargetType,
@@ -89,6 +91,13 @@ function contentFilterLabel(value: HarvestContentFilter): string {
   );
 }
 
+function categoryLabel(
+  categories: CategoryOption[] | undefined,
+  code: string,
+): string {
+  return categories?.find((category) => category.code === code)?.label ?? "unknown";
+}
+
 const harvestFormSchema = z.object({
   targetType: z.enum(["auto", "keyword", "channel", "playlist", "video"]),
   targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
@@ -103,6 +112,7 @@ const harvestFormSchema = z.object({
   contentFilter: z.enum(["both", "shorts", "videos"]),
   // 강제 다운로드: 증분 워터마크 무시하고 처음부터 재수집(기본은 증분 추가).
   force: z.boolean(),
+  defaultCategoryCode: z.string().min(1),
 });
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
@@ -148,6 +158,7 @@ export function HarvestConsole() {
       repeatMaxRuns: 0,
       contentFilter: "both",
       force: false,
+      defaultCategoryCode: "0",
     },
   });
   const targetType = useWatch({
@@ -165,6 +176,17 @@ export function HarvestConsole() {
     name: "contentFilter",
   });
   const force = useWatch({ control: form.control, name: "force" });
+  const defaultCategoryCode = useWatch({
+    control: form.control,
+    name: "defaultCategoryCode",
+  });
+  const effectiveDefaultCategoryCode = defaultCategoryCode ?? "0";
+
+  const categoriesQuery = useQuery({
+    queryKey: ["categories"],
+    queryFn: listCategories,
+    staleTime: 60 * 60 * 1000,
+  });
 
   const mutation = useMutation({
     mutationFn: startHarvest,
@@ -328,6 +350,37 @@ export function HarvestConsole() {
             </Select>
             <FieldDescription>
               숏츠는 길이 {`≤`}60초 기준으로 구분합니다.
+            </FieldDescription>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="harvest-default-category">기본 카테고리</FieldLabel>
+            <Select
+              value={effectiveDefaultCategoryCode}
+              onValueChange={(value) =>
+                form.setValue("defaultCategoryCode", value ?? "0", {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            >
+              <SelectTrigger id="harvest-default-category" className="w-full">
+                <SelectValue>
+                  {categoryLabel(categoriesQuery.data, effectiveDefaultCategoryCode)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectGroup>
+                  {(categoriesQuery.data ?? []).map((option) => (
+                    <SelectItem key={option.code} value={option.code}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              POI 카테고리 매칭이 안 되면 이 값으로 저장합니다.
             </FieldDescription>
           </Field>
 

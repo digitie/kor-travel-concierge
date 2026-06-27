@@ -321,6 +321,11 @@ function RunQueuePanel({
                       <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
                         {run.job_type_label ?? jobTypeLabel(run.job_type)}
                       </span>
+                      {run.default_category_label ? (
+                        <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
+                          기본 {run.default_category_label}
+                        </span>
+                      ) : null}
                     </button>
                   </TableCell>
                   <TableCell>
@@ -423,6 +428,7 @@ function JobsPanel({
                 <TableRow>
                   <TableHead>대상</TableHead>
                   <TableHead>주기</TableHead>
+                  <TableHead>기본</TableHead>
                   <TableHead>누적</TableHead>
                   <TableHead>일정</TableHead>
                   <TableHead>상태</TableHead>
@@ -460,6 +466,11 @@ function JobsPanel({
                             회당 {target.max_videos ?? "-"}개
                           </span>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {target.default_category_label ?? "unknown"}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col text-[13px]">
@@ -574,6 +585,11 @@ function JobsPanel({
                         <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
                           {run.job_type_label ?? jobTypeLabel(run.job_type)}
                         </span>
+                        {run.default_category_label ? (
+                          <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
+                            기본 {run.default_category_label}
+                          </span>
+                        ) : null}
                       </button>
                     </TableCell>
                     <TableCell>
