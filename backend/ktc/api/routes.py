@@ -1326,6 +1326,15 @@ async def get_candidate_detail(
                 ExtractedPlaceCandidate.ai_place_name,
                 ExtractedPlaceCandidate.match_status,
                 ExtractedPlaceCandidate.candidate_category,
+                func.coalesce(
+                    VideoPlaceMapping.place_id,
+                    ExtractedPlaceCandidate.matched_place_id,
+                ),
+            )
+            .join(
+                VideoPlaceMapping,
+                VideoPlaceMapping.place_candidate_id == ExtractedPlaceCandidate.id,
+                isouter=True,
             )
             .where(
                 ExtractedPlaceCandidate.video_id == candidate.video_id,
@@ -1358,8 +1367,9 @@ async def get_candidate_detail(
                 "ai_place_name": name,
                 "match_status": status,
                 "candidate_category": category,
+                "place_id": place_id,
             }
-            for sid, name, status, category in sibling_rows
+            for sid, name, status, category, place_id in sibling_rows
         ],
     }
 

@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
 
@@ -11,6 +18,7 @@ import {
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 function durationLabel(seconds: number | null): string {
   if (seconds == null) return "";
@@ -20,6 +28,42 @@ function durationLabel(seconds: number | null): string {
 }
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
+}
+
+function cleanTranscript(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]|\d{1,2}:\d{2}(?::\d{2})?)\s*/g, "")
+        .replace(/\[(?:음악|Music|music|박수|웃음)\]/g, "")
+        .trim(),
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+function timestampNeedle(value: string | null): string | null {
+  if (!value) return null;
+  const parts = value.split(":").map((part) => part.padStart(2, "0"));
+  return parts.join(":");
+}
+
+function siblingHref(sibling: {
+  id: number;
+  match_status: string;
+  place_id: number | null;
+}) {
+  if (
+    sibling.place_id != null &&
+    (sibling.match_status === "matched" ||
+      sibling.match_status === "MATCHED" ||
+      sibling.match_status === "user_corrected" ||
+      sibling.match_status === "USER_CORRECTED")
+  ) {
+    return `/?place=${sibling.place_id}`;
+  }
+  return `/review?candidate=${sibling.id}`;
 }
 
 export function CandidateDetailView({
@@ -41,13 +85,44 @@ export function CandidateDetailView({
   });
   const detail = detailQuery.data;
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [transcriptTab, setTranscriptTab] = useState("raw");
+  const transcriptRef = useRef<HTMLPreElement>(null);
+  const transcriptText = transcriptQuery.data?.text ?? "";
+  const evidenceStart = detail?.candidate.timestamp_start ?? null;
+  const scrollTranscriptToEvidence = useCallback(() => {
+    const element = transcriptRef.current;
+    if (!element || !transcriptText) return;
+    const needle = timestampNeedle(evidenceStart);
+    const index = needle ? transcriptText.indexOf(needle) : -1;
+    if (index < 0) {
+      element.scrollTop = 0;
+      return;
+    }
+    const ratio = index / Math.max(transcriptText.length, 1);
+    element.scrollTop = Math.max(0, element.scrollHeight * ratio - 40);
+  }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
     mutationFn: () => deleteCandidate(candidateId),
     onSuccess: () => {
+      queryClient.setQueriesData(
+        { queryKey: ["unmatched-candidates"] },
+        (old: unknown) =>
+          Array.isArray(old)
+            ? old.filter((item: { id?: number }) => item.id !== candidateId)
+            : old,
+      );
       queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.removeQueries({ queryKey: ["candidate-detail", candidateId] });
+      queryClient.removeQueries({ queryKey: ["candidate-transcript", candidateId] });
       onDeleted?.();
     },
   });
+
+  useEffect(() => {
+    if (transcriptText) {
+      requestAnimationFrame(scrollTranscriptToEvidence);
+    }
+  }, [candidateId, scrollTranscriptToEvidence, transcriptText]);
 
   if (detailQuery.isLoading) {
     return <p className="p-2 text-sm text-muted-foreground">불러오는 중…</p>;
@@ -61,6 +136,7 @@ export function CandidateDetailView({
   }
 
   const c = detail.candidate;
+  const cleanedTranscript = transcriptText ? cleanTranscript(transcriptText) : "";
 
   return (
     <div className="flex flex-col gap-4">
@@ -107,10 +183,12 @@ export function CandidateDetailView({
             href={detail.video.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+            className="flex max-w-full items-start gap-1 font-medium text-primary hover:underline"
           >
-            {detail.video.title ?? detail.video.video_id}
-            <ExternalLinkIcon className="size-3" />
+            <span className="min-w-0 break-words">
+              {detail.video.title ?? detail.video.video_id}
+            </span>
+            <ExternalLinkIcon className="mt-1 size-3 shrink-0" />
           </a>
           <p className="text-xs text-muted-foreground">
             {[
@@ -136,12 +214,39 @@ export function CandidateDetailView({
             : "보정 자막"
         }
       >
+        <div className="mb-2 flex justify-end">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={!transcriptText}
+            onClick={scrollTranscriptToEvidence}
+          >
+            근거 위치로 이동
+          </Button>
+        </div>
         {transcriptQuery.isLoading ? (
           <p className="text-xs text-muted-foreground">불러오는 중…</p>
-        ) : transcriptQuery.data?.text ? (
-          <pre className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap">
-            {transcriptQuery.data.text}
-          </pre>
+        ) : transcriptText ? (
+          <Tabs value={transcriptTab} onValueChange={(value) => setTranscriptTab(value ?? "raw")}>
+            <TabsList className="w-full">
+              <TabsTrigger value="raw">타임스탬프 포함</TabsTrigger>
+              <TabsTrigger value="clean">정리본</TabsTrigger>
+            </TabsList>
+            <TabsContent value="raw" className="mt-2">
+              <pre
+                ref={transcriptRef}
+                className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap"
+              >
+                {transcriptText}
+              </pre>
+            </TabsContent>
+            <TabsContent value="clean" className="mt-2">
+              <pre className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap">
+                {cleanedTranscript}
+              </pre>
+            </TabsContent>
+          </Tabs>
         ) : (
           <p className="text-xs text-muted-foreground">보정 자막 없음</p>
         )}
@@ -172,13 +277,14 @@ export function CandidateDetailView({
         >
           <div className="flex flex-col gap-1">
             {detail.sibling_candidates.map((sibling) => (
-              <div
+              <Link
                 key={sibling.id}
-                className="flex items-center justify-between gap-2 text-xs"
+                className="flex items-center justify-between gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-surface-subtle"
+                href={siblingHref(sibling)}
               >
                 <span className="truncate">{sibling.ai_place_name}</span>
                 <Badge variant="outline">{sibling.match_status}</Badge>
-              </div>
+              </Link>
             ))}
           </div>
         </DetailSection>

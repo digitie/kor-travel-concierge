@@ -82,6 +82,71 @@ test.describe('n150 live UI 셸 검증', () => {
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
+
+  test('검수 큐 테이블, 3분할 작업면, 상세 다이얼로그가 동작한다', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await loginAsAdmin(page, '/review');
+
+    await expect(page.getByRole('heading', { name: '검수 큐', exact: true })).toBeVisible();
+    await expect(page.getByText('검수 대기 후보')).toBeVisible();
+
+    try {
+      await expect
+        .poll(() => page.locator('tbody tr').count(), { timeout: 15_000 })
+        .toBeGreaterThan(0);
+    } catch {
+      test.skip(true, 'n150 검수 대기 후보가 없으면 후보 상세 UI 검증을 건너뛴다.');
+    }
+    const firstRow = page.locator('tbody tr').first();
+
+    await expect(page.getByRole('columnheader', { name: '후보', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '출처', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '상태', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '액션', exact: true })).toBeVisible();
+
+    await firstRow.locator('input[type="checkbox"]').check();
+    await expect(page.getByText('후보 1개 선택됨')).toBeVisible();
+    await expect(page.getByRole('button', { name: '선택 삭제' })).toBeVisible();
+    await page.getByRole('button', { name: '선택 해제' }).click();
+    await expect(page.getByText('후보 1개 선택됨')).toHaveCount(0);
+
+    await firstRow.locator('td').nth(1).locator('button').click();
+    await expect(page.getByRole('button', { name: '검색', exact: true })).toBeVisible();
+    await expect(page.getByText('확정 정보')).toBeVisible();
+    await expect(page.getByText('Google Places', { exact: true })).toBeVisible();
+    await expect(page.getByText('Kakao', { exact: true })).toBeVisible();
+    await expect(page.getByText('Naver', { exact: true })).toBeVisible();
+    await expect(page.locator('.maplibregl-map')).toBeVisible();
+
+    await page.getByRole('button', { name: /상세 보기/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: '검수 후보 상세' })).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: '동영상', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: '동영상 내 근거(어디에 나왔는지)' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '근거 위치로 이동' })).toBeVisible();
+
+    const rawTab = dialog.getByRole('tab', { name: '타임스탬프 포함' });
+    if (await rawTab.isVisible().catch(() => false)) {
+      await expect(dialog.getByRole('tab', { name: '정리본' })).toBeVisible();
+      await dialog.getByRole('tab', { name: '정리본' }).click();
+      await expect(dialog.getByRole('tabpanel')).toBeVisible();
+      await dialog.getByRole('tab', { name: '타임스탬프 포함' }).click();
+    } else {
+      await expect(dialog.getByText(/보정 자막 없음|불러오는 중/)).toBeVisible();
+    }
+
+    await dialog.getByRole('button', { name: '닫기' }).click();
+
+    const seededRow = page.locator('tbody tr').filter({ hasText: 'KTC Live E2E 검수 후보' });
+    if ((await seededRow.count()) > 0) {
+      await seededRow.first().locator('input[type="checkbox"]').check();
+      page.once('dialog', (confirmDialog) => confirmDialog.accept());
+      await page.getByRole('button', { name: '선택 삭제' }).click();
+      await expect(seededRow).toHaveCount(0);
+    }
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
 });
 
 async function loginAsAdmin(page: Page, nextPath: string) {

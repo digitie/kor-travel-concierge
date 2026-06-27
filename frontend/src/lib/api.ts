@@ -822,6 +822,7 @@ export type CandidateDetail = {
     ai_place_name: string;
     match_status: string;
     candidate_category: string | null;
+    place_id: number | null;
   }[];
 };
 
