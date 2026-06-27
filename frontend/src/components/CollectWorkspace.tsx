@@ -27,6 +27,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { HarvestConsole } from "@/components/HarvestConsole";
 import { JobDetailDialog } from "@/components/JobDetailDialog";
 import { RecurringEditDialog } from "@/components/RecurringEditDialog";
@@ -83,7 +92,7 @@ export function CollectWorkspace() {
 
   return (
     <div className="flex min-h-[calc(100vh-3rem)] flex-col lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:flex-row lg:overflow-hidden">
-      <div className="shrink-0 border-b lg:w-[26rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
+      <div className="shrink-0 border-b lg:w-[38rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
         <HarvestConsole />
         <div className="flex flex-col gap-1.5 border-t p-3">
           <Button
@@ -295,6 +304,11 @@ function JobsPanel({
   isDeleting: boolean;
   isRunningNow: boolean;
 }) {
+  // #7: "지금 실행" 클릭 시 강제 다운로드 여부를 묻는 다이얼로그.
+  const [runNowTarget, setRunNowTarget] = useState<SourceTargetSummary | null>(
+    null,
+  );
+  const [runNowForce, setRunNowForce] = useState(false);
   return (
     <section aria-label="작업" className="flex flex-col gap-3 p-3 lg:min-h-0 lg:overflow-y-auto">
       <Tabs defaultValue="recurring">
@@ -351,21 +365,13 @@ function JobsPanel({
                     type="button"
                     size="xs"
                     disabled={isRunningNow}
-                    onClick={() => onRunNow(target.id, false)}
+                    onClick={() => {
+                      setRunNowForce(false);
+                      setRunNowTarget(target);
+                    }}
                   >
                     <ZapIcon data-icon="inline-start" />
-                    지금 진행
-                  </Button>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={isRunningNow}
-                    onClick={() => onRunNow(target.id, true)}
-                    title="대상 영상을 다시 수집·재처리(미완료/실패분 재시도)"
-                  >
-                    <RotateCcwIcon data-icon="inline-start" />
-                    강제 재실행
+                    지금 실행
                   </Button>
                   <Button
                     type="button"
@@ -415,8 +421,68 @@ function JobsPanel({
           )}
         </TabsContent>
       </Tabs>
+      <Dialog
+        open={runNowTarget != null}
+        onOpenChange={(next) => !next && setRunNowTarget(null)}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>지금 실행</DialogTitle>
+            <DialogDescription>
+              {runNowTarget?.display_name ?? runNowTarget?.source_value}
+            </DialogDescription>
+          </DialogHeader>
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              className="size-4 rounded border"
+              checked={runNowForce}
+              onChange={(event) => setRunNowForce(event.target.checked)}
+            />
+            강제 다운로드 (전체 재수집)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            체크하면 이미 본 영상 이후만 받는 증분 수집 대신 처음부터 다시 받습니다.
+          </p>
+          <DialogFooter>
+            <DialogClose
+              render={
+                <Button type="button" variant="outline">
+                  취소
+                </Button>
+              }
+            />
+            <Button
+              type="button"
+              disabled={isRunningNow}
+              onClick={() => {
+                if (runNowTarget) onRunNow(runNowTarget.id, runNowForce);
+                setRunNowTarget(null);
+              }}
+            >
+              실행
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
+}
+
+// 실행 기록 한 줄: 종료 시각 + 수집/신규 영상 수(결과에 있을 때만). 신규 POI 수 등
+// 더 상세한 집계는 작업 상세 페이지(후속 작업)에서 제공한다.
+function runHistoryLine(run: CrawlRunSummary): string | null {
+  const r = (run.result ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+  if (
+    run.finished_at &&
+    (run.state === "done" || run.state === "failed" || run.state === "cancelled")
+  ) {
+    parts.push(run.finished_at.slice(5, 16).replace("T", " "));
+  }
+  if (typeof r.discovered === "number") parts.push(`수집 ${r.discovered}`);
+  if (typeof r.inserted === "number") parts.push(`신규 ${r.inserted}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 // 작업 카드: 1번째 줄=대상(검색어/유튜버/재생목록 + 값), 2번째 줄=작업유형 + 메시지.
@@ -438,17 +504,19 @@ function RunControlCard({
     run.state === "done" || run.state === "failed" || run.state === "cancelled";
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border p-2 text-xs">
+    <div className="flex flex-col gap-1 rounded-lg border p-1.5 text-xs">
       <button
         type="button"
         className="flex items-start justify-between gap-2 text-left"
         onClick={() => onDetail(run)}
       >
         <span className="flex min-w-0 flex-col">
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[10px] uppercase tracking-[0.05em] text-muted-foreground">
             {runTargetType(run)}
           </span>
-          <span className="truncate font-medium">{runTargetValue(run)}</span>
+          <span className="truncate text-sm font-semibold leading-tight">
+            {runTargetValue(run)}
+          </span>
         </span>
         <Badge variant={run.state === "failed" ? "destructive" : "outline"}>
           {run.state}
@@ -466,6 +534,9 @@ function RunControlCard({
         </span>
         {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
       </p>
+      {runHistoryLine(run) ? (
+        <p className="text-[11px] text-muted-foreground">{runHistoryLine(run)}</p>
+      ) : null}
       <div className="flex gap-2">
         {isActive ? (
           <Button
