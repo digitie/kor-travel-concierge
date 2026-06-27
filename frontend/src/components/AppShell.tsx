@@ -99,15 +99,9 @@ export function AppShell({
         </aside>
         <div className="flex min-h-screen min-w-0 flex-col">
           <header className="px-4 pt-4 lg:px-6 lg:pt-6">
-            <div className="mb-2 flex justify-end">
-              <Button type="button" variant="outline" size="sm" onClick={logout}>
-                <LogOutIcon data-icon="inline-start" />
-                로그아웃
-              </Button>
-            </div>
-            <div className="flex flex-col gap-4 rounded-2xl bg-card p-4 shadow-[var(--shadow-card)] ring-1 ring-border/70 lg:p-6 xl:flex-row xl:items-start xl:justify-between">
-              <div className="flex min-w-0 flex-1 flex-col gap-3">
-                <div className="flex min-w-0 flex-col gap-1">
+            <div className="rounded-2xl bg-card p-4 shadow-[var(--shadow-card)] ring-1 ring-border/70 lg:p-6">
+              <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex flex-wrap items-center gap-2">
                     {section ? <Badge variant="secondary">{section}</Badge> : null}
                     <span className="break-all font-mono text-[12px] text-text-secondary">
@@ -124,10 +118,14 @@ export function AppShell({
                     </p>
                   ) : null}
                 </div>
+                <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                  {actions}
+                  <Button type="button" variant="outline" size="sm" onClick={logout}>
+                    <LogOutIcon data-icon="inline-start" />
+                    로그아웃
+                  </Button>
+                </div>
               </div>
-              {actions ? (
-                <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>
-              ) : null}
             </div>
           </header>
           <div
