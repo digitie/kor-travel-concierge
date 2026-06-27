@@ -505,7 +505,7 @@ export default function ReviewPage() {
       actions={<Badge variant="secondary">{candidates.length}개 대기</Badge>}
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
     >
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-3 lg:overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:h-[calc(100vh-10rem)] lg:grid-cols-3 lg:overflow-hidden">
         <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 border-b p-3 lg:max-h-none lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between gap-2">
             <p className="px-1 text-xs font-medium text-muted-foreground">
