@@ -52,6 +52,7 @@ export type SourceTargetSummary = {
   next_crawl_at: string | null;
   last_crawled_at: string | null;
   last_scan_at: string | null;
+  last_seen_video_published_at: string | null;
   scan_failure_count: number;
   last_scan_error: string | null;
   created_at: string | null;
