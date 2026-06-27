@@ -18,6 +18,11 @@
 
 ## 완료
 
+- [x] **T-144**: 헤더 로그아웃·작업 상태·탭 배치 정리 — 공통 `AppShell`에서 로그아웃 버튼을
+  헤더 카드 밖 우측 최상단으로 이동하고, 작업 상태 링크는 제목 옆의 작은 pill 형태로 줄였다.
+  공용 `Tabs` primitive가 실제 `orientation`을 Root에 전달하고 `data-orientation` 기준 variant를
+  쓰도록 고쳐 보정 자막, 실행/검수 큐 계열 탭이 좌측이 아니라 상단에 배치되게 했다. 검증:
+  frontend type-check/lint/vitest/build 통과. (2026-06-28)
 - [x] **T-143 / PR-F**: 통합 n150 live UI E2E와 최종 배포 — T-138~T-142 기능을
   `tests/e2e/live-shell.spec.ts`의 n150 live spec 4건으로 고정했다. 메뉴/상단 작업 상태/상태/설정,
   수집 반복 작업 테이블과 수정 다이얼로그, 검수 큐 테이블·3분할·상세, 결과 필터와 출처 동영상 상세
