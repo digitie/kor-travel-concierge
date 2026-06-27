@@ -12,7 +12,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   return (
-    <html lang="ko">
+    <html lang="ko" className="font-sans">
       <body>
         <AppErrorPanel error={error} reset={reset} standalone />
       </body>

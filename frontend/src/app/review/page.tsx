@@ -52,7 +52,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
@@ -445,18 +445,13 @@ export default function ReviewPage() {
     Boolean(form.longitude);
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-background">
-      <AppNav />
-      <header className="flex items-center justify-between gap-3 border-b px-5 py-2.5">
-        <div className="flex items-center gap-3">
-          <h1 className="text-base font-semibold">검수 큐</h1>
-          <Badge variant="secondary">{candidates.length}</Badge>
-        </div>
-        <p className="hidden text-xs text-muted-foreground sm:block">
-          Google·Kakao·Naver 검색과 Gemini 의견을 비교해 위치를 확정합니다.
-        </p>
-      </header>
-
+    <AppShell
+      title="검수 큐"
+      description="Google, Kakao, Naver 검색과 Gemini 의견을 비교해 후보 위치를 확정합니다."
+      section="검수"
+      actions={<Badge variant="secondary">{candidates.length}개 대기</Badge>}
+      contentClassName="flex min-h-0 flex-1 flex-col p-0"
+    >
       <div
         ref={gridRef}
         style={{ "--list-width": `${listWidth}px` } as React.CSSProperties}
@@ -915,7 +910,7 @@ export default function ReviewPage() {
           ) : null}
         </DialogContent>
       </Dialog>
-    </main>
+    </AppShell>
   );
 }
 

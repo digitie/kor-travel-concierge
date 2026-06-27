@@ -12,29 +12,33 @@
     --font-heading: var(--font-sans);
   }
   :root {
-    /* --- StyleSeed 기반 semantic 토큰 (kor-travel-geo-ui docs/DESIGN-RULES.md 이식).
-       단일 accent(brand), 5단계 text, surface/status/shadow/motion 토큰을 단일 출처로 둔다. --- */
-    /* kor-travel-map 매칭: 그린 #2f765f + 웜 그레이 surface/text/shadow (사용자 결정 2026-06-27). */
+    /* kor-travel-map admin frontend와 같은 웜 그레이 surface, 그린 accent, 낮은 shadow 토큰. */
     --surface-page: #f7f8f6;
     --surface-card: #ffffff;
     --surface-subtle: #f2f5f1;
     --surface-muted: #e3e8e2;
     --surface-row: #fafbf9;
     --brand-tint: #e7f2ee;
-    --text-strong: #2a2d2b;
+    --text-strong: #3c3f3d;
     --text-primary: #3c3f3d;
     --text-secondary: #68706b;
     --text-tertiary: #858d87;
     --text-disabled: #b5bdb7;
+    --icon-default: #7c857f;
     --line: #d7ded8;
     --brand: #2f765f;
+    --brand-foreground: #ffffff;
     --brand-ink: #1f4d3f;
     --info: #3b82f6;
-    --warn: #8a5a12;
-    --danger: #b3322c;
-    --ok: #33683f;
+    --warning: #8a5a12;
+    --success: #33683f;
+    --destructive: #b3322c;
+    --warn: var(--warning);
+    --danger: var(--destructive);
+    --ok: var(--success);
     --shadow-card: 0 1px 3px rgb(60 63 61 / 0.04);
     --shadow-card-hover: 0 2px 4px rgb(60 63 61 / 0.08);
+    --shadow-elevated: 0 4px 12px rgb(60 63 61 / 0.08);
     --shadow-button: 0 1px 3px rgb(60 63 61 / 0.06);
     --shadow-modal: 0 8px 24px rgb(60 63 61 / 0.12);
     --duration-fast: 120ms;
@@ -49,74 +53,112 @@
     --popover: var(--surface-card);
     --popover-foreground: var(--text-strong);
     --primary: var(--brand);
-    --primary-foreground: #ffffff;
+    --primary-foreground: var(--brand-foreground);
     --secondary: var(--surface-subtle);
     --secondary-foreground: var(--text-strong);
     --muted: var(--surface-subtle);
     --muted-foreground: var(--text-secondary);
-    --accent: var(--surface-muted);
-    --accent-foreground: var(--text-strong);
-    --destructive: var(--danger);
-    --destructive-foreground: #ffffff;
+    --accent: var(--brand-tint);
+    --accent-foreground: var(--brand);
+    --destructive-foreground: var(--brand-foreground);
     --border: var(--line);
     --input: var(--line);
     --ring: var(--brand);
     --chart-1: var(--brand);
-    --chart-2: var(--info);
-    --chart-3: var(--ok);
-    --chart-4: var(--warn);
-    --chart-5: var(--danger);
-    /* kor-travel-map 매칭: 카드 반경 0.625rem. */
+    --chart-2: #9fb8ad;
+    --chart-3: #c4ccc5;
+    --chart-4: #8a948e;
+    --chart-5: #59625c;
     --radius: 0.625rem;
-    --sidebar: var(--surface-subtle);
+    --sidebar: var(--surface-card);
     --sidebar-foreground: var(--text-strong);
     --sidebar-primary: var(--brand);
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: var(--surface-muted);
-    --sidebar-accent-foreground: var(--text-strong);
+    --sidebar-primary-foreground: var(--brand-foreground);
+    --sidebar-accent: var(--brand-tint);
+    --sidebar-accent-foreground: var(--brand);
     --sidebar-border: var(--line);
     --sidebar-ring: var(--brand);
   }
   .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --surface-page: #171a18;
+    --surface-card: #20241f;
+    --surface-subtle: #222720;
+    --surface-muted: #30372f;
+    --surface-row: #20241f;
+    --brand: #78c7ad;
+    --brand-foreground: #10201a;
+    --brand-tint: #1f3a31;
+    --text-strong: #e5ebe7;
+    --text-primary: #e5ebe7;
+    --text-secondary: #b5beb8;
+    --text-tertiary: #8f9a93;
+    --text-disabled: #68736c;
+    --icon-default: #9aa49d;
+    --line: #30372f;
+    --success: #82bd92;
+    --warning: #d9a441;
+    --info: #7aa7ff;
+    --destructive: #e17870;
+    --warn: var(--warning);
+    --danger: var(--destructive);
+    --ok: var(--success);
+    --shadow-card: 0 1px 3px rgb(8 12 10 / 0.08);
+    --shadow-card-hover: 0 2px 4px rgb(8 12 10 / 0.12);
+    --shadow-elevated: 0 4px 12px rgb(8 12 10 / 0.12);
+    --shadow-modal: 0 8px 24px rgb(8 12 10 / 0.18);
+    --background: var(--surface-page);
+    --foreground: var(--text-primary);
+    --card: var(--surface-card);
+    --card-foreground: var(--text-primary);
+    --popover: var(--surface-card);
+    --popover-foreground: var(--text-primary);
+    --primary: var(--brand);
+    --primary-foreground: var(--brand-foreground);
+    --secondary: var(--surface-subtle);
+    --secondary-foreground: var(--text-primary);
+    --muted: var(--surface-subtle);
+    --muted-foreground: var(--text-secondary);
+    --accent: var(--brand-tint);
+    --accent-foreground: var(--brand);
+    --destructive-foreground: var(--brand-foreground);
+    --border: var(--line);
+    --input: #3a4239;
+    --ring: var(--brand);
+    --chart-1: var(--brand);
+    --chart-2: #5c7f70;
+    --chart-3: #46504a;
+    --chart-4: #a8b4ad;
+    --chart-5: #d2d9d5;
+    --sidebar: var(--surface-card);
+    --sidebar-foreground: var(--text-primary);
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: var(--brand-foreground);
+    --sidebar-accent: var(--brand-tint);
+    --sidebar-accent-foreground: var(--brand);
+    --sidebar-border: var(--line);
+    --sidebar-ring: var(--brand);
   }
   * {
-    @apply border-border;
-    outline-color: var(--ring);
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    min-height: 100%;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-surface-page text-text-primary antialiased;
+    font-family:
+      var(--font-sans, Pretendard), Pretendard, "Noto Sans KR",
+      "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  }
+  a {
+    @apply text-brand underline-offset-4 hover:underline;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
   }
   html {
     @apply font-sans;

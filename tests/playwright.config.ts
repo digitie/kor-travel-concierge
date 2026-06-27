@@ -8,6 +8,8 @@ const backendPort = process.env.E2E_BACKEND_PORT ?? '18080';
 const baseURL = process.env.E2E_FRONTEND_URL ?? `http://127.0.0.1:${frontendPort}`;
 const backendURL = process.env.E2E_API_BASE_URL ?? `http://127.0.0.1:${backendPort}`;
 const nodeCommand = quoteForShell(process.execPath);
+const skipWebServer =
+  process.env.E2E_SKIP_WEBSERVER === '1' || process.env.KTC_LIVE_E2E === '1';
 
 export default defineConfig({
   testDir: './e2e',
@@ -29,20 +31,22 @@ export default defineConfig({
     },
   ],
 
-  webServer: [
-    {
-      command: `${nodeCommand} ./scripts/start-backend.mjs`,
-      url: `${backendURL}/health`,
-      timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
-    },
-    {
-      command: `${nodeCommand} ./scripts/start-frontend.mjs`,
-      url: baseURL,
-      timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
-    },
-  ],
+  webServer: skipWebServer
+    ? undefined
+    : [
+        {
+          command: `${nodeCommand} ./scripts/start-backend.mjs`,
+          url: `${backendURL}/health`,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+        },
+        {
+          command: `${nodeCommand} ./scripts/start-frontend.mjs`,
+          url: baseURL,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+        },
+      ],
 });
 
 function quoteForShell(value: string) {

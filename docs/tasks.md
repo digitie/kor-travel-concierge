@@ -6,18 +6,62 @@
 
 ## 진행 중
 
-현재 진행 중 작업 없음.
+- [ ] **T-138 / PR-A**: `kor-travel-map`형 운영 셸·상태·설정 페이지 분리 — PC 좌측 메뉴와
+  모바일 상단 메뉴, 페이지 상부 헤더, 모든 페이지 상단의 간단 작업 상태 링크를 `kor-travel-map`의
+  `AdminShell` 레이아웃에 맞춰 이식한다. 수집 페이지에 있던 작업 상태와 우측 상단 "운영" 상세는
+  별도 `/status` 페이지로 옮기고, 설정도 메뉴의 별도 `/settings` 페이지로 정리한다. 각 화면은
+  n150 live UI E2E로 메뉴 전환·상태 링크·상태 상세·설정 진입을 검증한다. (담당: Codex,
+  2026-06-27 시작)
 
 ---
 
 ## 대기 (우선순위 순)
 
-현재 대기 작업 없음.
+- [ ] **T-139 / PR-B**: 수집 실행 큐 테이블화 + 반복 작업 수정 다이얼로그 개선 — 수집 실행 큐를
+  `kor-travel-map`의 curated features 테이블 패턴으로 바꾸고, row별 상세 정보와 액션을 컬럼으로
+  분리한다. 반복 작업 수정 다이얼로그는 ID 대신 검색어·재생목록명·유튜버명으로 제목을
+  `XXX 작업 수정`처럼 표시하고, 이전 획득 개수·실행 횟수·마지막 획득일·다음 실행일 같은 누적
+  정보를 파라미터 영역 위에 배치한다. 수정 다이얼로그에는 1회성 `강제 다운로드 (전체 재수집)`
+  체크박스를 추가하고, 저장 후 UI에서 1회성 옵션임을 명확히 표시한다. 작업별 기본 카테고리 선택
+  UI도 포함하되, 저장·적용의 최종 백엔드 계약은 T-142와 맞춘다. n150 live UI E2E로 실행 큐
+  테이블, 수정 저장, 강제 재수집 1회성 표시, 기본 카테고리 선택을 검증한다.
+- [ ] **T-140 / PR-C**: 검수 큐 테이블·3분할 레이아웃·삭제/상세 UX 개선 — 검수대기 후보를
+  테이블로 바꾸고 현재보다 넓은 검수 작업면을 제공한다. 레이아웃은 테이블/검수 패널/지도 3분할로
+  재구성하고, 장소 정보·검색어 입력·확정 정보는 검색 장소 목록과 같은 형태로 지도 옆에 배치한다.
+  후보 삭제 후 목록이 사라지지 않는 버그를 고치고, 다중 선택 후 선택 삭제를 추가한다. "검수 후보
+  상세"에서는 같은 동영상의 다른 장소 링크, 보정 자막 원문/정리본 탭, 근거 시작 시간으로 스크롤
+  이동 및 재이동 버튼, 긴 출처 제목 줄바꿈을 구현한다. n150 live UI E2E로 후보 검색·확정·삭제·선택
+  삭제·상세 탭·근거 이동·링크 이동을 검증한다.
+- [ ] **T-141 / PR-D**: 결과 뷰 필터와 출처 동영상 상세 확장 — 결과 탭에 카테고리 필터, 텍스트
+  검색, 시군구 필터를 추가한다. 결과 뷰의 출처 동영상을 클릭하면 다이얼로그가 확대되며 "검수 후보
+  상세"과 같은 수준의 동영상·근거·자막 정보를 보여준다. "장소 상세"의 출처 동영상 제목도 초과 시
+  줄바꿈한다. n150 live UI E2E로 필터 조합, 장소 선택, 출처 동영상 상세 확장, 긴 제목 표시를
+  검증한다.
+- [ ] **T-142 / PR-E**: 카테고리 강제화 + `kor-travel-geo` v2 행정코드 보강 — 카테고리를 필수
+  데이터로 만들고 Concierge 카테고리에 없는 값은 `unknown`/코드 `0`으로 저장한다. 작업별 기본
+  카테고리를 자동 저장과 검수 큐 수동 장소 검색에 적용하고, 카테고리 매칭 실패 시 기본값을 쓴다.
+  `kor-travel-geo` v2 API를 사용해 모든 자동/수동 매칭 결과에 법정동·시군구 코드를 저장하도록
+  DB schema와 Alembic migration을 추가한다. 기존 데이터는 API backfill로 빈 값을 채우고, 해당
+  시군구 정보를 T-141 필터 dropdown에 공급한다. 검증은 backend pytest, migration/backfill dry-run,
+  n150 live UI E2E의 자동/수동 매칭 행정코드 반영 확인을 포함한다.
+- [ ] **T-143 / PR-F**: 통합 n150 live UI E2E와 최종 배포 — T-138~T-142가 모두 병합된 뒤 각 기능의
+  live UI E2E 케이스를 n150 기준으로 촘촘하게 고정하고 전체 회귀를 실행한다. 보안 감사 후 PR을
+  머지하고, 최종 n150 배포에서는 UI 재생성 후 로그인 GET뿐 아니라 로그인 POST 200 + Set-Cookie와
+  `${KTC_ADMIN_PASSWORD_HASH}` 주입 여부까지 검증한다.
 
 ---
 
 ## 완료
 
+- [x] **T-137**: `kor-travel-map` UI primitive/폰트 정렬 + VWorld 마커 위치 버그 수정 — 전역
+  CSS font stack과 `kor-travel-map-admin`의 green/warm-gray token을 적용하고,
+  button/input/badge/select/tabs/dialog/label primitive의 font size·weight·height·brand ring을
+  참조 UI에 맞췄다. 검수 검색 결과 클릭 후 두 번째 선택부터 지도 마커가 엉뚱한 위치로 보이던
+  원인은 `VWorldMap.syncMarkerElement`가 MapLibre marker root의 `transform`을 덮어써 좌표 배치
+  transform을 깨던 것이다. root transform은 건드리지 않고 내부 badge만 lift하도록 고쳤고,
+  같은 `selectedPlaceId`에서 좌표만 바뀌어도 `easeTo`가 다시 실행되도록 공용 `VWorldMap`을
+  보강해 검수 지도와 결과 지도 모두에 반영했다. 검증: frontend type-check/lint/build/vitest(15/15).
+  (2026-06-27)
 - [~] **T-121**: 수집 입력 자동분류 + 결과 출처별 그룹화 + 자막교정 hung 방지 — A: 링크/검색어를 붙여넣으면 재생목록/유튜버/영상/키워드 자동 판별(`source_resolve.classify_source_input`), `/harvest` auto/video 경로 + 단일영상 harvest(`run_harvest.direct_video_ids`), 프런트 "자동" 기본·"영상" 옵션. B: `/destinations` 출처 필터(channel/playlist/keyword) + `/destinations/facets`, 결과 보기 그룹 셀렉터(유튜버별/재생목록별/검색어별). E: 자막 교정 영상당 타임아웃(`LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS`=240s)으로 단일 워커 hung 방지(prod 1557 강릉 51분 점유 원인). source_resolve 단위테스트·compileall·n150 facet SQL·frontend type-check/lint/build/vitest(15/15) 통과. C(작업 상세 대상필드)·D(누적 수집수)는 후속. (2026-06-25)
 - [x] **T-120**: feature export source title/provenance 추가 + PinVi 명칭 정리 — `youtube_videos`에
   `source_target_type`/`source_target_value`/`source_search_query`를 추가하고, keyword 수집이 실제 보정

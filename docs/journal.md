@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-06-27: T-138 — 운영 셸·상태 페이지·설정 페이지 분리
+
+- **공통 AppShell 도입**: `kor-travel-map`의 PC 좌측 메뉴/모바일 상단 메뉴 구조와 카드형
+  페이지 헤더를 `AppShell`로 이식했다. 결과·수집·검수·상태·설정을 메뉴로 묶고, 기존 각 페이지의
+  직접 `AppNav` 부착 구조를 공통 셸 아래로 정리했다.
+- **모든 페이지 상단 작업 상태**: `JobStatusLink`를 추가해 실행/대기 작업 수와 현재 작업 메시지를
+  모든 주요 페이지 헤더에 표시하고, 클릭 시 `/status`로 이동하도록 했다.
+- **운영/설정 페이지화**: 기존 우측 상단 "운영" 모달의 지표를 `/status` 대시보드로 확장해 실행 큐,
+  최근 작업, 저장소, DB/검수 후보 집계, 감사 로그를 함께 보이게 했다. 기존 설정 모달의 API 키,
+  공개 API 키, 로그인 기록 관리 내용을 `SettingsPanel`로 옮겨 `/settings` 페이지에서 관리한다.
+- **검증**: frontend `npm run type-check`, `npm run lint`, `npm run build`, `npm test`
+  (vitest 15/15) 통과. n150 UI 재빌드 후 `${#KTC_ADMIN_PASSWORD_HASH}`/세션 secret non-zero,
+  로그인 POST 200 + Set-Cookie 1개, 인증 후 `/status`·`/settings` 200 확인. Windows 호스트
+  Playwright live spec(`KTC_LIVE_E2E=1`, `tests/e2e/live-shell.spec.ts`) 1건 통과.
+
+## 2026-06-27: T-137 — `kor-travel-map` UI primitive/폰트 정렬 + VWorld 마커 위치 버그 수정
+
+- **UI 스타일 정렬**: `kor-travel-map/packages/kor-travel-map-admin/frontend`를 기준으로 전역
+  font stack을 `Geist` 우선으로 맞추되, prod 컨테이너 build가 외부 Google font 다운로드에 묶이지 않도록
+  `next/font/google`은 쓰지 않았다. `globals.css`/`tailwind.config.ts`의
+  brand를 green `#2f765f`, warm-gray surface/text/status/shadow token으로 정렬하고,
+  button/input/badge/select/tabs/dialog/label primitive의 font size·weight·height·brand ring을
+  참조 UI와 같은 계열로 맞췄다. `frontend/docs/DESIGN-RULES.md`도 `kor-travel-map` 기준으로 갱신.
+- **검수 지도 마커 위치 버그**: 검색 결과 클릭 후 두 번째 선택부터 마커가 다른 곳으로 보이던 원인은
+  `VWorldMap.syncMarkerElement`가 MapLibre marker root의 `transform`을 직접 설정해 지도 엔진의
+  좌표 배치 transform을 덮어쓴 것이었다. root transform은 보존하고 내부 badge만 `translateY`로
+  띄우도록 수정했다. 또한 검수뷰의 선택 마커처럼 같은 `selectedPlaceId`에서 좌표만 바뀌는 경우도
+  `easeTo`가 다시 실행되도록 선택 좌표를 effect 의존성에 포함했다. 공용 `VWorldMap` 수정이라
+  검수 지도와 결과 지도 모두에 반영된다.
+- **검증**: frontend `npm run type-check`, `npm run lint`, `npm run build`, `npm test`
+  (vitest 15/15) 통과. WSL `npm ci` 중 기존 Windows용 `.node` 바이너리 삭제가 EIO로 막혀
+  깨진 생성물은 `frontend/node_modules.win-broken-*` ignore 패턴으로 격리했다.
+
 ## 2026-06-27: T-136 — 작업 상세 페이지(#6 b-e) + 검수 검색 자동 스크롤
 
 - **#6 b-e 작업 상세 별도 페이지**: `JobDetailDialog` 본문을 `JobDetailView`로 추출하고 `/jobs/[jobId]` 라우트 페이지 신설(run "상세"는 다이얼로그 대신 `router.push('/jobs/'+id)`; 반복 대상은 다이얼로그 유지). **동영상별 POI 집계** `GET /runs/{id}/video-stats`(`poi_auto`=matched, `poi_needs_review`=needs_review, `poi_resolved`=user_corrected; ignored 제외). **동영상별 보정 자막** `GET /videos/{id}/transcript`(corrected→raw fallback, RustFS 미구성 시 null). 영상 행에서 **재실행**(reprocess) + 보정 자막 펼치기. POI 카운트 클릭 시 **결과 페이지 `?video=` 필터**(`place_service` video_id 필터 + DestinationWorkspace 해제 chip). `GET /runs/{id}` 추가. **#9는 근사치**(처리수=poi_total>0 영상 수 + 진행%/현재 메시지; 백엔드가 단계별 카운트 미추적).
