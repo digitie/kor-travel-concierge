@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 import {
-  excludeVideo,
+  deleteCandidate,
   getPlaceOpinion,
   listCategories,
   matchCategory,
@@ -37,6 +37,14 @@ import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -145,27 +153,6 @@ export default function ReviewPage() {
   // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
   // 선택이 유지된다(쇼핑몰 장바구니). 영상 단위로 dedup.
   const [cart, setCart] = usePersistedState<string[]>("ktc.review.cart", []);
-  // #1: 검수 후보 리스트 컬럼 폭(px). 데스크톱에서 구분선을 드래그해 조절, sessionStorage 보존.
-  const [listWidth, setListWidth] = usePersistedState<number>(
-    "ktc.review.listWidth",
-    288,
-  );
-  const gridRef = useRef<HTMLDivElement>(null);
-  function startListResize(event: React.PointerEvent) {
-    event.preventDefault();
-    const grid = gridRef.current;
-    if (!grid) return;
-    const left = grid.getBoundingClientRect().left;
-    const onMove = (moveEvent: PointerEvent) => {
-      setListWidth(Math.min(512, Math.max(224, moveEvent.clientX - left)));
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
   const [reprocessStage, setReprocessStage] =
     useState<ReprocessStage>("transcript");
   // 해외(국내 아님) 후보 숨기기 토글(기본 보기). 상세 왕복에도 유지(sessionStorage).
@@ -187,14 +174,6 @@ export default function ReviewPage() {
       setCart([]);
     },
   });
-  // 제외(삭제) — 관련 없거나 질 낮은 동영상을 제외하고 관련 POI 삭제 + 이후 수집 스킵.
-  const excludeMutation = useMutation({
-    mutationFn: (videoId: string) => excludeVideo(videoId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
-      queryClient.invalidateQueries({ queryKey: ["destinations"] });
-    },
-  });
   const candidates = useMemo(
     () => candidatesQuery.data ?? [],
     [candidatesQuery.data],
@@ -207,7 +186,63 @@ export default function ReviewPage() {
         : candidates,
     [candidates, hideForeign],
   );
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<number[]>([]);
+  const selectedCandidateSet = useMemo(
+    () => new Set(selectedCandidateIds),
+    [selectedCandidateIds],
+  );
+  const visibleCandidateIds = useMemo(
+    () => new Set(visibleCandidates.map((candidate) => candidate.id)),
+    [visibleCandidates],
+  );
+  const allVisibleCandidatesSelected =
+    visibleCandidates.length > 0 &&
+    visibleCandidates.every((candidate) => selectedCandidateSet.has(candidate.id));
+  function toggleCandidateSelection(candidateId: number) {
+    setSelectedCandidateIds((current) =>
+      current.includes(candidateId)
+        ? current.filter((id) => id !== candidateId)
+        : [...current, candidateId],
+    );
+  }
+  function toggleAllVisibleCandidates() {
+    setSelectedCandidateIds((current) =>
+      allVisibleCandidatesSelected
+        ? current.filter((id) => !visibleCandidateIds.has(id))
+        : Array.from(new Set([...current, ...visibleCandidates.map((c) => c.id)])),
+    );
+  }
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const deleteCandidatesMutation = useMutation({
+    mutationFn: async (ids: number[]) => {
+      await Promise.all(ids.map((id) => deleteCandidate(id)));
+      return ids;
+    },
+    onMutate: async (ids) => {
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      const previous =
+        queryClient.getQueryData<UnmatchedCandidate[]>(candidatesKey);
+      queryClient.setQueryData<UnmatchedCandidate[]>(
+        candidatesKey,
+        (old) => (old ?? []).filter((candidate) => !ids.includes(candidate.id)),
+      );
+      setSelectedCandidateIds((current) =>
+        current.filter((id) => !ids.includes(id)),
+      );
+      if (selectedId != null && ids.includes(selectedId)) {
+        setSelectedId(null);
+      }
+      return { previous };
+    },
+    onError: (_error, _ids, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(candidatesKey, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+    },
+  });
 
   // 작업 상세에서 검수 대기 POI를 누르면 `?candidate=<id>`로 들어온다. 그 후보가 필터에
   // 가려지지 않도록 그룹 필터를 해제하고 해당 후보를 선택한다(딥링크, 최초 1회).
@@ -452,22 +487,14 @@ export default function ReviewPage() {
       actions={<Badge variant="secondary">{candidates.length}개 대기</Badge>}
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
     >
-      <div
-        ref={gridRef}
-        style={{ "--list-width": `${listWidth}px` } as React.CSSProperties}
-        className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[var(--list-width)_1fr]"
-      >
-        <aside className="relative flex min-h-0 max-h-[45vh] flex-col gap-1 border-b p-3 lg:max-h-none lg:border-b-0 lg:border-r">
-          {/* #1: 데스크톱에서 우측 경계를 드래그해 리스트 폭 조절(224~512px). */}
-          <div
-            onPointerDown={startListResize}
-            role="separator"
-            aria-label="리스트 폭 조절"
-            className="absolute inset-y-0 -right-0.5 z-10 hidden w-1.5 cursor-col-resize hover:bg-primary/20 lg:block"
-          />
-          <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
-            검수 대기 후보
-          </p>
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-3">
+        <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 border-b p-3 lg:max-h-none lg:border-r lg:border-b-0">
+          <div className="flex items-center justify-between gap-2">
+            <p className="px-1 text-xs font-medium text-muted-foreground">
+              검수 대기 후보
+            </p>
+            <Badge variant="secondary">{visibleCandidates.length}</Badge>
+          </div>
           <div className="grid grid-cols-2 gap-1.5 pb-1">
             <Select
               value={groupDim}
@@ -512,6 +539,39 @@ export default function ReviewPage() {
               <div />
             )}
           </div>
+          {selectedCandidateIds.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
+              <span className="text-xs font-medium text-destructive">
+                후보 {selectedCandidateIds.length}개 선택됨
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                disabled={deleteCandidatesMutation.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `선택한 후보 ${selectedCandidateIds.length}개를 삭제할까요?`,
+                    )
+                  ) {
+                    deleteCandidatesMutation.mutate(selectedCandidateIds);
+                  }
+                }}
+              >
+                <Trash2Icon data-icon="inline-start" />
+                선택 삭제
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => setSelectedCandidateIds([])}
+              >
+                선택 해제
+              </Button>
+            </div>
+          ) : null}
           {reprocessMutation.isSuccess && reprocessMutation.data ? (
             <p className="rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">
               영상 {reprocessMutation.data.videos}개를{" "}
@@ -574,75 +634,112 @@ export default function ReviewPage() {
             />
             해외(국내 아님) 후보 숨기기
           </label>
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-          {visibleCandidates.length === 0 ? (
-            <p className="rounded-lg border p-3 text-xs text-muted-foreground">
-              검수할 후보가 없습니다.
-            </p>
-          ) : (
-            visibleCandidates.map((candidate) => (
-              <div
-                key={candidate.id}
-                data-selected={candidate.id === selected?.id}
-                className="flex items-center gap-1 rounded-lg border p-1 transition-colors hover:bg-muted data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
-              >
-                <input
-                  type="checkbox"
-                  className="ml-1 size-4 shrink-0 rounded border"
-                  checked={cartSet.has(candidate.video_id)}
-                  onChange={() => toggleCart(candidate.video_id)}
-                  aria-label={`${candidate.ai_place_name} 영상 재처리 선택`}
-                />
-                <button
-                  type="button"
-                  onClick={() => pickCandidate(candidate)}
-                  className="flex min-w-0 flex-1 flex-col gap-0.5 px-1.5 py-1 text-left text-sm"
-                >
-                  <span className="flex items-center gap-1 font-medium">
-                    <span className="truncate">{candidate.ai_place_name}</span>
-                    {candidate.is_domestic === false ? (
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 px-1 text-[10px]"
-                      >
-                        해외
-                      </Badge>
-                    ) : null}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {candidate.location_hint ?? candidate.video_id}
-                  </span>
-                </button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`${candidate.ai_place_name} 상세`}
-                  onClick={() => openDetail(candidate.id)}
-                >
-                  <InfoIcon className="size-4" />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`${candidate.ai_place_name} 영상 제외`}
-                  disabled={excludeMutation.isPending}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "이 동영상과 관련 POI를 삭제하고 이후 수집에서 제외합니다. 계속할까요?",
-                      )
-                    ) {
-                      excludeMutation.mutate(candidate.video_id);
-                    }
-                  }}
-                >
-                  <Trash2Icon className="size-4 text-destructive" />
-                </Button>
-              </div>
-            ))
-          )}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {visibleCandidates.length === 0 ? (
+              <p className="rounded-lg border p-3 text-xs text-muted-foreground">
+                검수할 후보가 없습니다.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border"
+                        checked={allVisibleCandidatesSelected}
+                        onChange={toggleAllVisibleCandidates}
+                        aria-label="보이는 후보 전체 선택"
+                      />
+                    </TableHead>
+                    <TableHead>후보</TableHead>
+                    <TableHead>출처</TableHead>
+                    <TableHead>상태</TableHead>
+                    <TableHead className="text-right">액션</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleCandidates.map((candidate) => (
+                    <TableRow
+                      key={candidate.id}
+                      data-state={candidate.id === selected?.id ? "selected" : undefined}
+                    >
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          className="size-4 rounded border"
+                          checked={selectedCandidateSet.has(candidate.id)}
+                          onChange={() => toggleCandidateSelection(candidate.id)}
+                          aria-label={`${candidate.ai_place_name} 후보 선택`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <button
+                          type="button"
+                          onClick={() => pickCandidate(candidate)}
+                          className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left"
+                        >
+                          <span className="font-bold leading-snug">
+                            {candidate.ai_place_name}
+                          </span>
+                          <span className="text-[12px] text-text-secondary">
+                            {candidate.candidate_category ?? "카테고리 없음"}
+                          </span>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <button
+                          type="button"
+                          className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary"
+                          onClick={() => toggleCart(candidate.video_id)}
+                          title="영상 재처리 선택"
+                        >
+                          <span>{candidate.location_hint ?? "위치 힌트 없음"}</span>
+                          <span className="font-mono">
+                            {cartSet.has(candidate.video_id) ? "재처리 선택됨" : candidate.video_id}
+                          </span>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <Badge variant="outline">{candidate.match_status}</Badge>
+                          {candidate.is_domestic === false ? (
+                            <Badge variant="outline">해외</Badge>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label={`${candidate.ai_place_name} 상세`}
+                            onClick={() => openDetail(candidate.id)}
+                          >
+                            <InfoIcon className="size-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="destructive"
+                            aria-label={`${candidate.ai_place_name} 후보 삭제`}
+                            disabled={deleteCandidatesMutation.isPending}
+                            onClick={() => {
+                              if (window.confirm("이 검수 후보를 삭제할까요?")) {
+                                deleteCandidatesMutation.mutate([candidate.id]);
+                              }
+                            }}
+                          >
+                            <Trash2Icon className="size-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </div>
         </aside>
 
@@ -808,82 +905,58 @@ export default function ReviewPage() {
 
               <div
                 ref={resultsRef}
-                className="scroll-mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[0.85fr_1.5fr]"
+                className="scroll-mt-3 flex flex-col gap-3"
               >
-                <div className="flex flex-col gap-3">
-                  {!opinionRequested ? (
+                {!opinionRequested ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    disabled={allHits.length === 0}
+                    onClick={() => setOpinionRequested(true)}
+                  >
+                    <SparklesIcon data-icon="inline-start" />
+                    AI(Gemini) 의견 요청
+                  </Button>
+                ) : gemini ? (
+                  <GeminiCard gemini={gemini} onApply={() => applyGemini(gemini)} />
+                ) : opinionQuery.isFetching ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm text-muted-foreground">
+                    <Loader2Icon className="size-4 animate-spin text-primary" />
+                    Gemini 의견 분석 중…
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <p className="flex items-center gap-1.5 rounded-xl border p-3 text-xs text-muted-foreground">
+                      <SparklesIcon className="size-3.5 shrink-0" />
+                      {opinionQuery.data?.error ??
+                        "Gemini 의견이 없습니다."}
+                    </p>
                     <Button
                       type="button"
-                      variant="outline"
-                      className="w-full"
-                      disabled={allHits.length === 0}
-                      onClick={() => setOpinionRequested(true)}
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => opinionQuery.refetch()}
                     >
-                      <SparklesIcon data-icon="inline-start" />
-                      AI(Gemini) 의견 요청
+                      다시 요청
                     </Button>
-                  ) : gemini ? (
-                    <GeminiCard gemini={gemini} onApply={() => applyGemini(gemini)} />
-                  ) : opinionQuery.isFetching ? (
-                    <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm text-muted-foreground">
-                      <Loader2Icon className="size-4 animate-spin text-primary" />
-                      Gemini 의견 분석 중…
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      <p className="flex items-center gap-1.5 rounded-xl border p-3 text-xs text-muted-foreground">
-                        <SparklesIcon className="size-3.5 shrink-0" />
-                        {opinionQuery.data?.error ??
-                          "Gemini 의견이 없습니다."}
-                      </p>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => opinionQuery.refetch()}
-                      >
-                        다시 요청
-                      </Button>
-                    </div>
-                  )}
-                  {PROVIDER_ORDER.map((provider) => (
-                    <ProviderSection
-                      key={provider}
-                      label={PROVIDER_LABELS[provider]}
-                      hits={result?.[provider] ?? []}
-                      error={result?.errors?.[provider]}
-                      loading={searchQuery.isFetching}
-                      onSelect={selectHit}
-                    />
-                  ))}
-                  {!activeQuery ? (
-                    <p className="text-xs text-muted-foreground">
-                      후보를 선택하면 자동 검색합니다. 직접 검색어를 입력할 수도 있습니다.
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  <div className="h-[32rem] overflow-hidden rounded-xl border lg:h-full lg:min-h-[28rem]">
-                    <VWorldMap
-                      places={mapPlaces}
-                      selectedPlaceId={form.latitude ? 9999 : null}
-                      onSelectPlace={(placeId) => {
-                        const place = mapPlaces.find(
-                          (p) => p.place_id === placeId,
-                        );
-                        if (place && place.place_id !== 9999) {
-                          setForm((prev) => ({
-                            ...prev,
-                            name: place.name,
-                            latitude: String(place.latitude),
-                            longitude: String(place.longitude),
-                          }));
-                        }
-                      }}
-                    />
                   </div>
-                </div>
+                )}
+                {PROVIDER_ORDER.map((provider) => (
+                  <ProviderSection
+                    key={provider}
+                    label={PROVIDER_LABELS[provider]}
+                    hits={result?.[provider] ?? []}
+                    error={result?.errors?.[provider]}
+                    loading={searchQuery.isFetching}
+                    onSelect={selectHit}
+                  />
+                ))}
+                {!activeQuery ? (
+                  <p className="text-xs text-muted-foreground">
+                    후보를 선택하면 자동 검색합니다. 직접 검색어를 입력할 수도 있습니다.
+                  </p>
+                ) : null}
               </div>
             </>
           ) : (
@@ -891,6 +964,23 @@ export default function ReviewPage() {
               검수할 후보가 없습니다.
             </p>
           )}
+        </section>
+        <section className="min-h-[28rem] border-t lg:min-h-0 lg:border-t-0 lg:border-l">
+          <VWorldMap
+            places={mapPlaces}
+            selectedPlaceId={form.latitude ? 9999 : null}
+            onSelectPlace={(placeId) => {
+              const place = mapPlaces.find((p) => p.place_id === placeId);
+              if (place && place.place_id !== 9999) {
+                setForm((prev) => ({
+                  ...prev,
+                  name: place.name,
+                  latitude: String(place.latitude),
+                  longitude: String(place.longitude),
+                }));
+              }
+            }}
+          />
         </section>
       </div>
 
@@ -905,7 +995,12 @@ export default function ReviewPage() {
           {detailId != null ? (
             <CandidateDetailView
               candidateId={detailId}
-              onDeleted={() => setDetailId(null)}
+              onDeleted={() => {
+                setDetailId(null);
+                if (detailId === selectedId) {
+                  setSelectedId(null);
+                }
+              }}
             />
           ) : null}
         </DialogContent>
