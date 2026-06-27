@@ -1,11 +1,15 @@
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/AppShell";
 import { CollectWorkspace } from "@/components/CollectWorkspace";
 
 export default function CollectPage() {
   return (
-    <main className="flex min-h-screen flex-col bg-background">
-      <AppNav />
+    <AppShell
+      title="수집"
+      description="YouTube 검색어, 재생목록, 유튜버 입력을 수집 작업으로 등록합니다."
+      section="수집"
+      contentClassName="flex min-h-0 flex-1 p-0"
+    >
       <CollectWorkspace />
-    </main>
+    </AppShell>
   );
 }

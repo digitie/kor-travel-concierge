@@ -96,7 +96,7 @@ export function CollectWorkspace() {
   const isMutating = stopRunMutation.isPending || restartRunMutation.isPending;
 
   return (
-    <div className="flex min-h-[calc(100vh-3rem)] flex-col lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:flex-row lg:overflow-hidden">
+    <div className="flex h-full min-h-[40rem] flex-col lg:min-h-0 lg:flex-row lg:overflow-hidden">
       <div className="shrink-0 border-b lg:w-[38rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
         <HarvestConsole />
         <div className="flex flex-col gap-1.5 border-t p-3">

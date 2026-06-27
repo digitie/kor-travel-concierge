@@ -1,11 +1,11 @@
 # UI 디자인 규칙
 
-이 문서는 `kor-travel-geo` 프로젝트(`kor-travel-geo-ui/docs/DESIGN-RULES.md`)의 UI 지침을
-`kor-travel-concierge` 프런트엔드에 **그대로** 따른 것이다. 원본은
-`https://styleseed-demo.vercel.app/llms.txt`와 그 전체 문맥인
-`https://styleseed-demo.vercel.app/llms-full.txt`를 해석한 운영 콘솔용 규칙이다. StyleSeed는
-제품 UI가 "생성된 화면"처럼 보이지 않도록 단일 accent, 의미 토큰, 카드 구조, 낮은 그림자,
-일관된 모션을 강조한다.
+이 문서는 `kor-travel-map` 프로젝트의 admin frontend
+(`packages/kor-travel-map-admin/frontend`)와 같은 UI 언어를 쓰기 위한 규칙이다.
+원본 계열은 StyleSeed 문서(`https://styleseed-demo.vercel.app/llms.txt`와
+`https://styleseed-demo.vercel.app/llms-full.txt`)를 운영 콘솔에 맞게 해석한 것이다.
+StyleSeed는 제품 UI가 "생성된 화면"처럼 보이지 않도록 단일 accent, 의미 토큰,
+카드 구조, 낮은 그림자, 일관된 모션을 강조한다.
 
 ## 적용 범위
 
@@ -17,28 +17,28 @@
 ## 핵심 규칙
 
 1. 색상은 단일 accent 중심으로 쓴다.
-   `--brand`(teal `#0f766e`)는 active nav, 진행률 fill, 선택 상태, 작은 icon/badge에만 쓴다.
+   `--brand`(green `#2f765f`)는 active nav, 진행률 fill, 선택 상태, 작은 icon/badge에만 쓴다.
    큰 배경면은 `--surface-*` 토큰을 사용하고, 오류/경고/성공 색은 작은 badge, dot, text에 제한한다.
 
 2. 텍스트는 5단계 grayscale 토큰을 따른다.
-   `--text-strong`, `--text-primary`, `--text-secondary`, `--text-tertiary`,
-   `--text-disabled`를 사용한다. 순수 `#000`과 임의 gray 값은 새로 늘리지 않는다.
+   `--text-primary`, `--text-secondary`, `--text-tertiary`, `--text-disabled`를 기본으로 쓰고,
+   기존 호환용 `--text-strong`은 `--text-primary`와 같은 톤으로 둔다. 순수 `#000`과 임의
+   gray 값은 새로 늘리지 않는다.
 
 3. 카드와 패널은 정보 단위의 경계다.
-   운영 화면의 주요 내용은 `Card`, panel, table, map 같은 명확한 영역 안에 둔다. 다만 이
-   프로젝트의 디자인 시스템은 카드 반경을 8px로 유지하므로(`--radius: 0.5rem`) StyleSeed
-   예시의 16px 카드 반경은 적용하지 않는다.
+   운영 화면의 주요 내용은 `Card`, panel, table, map 같은 명확한 영역 안에 둔다.
+   기본 반경은 `kor-travel-map`과 같은 `--radius: 0.625rem`이다.
 
 4. 그림자는 아주 약하게 쓴다.
    기본 카드는 `--shadow-card`처럼 4% 수준의 낮은 그림자만 사용한다. modal이나 floating
    표면도 12%(`--shadow-modal`)를 넘기지 않는다. 색이 들어간 그림자는 쓰지 않는다.
 
-5. 조작 대상은 최소 44px touch target을 가진다.
-   button, input, nav link, icon button, checkbox hit area는 `min-h-11`(44px) 또는 그에
-   준하는 hit area를 가진다. 시각적으로 작은 checkbox도 pseudo hit area로 클릭 영역을 보강한다.
+5. 조작 대상 크기는 `kor-travel-map` primitive를 따른다.
+   button 기본 높이는 44px(`h-11`), 작은 버튼은 32/40px 계열을 쓴다. input은 40px(`h-10`)과
+   `text-[14px]`를 기본으로 한다. 시각적으로 작은 checkbox도 hit area를 보강한다.
 
 6. label은 작고 일관되게 표시한다.
-   폼 label, table header, nav group title은 12px, 굵은 weight, `letter-spacing: 0.05em`,
+   폼 label, table header, nav group title은 12px, bold weight, `letter-spacing: 0.05em`,
    uppercase를 기본으로 한다. 한국어 문구는 형태가 바뀌지 않지만 같은 시각 리듬을 유지한다.
 
 7. 상태 표시는 dot과 text를 함께 쓴다.
@@ -56,7 +56,8 @@
 
 10. 새 UI는 semantic token부터 확인한다.
     새 컴포넌트에서 hardcoded hex를 추가하기 전에 `src/app/globals.css`와 `tailwind.config.ts`의
-    `surface`, `text`, `brand`, `success`, `warn`, `danger` 토큰으로 표현할 수 있는지 먼저 본다.
+    `surface`, `text`, `brand`, `success`, `warning`, `destructive` 토큰으로 표현할 수 있는지
+    먼저 본다.
 
 ## 금지
 
@@ -71,8 +72,8 @@
 ## 현재 코드 적용 지점
 
 - `src/app/globals.css`: surface/text/status/motion/shadow token과 shadcn 토큰의 brand 매핑,
-  `prefers-reduced-motion` 규칙
+  외부 다운로드 없는 `Geist` 우선 font stack, `prefers-reduced-motion` 규칙
 - `tailwind.config.ts`: 새 UI에서 사용할 semantic color/shadow/motion token
 - `src/components/ui/button.tsx`, `input.tsx`, `label.tsx`, `badge.tsx`, `field.tsx`,
-  `select.tsx`: shadcn 기반 primitive의 touch target(44px), label(12px uppercase),
-  shadow, radius(8px), motion 규칙
+  `select.tsx`, `tabs.tsx`, `dialog.tsx`: `kor-travel-map` primitive와 같은 font size,
+  weight, brand ring, radius, shadow 규칙

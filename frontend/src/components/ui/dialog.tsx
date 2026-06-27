@@ -18,11 +18,11 @@ function DialogContent({
 }: DialogPrimitive.Popup.Props & { showClose?: boolean }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 data-[closed]:opacity-0 data-[open]:opacity-100" />
+      <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-foreground/30 transition-opacity duration-150 data-[closed]:opacity-0 data-[open]:opacity-100" />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid max-h-[90vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl border bg-popover p-6 text-popover-foreground shadow-lg transition-all duration-150 data-[closed]:scale-95 data-[closed]:opacity-0 data-[open]:scale-100 data-[open]:opacity-100",
+          "fixed top-1/2 left-1/2 z-50 grid max-h-[90vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-popover p-6 text-popover-foreground shadow-modal ring-1 ring-border/70 transition-all duration-150 data-[closed]:scale-95 data-[closed]:opacity-0 data-[open]:scale-100 data-[open]:opacity-100",
           className,
         )}
         {...props}
@@ -31,7 +31,7 @@ function DialogContent({
         {showClose ? (
           <DialogPrimitive.Close
             aria-label="닫기"
-            className="absolute top-4 right-4 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="absolute top-4 right-4 rounded-md p-1 text-text-secondary transition-colors hover:bg-surface-subtle hover:text-text-primary"
           >
             <XIcon className="size-4" />
           </DialogPrimitive.Close>
@@ -60,7 +60,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
 function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
-      className={cn("text-base font-semibold", className)}
+      className={cn("text-[18px] leading-snug font-bold", className)}
       {...props}
     />
   )
@@ -72,7 +72,7 @@ function DialogDescription({
 }: DialogPrimitive.Description.Props) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("text-[13px] leading-normal text-text-tertiary", className)}
       {...props}
     />
   )

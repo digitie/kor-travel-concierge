@@ -12,7 +12,7 @@ import {
   reprocessVideos,
   type RunVideoStat,
 } from "@/lib/api";
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/AppShell";
 import { JobDetailView } from "@/components/JobDetailView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,22 +37,25 @@ export default function JobDetailPage() {
   const processed = stats.filter((s) => s.poi_total > 0).length;
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
-      <AppNav />
-      <header className="flex items-center gap-3 border-b px-5 py-2.5">
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          onClick={() => router.back()}
-        >
-          <ArrowLeftIcon data-icon="inline-start" />
-          뒤로
-        </Button>
-        <h1 className="text-base font-semibold">작업 상세 #{jobId}</h1>
-        {run ? <Badge variant="secondary">{run.state}</Badge> : null}
-      </header>
-
+    <AppShell
+      title={`작업 상세 #${jobId}`}
+      description="작업 진행 상태, 영상별 POI 처리 현황, 재처리 액션을 확인합니다."
+      section="상태"
+      actions={
+        <>
+          {run ? <Badge variant="secondary">{run.state}</Badge> : null}
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => router.back()}
+          >
+            <ArrowLeftIcon data-icon="inline-start" />
+            뒤로
+          </Button>
+        </>
+      }
+    >
       <div className="flex flex-col gap-4 overflow-y-auto p-5">
         {runQuery.isLoading ? (
           <p className="text-sm text-muted-foreground">불러오는 중…</p>
@@ -86,7 +89,7 @@ export default function JobDetailPage() {
           )}
         </div>
       </div>
-    </main>
+    </AppShell>
   );
 }
 

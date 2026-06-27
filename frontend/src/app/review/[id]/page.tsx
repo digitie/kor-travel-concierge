@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeftIcon } from "lucide-react";
 
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 
 export default function CandidateDetailPage() {
@@ -13,8 +13,11 @@ export default function CandidateDetailPage() {
   const id = Number(params.id);
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
-      <AppNav />
+    <AppShell
+      title="검수 후보 상세"
+      description="후보 장소의 출처 영상, 근거 문장, 같은 영상의 다른 장소를 확인합니다."
+      section="검수"
+    >
       <div className="mx-auto w-full max-w-2xl p-4">
         <Link
           href="/review"
@@ -34,6 +37,6 @@ export default function CandidateDetailPage() {
           )}
         </div>
       </div>
-    </main>
+    </AppShell>
   );
 }

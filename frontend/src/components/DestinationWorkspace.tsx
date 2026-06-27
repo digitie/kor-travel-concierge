@@ -1,13 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
   DownloadIcon,
   InfoIcon,
-  ListChecksIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -15,9 +13,6 @@ import {
   buildDestinationExportUrl,
   listDestinationFacets,
   listDestinations,
-  listRunQueue,
-  USER_JOB_TYPES,
-  type CrawlRunSummary,
   type DestinationExportFormat,
   type DestinationFacets,
   type DestinationGroupDim,
@@ -128,12 +123,6 @@ export function DestinationWorkspace() {
     queryFn: () => listDestinations(destinationSort, filter),
     refetchInterval: 10_000,
   });
-  const runQueueQuery = useQuery({
-    queryKey: ["run-queue", "user"],
-    queryFn: () => listRunQueue(USER_JOB_TYPES),
-    refetchInterval: 3_000,
-  });
-
   const router = useRouter();
   const isMobile = useIsMobile();
   const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
@@ -197,8 +186,7 @@ export function DestinationWorkspace() {
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-3rem)] flex-col bg-background lg:h-[calc(100vh-3rem)] lg:min-h-0 lg:overflow-hidden">
-      <RunQueueStatus runs={runQueueQuery.data ?? []} />
+    <div className="flex h-full min-h-[36rem] flex-col bg-background lg:min-h-0 lg:overflow-hidden">
       {videoFilter ? (
         <div className="flex items-center justify-between gap-2 border-b bg-primary/5 px-4 py-1.5 text-xs">
           <span className="truncate text-muted-foreground">
@@ -268,39 +256,6 @@ export function DestinationWorkspace() {
           ) : null}
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-// 결과 페이지 상단의 간단한 실행 큐 상태 바(상세 관리는 /collect).
-function RunQueueStatus({ runs }: { runs: CrawlRunSummary[] }) {
-  const running = runs.filter((run) => run.state === "running");
-  const pending = runs.filter((run) => run.state === "pending");
-  const current = running[0] ?? pending[0] ?? null;
-  return (
-    <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs">
-      <ListChecksIcon className="size-4 text-muted-foreground" />
-      <span className="font-semibold">실행 큐</span>
-      <Badge variant="secondary">실행 {running.length}</Badge>
-      <Badge variant="outline">대기 {pending.length}</Badge>
-      {current ? (
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="font-medium">
-            {current.target_label ?? current.target_id ?? "진행 중"}
-          </span>
-          <span className="truncate text-muted-foreground">
-            {current.current_message ?? ""}
-          </span>
-        </span>
-      ) : (
-        <span className="text-muted-foreground">유휴 상태</span>
-      )}
-      <Link
-        href="/collect"
-        className="ml-auto whitespace-nowrap font-medium text-primary hover:underline"
-      >
-        수집 관리 →
-      </Link>
     </div>
   );
 }

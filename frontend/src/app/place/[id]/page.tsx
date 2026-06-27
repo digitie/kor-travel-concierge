@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeftIcon } from "lucide-react";
 
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/AppShell";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
 
 export default function PlaceDetailPage() {
@@ -13,8 +13,11 @@ export default function PlaceDetailPage() {
   const id = Number(params.id);
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
-      <AppNav />
+    <AppShell
+      title="장소 상세"
+      description="확정된 여행지의 출처 영상과 언급 근거를 확인합니다."
+      section="결과"
+    >
       <div className="mx-auto w-full max-w-2xl p-4">
         <Link
           href="/"
@@ -31,6 +34,6 @@ export default function PlaceDetailPage() {
           )}
         </div>
       </div>
-    </main>
+    </AppShell>
   );
 }
