@@ -23,8 +23,9 @@ test.describe('n150 live UI 셸 검증', () => {
     await statusLink.click();
     await page.waitForURL('**/status');
     await expect(page.getByRole('heading', { name: '상태', exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '실행 큐 상세' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '최근 작업' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '작업 테이블' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /진행 중/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /완료 이력/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: '저장소 상세' })).toBeVisible();
 
     await page.getByRole('link', { name: /설정/ }).first().click();
@@ -53,14 +54,14 @@ test.describe('n150 live UI 셸 검증', () => {
     await loginAsAdmin(page, '/collect');
 
     await expect(page.getByRole('heading', { name: '수집', exact: true })).toBeVisible();
-    const queueRegion = page.getByRole('region', { name: '실행 큐' });
+    const queueRegion = page.getByRole('region', { name: '진행 중 작업' });
     await expect(queueRegion).toBeVisible();
-    await expect(queueRegion.getByText('실행 큐')).toBeVisible();
+    await expect(queueRegion.getByText('진행 중 작업')).toBeVisible();
     await expect(page.getByText('기본 카테고리').first()).toBeVisible();
     await expect(page.getByLabel('기본 카테고리').first()).toBeVisible();
 
-    const jobsRegion = page.getByRole('region', { name: '작업' });
-    await expect(jobsRegion.getByRole('tab', { name: /반복/ })).toBeVisible();
+    const jobsRegion = page.getByRole('region', { name: '반복 작업' });
+    await expect(jobsRegion.getByRole('heading', { name: '반복 작업' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '대상' }).first()).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '주기' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '기본' })).toBeVisible();

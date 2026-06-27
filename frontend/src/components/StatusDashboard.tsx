@@ -22,8 +22,19 @@ import {
   USER_JOB_TYPES,
   type CrawlRunSummary,
 } from "@/lib/api";
+import {
+  assetTypeLabel,
+  candidateStatusLabel,
+  categoryDisplayLabel,
+  jobTypeDisplayLabel,
+  loginEventLabel,
+  loginOutcomeLabel,
+  runStateLabel,
+  targetTypeDisplayLabel,
+} from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 function asNum(value: unknown): number {
   return typeof value === "number" ? value : 0;
@@ -67,49 +78,6 @@ function progressPercent(run: CrawlRunSummary): string {
   return `${Math.round(run.progress * 100)}%`;
 }
 
-const RUN_STATE_LABELS: Record<string, string> = {
-  pending: "대기",
-  running: "실행",
-  done: "완료",
-  failed: "실패",
-  cancelled: "취소",
-  stale: "지연",
-};
-
-const CANDIDATE_STATUS_LABELS: Record<string, string> = {
-  needs_review: "대기",
-  matched: "확정",
-  user_corrected: "수정",
-  auto_matched: "자동",
-  rejected: "제외",
-  ignored: "제외",
-};
-
-const LOGIN_EVENT_LABELS: Record<string, string> = {
-  login: "로그인",
-  logout: "로그아웃",
-};
-
-const LOGIN_OUTCOME_LABELS: Record<string, string> = {
-  succeeded: "성공",
-  failed: "실패",
-  denied: "거부",
-};
-
-const ASSET_TYPE_LABELS: Record<string, string> = {
-  raw_video: "원본",
-  subtitles: "자막",
-  subtitle: "자막",
-  transcript: "전사",
-  transcripts: "전사",
-  frame: "프레임",
-  frames: "프레임",
-};
-
-function shortLabel(labels: Record<string, string>, value: string): string {
-  return labels[value] ?? value.replaceAll("_", " ");
-}
-
 function auditActionLabel(value: string): string {
   if (value.includes("settings")) return "설정";
   if (value.includes("api_key")) return "API 키";
@@ -132,7 +100,7 @@ export function StatusDashboard() {
   });
   const runsQuery = useQuery({
     queryKey: ["runs", "status"],
-    queryFn: () => listRuns({ limit: 30, jobTypes: USER_JOB_TYPES }),
+    queryFn: () => listRuns({ limit: 80, jobTypes: USER_JOB_TYPES }),
     refetchInterval: 5_000,
   });
   const metricsQuery = useQuery({
@@ -157,8 +125,17 @@ export function StatusDashboard() {
   });
 
   const queueRuns = queueQuery.data ?? [];
-  const running = queueRuns.filter((run) => run.state === "running");
-  const pending = queueRuns.filter((run) => run.state === "pending");
+  const historyRuns = (runsQuery.data ?? []).filter(
+    (run) =>
+      run.state.toLowerCase() !== "running" &&
+      run.state.toLowerCase() !== "pending",
+  );
+  const running = queueRuns.filter(
+    (run) => run.state.toLowerCase() === "running",
+  );
+  const pending = queueRuns.filter(
+    (run) => run.state.toLowerCase() === "pending",
+  );
   const metrics = metricsQuery.data;
   const db = metrics?.database ?? {};
   const runsByState = asRecord(db.runs_by_state);
@@ -216,10 +193,7 @@ export function StatusDashboard() {
           icon={<AlertTriangleIcon className="size-4" />}
           label="검수 후보"
           value={Object.entries(candidatesByStatus)
-            .map(
-              ([key, value]) =>
-                `${shortLabel(CANDIDATE_STATUS_LABELS, key)} ${value}`,
-            )
+            .map(([key, value]) => `${candidateStatusLabel(key)} ${value}`)
             .join(" · ") || "후보 없음"}
           tone={asNum(candidatesByStatus.needs_review) > 0 ? "warn" : "neutral"}
         />
@@ -229,118 +203,45 @@ export function StatusDashboard() {
         title="작업"
         description="현재 큐와 최근 실행 이력을 함께 봅니다."
       >
-        <section className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
-          <Panel title="실행 큐 상세">
+        <section className="grid gap-4 xl:grid-cols-[1fr_18rem]">
+          <Panel title="작업 테이블">
             {queueQuery.isError ? (
-              <p className="text-sm text-destructive">{queueQuery.error.message}</p>
-            ) : queueRuns.length > 0 ? (
-              <div className="overflow-x-auto rounded-lg border border-surface-muted">
-                <table className="w-full text-[13px]">
-                  <thead className="bg-surface-subtle text-left text-[12px] font-bold uppercase text-text-secondary">
-                    <tr>
-                      <th className="px-3 py-2">상태</th>
-                      <th className="px-3 py-2">대상</th>
-                      <th className="px-3 py-2">진행</th>
-                      <th className="px-3 py-2">메시지</th>
-                      <th className="px-3 py-2">상세</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {queueRuns.map((run) => (
-                      <tr key={run.job_id} className="border-t border-surface-muted">
-                        <td className="px-3 py-2">
-                          <Badge
-                            variant={
-                              run.state === "running" ? "secondary" : "outline"
-                            }
-                          >
-                            {shortLabel(RUN_STATE_LABELS, run.state)}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="max-w-[18rem] whitespace-normal">
-                            <div className="font-medium">{targetLabel(run)}</div>
-                            <div className="text-[12px] text-text-secondary">
-                              {run.job_type_label ?? run.job_type}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">{progressPercent(run)}</td>
-                        <td className="px-3 py-2">
-                          <span className="line-clamp-2 text-text-secondary">
-                            {run.current_message ??
-                              run.status_logs.at(-1)?.message ??
-                              "-"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <Link
-                            href={`/jobs/${run.job_id}`}
-                            className="font-medium text-brand hover:underline"
-                          >
-                            열기
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <EmptyState>실행 중이거나 대기 중인 작업이 없습니다.</EmptyState>
-            )}
+              <p className="mb-2 text-sm text-destructive">
+                {queueQuery.error.message}
+              </p>
+            ) : null}
+            {runsQuery.isError ? (
+              <p className="mb-2 text-sm text-destructive">
+                {runsQuery.error.message}
+              </p>
+            ) : null}
+            <Tabs defaultValue="active">
+              <TabsList>
+                <TabsTrigger value="active">진행 중 {queueRuns.length}</TabsTrigger>
+                <TabsTrigger value="history">완료 이력 {historyRuns.length}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="active" className="mt-3">
+                <RunStatusTable
+                  runs={queueRuns}
+                  empty="실행 중이거나 대기 중인 작업이 없습니다."
+                />
+              </TabsContent>
+              <TabsContent value="history" className="mt-3">
+                <RunStatusTable
+                  runs={historyRuns}
+                  empty="완료된 작업 이력이 없습니다."
+                />
+              </TabsContent>
+            </Tabs>
           </Panel>
 
-          <div className="grid gap-4">
-            <Panel title="작업 상태 집계">
-              <CountList
-                counts={runsByState}
-                empty="작업 기록이 없습니다."
-                labeler={(key) => shortLabel(RUN_STATE_LABELS, key)}
-              />
-            </Panel>
-
-            <Panel title="최근 작업">
-              {(runsQuery.data ?? []).length > 0 ? (
-                <div className="flex max-h-80 flex-col divide-y divide-surface-muted overflow-y-auto rounded-lg border border-surface-muted">
-                  {(runsQuery.data ?? []).map((run) => (
-                    <Link
-                      key={run.job_id}
-                      href={`/jobs/${run.job_id}`}
-                      className="flex items-start justify-between gap-3 px-3 py-2.5 text-[13px] transition-colors hover:bg-surface-subtle"
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">
-                          {targetLabel(run)}
-                        </span>
-                        <span className="line-clamp-1 text-text-secondary">
-                          {run.current_message ??
-                            run.status_logs.at(-1)?.message ??
-                            "-"}
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 flex-col items-end gap-1">
-                        <Badge
-                          variant={
-                            run.state === "failed" ? "destructive" : "outline"
-                          }
-                        >
-                          {shortLabel(RUN_STATE_LABELS, run.state)}
-                        </Badge>
-                        <span className="text-[12px] text-text-secondary">
-                          {formatDateTime(
-                            run.finished_at ?? run.started_at ?? run.created_at,
-                          )}
-                        </span>
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState>최근 작업이 없습니다.</EmptyState>
-              )}
-            </Panel>
-          </div>
+          <Panel title="작업 상태 집계">
+            <CountList
+              counts={runsByState}
+              empty="작업 기록이 없습니다."
+              labeler={runStateLabel}
+            />
+          </Panel>
         </section>
       </DashboardGroup>
 
@@ -367,7 +268,7 @@ export function StatusDashboard() {
                     className="flex items-center justify-between gap-3 px-3 py-2"
                   >
                     <span className="text-text-secondary">
-                      {shortLabel(ASSET_TYPE_LABELS, asset.asset_type)}
+                      {assetTypeLabel(asset.asset_type)}
                     </span>
                     <span>
                       {asset.count.toLocaleString()}개 · {formatBytes(asset.size_bytes)}
@@ -382,7 +283,7 @@ export function StatusDashboard() {
             <CountList
               counts={candidatesByStatus}
               empty="검수 후보가 없습니다."
-              labeler={(key) => shortLabel(CANDIDATE_STATUS_LABELS, key)}
+              labeler={candidateStatusLabel}
             />
           </Panel>
         </section>
@@ -403,14 +304,14 @@ export function StatusDashboard() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">
-                        {shortLabel(LOGIN_EVENT_LABELS, event.event_type)}
+                        {loginEventLabel(event.event_type)}
                       </span>
                       <Badge
                         variant={
                           event.outcome === "succeeded" ? "secondary" : "outline"
                         }
                       >
-                        {shortLabel(LOGIN_OUTCOME_LABELS, event.outcome)}
+                        {loginOutcomeLabel(event.outcome)}
                       </Badge>
                     </div>
                     <p className="mt-1 text-[12px] text-text-secondary">
@@ -455,6 +356,129 @@ export function StatusDashboard() {
       </DashboardGroup>
     </div>
   );
+}
+
+function RunStatusTable({
+  runs,
+  empty,
+}: {
+  runs: CrawlRunSummary[];
+  empty: string;
+}) {
+  if (runs.length === 0) {
+    return (
+      <div className="flex h-[28rem] items-start">
+        <EmptyState>{empty}</EmptyState>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-h-[28rem] overflow-auto rounded-lg border border-surface-muted">
+      <table className="w-full min-w-[64rem] text-[13px]">
+        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
+          <tr>
+            <th className="px-3 py-2">상태</th>
+            <th className="px-3 py-2">작업/대상</th>
+            <th className="px-3 py-2">기본</th>
+            <th className="px-3 py-2">진행</th>
+            <th className="px-3 py-2">메시지</th>
+            <th className="px-3 py-2">시간</th>
+            <th className="px-3 py-2 text-right">상세</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((run) => (
+            <tr key={run.job_id} className="border-t border-surface-muted">
+              <td className="px-3 py-2 align-top">
+                <Badge variant={runStateVariant(run.state)}>
+                  {runStateLabel(run.state)}
+                </Badge>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="flex max-w-[20rem] flex-col gap-1 whitespace-normal">
+                  <span className="text-[11px] font-bold text-text-secondary">
+                    {run.target_type_label ?? targetTypeDisplayLabel(run.target_type)}
+                    {" · "}
+                    {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
+                  </span>
+                  <span className="font-bold leading-snug">{targetLabel(run)}</span>
+                  <span className="font-mono text-[11px] text-text-secondary">
+                    {run.job_id}
+                  </span>
+                </div>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <Badge variant="outline">
+                  {categoryDisplayLabel(
+                    run.default_category_label ?? run.default_category_code,
+                  )}
+                </Badge>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="flex w-28 flex-col gap-1">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
+                    <div
+                      className={progressBarClass(run.state)}
+                      style={{ width: progressPercent(run) }}
+                    />
+                  </div>
+                  <span className="text-[12px] text-text-secondary">
+                    {progressPercent(run)}
+                  </span>
+                </div>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="max-w-[22rem] text-text-secondary">
+                  <p className="line-clamp-2 whitespace-normal">
+                    {run.current_message ?? run.status_logs.at(-1)?.message ?? "-"}
+                  </p>
+                  {run.last_error ? (
+                    <p className="line-clamp-1 text-destructive">
+                      {run.last_error}
+                    </p>
+                  ) : null}
+                </div>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="flex flex-col text-[12px] text-text-secondary">
+                  <span>등록 {formatDateTime(run.created_at)}</span>
+                  <span>시작 {formatDateTime(run.started_at)}</span>
+                  <span>종료 {formatDateTime(run.finished_at)}</span>
+                </div>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="flex justify-end">
+                  <Link
+                    href={`/jobs/${run.job_id}`}
+                    className={buttonVariants({ variant: "outline", size: "xs" })}
+                  >
+                    상세
+                  </Link>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function runStateVariant(
+  state: string,
+): "outline" | "secondary" | "destructive" {
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "destructive";
+  if (normalized === "running" || normalized === "done") return "secondary";
+  return "outline";
+}
+
+function progressBarClass(state: string) {
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "h-full rounded-full bg-destructive";
+  if (normalized === "done") return "h-full rounded-full bg-success";
+  return "h-full rounded-full bg-primary";
 }
 
 function DashboardGroup({

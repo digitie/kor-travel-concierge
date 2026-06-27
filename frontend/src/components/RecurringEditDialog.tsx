@@ -11,6 +11,7 @@ import {
   type CategoryOption,
   type SourceTargetSummary,
 } from "@/lib/api";
+import { categoryDisplayLabel } from "@/lib/display-labels";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -90,8 +91,9 @@ function categoryLabel(
   categories: CategoryOption[] | undefined,
   code: string | null | undefined,
 ): string {
-  if (!code) return "unknown";
-  return categories?.find((category) => category.code === code)?.label ?? "unknown";
+  return categoryDisplayLabel(
+    categories?.find((category) => category.code === code)?.label ?? code,
+  );
 }
 
 export function RecurringEditDialog({

@@ -12,6 +12,12 @@ import {
   type RunPlace,
   type SourceTargetSummary,
 } from "@/lib/api";
+import {
+  categoryDisplayLabel,
+  jobTypeDisplayLabel,
+  runStateLabel,
+  targetTypeDisplayLabel,
+} from "@/lib/display-labels";
 import { JobLogView } from "@/components/JobLogDialog";
 import { Badge } from "@/components/ui/badge";
 
@@ -24,17 +30,37 @@ export function intervalLabel(minutes: number | null | undefined): string {
   return `${minutes}분`;
 }
 export function targetTypeLabel(type: string | null | undefined): string {
-  if (type === "channel") return "유튜버";
-  if (type === "playlist") return "재생목록";
-  if (type === "keyword") return "검색어";
-  if (type === "video") return "영상";
-  return type ?? "-";
+  return targetTypeDisplayLabel(type);
 }
 export function durationLabel(seconds: number | null): string {
   if (seconds == null) return "-";
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m > 0 ? `${m}분 ${s}초` : `${s}초`;
+}
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+function runResultLabel(result: Record<string, unknown>, hasResult: boolean): string {
+  if (!hasResult) return "진행 중";
+  const parts: string[] = [];
+  if (typeof result.discovered === "number") parts.push(`수집 ${result.discovered}`);
+  if (typeof result.inserted === "number") parts.push(`신규 ${result.inserted}`);
+  if (typeof result.updated === "number") parts.push(`갱신 ${result.updated}`);
+  if (typeof result.skipped === "number") parts.push(`건너뜀 ${result.skipped}`);
+  if (typeof result.enqueued_jobs === "number") {
+    parts.push(`등록 ${result.enqueued_jobs}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "결과 기록 있음";
 }
 
 // 작업 상세 본문(필드·상태로그·추출 POI·수집 영상). 다이얼로그와 별도 페이지(/jobs/[id])
@@ -80,28 +106,37 @@ export function JobDetailView({
   const result = (run?.result ?? {}) as Record<string, unknown>;
   const fields: { label: string; value: string }[] = run
     ? [
+        { label: "상태", value: runStateLabel(run.state) },
+        { label: "진행률", value: `${Math.round((run.progress ?? 0) * 100)}%` },
+        {
+          label: "작업 유형",
+          value: run.job_type_label ?? jobTypeDisplayLabel(run.job_type),
+        },
         {
           label: "대상 유형",
           value: run.target_type_label ?? targetTypeLabel(run.target_type),
         },
         { label: "대상", value: run.target_label ?? run.target_id ?? "-" },
-        { label: "작업 유형", value: run.job_type_label ?? run.job_type },
-        { label: "상태", value: run.state },
-        { label: "진행률", value: `${Math.round((run.progress ?? 0) * 100)}%` },
+        {
+          label: "기본 카테고리",
+          value: categoryDisplayLabel(
+            run.default_category_label ?? run.default_category_code,
+          ),
+        },
         {
           label: "최대 영상 수",
           value: run.max_videos != null ? String(run.max_videos) : "-",
         },
+        { label: "재시도", value: `${run.retry_count}회` },
         {
-          // result는 완료 시에만 채워지므로 진행 중에는 "진행 중"으로 표기한다.
-          label: "수집/신규",
-          value: run.result
-            ? `${(result.discovered as number) ?? "-"} / ${
-                (result.inserted as number) ?? "-"
-              }`
-            : "진행 중",
+          label: "결과",
+          value: runResultLabel(result, Boolean(run.result)),
         },
+        { label: "등록", value: formatDateTime(run.created_at) },
+        { label: "시작", value: formatDateTime(run.started_at) },
+        { label: "종료", value: formatDateTime(run.finished_at) },
         { label: "현재 메시지", value: run.current_message ?? "-" },
+        { label: "오류", value: run.last_error ?? "-" },
       ]
     : target
       ? [
@@ -117,6 +152,12 @@ export function JobDetailView({
               target.display_name ??
               target.source_value,
           },
+          {
+            label: "기본 카테고리",
+            value: categoryDisplayLabel(
+              target.default_category_label ?? target.default_category_code,
+            ),
+          },
           { label: "반복 간격", value: intervalLabel(target.scan_interval_minutes) },
           {
             label: "반복 횟수",
@@ -124,19 +165,23 @@ export function JobDetailView({
           },
           { label: "실행 횟수", value: String(target.run_count) },
           { label: "활성", value: target.is_active ? "예" : "아니오" },
+          { label: "다음 실행", value: formatDateTime(target.next_crawl_at) },
+          { label: "최근 실행", value: formatDateTime(target.last_crawled_at) },
+          { label: "최근 스캔", value: formatDateTime(target.last_scan_at) },
+          { label: "최근 오류", value: target.last_scan_error ?? "-" },
         ]
       : [];
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
         {fields.map((field) => (
           <div
             key={field.label}
-            className="flex flex-col gap-0.5 rounded-lg border p-2.5"
+            className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-surface-muted bg-card p-3 shadow-[var(--shadow-card)]"
           >
             <span className="text-xs text-muted-foreground">{field.label}</span>
-            <span className="truncate text-sm font-medium">{field.value}</span>
+            <span className="break-words text-sm font-medium">{field.value}</span>
           </div>
         ))}
       </div>

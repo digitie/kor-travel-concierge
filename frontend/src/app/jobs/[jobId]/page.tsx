@@ -12,6 +12,7 @@ import {
   reprocessVideos,
   type RunVideoStat,
 } from "@/lib/api";
+import { runStateLabel } from "@/lib/display-labels";
 import { AppShell } from "@/components/AppShell";
 import { JobDetailView } from "@/components/JobDetailView";
 import { Badge } from "@/components/ui/badge";
@@ -39,11 +40,11 @@ export default function JobDetailPage() {
   return (
     <AppShell
       title={`작업 상세 #${jobId}`}
-      description="작업 진행 상태, 영상별 POI 처리 현황, 재처리 액션을 확인합니다."
+      description="작업 진행, 결과, 영상별 처리 현황을 확인합니다."
       section="상태"
       actions={
         <>
-          {run ? <Badge variant="secondary">{run.state}</Badge> : null}
+          {run ? <Badge variant="secondary">{runStateLabel(run.state)}</Badge> : null}
           <Button
             type="button"
             size="xs"
@@ -144,7 +145,7 @@ function VideoStatRow({ stat }: { stat: RunVideoStat }) {
       >
         <Badge variant="secondary">POI {stat.poi_total}</Badge>
         <span className="text-muted-foreground">
-          자동 {stat.poi_auto} · 검수필요 {stat.poi_needs_review} · 완료{" "}
+          자동 {stat.poi_auto} · 검수 대기 {stat.poi_needs_review} · 완료{" "}
           {stat.poi_resolved}
         </span>
         <span className="text-primary">결과에서 보기 →</span>

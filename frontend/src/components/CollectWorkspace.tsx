@@ -15,7 +15,6 @@ import {
 import {
   deleteSourceTarget,
   listRunQueue,
-  listRuns,
   listSourceTargets,
   restartRun,
   runSourceTargetNow,
@@ -25,6 +24,12 @@ import {
   type CrawlRunSummary,
   type SourceTargetSummary,
 } from "@/lib/api";
+import {
+  categoryDisplayLabel,
+  jobTypeDisplayLabel,
+  runStateLabel,
+  targetTypeDisplayLabel,
+} from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,7 +40,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogClose,
@@ -61,11 +65,6 @@ export function CollectWorkspace() {
     router.push(`/jobs/${run.job_id}`);
   const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
-  const runsQuery = useQuery({
-    queryKey: ["runs", "user"],
-    queryFn: () => listRuns({ limit: 40, jobTypes: USER_JOB_TYPES }),
-    refetchInterval: 5_000,
-  });
   const runQueueQuery = useQuery({
     queryKey: ["run-queue", "user"],
     queryFn: () => listRunQueue(USER_JOB_TYPES),
@@ -102,11 +101,24 @@ export function CollectWorkspace() {
   });
 
   const isMutating = stopRunMutation.isPending || restartRunMutation.isPending;
+  const queueRuns = runQueueQuery.data ?? [];
+  const activeRun =
+    queueRuns.find((run) => run.state.toLowerCase() === "running") ??
+    queueRuns.find((run) => run.state.toLowerCase() === "pending") ??
+    null;
 
   return (
-    <div className="flex h-full min-h-[40rem] flex-col lg:min-h-0 lg:flex-row lg:overflow-hidden">
-      <div className="shrink-0 border-b lg:w-[38rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
+    <div className="grid h-full min-h-[40rem] grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
+      <div className="flex min-h-0 flex-col border-b lg:overflow-y-auto lg:border-r lg:border-b-0">
         <HarvestConsole />
+        <ActiveRunPanel
+          run={activeRun}
+          errorMessage={runQueueQuery.error?.message ?? null}
+          onStop={(jobId) => stopRunMutation.mutate(jobId)}
+          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+          onDetail={openRunDetail}
+          isMutating={isMutating}
+        />
         <div className="flex flex-col gap-1.5 border-t p-3">
           <Button
             type="button"
@@ -131,29 +143,14 @@ export function CollectWorkspace() {
           ) : null}
         </div>
       </div>
-      <div className="grid flex-1 grid-cols-1 md:grid-cols-2 lg:min-h-0">
-        <RunQueuePanel
-          queueRuns={runQueueQuery.data ?? []}
-          errorMessage={runQueueQuery.error?.message ?? null}
-          onStop={(jobId) => stopRunMutation.mutate(jobId)}
-          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-          onDetail={openRunDetail}
-          isMutating={isMutating}
-        />
+      <div className="min-h-0">
         <JobsPanel
-          runs={runsQuery.data ?? []}
           targets={sourceTargetsQuery.data ?? []}
-          errorMessage={
-            runsQuery.error?.message ?? sourceTargetsQuery.error?.message ?? null
-          }
-          onStop={(jobId) => stopRunMutation.mutate(jobId)}
-          onRestart={(jobId) => restartRunMutation.mutate(jobId)}
+          errorMessage={sourceTargetsQuery.error?.message ?? null}
           onRunNow={(id, force) => runNowMutation.mutate({ id, force })}
-          onDetailRun={openRunDetail}
           onDetailTarget={setDetailTarget}
           onEditTarget={setEditTarget}
           onDeleteTarget={(id) => deleteTargetMutation.mutate(id)}
-          isMutating={isMutating}
           isDeleting={deleteTargetMutation.isPending}
           isRunningNow={runNowMutation.isPending}
         />
@@ -178,25 +175,11 @@ export function CollectWorkspace() {
 // ─── labels ───────────────────────────────────────────────────────────────
 
 function targetTypeLabel(type: string | null | undefined): string {
-  if (type === "channel") return "유튜버";
-  if (type === "playlist") return "재생목록";
-  if (type === "keyword") return "검색어";
-  if (type === "video") return "영상";
-  return type ?? "대상";
+  return targetTypeDisplayLabel(type);
 }
 
 function jobTypeLabel(type: string | null | undefined): string {
-  const map: Record<string, string> = {
-    harvest: "수집",
-    source_scan: "예약 스캔",
-    video_analysis: "영상 분석",
-    deep_research: "심층 조사",
-    transcript: "자막",
-    poi_batch: "장소 추출(묶음)",
-    geocode: "지오코딩",
-    postprocess: "후처리",
-  };
-  return (type && map[type]) ?? type ?? "작업";
+  return jobTypeDisplayLabel(type);
 }
 
 function runTargetType(run: CrawlRunSummary): string {
@@ -244,28 +227,30 @@ function runProgressPercent(run: CrawlRunSummary) {
 }
 
 function runStateVariant(state: string): "outline" | "secondary" | "destructive" {
-  if (state === "failed") return "destructive";
-  if (state === "running" || state === "done") return "secondary";
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "destructive";
+  if (normalized === "running" || normalized === "done") return "secondary";
   return "outline";
 }
 
 function progressBarClass(state: string) {
-  if (state === "failed") return "h-full rounded-full bg-destructive";
-  if (state === "done") return "h-full rounded-full bg-success";
+  const normalized = state.toLowerCase();
+  if (normalized === "failed") return "h-full rounded-full bg-destructive";
+  if (normalized === "done") return "h-full rounded-full bg-success";
   return "h-full rounded-full bg-primary";
 }
 
 // ─── panels ───────────────────────────────────────────────────────────────
 
-function RunQueuePanel({
-  queueRuns,
+function ActiveRunPanel({
+  run,
   errorMessage,
   onStop,
   onRestart,
   onDetail,
   isMutating,
 }: {
-  queueRuns: CrawlRunSummary[];
+  run: CrawlRunSummary | null;
   errorMessage: string | null;
   onStop: (jobId: string) => void;
   onRestart: (jobId: string) => void;
@@ -274,133 +259,109 @@ function RunQueuePanel({
 }) {
   return (
     <section
-      aria-label="실행 큐"
-      className="flex flex-col gap-3 border-b p-3 md:border-b-0 md:border-r lg:min-h-0"
+      aria-label="진행 중 작업"
+      className="flex flex-col gap-3 border-t p-3"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
           <ListChecksIcon className="size-4 text-muted-foreground" />
-          실행 큐
+          진행 중 작업
         </h2>
-        <Badge variant="secondary">{queueRuns.length}</Badge>
+        <Badge variant="secondary">{run ? "1" : "0"}</Badge>
       </div>
       {errorMessage ? (
         <p role="alert" className="text-xs text-destructive">
           {errorMessage}
         </p>
       ) : null}
-      <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-        {queueRuns.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>상태</TableHead>
-                <TableHead>대상</TableHead>
-                <TableHead>진행</TableHead>
-                <TableHead>최근 메시지</TableHead>
-                <TableHead>시간</TableHead>
-                <TableHead className="text-right">액션</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {queueRuns.map((run) => (
-                <TableRow key={run.job_id}>
-                  <TableCell>
-                    <Badge variant={runStateVariant(run.state)}>{run.state}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <button
-                      type="button"
-                      className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                      onClick={() => onDetail(run)}
-                    >
-                      <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                        {runTargetType(run)}
-                      </span>
-                      <span className="font-bold leading-snug">{runTargetValue(run)}</span>
-                      <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                        {run.job_type_label ?? jobTypeLabel(run.job_type)}
-                      </span>
-                      {run.default_category_label ? (
-                        <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                          기본 {run.default_category_label}
-                        </span>
-                      ) : null}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex w-28 flex-col gap-1">
-                      <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
-                        <div
-                          className={progressBarClass(run.state)}
-                          style={{ width: runProgressPercent(run) }}
-                        />
-                      </div>
-                      <span className="text-[12px] text-text-secondary">
-                        {runProgressPercent(run)}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <p className="line-clamp-2 max-w-[18rem] whitespace-normal text-[13px] text-text-secondary">
-                      {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col text-[12px] text-text-secondary">
-                      <span>등록 {formatDateTime(run.created_at)}</span>
-                      <span>시작 {formatDateTime(run.started_at)}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <RunActionButtons
-                      run={run}
-                      onStop={onStop}
-                      onRestart={onRestart}
-                      onDetail={onDetail}
-                      isMutating={isMutating}
+      {run ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>상태</TableHead>
+              <TableHead>대상</TableHead>
+              <TableHead>진행</TableHead>
+              <TableHead>최근 메시지</TableHead>
+              <TableHead className="text-right">액션</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>
+                <Badge variant={runStateVariant(run.state)}>
+                  {runStateLabel(run.state)}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <button
+                  type="button"
+                  className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
+                  onClick={() => onDetail(run)}
+                >
+                  <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
+                    {runTargetType(run)}
+                  </span>
+                  <span className="font-bold leading-snug">{runTargetValue(run)}</span>
+                  <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
+                    {run.job_type_label ?? jobTypeLabel(run.job_type)}
+                  </span>
+                </button>
+              </TableCell>
+              <TableCell>
+                <div className="flex w-24 flex-col gap-1">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
+                    <div
+                      className={progressBarClass(run.state)}
+                      style={{ width: runProgressPercent(run) }}
                     />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-            실행 중이거나 대기 중인 작업이 없습니다.
-          </p>
-        )}
-      </div>
+                  </div>
+                  <span className="text-[12px] text-text-secondary">
+                    {runProgressPercent(run)}
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell>
+                <p className="line-clamp-2 max-w-[14rem] whitespace-normal text-[13px] text-text-secondary">
+                  {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
+                </p>
+              </TableCell>
+              <TableCell>
+                <RunActionButtons
+                  run={run}
+                  onStop={onStop}
+                  onRestart={onRestart}
+                  onDetail={onDetail}
+                  isMutating={isMutating}
+                />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      ) : (
+        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+          실행 중이거나 대기 중인 작업이 없습니다.
+        </p>
+      )}
     </section>
   );
 }
 
 function JobsPanel({
-  runs,
   targets,
   errorMessage,
-  onStop,
-  onRestart,
   onRunNow,
-  onDetailRun,
   onDetailTarget,
   onEditTarget,
   onDeleteTarget,
-  isMutating,
   isDeleting,
   isRunningNow,
 }: {
-  runs: CrawlRunSummary[];
   targets: SourceTargetSummary[];
   errorMessage: string | null;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
   onRunNow: (id: number, force: boolean) => void;
-  onDetailRun: (run: CrawlRunSummary) => void;
   onDetailTarget: (target: SourceTargetSummary) => void;
   onEditTarget: (target: SourceTargetSummary) => void;
   onDeleteTarget: (id: number) => void;
-  isMutating: boolean;
   isDeleting: boolean;
   isRunningNow: boolean;
 }) {
@@ -410,235 +371,147 @@ function JobsPanel({
   );
   const [runNowForce, setRunNowForce] = useState(false);
   return (
-    <section aria-label="작업" className="flex flex-col gap-3 p-3 lg:min-h-0 lg:overflow-y-auto">
-      <Tabs defaultValue="recurring">
-        <TabsList className="w-full">
-          <TabsTrigger value="recurring">반복 {targets.length}</TabsTrigger>
-          <TabsTrigger value="oneoff">1회성 {runs.length}</TabsTrigger>
-        </TabsList>
-        {errorMessage ? (
-          <p role="alert" className="mt-2 text-xs text-destructive">
-            {errorMessage}
-          </p>
-        ) : null}
-        <TabsContent value="recurring" className="mt-3 flex flex-col gap-2">
-          {targets.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>대상</TableHead>
-                  <TableHead>주기</TableHead>
-                  <TableHead>기본</TableHead>
-                  <TableHead>누적</TableHead>
-                  <TableHead>일정</TableHead>
-                  <TableHead>상태</TableHead>
-                  <TableHead className="text-right">액션</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {targets.map((target) => {
-                  const targetName =
-                    target.target_label ?? target.display_name ?? target.source_value;
-                  return (
-                    <TableRow key={target.id}>
-                      <TableCell>
-                        <button
-                          type="button"
-                          className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                          onClick={() => onDetailTarget(target)}
-                        >
-                          <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                            {target.target_type_label ??
-                              targetTypeLabel(target.target_type)}
-                          </span>
-                          <span className="font-bold leading-snug">{targetName}</span>
-                          <span className="break-all font-mono text-[11px] text-text-secondary">
-                            {target.source_value === targetName
-                              ? `#${target.id}`
-                              : target.source_value}
-                          </span>
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col text-[13px]">
-                          <span>{intervalLabel(target.scan_interval_minutes)}</span>
-                          <span className="text-[12px] text-text-secondary">
-                            회당 {target.max_videos ?? "-"}개
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {target.default_category_label ?? "unknown"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col text-[13px]">
-                          <span>
-                            {target.max_runs === 0
-                              ? `무한 (${target.run_count}회)`
-                              : `${target.run_count}/${target.max_runs}회`}
-                          </span>
-                          <span className="text-[12px] text-text-secondary">
-                            최근 {formatRunTime(target.last_crawled_at)}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col text-[12px] text-text-secondary">
-                          <span>다음 {formatDateTime(target.next_crawl_at)}</span>
-                          <span>스캔 {formatDateTime(target.last_scan_at)}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
-                          <Badge variant={target.is_active ? "outline" : "secondary"}>
-                            {target.is_active ? "활성" : "중지"}
-                          </Badge>
-                          {target.last_scan_error ? (
-                            <span className="line-clamp-2 text-[12px] text-destructive">
-                              {target.last_scan_error}
-                            </span>
-                          ) : (
-                            <span className="text-[12px] text-text-secondary">
-                              실패 {target.scan_failure_count}회
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            type="button"
-                            size="xs"
-                            disabled={isRunningNow}
-                            onClick={() => {
-                              setRunNowForce(false);
-                              setRunNowTarget(target);
-                            }}
-                          >
-                            <ZapIcon data-icon="inline-start" />
-                            실행
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => onEditTarget(target)}
-                          >
-                            <PencilIcon data-icon="inline-start" />
-                            수정
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="destructive"
-                            disabled={isDeleting}
-                            onClick={() => onDeleteTarget(target.id)}
-                            aria-label={`${targetName} 반복 삭제`}
-                          >
-                            <Trash2Icon data-icon="inline-start" />
-                            삭제
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          ) : (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
-            </p>
-          )}
-        </TabsContent>
-        <TabsContent value="oneoff" className="mt-3 flex flex-col gap-2">
-          {runs.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>상태</TableHead>
-                  <TableHead>대상</TableHead>
-                  <TableHead>진행</TableHead>
-                  <TableHead>결과/메시지</TableHead>
-                  <TableHead>시간</TableHead>
-                  <TableHead className="text-right">액션</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {runs.map((run) => (
-                  <TableRow key={run.job_id}>
-                    <TableCell>
-                      <Badge variant={runStateVariant(run.state)}>{run.state}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <button
-                        type="button"
-                        className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                        onClick={() => onDetailRun(run)}
-                      >
-                        <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                          {runTargetType(run)}
+    <section
+      aria-label="반복 작업"
+      className="flex h-full min-h-0 flex-col gap-3 p-3 lg:overflow-y-auto"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">반복 작업</h2>
+        <Badge variant="secondary">{targets.length}</Badge>
+      </div>
+      {errorMessage ? (
+        <p role="alert" className="text-xs text-destructive">
+          {errorMessage}
+        </p>
+      ) : null}
+      {targets.length > 0 ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>대상</TableHead>
+              <TableHead>주기</TableHead>
+              <TableHead>기본</TableHead>
+              <TableHead>누적</TableHead>
+              <TableHead>일정</TableHead>
+              <TableHead>상태</TableHead>
+              <TableHead className="text-right">액션</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {targets.map((target) => {
+              const targetName =
+                target.target_label ?? target.display_name ?? target.source_value;
+              return (
+                <TableRow key={target.id}>
+                  <TableCell>
+                    <button
+                      type="button"
+                      className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
+                      onClick={() => onDetailTarget(target)}
+                    >
+                      <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
+                        {target.target_type_label ??
+                          targetTypeLabel(target.target_type)}
+                      </span>
+                      <span className="font-bold leading-snug">{targetName}</span>
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col text-[13px]">
+                      <span>{intervalLabel(target.scan_interval_minutes)}</span>
+                      <span className="text-[12px] text-text-secondary">
+                        회당 {target.max_videos ?? "-"}개
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      {categoryDisplayLabel(
+                        target.default_category_label ??
+                          target.default_category_code,
+                      )}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col text-[13px]">
+                      <span>
+                        {target.max_runs === 0
+                          ? `무한 (${target.run_count}회)`
+                          : `${target.run_count}/${target.max_runs}회`}
+                      </span>
+                      <span className="text-[12px] text-text-secondary">
+                        최근 {formatRunTime(target.last_crawled_at)}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col text-[12px] text-text-secondary">
+                      <span>다음 {formatDateTime(target.next_crawl_at)}</span>
+                      <span>스캔 {formatDateTime(target.last_scan_at)}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
+                      <Badge variant={target.is_active ? "outline" : "secondary"}>
+                        {target.is_active ? "활성" : "중지"}
+                      </Badge>
+                      {target.last_scan_error ? (
+                        <span className="line-clamp-2 text-[12px] text-destructive">
+                          {target.last_scan_error}
                         </span>
-                        <span className="font-bold leading-snug">{runTargetValue(run)}</span>
-                        <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                          {run.job_type_label ?? jobTypeLabel(run.job_type)}
-                        </span>
-                        {run.default_category_label ? (
-                          <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                            기본 {run.default_category_label}
-                          </span>
-                        ) : null}
-                      </button>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex w-28 flex-col gap-1">
-                        <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
-                          <div
-                            className={progressBarClass(run.state)}
-                            style={{ width: runProgressPercent(run) }}
-                          />
-                        </div>
+                      ) : (
                         <span className="text-[12px] text-text-secondary">
-                          {runProgressPercent(run)}
+                          실패 {target.scan_failure_count}회
                         </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <p className="line-clamp-2 max-w-[18rem] whitespace-normal text-[13px] text-text-secondary">
-                        {runHistoryLine(run) ??
-                          run.current_message ??
-                          latestRunLog(run) ??
-                          "상세 로그 대기 중"}
-                      </p>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col text-[12px] text-text-secondary">
-                        <span>시작 {formatDateTime(run.started_at)}</span>
-                        <span>종료 {formatDateTime(run.finished_at)}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <RunActionButtons
-                        run={run}
-                        onStop={onStop}
-                        onRestart={onRestart}
-                        onDetail={onDetailRun}
-                        isMutating={isMutating}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              작업이 없습니다.
-            </p>
-          )}
-        </TabsContent>
-      </Tabs>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        type="button"
+                        size="xs"
+                        disabled={isRunningNow}
+                        onClick={() => {
+                          setRunNowForce(false);
+                          setRunNowTarget(target);
+                        }}
+                      >
+                        <ZapIcon data-icon="inline-start" />
+                        실행
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => onEditTarget(target)}
+                      >
+                        <PencilIcon data-icon="inline-start" />
+                        수정
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="destructive"
+                        disabled={isDeleting}
+                        onClick={() => onDeleteTarget(target.id)}
+                        aria-label={`${targetName} 반복 삭제`}
+                      >
+                        <Trash2Icon data-icon="inline-start" />
+                        삭제
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      ) : (
+        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+          반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
+        </p>
+      )}
       <Dialog
         open={runNowTarget != null}
         onOpenChange={(next) => !next && setRunNowTarget(null)}
@@ -687,22 +560,6 @@ function JobsPanel({
   );
 }
 
-// 실행 기록 한 줄: 종료 시각 + 수집/신규 영상 수(결과에 있을 때만). 신규 POI 수 등
-// 더 상세한 집계는 작업 상세 페이지(후속 작업)에서 제공한다.
-function runHistoryLine(run: CrawlRunSummary): string | null {
-  const r = (run.result ?? {}) as Record<string, unknown>;
-  const parts: string[] = [];
-  if (
-    run.finished_at &&
-    (run.state === "done" || run.state === "failed" || run.state === "cancelled")
-  ) {
-    parts.push(run.finished_at.slice(5, 16).replace("T", " "));
-  }
-  if (typeof r.discovered === "number") parts.push(`수집 ${r.discovered}`);
-  if (typeof r.inserted === "number") parts.push(`신규 ${r.inserted}`);
-  return parts.length ? parts.join(" · ") : null;
-}
-
 function RunActionButtons({
   run,
   onStop,
@@ -716,9 +573,13 @@ function RunActionButtons({
   onDetail: (run: CrawlRunSummary) => void;
   isMutating: boolean;
 }) {
-  const isActive = run.state === "pending" || run.state === "running";
+  const normalized = run.state.toLowerCase();
+  const isActive = normalized === "pending" || normalized === "running";
   const isTerminal =
-    run.state === "done" || run.state === "failed" || run.state === "cancelled";
+    normalized === "done" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "canceled";
 
   return (
     <div className="flex justify-end gap-1">
@@ -749,7 +610,7 @@ function RunActionButtons({
       <Button
         type="button"
         size="xs"
-        variant="ghost"
+        variant="outline"
         onClick={() => onDetail(run)}
       >
         상세
