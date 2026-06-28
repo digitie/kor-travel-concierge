@@ -374,6 +374,11 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 - 날짜: 2026-06-09
 - 결정자: 사용자, AI agent
 
+> 보강(2026-06-28, ADR-33): 개발·검증·리포지토리 작업 명령은 `git`, `gh`,
+> codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서
+> 실행한다. E2E Playwright는 Windows 호스트 고정 예외가 아니라 n150 live/Linux
+> 환경에서 우선 실행하고, 불가할 때만 Windows 호스트 fallback을 사용한다.
+
 ### 컨텍스트
 초기 설계는 Windows 호스트에서 직접 빌드·평가하는 것을 전제로 했고(ADR-6), 이를 위해 PowerShell 라이브 런처(`scripts/start-windows-live.ps1`), Windows용 FFmpeg 자동 다운로드 스크립트(`scripts/ensure-windows-ffmpeg.ps1`), 호스트와 컨테이너 FFmpeg 경로 이원화(`FFMPEG_PATH` vs `DOCKER_FFMPEG_PATH`), `.mjs`·playwright 설정의 `process.platform === 'win32'` 분기 등 Windows 전용 자산이 누적되었다. 이 경로는 공급망 검증(FFmpeg 아카이브 해시), 라이브 포트 점유 프로세스 종료, Python launcher fallback 등 Windows 고유의 복잡도와 운영 부담을 키웠다. 단일 호스트 Docker Compose 실행 계약(ADR-18)이 이미 자리잡았으므로, 실행·평가 환경을 하나로 수렴할 필요가 있었다.
 
@@ -401,20 +406,21 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 - ADR-6, T-030, T-041, T-055 등 Windows 전제 작업 산출물(FFmpeg 자동 준비, PowerShell launcher)은 본 ADR로 보정·대체된다. T-027의 고정 포트 `12401`/`12405`는 폐기하지 않고 OS 중립적인 Compose 표준 host port로 유지하며, 포트 회수는 bash `scripts/stop-fixed-ports.sh`로 옮긴다.
 
 ### 보강 — Codex 명령 실행 위치 (2026-06-12)
-- 에이전트/Codex가 이 저장소에서 실행하는 작업 명령은 기본적으로 WSL2(Ubuntu) bash에서 수행한다.
-- 예외는 `git` 명령과 Windows 호스트 Playwright E2E(`cd tests; npm install; npx playwright install; npx playwright test`)뿐이다.
-- `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행한다. 이 규칙은 Windows 네이티브 앱 실행 경로를 되살리지 않기 위한 운영 규칙이다.
+- 에이전트/Codex가 이 저장소에서 실행하는 작업 명령은 WSL2(Ubuntu)를 포함한 Linux bash에서 수행한다.
+- 2026-06-28 ADR-33 이후 과거 예외였던 `git` 명령도 Linux 실행 대상에 포함한다.
+- `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인, codegraph 계열 인덱싱/분석 명령도 Linux에서 실행한다. 이 규칙은 Windows 네이티브 앱 실행 경로를 되살리지 않기 위한 운영 규칙이다.
 
-### 예외 — E2E Playwright는 Windows 호스트에서 실행 (2026-06-09 보강)
+### 예외 — E2E Playwright는 n150 우선, Windows fallback (2026-06-28 보강)
 - 위 "Linux Docker 전용" 모델은 **애플리케이션 런타임/배포**에 적용된다(backend, frontend, mcp, scheduler, rustfs).
-- **E2E Playwright 테스트 하니스만은 의도적으로 Windows 호스트에서 실행한다.** 즉 `cd tests; npm install; npx playwright install; npx playwright test`를 Windows에서 구동해 실제 사용자 환경(Windows 브라우저)에 가까운 화면 검증을 수행한다. 이는 앱 구동 환경의 예외가 아니라 테스트 하니스에 한정된 예외다.
-- 이 예외는 Windows 네이티브 **앱**(backend/frontend/mcp/scheduler) 실행 경로나 앱 런타임 코드의 `win32` 분기를 되살리지 않는다. 다만 **E2E 런처 스크립트(`tests/scripts/start-backend.mjs`·`start-frontend.mjs`)는 Windows 호스트에서 동작해야 하므로 OS별 처리(venv interpreter 경로 해석, `taskkill` 기반 자식 프로세스 트리 정리)를 유지한다.** 이는 테스트 하니스에 한정된 분기이며 앱 코드에는 적용되지 않는다. E2E backend는 `APP_ENV=e2e`로 무인증 동작한다(ADR-24).
-- 따라서 ADR-6의 "Playwright E2E를 Windows에서 검증" 의도는 **테스트 하니스 차원에서 유지**되고, supersede 되는 것은 앱 구동 환경(=Linux/WSL2 Docker)에 한정된다.
+- **E2E Playwright 테스트 하니스는 n150 live/Linux 환경에서 우선 실행한다.** 즉 `cd tests; npm install; npx playwright install; npx playwright test`를 n150 또는 이에 준하는 Linux 환경에서 먼저 실행해 실제 live 배포와 가까운 화면 검증을 수행한다.
+- n150 접근, 브라우저 설치, 네트워크, DB, 계정 상태 때문에 n150 검증이 불가능할 때만 Windows 호스트에서 같은 Playwright 스위트를 fallback 실행한다.
+- 이 fallback은 Windows 네이티브 **앱**(backend/frontend/mcp/scheduler) 실행 경로나 앱 런타임 코드의 `win32` 분기를 되살리지 않는다. 다만 **E2E 런처 스크립트(`tests/scripts/start-backend.mjs`·`start-frontend.mjs`)는 fallback 하니스 호환성 때문에 OS별 처리(venv interpreter 경로 해석, `taskkill` 기반 자식 프로세스 트리 정리)를 유지할 수 있다.** 이는 테스트 하니스에 한정된 분기이며 앱 코드에는 적용되지 않는다. E2E backend는 `APP_ENV=e2e`로 무인증 동작한다(ADR-24).
+- 따라서 ADR-6의 "Playwright E2E를 Windows에서 검증" 의도는 **fallback 하니스 차원으로 축소**되고, 기본 E2E 검증 호스트는 n150 live/Linux로 이동한다.
 
 ### 관련
 - ADR-18(단일 호스트 Docker Compose 실행 계약)을 유일 실행 경로로 강화한다.
-- ADR-6(Windows 환경 Playwright E2E 파이프라인) 중 앱 구동 환경 부분을 supersede 한다. 단, **E2E 테스트 하니스의 Windows 호스트 실행은 위 예외로 유지**한다(도구·구동 호스트 모두 Windows, 앱 런타임만 Linux/WSL2).
-- ADR-24(REST API 버저닝과 외부 호출용 인증)의 `APP_ENV` 기반 로컬 우회는 Windows E2E 하니스(`APP_ENV=e2e`)에도 동일하게 적용된다.
+- ADR-6(Windows 환경 Playwright E2E 파이프라인) 중 앱 구동 환경 부분을 supersede 한다. 단, **E2E 테스트 하니스의 Windows 호스트 실행은 n150 실행 불가 시 fallback으로만 유지**한다.
+- ADR-24(REST API 버저닝과 외부 호출용 인증)의 `APP_ENV` 기반 로컬 우회는 n150/Windows E2E 하니스(`APP_ENV=e2e`)에 동일하게 적용된다.
 
 ---
 
@@ -691,13 +697,61 @@ Docker Compose 실행 계약을 다음으로 확정한다.
 
 ---
 
+## ADR-33: 개발 명령 Linux 전용과 Playwright n150 우선 실행 정책
+
+- **상태**: 채택 (2026-06-28)
+- **결정자**: 사용자, AI agent
+
+### 맥락
+ADR-23은 Windows 네이티브 앱 실행 경로를 제거하고 Linux Docker/WSL 실행 모델로 수렴했지만,
+2026-06-12 보강에서는 `git` 명령과 Windows 호스트 Playwright E2E를 예외로 남겼다.
+최근 운영은 n150 live 환경에서 UI와 로그인, 배포 상태를 직접 검증하는 흐름이 늘었고,
+사용자는 과거 예외였던 `git`/codegraph도 Linux에서 실행하며 Playwright도 n150에서 우선
+실행하도록 정책을 명확히 하라고 요청했다.
+
+### 결정
+- 모든 개발·검증·리포지토리 작업 명령은 WSL2(Ubuntu)를 포함한 Linux bash에서 실행한다.
+- `git`, `gh`, codegraph 계열 인덱싱/분석 명령도 예외 없이 Linux에서 실행한다.
+- Windows PowerShell/cmd 직접 작업은 금지한다. 단, n150에서 Playwright를 실행할 수 없을 때의
+  Windows 호스트 fallback E2E 하니스만 예외로 둔다.
+- E2E Playwright는 n150 live/Linux 환경에서 우선 실행한다. n150 접근, 브라우저 설치, 네트워크,
+  DB, 계정 상태 등으로 불가능할 때만 Windows 호스트에서 같은 Playwright 스위트를 fallback 실행한다.
+- fallback을 사용한 경우에는 n150 실행이 불가했던 이유와 fallback 결과를 PR 또는
+  `docs/journal.md`에 남긴다.
+- Windows fallback은 테스트 하니스에 한정되며, 앱 런타임 코드나 신규 개발 스크립트에
+  Windows 전용 실행 경로를 추가하는 근거가 될 수 없다.
+
+### 근거
+- 개발 명령 실행 위치를 Linux로 고정하면 `git`, codegraph, 빌드, 테스트 결과의 경로·권한·줄바꿈
+  차이를 줄일 수 있다.
+- n150 live 환경은 실제 배포 상태, 인증, 프록시, 데이터베이스, 브라우저 렌더링을 함께 확인할 수 있어
+  현재 운영 검증에 더 직접적이다.
+- Windows Playwright는 여전히 유용한 비상 검증 경로지만, 기본 경로로 두면 Windows 네이티브 앱 실행
+  경로가 되살아난 것처럼 문서가 읽힐 수 있다.
+
+### 결과 (긍정)
+- 에이전트와 사람이 같은 Linux 실행 계약을 따른다.
+- PR 검증 기록에서 n150 live 검증과 Windows fallback 검증의 의미가 구분된다.
+- Windows 전용 앱 분기나 스크립트를 새로 만들 유인이 줄어든다.
+
+### 결과 (부정)
+- n150 접근 권한, 브라우저 설치, 라이브 데이터 상태가 E2E 검증의 선행 조건이 된다.
+- n150이 일시적으로 불안정하면 Windows fallback을 쓰고 그 사유를 기록해야 한다.
+
+### 관련
+- ADR-23의 Codex 명령 실행 위치와 E2E Playwright 예외를 보강한다.
+- ADR-6의 Windows Playwright 검증은 기본 경로가 아니라 fallback 하니스로 축소한다.
+- prod/n150 접속 세부와 민감정보는 gitignore된 `docs/deploy-runbook.local.md`에만 둔다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.
 
 - **ADR-4**: VWorld 지도 컴포넌트 통합 및 `.env` API 키 주입 — accepted, T-013에서 `maplibre-gl + VWorld WMTS` 직접 구성으로 보강(공개 wrapper 미사용).
 - **ADR-5**: YouTube API 할당량 절약용 Scraping/Caching 전략 — superseded by ADR-11(공식 YouTube Data API 우선).
-- **ADR-6**: Windows 환경 Playwright E2E 파이프라인 — superseded by ADR-23(앱 구동 환경 한정). Playwright 도구 채택과 E2E 하니스의 Windows 호스트 실행 예외는 ADR-23으로 유지.
+- **ADR-6**: Windows 환경 Playwright E2E 파이프라인 — superseded by ADR-23(앱 구동 환경 한정), 이후 ADR-33이 기본 E2E 검증 호스트를 n150 live/Linux로 옮기고 Windows 호스트 실행은 fallback 하니스로 축소.
 - **ADR-8**: 지오코딩 공급자 전략 및 `kraddr-geo` 제외 — accepted, ADR-19로 VWorld 최우선 구현 기준 보강.
 - **ADR-9**: ETL 복원력 보강 원칙 — accepted, 자막 3단계 폴백·멱등·watermark·작업 상태·429 백오프(ADR-11/ADR-30이 인용·확장).
 - **ADR-10**: SQLite3 우선 구현과 PostGIS 전환 유보 — superseded by ADR-12, 이후 ADR-25로 PostgreSQL/PostGIS 전환.

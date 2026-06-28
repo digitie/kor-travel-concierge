@@ -1,24 +1,25 @@
-# Linux/Docker(및 Windows WSL2) 개발 및 평가 환경 구축 가이드
+# Linux/Docker(및 WSL2) 개발 및 평가 환경 구축 가이드
 
-본 문서는 `kor-travel-concierge` 프로젝트의 프론트엔드, 백엔드, ETL 파이프라인을 **Linux Docker**(앱 런타임/배포 전용, ADR-23)에서 빌드·실행하고, **E2E Playwright 테스트를 Windows 호스트에서 실행**(ADR-23 예외)하기 위한 상세 절차를 다룹니다. Windows 사용자는 앱 구동에 한해 WSL2(Ubuntu) + Docker를 사용합니다.
+본 문서는 `kor-travel-concierge` 프로젝트의 프론트엔드, 백엔드, ETL 파이프라인을 **Linux Docker**(앱 런타임/배포 전용, ADR-23)에서 빌드·실행하고, **E2E Playwright 테스트를 n150 live/Linux 환경에서 우선 실행**(ADR-33)하기 위한 상세 절차를 다룹니다. Windows 사용자는 앱 구동과 개발 작업을 WSL2(Ubuntu) + Docker 안에서 수행합니다.
 
-> 앱 런타임을 Windows 네이티브로 직접 띄우지 않습니다. 모든 앱 실행 명령은 Linux/WSL2 bash 기준이며, E2E 하니스만 Windows 호스트에서 실행합니다.
-> 에이전트/Codex가 이 저장소에서 실행하는 명령은 `git` 명령과 Windows Playwright E2E를 제외하고 WSL2(Ubuntu) bash에서만 수행합니다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행합니다.
+> 앱 런타임을 Windows 네이티브로 직접 띄우지 않습니다. 모든 앱 실행 명령은 Linux/WSL2 bash 기준입니다.
+> 에이전트/Codex가 이 저장소에서 실행하는 명령은 `git`, `gh`, codegraph 계열 인덱싱/분석 명령까지 포함해 WSL2(Ubuntu)를 포함한 Linux bash에서만 수행합니다.
+> E2E Playwright는 n150 live/Linux 환경에서 우선 실행하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행합니다.
 > ADR-25/T-061 이후 DB는 PostgreSQL + PostGIS입니다. 신규 DB 작업은 Alembic migration과 모델을 함께 갱신합니다.
 
 ---
 
 ## 1. 사전 요구사항
 
-### 앱 런타임/개발 (Linux 또는 Windows WSL2)
+### 앱 런타임/개발 (Linux 또는 WSL2)
 - **Docker Engine / Docker Compose**: 기본 실행 경로(단일 호스트 Compose). Windows 사용자는 Docker Desktop의 WSL2 backend 또는 WSL2 내부 Docker Engine을 사용합니다.
 - **Node.js**: v20.9 이상. Next.js 16 기준 Node.js 20.9 이상이 필요합니다. ([다운로드](https://nodejs.org/))
 - **Python**: v3.10 이상(컨테이너 밖 로컬 개발 시). Linux/WSL의 `python3 -m venv`를 사용합니다.
 - **PostgreSQL + PostGIS**: 로컬 개발은 `python-kraddr-geo`가 쓰는 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `kor_travel_concierge`를 사용합니다.
-- **Git**: ([다운로드](https://git-scm.com/))
+- **Git**: Linux/WSL 패키지 관리자로 설치해 Linux bash에서 실행합니다.
 
-### E2E 테스트 (Windows 호스트, ADR-23 예외)
-- **Node.js 20.9+**: Windows 호스트에 설치합니다.
+### E2E 테스트 (n150 live/Linux 우선, Windows fallback)
+- **Node.js 20.9+**: n150 live/Linux 환경에 설치합니다. Windows fallback이 필요할 때만 Windows 호스트에도 설치합니다.
 - **Playwright 브라우저**: `npx playwright install`로 설치합니다(아래 9절 참조).
 
 ---
@@ -263,7 +264,7 @@ DB를 사용합니다. 이 job store는 scheduler 재시작 시 `crawl-run-worke
 
 ## 8. Docker Compose 통합 검증 — Linux/WSL2
 
-이것이 기본 실행/검증 경로입니다. Linux 또는 Windows WSL2(Ubuntu) 안에서 Docker Engine(또는 Docker Desktop WSL backend)이 실행 중인 상태로 다음을 실행합니다.
+이것이 기본 실행/검증 경로입니다. Linux 또는 WSL2(Ubuntu) 안에서 Docker Engine(또는 Docker Desktop WSL backend)이 실행 중인 상태로 다음을 실행합니다.
 
 ```bash
 cp .env.example .env
@@ -304,34 +305,36 @@ dev 기준 `http://127.0.0.1:12602/mcp`로 접근합니다.
 
 ---
 
-## 9. E2E 통합 테스트 (Playwright) — Windows 호스트 (ADR-23 예외)
+## 9. E2E 통합 테스트 (Playwright) — n150 live/Linux 우선
 
-> **여기만 Windows입니다.** 앱 런타임/배포는 Linux/WSL2 Docker로만 구동하지만(2~8절), E2E Playwright 스위트는 **의도적으로 Windows 호스트에서 직접 실행**합니다. 실제 Windows 브라우저 사용 경험(VWorld 지도 렌더링 포함)을 검증하기 위함이며, 이 절의 PowerShell 명령은 Windows 호스트에서 그대로 실행하는 것이 맞습니다. E2E 백엔드는 `APP_ENV=e2e`로 기동하므로 API 인증(`X-API-Key`)이 우회됩니다(ADR-24).
+> **우선 경로는 n150 live/Linux입니다.** 앱 런타임/배포와 개발 작업은 Linux/WSL2 Docker로만 구동합니다(2~8절). E2E Playwright 스위트도 n150 live/Linux 환경에서 먼저 실행하고, n150 접근·브라우저 설치·네트워크·DB·계정 상태 때문에 불가능할 때만 Windows 호스트에서 fallback 실행합니다. E2E 백엔드는 `APP_ENV=e2e`로 기동하므로 API 인증(`X-API-Key`)이 우회됩니다(ADR-24).
 
 본 프로젝트는 프론트엔드와 백엔드가 정상적으로 메시지를 교환하고 PostgreSQL/PostGIS DB 적재 및 VWorld 지도 로딩이 깨지지 않는지 Playwright E2E로 검증합니다.
 
-1. Windows 호스트에서 `tests` 디렉토리로 이동하여 의존 모듈을 설치합니다:
-   ```powershell
+1. n150 live/Linux 환경에서 `tests` 디렉토리로 이동하여 의존 모듈을 설치합니다:
+   ```bash
    cd ../tests
    npm install
    ```
 
 2. Playwright 전용 헤드리스 브라우저를 다운로드합니다:
-   ```powershell
+   ```bash
    npx playwright install
    ```
 
 3. 테스트를 실행합니다. Playwright 설정이 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100` 개발 서버를 자동으로 기동합니다:
-   ```powershell
+   ```bash
    npx playwright test
    ```
    - 특정 테스트 브라우저 UI를 보면서 시각적으로 검증하고 싶다면 `--headed` 플래그를 추가합니다:
-     ```powershell
+     ```bash
      npx playwright test --headed
      ```
    - 포트를 바꾸려면 `E2E_BACKEND_PORT`, `E2E_FRONTEND_PORT`, `E2E_API_BASE_URL`, `E2E_FRONTEND_URL` 환경 변수를 지정합니다.
-   - E2E는 `KTC_E2E_DATABASE_URL` 또는 `KTC_TEST_PG_DSN`이 가리키는 disposable PostgreSQL/PostGIS DB를 사용합니다. 매 테스트 시작 전에 `tests\scripts\seed_e2e.py`가 장소, 검수 후보, MCP 감사 로그, RustFS 대표 프레임 메타데이터를 재시드합니다.
-   - 테스트 산출물(`tests\test-results`, `tests\playwright-report`)은 Git 추적 대상이 아닙니다.
+   - E2E는 `KTC_E2E_DATABASE_URL` 또는 `KTC_TEST_PG_DSN`이 가리키는 disposable PostgreSQL/PostGIS DB를 사용합니다. 매 테스트 시작 전에 `tests/scripts/seed_e2e.py`가 장소, 검수 후보, MCP 감사 로그, RustFS 대표 프레임 메타데이터를 재시드합니다.
+   - 테스트 산출물(`tests/test-results`, `tests/playwright-report`)은 Git 추적 대상이 아닙니다.
+
+4. n150에서 실행할 수 없을 때만 Windows 호스트 fallback을 사용합니다. 이 경우 `tests` 디렉토리에서 같은 명령을 PowerShell로 실행하고, 왜 n150 실행이 불가했는지 PR이나 작업 일지에 남깁니다.
 
 검증 범위는 다음과 같습니다.
 

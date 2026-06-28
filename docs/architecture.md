@@ -112,7 +112,10 @@ source 정규화 테이블이 T-062까지 반영되었다.
 콘솔 `http://127.0.0.1:12105`이다. 앱 컨테이너는 RustFS를
 `http://host.docker.internal:12101`로 호출하고, `http://rustfs:9000`은 선택형
 `embedded-rustfs` profile에서만 사용한다(Windows 사용자는 WSL2 안에서 동일하게
-구동). `scripts/start-live.sh`는 기동 전 `scripts/stop-fixed-ports.sh`로
+구동). 개발·검증·리포지토리 작업 명령은 `git`, `gh`, codegraph 계열 분석까지
+포함해 WSL2(Ubuntu)를 포함한 Linux bash에서 실행하고, Playwright E2E는 n150
+live/Linux 환경에서 우선 실행하며 불가할 때만 Windows 호스트 fallback을 사용한다(ADR-33).
+`scripts/start-live.sh`는 기동 전 `scripts/stop-fixed-ports.sh`로
 이 repo 소유 고정 포트 `12601`/`12602`/`12605`를 점유한 리스너를 회수해
 재시작을 보장하고 RustFS 포트 `12101`/`12105`는 회수하지 않는다(패턴은 `python-krtour-map`에서 차용).
 Compose CORS 허용 origin은 `.env`의 `CORS_ALLOW_ORIGINS`를 우선하고 기본값으로 `3000`, `12605`, `13100`의 local

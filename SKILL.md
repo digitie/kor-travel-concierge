@@ -1,8 +1,8 @@
 # SKILL — kor-travel-concierge 에이전트 매뉴얼
 
 > 이 파일은 당신(AI 에이전트)이 작업을 시작하기 전 반드시 읽어야 한다.
-> Linux/Docker(및 Windows WSL2) 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
-> 앱 런타임/배포는 Linux Docker 전용이며(ADR-23), 예외적으로 E2E Playwright는 Windows 호스트에서 실행한다.
+> Linux/Docker(및 WSL2) 개발 환경 셋업과 Gemini API, YouTube API 최적화에 대한 팁을 담고 있다.
+> 앱 런타임/배포와 개발 작업은 Linux Docker/WSL 전용이며(ADR-23/ADR-33), E2E Playwright는 n150 live/Linux 환경에서 우선 실행하고 불가할 때만 Windows 호스트에서 fallback 실행한다.
 
 ## 1. 정체성
 
@@ -19,8 +19,8 @@
 - **앱 런타임/배포**: Linux Docker 전용(ADR-23). Windows 호스트는 WSL2(Ubuntu) + Docker 안에서 동일하게 구동한다.
 - **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용(Linux/WSL).
 - **Node.js**: Node.js 20+ LTS 사용.
-- **E2E 테스트**: Playwright를 **Windows 호스트**에서 실행해 실제 사용자에 가까운 브라우저 화면을 검증한다(ADR-23 예외).
-- **Codex 실행 위치**: 에이전트/Codex가 실행하는 명령은 `git` 명령과 Windows Playwright E2E를 제외하고 모두 WSL2(Ubuntu) bash에서 수행한다. `gh`, Docker, Python, Node.js, 테스트, 빌드, 파일 검색·확인 명령은 WSL에서 실행한다.
+- **E2E 테스트**: Playwright를 **n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행한다(ADR-33).
+- **Codex 실행 위치**: 에이전트/Codex가 실행하는 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 수행한다. PowerShell/cmd는 n150 Playwright가 불가능한 경우의 Windows E2E fallback에만 사용한다.
 
 ## 2. 빠른 시작
 
@@ -53,13 +53,14 @@ npm install
 npm run dev                     # Web 3000
 ```
 
-### Playwright 테스트 실행 (Windows 호스트 — ADR-23 예외)
-```powershell
+### Playwright 테스트 실행 (n150 live/Linux 우선)
+```bash
 cd tests
 npm install
 npx playwright install
 npx playwright test
 ```
+n150에서 실행할 수 없을 때만 Windows 호스트에서 같은 명령을 PowerShell로 실행한다.
 
 ## 3. 절대 하지 말 것 (DO NOT)
 
@@ -71,7 +72,7 @@ npx playwright test
    - 비공식 검색 크롤러는 기본 설계에서 제외하고, 비공식 의존은 자막 추출과 프레임 추출 구간으로 격리한다.
    - 한 번 수집된 비디오 정보는 PostgreSQL + PostGIS DB에 캐싱하여 재수집을 배제한다.
 4. **FastAPI 비동기 세션 leak 방지**: SQLAlchemy 2.0의 `AsyncSession` 또는 동기 `Session`을 사용할 때 Context Manager(`with` 또는 `async with`)를 사용하거나 Depends 주입 방식을 명확히 준수하여 DB 연결 누수를 막는다.
-5. **Windows 네이티브 앱 실행 경로 작성 금지**: 앱 런타임/배포는 Linux Docker 전용이다(ADR-23). 개발 유틸 스크립트는 bash(`.sh`) 또는 Python으로 작성하고, PowerShell(`*.ps1`)·cmd 전용 자산이나 `process.platform === 'win32'` 류의 Windows 전용 앱 분기를 새로 만들지 않는다. Windows 사용자는 WSL2(Ubuntu) 안에서 동일한 bash/Docker 명령으로 앱을 구동한다. 예외는 Windows 호스트에서 실행하는 E2E Playwright 테스트 하니스뿐이며, 이 예외도 앱 코드에 `win32` 분기를 되살리지 않는다.
+5. **Windows 네이티브 앱 실행 경로 작성 금지**: 앱 런타임/배포는 Linux Docker 전용이다(ADR-23/ADR-33). 개발 유틸 스크립트는 bash(`.sh`) 또는 Python으로 작성하고, PowerShell(`*.ps1`)·cmd 전용 자산이나 `process.platform === 'win32'` 류의 Windows 전용 앱 분기를 새로 만들지 않는다. Windows 사용자는 WSL2(Ubuntu) 안에서 동일한 bash/Docker 명령으로 앱을 구동한다. E2E Playwright도 n150 live/Linux 우선이며, Windows 호스트 실행은 n150에서 불가능할 때의 fallback 하니스로만 둔다.
 6. **`kraddr-geo` 지오코딩 연계 재도입 금지**: 최신 요청에 따라 `kraddr-geo` 지오코딩 연계는 취소되었다. Geocoding/Reverse Geocoding은 VWorld를 최우선으로 하며, VWorld 호출은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고 내부 adapter/wrapper 계층은 만들지 않는다. 단, ADR-25의 `python-kraddr-geo` PostgreSQL/PostGIS DB 서버 재사용은 지오코딩 연계가 아니라 로컬 인프라 재사용이다.
 7. **RustFS 객체 자동 삭제 금지**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 무기한 보존한다. DB 논리 삭제나 장소 매칭 실패만으로 객체를 삭제하는 로직을 만들지 않는다.
 8. **매칭 실패 장소 자동 확정 금지**: 지오코딩 결과가 없거나 모호하면 `needs_review` 후보로 남기고 웹 UI 또는 MCP 도구를 통한 사용자 판단을 요구한다.
@@ -146,6 +147,6 @@ npx playwright test
 
 - [ ] Python 가상 환경에서 `pytest` 테스트 통과
 - [ ] 프론트엔드 TypeScript 오류(`npm run type-check`) 및 린터 체크 통과
-- [ ] Windows Playwright E2E 테스트 통과
+- [ ] n150 live/Linux Playwright E2E 테스트 통과(불가 시 Windows fallback 결과 기록)
 - [ ] `docs/tasks.md` 및 `docs/journal.md` 문서 최신화
 - [ ] PR 제출 및 코드 정합성 검증 확인
