@@ -165,6 +165,20 @@
   }
 }
 
+@layer components {
+  @media (min-width: 1024px) {
+    .ktc-viewport-locked {
+      height: 100vh;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .ktc-viewport-locked-content {
+      overflow: hidden;
+    }
+  }
+}
+
 /* DESIGN-RULES 9: prefers-reduced-motion에서 animation/transition을 사실상 비활성화한다. */
 @media (prefers-reduced-motion: reduce) {
   *,

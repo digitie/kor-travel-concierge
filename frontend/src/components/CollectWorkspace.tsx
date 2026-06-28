@@ -108,8 +108,8 @@ export function CollectWorkspace() {
     null;
 
   return (
-    <div className="flex h-full min-h-[40rem] flex-col lg:min-h-0 lg:overflow-hidden">
-      <div className="grid shrink-0 grid-cols-1 border-b lg:max-h-[34rem] lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="grid min-h-0 shrink-0 grid-cols-1 border-b lg:h-96 lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
         <div className="min-h-0 lg:overflow-y-auto lg:border-r">
           <HarvestConsole />
         </div>
@@ -147,7 +147,7 @@ export function CollectWorkspace() {
           </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <JobsPanel
           targets={sourceTargetsQuery.data ?? []}
           errorMessage={sourceTargetsQuery.error?.message ?? null}
@@ -377,142 +377,144 @@ function JobsPanel({
   return (
     <section
       aria-label="반복 작업"
-      className="flex h-full min-h-0 flex-col gap-3 p-3 lg:overflow-y-auto"
+      className="flex h-full min-h-0 flex-col gap-3 pt-3"
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 px-3">
         <h2 className="text-sm font-semibold">반복 작업</h2>
         <Badge variant="secondary">{targets.length}</Badge>
       </div>
       {errorMessage ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="px-3 text-xs text-destructive">
           {errorMessage}
         </p>
       ) : null}
       {targets.length > 0 ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>대상</TableHead>
-              <TableHead>주기</TableHead>
-              <TableHead>기본</TableHead>
-              <TableHead>누적</TableHead>
-              <TableHead>일정</TableHead>
-              <TableHead>상태</TableHead>
-              <TableHead className="text-right">액션</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {targets.map((target) => {
-              const targetName =
-                target.target_label ?? target.display_name ?? target.source_value;
-              return (
-                <TableRow key={target.id}>
-                  <TableCell>
-                    <button
-                      type="button"
-                      className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                      onClick={() => onDetailTarget(target)}
-                    >
-                      <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                        {target.target_type_label ??
-                          targetTypeLabel(target.target_type)}
-                      </span>
-                      <span className="font-bold leading-snug">{targetName}</span>
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col text-[13px]">
-                      <span>{intervalLabel(target.scan_interval_minutes)}</span>
-                      <span className="text-[12px] text-text-secondary">
-                        회당 {target.max_videos ?? "-"}개
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">
-                      {categoryDisplayLabel(
-                        target.default_category_label ??
-                          target.default_category_code,
-                      )}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col text-[13px]">
-                      <span>
-                        {target.max_runs === 0
-                          ? `무한 (${target.run_count}회)`
-                          : `${target.run_count}/${target.max_runs}회`}
-                      </span>
-                      <span className="text-[12px] text-text-secondary">
-                        최근 {formatRunTime(target.last_crawled_at)}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col text-[12px] text-text-secondary">
-                      <span>다음 {formatDateTime(target.next_crawl_at)}</span>
-                      <span>스캔 {formatDateTime(target.last_scan_at)}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
-                      <Badge variant={target.is_active ? "outline" : "secondary"}>
-                        {target.is_active ? "활성" : "중지"}
-                      </Badge>
-                      {target.last_scan_error ? (
-                        <span className="line-clamp-2 text-[12px] text-destructive">
-                          {target.last_scan_error}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>대상</TableHead>
+                <TableHead>주기</TableHead>
+                <TableHead>기본</TableHead>
+                <TableHead>누적</TableHead>
+                <TableHead>일정</TableHead>
+                <TableHead>상태</TableHead>
+                <TableHead className="text-right">액션</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {targets.map((target) => {
+                const targetName =
+                  target.target_label ?? target.display_name ?? target.source_value;
+                return (
+                  <TableRow key={target.id}>
+                    <TableCell>
+                      <button
+                        type="button"
+                        className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
+                        onClick={() => onDetailTarget(target)}
+                      >
+                        <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
+                          {target.target_type_label ??
+                            targetTypeLabel(target.target_type)}
                         </span>
-                      ) : (
+                        <span className="font-bold leading-snug">{targetName}</span>
+                      </button>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col text-[13px]">
+                        <span>{intervalLabel(target.scan_interval_minutes)}</span>
                         <span className="text-[12px] text-text-secondary">
-                          실패 {target.scan_failure_count}회
+                          회당 {target.max_videos ?? "-"}개
                         </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        type="button"
-                        size="xs"
-                        disabled={isRunningNow}
-                        onClick={() => {
-                          setRunNowForce(false);
-                          setRunNowTarget(target);
-                        }}
-                      >
-                        <ZapIcon data-icon="inline-start" />
-                        실행
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        onClick={() => onEditTarget(target)}
-                      >
-                        <PencilIcon data-icon="inline-start" />
-                        수정
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="destructive"
-                        disabled={isDeleting}
-                        onClick={() => onDeleteTarget(target.id)}
-                        aria-label={`${targetName} 반복 삭제`}
-                      >
-                        <Trash2Icon data-icon="inline-start" />
-                        삭제
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {categoryDisplayLabel(
+                          target.default_category_label ??
+                            target.default_category_code,
+                        )}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col text-[13px]">
+                        <span>
+                          {target.max_runs === 0
+                            ? `무한 (${target.run_count}회)`
+                            : `${target.run_count}/${target.max_runs}회`}
+                        </span>
+                        <span className="text-[12px] text-text-secondary">
+                          최근 {formatRunTime(target.last_crawled_at)}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col text-[12px] text-text-secondary">
+                        <span>다음 {formatDateTime(target.next_crawl_at)}</span>
+                        <span>스캔 {formatDateTime(target.last_scan_at)}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
+                        <Badge variant={target.is_active ? "outline" : "secondary"}>
+                          {target.is_active ? "활성" : "중지"}
+                        </Badge>
+                        {target.last_scan_error ? (
+                          <span className="line-clamp-2 text-[12px] text-destructive">
+                            {target.last_scan_error}
+                          </span>
+                        ) : (
+                          <span className="text-[12px] text-text-secondary">
+                            실패 {target.scan_failure_count}회
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          size="xs"
+                          disabled={isRunningNow}
+                          onClick={() => {
+                            setRunNowForce(false);
+                            setRunNowTarget(target);
+                          }}
+                        >
+                          <ZapIcon data-icon="inline-start" />
+                          실행
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          onClick={() => onEditTarget(target)}
+                        >
+                          <PencilIcon data-icon="inline-start" />
+                          수정
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="destructive"
+                          disabled={isDeleting}
+                          onClick={() => onDeleteTarget(target.id)}
+                          aria-label={`${targetName} 반복 삭제`}
+                        >
+                          <Trash2Icon data-icon="inline-start" />
+                          삭제
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       ) : (
-        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+        <p className="mx-3 rounded-lg border p-2 text-xs text-muted-foreground">
           반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
         </p>
       )}

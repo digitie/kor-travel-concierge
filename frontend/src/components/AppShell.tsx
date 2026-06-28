@@ -42,6 +42,7 @@ export function AppShell({
   actions,
   children,
   contentClassName,
+  viewportLocked,
 }: {
   title: string;
   description?: string;
@@ -49,6 +50,7 @@ export function AppShell({
   actions?: ReactNode;
   children: ReactNode;
   contentClassName?: string;
+  viewportLocked?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -115,8 +117,13 @@ export function AppShell({
             </nav>
           </div>
         </aside>
-        <div className="flex min-h-screen min-w-0 flex-col">
-          <header className="px-4 pt-4 lg:px-6 lg:pt-6">
+        <div
+          className={cn(
+            "flex min-h-screen min-w-0 flex-col",
+            viewportLocked && "ktc-viewport-locked",
+          )}
+        >
+          <header className="shrink-0 px-4 pt-4 lg:px-6 lg:pt-6">
             <div className="rounded-2xl bg-card p-4 shadow-[var(--shadow-card)] ring-1 ring-border/70 lg:p-6">
               <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -145,7 +152,8 @@ export function AppShell({
           </header>
           <div
             className={cn(
-              "min-w-0 flex-1 px-4 py-4 lg:px-6 lg:py-6",
+              "min-h-0 min-w-0 flex-1 px-4 py-4 lg:px-6 lg:py-6",
+              viewportLocked && "ktc-viewport-locked-content",
               contentClassName,
             )}
           >

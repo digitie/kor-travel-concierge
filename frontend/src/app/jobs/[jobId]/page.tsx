@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeftIcon, ExternalLinkIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CheckCircle2Icon,
+  ExternalLinkIcon,
+  ListVideoIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 
 import {
   getRun,
@@ -34,63 +40,126 @@ export default function JobDetailPage() {
   });
   const run = runQuery.data;
   const stats = statsQuery.data ?? [];
-  const processed = stats.filter((s) => s.poi_total > 0).length;
 
   return (
     <AppShell
-      title={`작업 상세 #${jobId}`}
-      description="작업 진행, 결과, 영상별 처리 현황을 확인합니다."
+      title="작업 상세"
+      description={`작업 ID ${jobId}`}
       section="상태"
       actions={
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => router.back()}
-        >
-          <ArrowLeftIcon data-icon="inline-start" />
-          뒤로
-        </Button>
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void runQuery.refetch();
+              void statsQuery.refetch();
+            }}
+          >
+            <RefreshCwIcon data-icon="inline-start" />
+            새로고침
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => router.back()}
+          >
+            <ArrowLeftIcon data-icon="inline-start" />
+            뒤로
+          </Button>
+        </>
       }
     >
-      <div className="flex flex-col gap-4 overflow-y-auto p-5">
+      <div className="flex flex-col gap-5">
         {runQuery.isLoading ? (
-          <p className="text-sm text-muted-foreground">불러오는 중…</p>
+          <Panel title="작업">
+            <EmptyState>불러오는 중...</EmptyState>
+          </Panel>
         ) : run ? (
-          <JobDetailView run={run} hideVideos />
+          <JobDetailView run={run} hideVideos variant="page" />
         ) : (
-          <p className="text-sm text-muted-foreground">작업을 찾을 수 없습니다.</p>
+          <Panel title="작업">
+            <EmptyState>작업을 찾을 수 없습니다.</EmptyState>
+          </Panel>
         )}
 
-        <div className="flex flex-col gap-2 border-t pt-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">영상별 POI · 보정 자막 · 재실행</p>
-            <span className="text-xs text-muted-foreground">
-              {/* 진행 근사: POI가 추출된 영상 수 / 전체 영상 수. 정밀 단계 카운트는
-                  백엔드 미추적이라 진행률·현재 메시지(위)로 보완. */}
-              영상 {stats.length}개 중 {processed}개 처리
-            </span>
-          </div>
-          {statsQuery.isLoading ? (
-            <p className="text-xs text-muted-foreground">불러오는 중…</p>
-          ) : stats.length === 0 ? (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              수집된 영상이 없습니다.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {stats.map((stat) => (
-                <VideoStatRow key={stat.video_id} stat={stat} />
-              ))}
-            </div>
-          )}
-        </div>
+        <VideoStatsSection stats={stats} isLoading={statsQuery.isLoading} />
       </div>
     </AppShell>
   );
 }
 
-function VideoStatRow({ stat }: { stat: RunVideoStat }) {
+function VideoStatsSection({
+  stats,
+  isLoading,
+}: {
+  stats: RunVideoStat[];
+  isLoading: boolean;
+}) {
+  const processed = stats.filter((stat) => stat.poi_total > 0).length;
+  const totalPoi = stats.reduce((sum, stat) => sum + stat.poi_total, 0);
+  const reviewPoi = stats.reduce((sum, stat) => sum + stat.poi_needs_review, 0);
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <h2 className="text-[15px] font-bold">영상 처리</h2>
+        <p className="text-[13px] text-text-secondary">
+          영상별 POI 추출 결과, 보정 자막, 재실행 액션을 확인합니다.
+        </p>
+      </div>
+
+      <section className="grid gap-3 md:grid-cols-3">
+        <MetricCard
+          icon={<ListVideoIcon className="size-4" />}
+          label="처리 영상"
+          value={`${processed.toLocaleString()} / ${stats.length.toLocaleString()}개`}
+        />
+        <MetricCard
+          icon={<CheckCircle2Icon className="size-4" />}
+          label="추출 POI"
+          value={`${totalPoi.toLocaleString()}개`}
+        />
+        <MetricCard
+          icon={<CheckCircle2Icon className="size-4" />}
+          label="검수 대기"
+          value={`${reviewPoi.toLocaleString()}개`}
+          tone={reviewPoi > 0 ? "warn" : "neutral"}
+        />
+      </section>
+
+      <Panel title="영상별 POI · 보정 자막 · 재실행">
+        {isLoading ? (
+          <EmptyState>불러오는 중...</EmptyState>
+        ) : stats.length === 0 ? (
+          <EmptyState>수집된 영상이 없습니다.</EmptyState>
+        ) : (
+          <div className="max-h-[34rem] overflow-auto rounded-lg border border-surface-muted">
+            <table className="w-full min-w-[60rem] text-[13px]">
+              <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
+                <tr>
+                  <th className="px-3 py-2">영상</th>
+                  <th className="px-3 py-2">POI</th>
+                  <th className="px-3 py-2">상태</th>
+                  <th className="px-3 py-2 text-right">액션</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.map((stat) => (
+                  <VideoStatRows key={stat.video_id} stat={stat} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </section>
+  );
+}
+
+function VideoStatRows({ stat }: { stat: RunVideoStat }) {
   const router = useRouter();
   const [showTranscript, setShowTranscript] = useState(false);
   const transcriptQuery = useQuery({
@@ -103,76 +172,150 @@ function VideoStatRow({ stat }: { stat: RunVideoStat }) {
   });
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <a
-          href={stat.url}
-          target="_blank"
-          rel="noreferrer"
-          className="flex min-w-0 items-center gap-1 truncate text-sm font-medium hover:underline"
-        >
-          <span className="truncate">{stat.title}</span>
-          <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" />
-        </a>
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={reprocess.isPending}
-          onClick={() => {
-            if (
-              window.confirm(
-                "이 영상의 자막 교정 → POI 추출을 다시 실행할까요?",
-              )
-            ) {
-              reprocess.mutate();
-            }
-          }}
-        >
-          재실행
-        </Button>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => router.push(`/?video=${encodeURIComponent(stat.video_id)}`)}
-        title="이 영상의 POI를 결과 화면에서 필터로 보기"
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md text-left text-xs transition-colors hover:opacity-80"
-      >
-        <Badge variant="secondary">POI {stat.poi_total}</Badge>
-        <span className="text-muted-foreground">
-          자동 {stat.poi_auto} · 검수 대기 {stat.poi_needs_review} · 완료{" "}
-          {stat.poi_resolved}
-        </span>
-        <span className="text-primary">결과에서 보기 →</span>
-      </button>
-
-      {reprocess.isSuccess ? (
-        <p className="text-xs text-primary">재처리 작업으로 등록했습니다.</p>
-      ) : reprocess.error ? (
-        <p className="text-xs text-destructive">{reprocess.error.message}</p>
-      ) : null}
-
-      <button
-        type="button"
-        onClick={() => setShowTranscript((v) => !v)}
-        className="w-fit text-xs text-muted-foreground hover:text-foreground"
-      >
-        {showTranscript ? "보정 자막 닫기 ▲" : "보정 자막 보기 ▼"}
-      </button>
+    <Fragment>
+      <tr className="border-t border-surface-muted">
+        <td className="px-3 py-2 align-top">
+          <a
+            href={stat.url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex min-w-0 items-start gap-1 font-medium"
+          >
+            <span className="line-clamp-2">{stat.title}</span>
+            <ExternalLinkIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+          </a>
+          <span className="font-mono text-[11px] text-text-secondary">
+            {stat.video_id}
+          </span>
+        </td>
+        <td className="px-3 py-2 align-top">
+          <Badge variant="secondary">POI {stat.poi_total}</Badge>
+        </td>
+        <td className="px-3 py-2 align-top">
+          <div className="flex flex-col gap-1 text-[12px] text-text-secondary">
+            <span>자동 {stat.poi_auto.toLocaleString()}</span>
+            <span>검수 대기 {stat.poi_needs_review.toLocaleString()}</span>
+            <span>완료 {stat.poi_resolved.toLocaleString()}</span>
+            {reprocess.isSuccess ? (
+              <span className="text-primary">재처리 작업 등록됨</span>
+            ) : reprocess.error ? (
+              <span className="text-destructive">{reprocess.error.message}</span>
+            ) : null}
+          </div>
+        </td>
+        <td className="px-3 py-2 align-top">
+          <div className="flex justify-end gap-1">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() =>
+                router.push(`/?video=${encodeURIComponent(stat.video_id)}`)
+              }
+            >
+              결과
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => setShowTranscript((value) => !value)}
+            >
+              {showTranscript ? "자막 닫기" : "자막"}
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={reprocess.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "이 영상의 자막 교정 → POI 추출을 다시 실행할까요?",
+                  )
+                ) {
+                  reprocess.mutate();
+                }
+              }}
+            >
+              재실행
+            </Button>
+          </div>
+        </td>
+      </tr>
       {showTranscript ? (
-        transcriptQuery.isLoading ? (
-          <p className="text-xs text-muted-foreground">불러오는 중…</p>
-        ) : transcriptQuery.data?.text ? (
-          <pre className="max-h-60 overflow-y-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-            {transcriptQuery.data.text}
-          </pre>
-        ) : (
-          <p className="rounded-md border p-2 text-xs text-muted-foreground">
-            보정 자막이 없습니다(RustFS 미구성이거나 아직 저장 전).
-          </p>
-        )
+        <tr className="border-t border-surface-muted bg-surface-row">
+          <td colSpan={4} className="px-3 py-3">
+            {transcriptQuery.isLoading ? (
+              <EmptyState>불러오는 중...</EmptyState>
+            ) : transcriptQuery.data?.text ? (
+              <pre className="max-h-72 overflow-y-auto rounded-lg border border-surface-muted bg-surface-subtle p-3 text-xs whitespace-pre-wrap">
+                {transcriptQuery.data.text}
+              </pre>
+            ) : (
+              <EmptyState>
+                보정 자막이 없습니다(RustFS 미구성이거나 아직 저장 전).
+              </EmptyState>
+            )}
+          </td>
+        </tr>
       ) : null}
+    </Fragment>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <h2 className="mb-3 flex items-center gap-1.5 text-[14px] font-bold">
+        <CheckCircle2Icon className="size-4 text-brand" />
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  tone = "neutral",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone?: "neutral" | "active" | "warn";
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <span
+        className={
+          tone === "active"
+            ? "mt-0.5 text-brand"
+            : tone === "warn"
+              ? "mt-0.5 text-warning"
+              : "mt-0.5 text-text-secondary"
+        }
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[12px] font-bold uppercase tracking-[0.05em] text-text-secondary">
+          {label}
+        </span>
+        <span className="mt-1 block text-[16px] font-bold leading-snug text-text-primary">
+          {value}
+        </span>
+      </span>
     </div>
+  );
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-lg border border-surface-muted bg-surface-subtle p-3 text-[13px] text-text-secondary">
+      {children}
+    </p>
   );
 }
