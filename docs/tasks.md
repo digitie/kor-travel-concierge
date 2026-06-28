@@ -18,6 +18,12 @@
 
 ## 완료
 
+- [x] **T-148**: 개발 명령 Linux 전용과 Playwright n150 우선 정책 문서화 — 개발·검증·리포지토리
+  작업 명령은 `git`/`gh`/codegraph 계열 분석까지 모두 WSL2(Ubuntu)를 포함한 Linux bash에서
+  실행하도록 정리했다. E2E Playwright는 n150 live/Linux 환경에서 우선 실행하고, n150 접근·브라우저·
+  환경 제약으로 불가할 때만 Windows 호스트 fallback을 허용한다. `AGENTS.md`, `README.md`, `SKILL.md`,
+  `CLAUDE.md`, `docs/dev-environment.md`, `docs/architecture.md`, ADR-33, 작업 일지를 갱신했다.
+  (2026-06-28)
 - [x] **T-147**: 결과 지도 크기와 장소 클릭 재중심 보정 — 결과 페이지도 데스크톱 viewport lock을
   적용해 지도 영역이 화면 높이에 맞게 안정적으로 잡히도록 했다. MapLibre 지도는 ResizeObserver로
   컨테이너 크기 변화를 감지해 `resize()`를 호출하고, 장소 목록/마커 클릭마다 focus key를 증가시켜

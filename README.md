@@ -55,7 +55,7 @@
 
 ## 시작하기
 
-앱 런타임/배포는 **Linux Docker 전용**입니다(ADR-23). 기본 실행은 단일 호스트 Docker Compose이며, Windows 사용자는 WSL2(Ubuntu) + Docker 안에서 동일한 명령을 사용합니다. 예외적으로 **E2E Playwright 테스트는 Windows 호스트에서 실행**합니다. 에이전트/Codex 작업 명령은 `git` 명령과 Windows Playwright E2E를 제외하고 모두 WSL2(Ubuntu) bash에서 실행합니다.
+앱 런타임/배포는 **Linux Docker 전용**입니다(ADR-23). 기본 실행은 단일 호스트 Docker Compose이며, Windows 사용자는 WSL2(Ubuntu) + Docker 안에서 동일한 명령을 사용합니다. 에이전트/Codex 작업 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 실행합니다(ADR-33). **E2E Playwright 테스트는 n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행합니다.
 
 REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입합니다(키는 브라우저에 노출되지 않음). 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 `API_KEYS`를 설정합니다(ADR-24).
 
@@ -176,24 +176,24 @@ npm run dev                     # Web 3000
 ./ktcctl etl
 ```
 
-### E2E 테스트 실행 (Windows 호스트 — ADR-23 예외)
+### E2E 테스트 실행 (n150 live/Linux 우선)
 
-앱 런타임은 Linux Docker 전용이지만, E2E Playwright 하니스는 실제 사용자에 가까운 Windows 브라우저 검증을 위해 **Windows 호스트**에서 실행합니다.
+E2E Playwright 하니스는 **n150 live/Linux 환경에서 우선 실행**합니다. n150 접근, 브라우저 설치, 네트워크, DB, 계정 상태 때문에 실행할 수 없을 때만 Windows 호스트에서 fallback으로 같은 스위트를 실행합니다.
 
-```powershell
+```bash
 cd ../tests
 npm install
 npx playwright install
 npx playwright test
 ```
 
-Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동하고, `tests/.tmp/e2e.db`를 테스트마다 재시드합니다(E2E backend는 `APP_ENV=e2e`로 무인증 동작).
+Windows fallback이 필요한 경우에는 Windows 호스트의 `tests` 디렉토리에서 같은 명령을 PowerShell로 실행합니다. Playwright 설정은 backend `127.0.0.1:18080`과 frontend `127.0.0.1:13100`을 자동 기동하고, 테스트 DB를 매 테스트마다 재시드합니다(E2E backend는 `APP_ENV=e2e`로 무인증 동작).
 
 ## 참고 문서
 
 - [`AGENTS.md`](./AGENTS.md) — 프로젝트 내 문서화 언어 정책 및 에이전트 개발 규칙
 - [`CLAUDE.md`](./CLAUDE.md) — 세션 연동 프로젝트 현황 및 소스 트리 구조 설명
-- [`SKILL.md`](./SKILL.md) — 에이전트 지침서, Linux/Docker(및 Windows WSL2) 개발 팁 및 도메인 어휘집
+- [`SKILL.md`](./SKILL.md) — 에이전트 지침서, Linux/Docker(및 WSL2) 개발 팁 및 도메인 어휘집
 - [`docs/architecture.md`](./docs/architecture.md) — 시스템 아키텍처와 데이터 흐름
 - [`docs/decisions.md`](./docs/decisions.md) — 주요 아키텍처 결정 기록
 - [`docs/tasks.md`](./docs/tasks.md) — 개발 진행 현황 및 백로그

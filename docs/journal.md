@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-28: T-148 — 개발 명령 Linux 전용과 Playwright n150 우선 정책 문서화
+
+- **실행 위치 정리**: 개발·검증·리포지토리 작업 명령은 `git`, `gh`, codegraph 계열 인덱싱/분석까지
+  모두 WSL2(Ubuntu)를 포함한 Linux bash에서 실행하도록 정리했다. PowerShell/cmd 직접 작업은
+  n150 Playwright 검증이 불가능할 때의 Windows E2E fallback에만 허용한다.
+- **Playwright 우선순위 변경**: E2E Playwright 기본 검증 호스트를 Windows에서 n150 live/Linux로
+  옮기고, n150 접근·브라우저·네트워크·DB·계정 상태로 불가능할 때만 Windows 호스트 fallback을
+  사용하도록 문서화했다. fallback을 쓸 때는 사유와 결과를 PR 또는 일지에 남긴다.
+- **문서 반영**: `AGENTS.md`, `README.md`, `SKILL.md`, `CLAUDE.md`,
+  `docs/dev-environment.md`, `docs/architecture.md`, `docs/decisions.md`(ADR-33),
+  `docs/tasks.md`를 갱신했다.
+- **검증**: 문서 전용 변경으로 애플리케이션 테스트는 생략하고, Markdown 내 잔여 정책 문구 검색과
+  `git diff --check`로 확인한다.
+
 ## 2026-06-28: T-147 — 결과 지도 크기와 재중심 보정
 
 - **결과 지도 높이 고정**: 결과 페이지도 검수/수집과 같은 데스크톱 viewport lock을 사용하게 해
