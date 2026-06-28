@@ -77,12 +77,18 @@ test.describe('n150 live UI 셸 검증', () => {
     const jobsRegion = page.getByRole('region', { name: '반복 작업' });
     await expect(jobsRegion.getByRole('heading', { name: '반복 작업' })).toBeVisible();
     const viewport = page.viewportSize();
-    const jobsBox = await jobsRegion.boundingBox();
-    expect(jobsBox?.width ?? 0).toBeGreaterThan(900);
+    const jobsLayout = await jobsRegion.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const parentBox = element.parentElement?.getBoundingClientRect();
+      return {
+        bottom: box.bottom,
+        width: box.width,
+        parentWidth: parentBox?.width ?? box.width,
+      };
+    });
+    expect(jobsLayout.width).toBeGreaterThanOrEqual(jobsLayout.parentWidth - 2);
     if (viewport) {
-      expect((jobsBox?.y ?? 0) + (jobsBox?.height ?? 0)).toBeLessThanOrEqual(
-        viewport.height + 2,
-      );
+      expect(jobsLayout.bottom).toBeLessThanOrEqual(viewport.height + 2);
     }
     await expect(jobsRegion.getByRole('columnheader', { name: '대상' }).first()).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '주기' })).toBeVisible();
