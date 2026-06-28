@@ -7,6 +7,7 @@ export default function CollectPage() {
       title="수집"
       section="수집"
       contentClassName="flex min-h-0 flex-1 p-0"
+      viewportLocked
     >
       <CollectWorkspace />
     </AppShell>

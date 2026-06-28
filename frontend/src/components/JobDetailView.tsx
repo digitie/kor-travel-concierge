@@ -1,8 +1,15 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLinkIcon } from "lucide-react";
+import {
+  CheckCircle2Icon,
+  ExternalLinkIcon,
+  ListChecksIcon,
+  MapPinIcon,
+  TimerIcon,
+} from "lucide-react";
 
 import {
   getRunPlaces,
@@ -71,11 +78,13 @@ export function JobDetailView({
   target,
   hideVideos,
   onNavigate,
+  variant = "compact",
 }: {
   run?: CrawlRunSummary | null;
   target?: SourceTargetSummary | null;
   hideVideos?: boolean;
   onNavigate?: () => void;
+  variant?: "compact" | "page";
 }) {
   const open = Boolean(run || target);
   const router = useRouter();
@@ -160,126 +169,149 @@ export function JobDetailView({
           { label: "최근 오류", value: target.last_scan_error ?? "-" },
         ]
       : [];
+  const detailGridClass =
+    variant === "page"
+      ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]"
+      : "grid gap-4";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       {run ? (
-        <RunOverview run={run} result={result} />
+        <RunSummaryCards run={run} result={result} placesCount={places.length} />
       ) : target ? (
-        <TargetOverview target={target} />
+        <TargetSummaryCards target={target} videosCount={videos.length} />
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
-        {fields.map((field) => (
-          <div
-            key={field.label}
-            className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-surface-muted bg-surface-subtle p-2.5"
-          >
-            <span className="text-xs text-muted-foreground">{field.label}</span>
-            <span className="break-words text-sm font-medium">{field.value}</span>
-          </div>
-        ))}
-      </div>
+      <DashboardGroup
+        title={run ? "작업" : "반복 작업"}
+        description={
+          run
+            ? "대상, 진행률, 결과 값을 한 화면에서 확인합니다."
+            : "반복 수집 설정과 누적 실행 정보를 확인합니다."
+        }
+      >
+        <section className={detailGridClass}>
+          {run ? (
+            <RunProgressPanel run={run} result={result} />
+          ) : target ? (
+            <TargetProgressPanel target={target} />
+          ) : null}
+          <Panel title="세부 정보">
+            <MetricGrid fields={fields} />
+          </Panel>
+        </section>
+      </DashboardGroup>
 
       {run ? (
-        <div className="flex flex-col gap-2 border-t pt-4">
-          <p className="text-sm font-medium">상태 로그·오류</p>
-          <JobLogView status={run} />
-        </div>
-      ) : null}
-
-      {run ? (
-        <div className="flex flex-col gap-2 border-t pt-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">추출된 POI</p>
-            <Badge variant="secondary">{places.length}</Badge>
-          </div>
-          {placesQuery.isLoading ? (
-            <p className="text-xs text-muted-foreground">불러오는 중…</p>
-          ) : places.length === 0 ? (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              추출된 POI가 없습니다.
-            </p>
-          ) : (
-            <div className="flex max-h-60 flex-col gap-1.5 overflow-y-auto">
-              {places.map((place) => (
-                <button
-                  key={`${place.kind}-${place.place_id ?? place.candidate_id}`}
-                  type="button"
-                  onClick={() => openPlace(place)}
-                  title={
-                    place.status === "confirmed"
-                      ? "결과 뷰로 이동"
-                      : "검수 뷰로 이동"
-                  }
-                  className="flex items-center justify-between gap-2 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted"
-                >
-                  <span className="truncate font-medium">{place.name}</span>
-                  <span className="flex shrink-0 items-center gap-1">
-                    {place.is_domestic === false ? (
-                      <Badge variant="outline">해외</Badge>
-                    ) : null}
-                    <Badge
-                      variant={
-                        place.status === "confirmed" ? "secondary" : "outline"
-                      }
-                    >
-                      {place.status === "confirmed" ? "확정" : "검수 대기"}
-                    </Badge>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <DashboardGroup
+          title="로그와 결과"
+          description="처리 로그와 이번 작업에서 추출된 장소 후보를 확인합니다."
+        >
+          <section className={detailGridClass}>
+            <Panel title="상태 로그·오류">
+              <JobLogView status={run} />
+            </Panel>
+            <Panel title="추출된 POI">
+              <RunPlacesTable
+                places={places}
+                isLoading={placesQuery.isLoading}
+                onOpenPlace={openPlace}
+              />
+            </Panel>
+          </section>
+        </DashboardGroup>
       ) : null}
 
       {!hideVideos ? (
-        <div className="flex flex-col gap-2 border-t pt-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">누적 수집 영상</p>
-            <Badge variant="secondary">{videos.length}</Badge>
-          </div>
-          {videosQuery.isLoading ? (
-            <p className="text-xs text-muted-foreground">불러오는 중…</p>
-          ) : videos.length === 0 ? (
-            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-              수집된 영상이 없습니다.
-            </p>
-          ) : (
-            <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
-              {videos.map((video) => (
-                <a
-                  key={video.video_id}
-                  href={video.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex flex-col gap-0.5 rounded-lg border p-2 text-xs transition-colors hover:bg-muted"
-                >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate font-medium">{video.title}</span>
-                    <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" />
-                  </span>
-                  <span className="truncate text-muted-foreground">
-                    {[
-                      video.channel_title,
-                      durationLabel(video.duration_seconds),
-                      video.published_at?.slice(0, 10),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </a>
-              ))}
-            </div>
-          )}
-        </div>
+        <DashboardGroup
+          title="수집 영상"
+          description="반복 작업이 지금까지 가져온 영상을 확인합니다."
+        >
+          <Panel title="누적 수집 영상">
+            <CollectedVideosTable
+              videos={videos}
+              isLoading={videosQuery.isLoading}
+            />
+          </Panel>
+        </DashboardGroup>
       ) : null}
     </div>
   );
 }
 
-function RunOverview({
+function RunSummaryCards({
+  run,
+  result,
+  placesCount,
+}: {
+  run: CrawlRunSummary;
+  result: Record<string, unknown>;
+  placesCount: number;
+}) {
+  const progress = Math.round((run.progress ?? 0) * 100);
+  return (
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <MetricCard
+        icon={<ListChecksIcon className="size-4" />}
+        label="상태"
+        value={runStateLabel(run.state)}
+        tone={run.state.toLowerCase() === "failed" ? "warn" : "neutral"}
+      />
+      <MetricCard
+        icon={<TimerIcon className="size-4" />}
+        label="진행률"
+        value={`${progress}%`}
+        tone={run.state.toLowerCase() === "running" ? "active" : "neutral"}
+      />
+      <MetricCard
+        icon={<CheckCircle2Icon className="size-4" />}
+        label="결과"
+        value={runResultLabel(result, Boolean(run.result))}
+      />
+      <MetricCard
+        icon={<MapPinIcon className="size-4" />}
+        label="추출 POI"
+        value={`${placesCount.toLocaleString()}개`}
+      />
+    </section>
+  );
+}
+
+function TargetSummaryCards({
+  target,
+  videosCount,
+}: {
+  target: SourceTargetSummary;
+  videosCount: number;
+}) {
+  return (
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <MetricCard
+        icon={<ListChecksIcon className="size-4" />}
+        label="상태"
+        value={target.is_active ? "활성" : "중지"}
+        tone={target.is_active ? "active" : "neutral"}
+      />
+      <MetricCard
+        icon={<TimerIcon className="size-4" />}
+        label="반복 간격"
+        value={intervalLabel(target.scan_interval_minutes)}
+      />
+      <MetricCard
+        icon={<CheckCircle2Icon className="size-4" />}
+        label="실행 횟수"
+        value={`${target.run_count.toLocaleString()}회`}
+      />
+      <MetricCard
+        icon={<MapPinIcon className="size-4" />}
+        label="수집 영상"
+        value={`${videosCount.toLocaleString()}개`}
+      />
+    </section>
+  );
+}
+
+function RunProgressPanel({
   run,
   result,
 }: {
@@ -289,7 +321,7 @@ function RunOverview({
   const progress = Math.round((run.progress ?? 0) * 100);
   const targetName = run.target_label ?? run.target_id ?? "-";
   return (
-    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+    <Panel title="대상과 진행">
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -309,6 +341,9 @@ function RunOverview({
           <p className="mt-2 line-clamp-2 text-[13px] text-text-secondary">
             {run.last_error ?? run.current_message ?? runResultLabel(result, Boolean(run.result))}
           </p>
+          <p className="mt-2 break-all font-mono text-[11px] text-text-secondary">
+            {run.job_id}
+          </p>
         </div>
         <div className="w-full shrink-0 lg:w-72">
           <div className="mb-1 flex items-center justify-between text-[12px]">
@@ -327,14 +362,14 @@ function RunOverview({
           </div>
         </div>
       </div>
-    </section>
+    </Panel>
   );
 }
 
-function TargetOverview({ target }: { target: SourceTargetSummary }) {
+function TargetProgressPanel({ target }: { target: SourceTargetSummary }) {
   const targetName = target.target_label ?? target.display_name ?? target.source_value;
   return (
-    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+    <Panel title="대상과 일정">
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge variant={target.is_active ? "secondary" : "outline"}>
           {target.is_active ? "활성" : "중지"}
@@ -350,7 +385,225 @@ function TargetOverview({ target }: { target: SourceTargetSummary }) {
         다음 실행 {formatDateTime(target.next_crawl_at)} · 최근 실행{" "}
         {formatDateTime(target.last_crawled_at)}
       </p>
+    </Panel>
+  );
+}
+
+function RunPlacesTable({
+  places,
+  isLoading,
+  onOpenPlace,
+}: {
+  places: RunPlace[];
+  isLoading: boolean;
+  onOpenPlace: (place: RunPlace) => void;
+}) {
+  if (isLoading) return <EmptyState>불러오는 중...</EmptyState>;
+  if (places.length === 0) return <EmptyState>추출된 POI가 없습니다.</EmptyState>;
+
+  return (
+    <div className="max-h-72 overflow-auto rounded-lg border border-surface-muted">
+      <table className="w-full min-w-[34rem] text-[13px]">
+        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
+          <tr>
+            <th className="px-3 py-2">장소</th>
+            <th className="px-3 py-2">상태</th>
+            <th className="px-3 py-2 text-right">이동</th>
+          </tr>
+        </thead>
+        <tbody>
+          {places.map((place) => (
+            <tr
+              key={`${place.kind}-${place.place_id ?? place.candidate_id}`}
+              className="border-t border-surface-muted"
+            >
+              <td className="px-3 py-2 align-top">
+                <span className="line-clamp-2 font-medium">{place.name}</span>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <div className="flex flex-wrap gap-1">
+                  {place.is_domestic === false ? (
+                    <Badge variant="outline">해외</Badge>
+                  ) : null}
+                  <Badge
+                    variant={place.status === "confirmed" ? "secondary" : "outline"}
+                  >
+                    {place.status === "confirmed" ? "확정" : "검수 대기"}
+                  </Badge>
+                </div>
+              </td>
+              <td className="px-3 py-2 align-top">
+                <button
+                  type="button"
+                  onClick={() => onOpenPlace(place)}
+                  className="ml-auto block text-[12px] font-medium text-primary hover:underline"
+                >
+                  {place.status === "confirmed" ? "결과" : "검수"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CollectedVideosTable({
+  videos,
+  isLoading,
+}: {
+  videos: {
+    video_id: string;
+    title: string;
+    url: string;
+    channel_title?: string | null;
+    duration_seconds: number | null;
+    published_at?: string | null;
+  }[];
+  isLoading: boolean;
+}) {
+  if (isLoading) return <EmptyState>불러오는 중...</EmptyState>;
+  if (videos.length === 0) return <EmptyState>수집된 영상이 없습니다.</EmptyState>;
+
+  return (
+    <div className="max-h-80 overflow-auto rounded-lg border border-surface-muted">
+      <table className="w-full min-w-[42rem] text-[13px]">
+        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
+          <tr>
+            <th className="px-3 py-2">영상</th>
+            <th className="px-3 py-2">채널</th>
+            <th className="px-3 py-2">길이</th>
+            <th className="px-3 py-2">공개일</th>
+          </tr>
+        </thead>
+        <tbody>
+          {videos.map((video) => (
+            <tr key={video.video_id} className="border-t border-surface-muted">
+              <td className="px-3 py-2 align-top">
+                <a
+                  href={video.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-w-0 items-start gap-1 font-medium"
+                >
+                  <span className="line-clamp-2">{video.title}</span>
+                  <ExternalLinkIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                </a>
+                <span className="font-mono text-[11px] text-text-secondary">
+                  {video.video_id}
+                </span>
+              </td>
+              <td className="px-3 py-2 align-top text-text-secondary">
+                {video.channel_title ?? "-"}
+              </td>
+              <td className="px-3 py-2 align-top text-text-secondary">
+                {durationLabel(video.duration_seconds)}
+              </td>
+              <td className="px-3 py-2 align-top text-text-secondary">
+                {video.published_at?.slice(0, 10) ?? "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DashboardGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <h2 className="text-[15px] font-bold">{title}</h2>
+        <p className="text-[13px] text-text-secondary">{description}</p>
+      </div>
+      {children}
     </section>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <h2 className="mb-3 flex items-center gap-1.5 text-[14px] font-bold">
+        <CheckCircle2Icon className="size-4 text-brand" />
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function MetricGrid({
+  fields,
+}: {
+  fields: { label: string; value: string }[];
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {fields.map((field) => (
+        <div
+          key={field.label}
+          className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-surface-muted bg-surface-subtle p-2.5"
+        >
+          <span className="text-[12px] text-text-secondary">{field.label}</span>
+          <span className="break-words text-[13px] font-bold">{field.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  tone = "neutral",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone?: "neutral" | "active" | "warn";
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+      <span
+        className={
+          tone === "active"
+            ? "mt-0.5 text-brand"
+            : tone === "warn"
+              ? "mt-0.5 text-warning"
+              : "mt-0.5 text-text-secondary"
+        }
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[12px] font-bold uppercase tracking-[0.05em] text-text-secondary">
+          {label}
+        </span>
+        <span className="mt-1 block text-[16px] font-bold leading-snug text-text-primary">
+          {value}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-lg border border-surface-muted bg-surface-subtle p-3 text-[13px] text-text-secondary">
+      {children}
+    </p>
   );
 }
 

@@ -28,6 +28,20 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(page.getByRole('tab', { name: /완료 이력/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: '저장소 상세' })).toBeVisible();
 
+    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    const detailLinks = page.getByRole('link', { name: '상세' });
+    if ((await detailLinks.count()) > 0) {
+      await detailLinks.first().click();
+      await page.waitForURL('**/jobs/*');
+      await expect(page.getByRole('heading', { name: '작업 상세', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '뒤로' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '작업', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '로그와 결과' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '영상 처리' })).toBeVisible();
+      await page.goBack();
+      await page.waitForURL('**/status');
+    }
+
     await page.getByRole('link', { name: /설정/ }).first().click();
     await page.waitForURL('**/settings');
     await expect(page.getByRole('heading', { name: '설정', exact: true })).toBeVisible();
@@ -62,6 +76,14 @@ test.describe('n150 live UI 셸 검증', () => {
 
     const jobsRegion = page.getByRole('region', { name: '반복 작업' });
     await expect(jobsRegion.getByRole('heading', { name: '반복 작업' })).toBeVisible();
+    const viewport = page.viewportSize();
+    const jobsBox = await jobsRegion.boundingBox();
+    expect(jobsBox?.width ?? 0).toBeGreaterThan(900);
+    if (viewport) {
+      expect((jobsBox?.y ?? 0) + (jobsBox?.height ?? 0)).toBeLessThanOrEqual(
+        viewport.height + 2,
+      );
+    }
     await expect(jobsRegion.getByRole('columnheader', { name: '대상' }).first()).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '주기' })).toBeVisible();
     await expect(jobsRegion.getByRole('columnheader', { name: '기본' })).toBeVisible();
@@ -126,6 +148,14 @@ test.describe('n150 live UI 셸 검증', () => {
     const mapBox = await page.locator('#vworld-map-container').boundingBox();
     expect(mapBox?.height ?? 0).toBeGreaterThan(300);
     expect(mapBox?.height ?? 0).toBeLessThan(1200);
+    const candidatePaneBox = await page
+      .getByText('검수 대기 후보')
+      .locator('xpath=ancestor::aside')
+      .boundingBox();
+    const viewport = page.viewportSize();
+    if (viewport) {
+      expect(candidatePaneBox?.height ?? 0).toBeLessThanOrEqual(viewport.height);
+    }
 
     await page.getByRole('button', { name: /상세 보기/ }).click();
     const dialog = page.getByRole('dialog');
