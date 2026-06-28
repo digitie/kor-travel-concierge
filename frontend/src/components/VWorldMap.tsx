@@ -9,6 +9,7 @@ type VWorldMapProps = {
   places: DestinationSummary[];
   selectedPlaceId: number | null;
   onSelectPlace: (placeId: number) => void;
+  focusKey?: number;
 };
 
 type MarkerEntry = {
@@ -31,6 +32,7 @@ export function VWorldMap({
   places,
   selectedPlaceId,
   onSelectPlace,
+  focusKey = 0,
 }: VWorldMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -49,7 +51,7 @@ export function VWorldMap({
       return;
     }
     const markers = markersRef.current;
-    mapRef.current = new maplibregl.Map({
+    const map = new maplibregl.Map({
       container: containerRef.current,
       style: buildVWorldStyle(VWORLD_SERVICE_KEY),
       center: KOREA_CENTER,
@@ -58,11 +60,24 @@ export function VWorldMap({
       maxBounds: KOREA_MAX_BOUNDS,
       attributionControl: false,
     });
-    mapRef.current.addControl(new maplibregl.NavigationControl(), "top-right");
+    mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    const resize = () => {
+      if (mapRef.current) {
+        mapRef.current.resize();
+      }
+    };
+    const resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(resize);
+    });
+    resizeObserver.observe(containerRef.current);
+    map.once("load", resize);
+    window.requestAnimationFrame(resize);
     return () => {
+      resizeObserver.disconnect();
       markers.forEach((entry) => removeMarkerEntry(entry));
       markers.clear();
-      mapRef.current?.remove();
+      map.remove();
       mapRef.current = null;
     };
   }, []);
@@ -141,13 +156,14 @@ export function VWorldMap({
       return;
     }
     if (selectedPlaceCoordinates) {
+      map.resize();
       map.easeTo({
         center: selectedPlaceCoordinates.lngLat,
         zoom: Math.max(map.getZoom(), 12),
         duration: 500,
       });
     }
-  }, [selectedPlaceCoordinates]);
+  }, [focusKey, selectedPlaceCoordinates]);
 
   return (
     <div className="relative h-full w-full">

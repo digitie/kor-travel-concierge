@@ -22,6 +22,7 @@ import { AppShell } from "@/components/AppShell";
 import { JobDetailView } from "@/components/JobDetailView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { categoryDisplayLabel } from "@/lib/display-labels";
 
 export default function JobDetailPage() {
   const params = useParams<{ jobId: string }>();
@@ -85,7 +86,17 @@ export default function JobDetailPage() {
           </Panel>
         )}
 
-        <VideoStatsSection stats={stats} isLoading={statsQuery.isLoading} />
+        <VideoStatsSection
+          stats={stats}
+          isLoading={statsQuery.isLoading}
+          defaultCategory={
+            run
+              ? categoryDisplayLabel(
+                  run.default_category_label ?? run.default_category_code,
+                )
+              : "-"
+          }
+        />
       </div>
     </AppShell>
   );
@@ -94,9 +105,11 @@ export default function JobDetailPage() {
 function VideoStatsSection({
   stats,
   isLoading,
+  defaultCategory,
 }: {
   stats: RunVideoStat[];
   isLoading: boolean;
+  defaultCategory: string;
 }) {
   const processed = stats.filter((stat) => stat.poi_total > 0).length;
   const totalPoi = stats.reduce((sum, stat) => sum + stat.poi_total, 0);
@@ -111,7 +124,7 @@ function VideoStatsSection({
         </p>
       </div>
 
-      <section className="grid gap-3 md:grid-cols-3">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={<ListVideoIcon className="size-4" />}
           label="처리 영상"
@@ -127,6 +140,11 @@ function VideoStatsSection({
           label="검수 대기"
           value={`${reviewPoi.toLocaleString()}개`}
           tone={reviewPoi > 0 ? "warn" : "neutral"}
+        />
+        <MetricCard
+          icon={<CheckCircle2Icon className="size-4" />}
+          label="기본 카테고리"
+          value={defaultCategory}
         />
       </section>
 

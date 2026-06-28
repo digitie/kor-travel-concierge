@@ -212,6 +212,34 @@ test.describe('n150 live UI 셸 검증', () => {
     } catch {
       test.skip(true, 'n150 결과 장소가 없으면 장소 상세 UI 검증을 건너뛴다.');
     }
+    await expect(page.locator('.maplibregl-map')).toBeVisible();
+    const resultMapBox = await page.locator('#vworld-map-container').boundingBox();
+    expect(resultMapBox?.height ?? 0).toBeGreaterThan(300);
+    expect(resultMapBox?.height ?? 0).toBeLessThan(1200);
+
+    const placeRows = placeList.locator('div[data-selected]');
+    if ((await placeRows.count()) > 1) {
+      await placeRows.nth(1).locator('button').first().click();
+      await expect
+        .poll(async () => {
+          const layout = await page.evaluate(() => {
+            const map = document
+              .querySelector('#vworld-map-container')
+              ?.getBoundingClientRect();
+            const marker = document
+              .querySelector('#vworld-map-container [data-selected="true"][data-marker-number]')
+              ?.getBoundingClientRect();
+            if (!map || !marker) return null;
+            return {
+              dx: Math.abs(marker.left + marker.width / 2 - (map.left + map.width / 2)),
+              dy: Math.abs(marker.top + marker.height / 2 - (map.top + map.height / 2)),
+            };
+          });
+          if (!layout) return Number.POSITIVE_INFINITY;
+          return Math.max(layout.dx, layout.dy);
+        }, { timeout: 5_000 })
+        .toBeLessThan(96);
+    }
 
     await placeList.getByRole('button', { name: /상세/ }).first().click();
     const dialog = page.getByRole('dialog');
