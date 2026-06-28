@@ -260,12 +260,12 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(dialog.getByRole('button', { name: '근거 위치로 이동' })).toBeVisible();
 
     const rawTab = dialog.getByRole('tab', { name: '타임스탬프 포함' });
-    if (await rawTab.isVisible().catch(() => false)) {
+    if ((await rawTab.count()) > 0) {
       await dialog.getByRole('tab', { name: '정리본' }).click();
       await expect(dialog.getByRole('tabpanel', { name: '정리본' })).toBeVisible();
       await rawTab.click();
     } else {
-      await expect(dialog.getByText(/보정 자막 없음|불러오는 중/)).toBeVisible();
+      await expect(dialog.getByRole('heading', { name: '보정 자막' })).toBeVisible();
     }
 
     expectRelevantConsoleErrors(errors).toEqual([]);
