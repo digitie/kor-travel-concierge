@@ -115,26 +115,10 @@ export function JobDetailView({
   const result = (run?.result ?? {}) as Record<string, unknown>;
   const fields: { label: string; value: string }[] = run
     ? [
-        {
-          label: "기본 카테고리",
-          value: categoryDisplayLabel(
-            run.default_category_label ?? run.default_category_code,
-          ),
-        },
-        {
-          label: "최대 영상 수",
-          value: run.max_videos != null ? String(run.max_videos) : "-",
-        },
         { label: "재시도", value: `${run.retry_count}회` },
-        {
-          label: "결과",
-          value: runResultLabel(result, Boolean(run.result)),
-        },
         { label: "등록", value: formatDateTime(run.created_at) },
         { label: "시작", value: formatDateTime(run.started_at) },
         { label: "종료", value: formatDateTime(run.finished_at) },
-        { label: "현재 메시지", value: run.current_message ?? "-" },
-        { label: "오류", value: run.last_error ?? "-" },
       ]
     : target
       ? [
@@ -197,7 +181,7 @@ export function JobDetailView({
             <TargetProgressPanel target={target} />
           ) : null}
           <Panel title="세부 정보">
-            <MetricGrid fields={fields} />
+            <MetricGrid fields={fields} singleColumn={variant === "page"} />
           </Panel>
         </section>
       </DashboardGroup>
@@ -545,11 +529,13 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 
 function MetricGrid({
   fields,
+  singleColumn,
 }: {
   fields: { label: string; value: string }[];
+  singleColumn?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className={`grid gap-2 ${singleColumn ? "grid-cols-1" : "grid-cols-2"}`}>
       {fields.map((field) => (
         <div
           key={field.label}

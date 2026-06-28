@@ -44,6 +44,7 @@ import { VWorldMap } from "@/components/VWorldMap";
 
 export function DestinationWorkspace() {
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
+  const [mapFocusKey, setMapFocusKey] = useState(0);
   // 정렬·그룹 필터는 상세 페이지를 다녀와도 유지되도록 sessionStorage에 보존한다.
   const [destinationSort, setDestinationSort] = usePersistedState<DestinationSort>(
     "ktc.destinations.sort",
@@ -214,8 +215,13 @@ export function DestinationWorkspace() {
     );
   }
 
+  function focusPlace(placeId: number) {
+    setSelectedPlaceId(placeId);
+    setMapFocusKey((current) => current + 1);
+  }
+
   return (
-    <div className="flex h-full min-h-[36rem] flex-col bg-background lg:min-h-0 lg:overflow-hidden">
+    <div className="flex h-full min-h-[36rem] flex-col overflow-hidden bg-background lg:min-h-0">
       {videoFilter ? (
         <div className="flex items-center justify-between gap-2 border-b bg-primary/5 px-4 py-1.5 text-xs">
           <span className="truncate text-muted-foreground">
@@ -232,14 +238,14 @@ export function DestinationWorkspace() {
         </div>
       ) : null}
       {/* 장소(지도 왼쪽, 좁은 칼럼) + 지도 */}
-      <div className="grid min-h-[30rem] flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[0.7fr_1.6fr]">
+      <div className="grid h-full min-h-[30rem] flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[0.7fr_1.6fr] lg:overflow-hidden">
         {/* 좁은 화면(스택): 지도가 위, 리스트가 아래(order). 데스크톱(lg): 좌 리스트 / 우 지도 유지. */}
         <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto lg:order-none lg:min-h-0 lg:overflow-hidden lg:border-r">
           <DestinationList
             places={places}
             selectedPlace={selectedPlace}
             isLoading={destinationsQuery.isLoading}
-            onSelect={setSelectedPlaceId}
+            onSelect={focusPlace}
             sort={destinationSort}
             onSortChange={setDestinationSort}
             exportFormat={exportFormat}
@@ -266,11 +272,12 @@ export function DestinationWorkspace() {
             onTextFilterChange={setTextFilter}
           />
         </div>
-        <div className="order-1 min-h-[22rem] border-b lg:order-none lg:border-b-0">
+        <div className="order-1 min-h-[22rem] overflow-hidden border-b lg:order-none lg:h-full lg:min-h-0 lg:border-b-0">
           <VWorldMap
             places={places}
             selectedPlaceId={selectedPlace?.place_id ?? null}
-            onSelectPlace={setSelectedPlaceId}
+            onSelectPlace={focusPlace}
+            focusKey={mapFocusKey}
           />
         </div>
       </div>
