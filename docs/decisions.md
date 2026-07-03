@@ -745,6 +745,60 @@ ADR-23은 Windows 네이티브 앱 실행 경로를 제거하고 Linux Docker/WS
 
 ---
 
+## ADR-34: 유지보수 UI 공용 컴포넌트·확인 다이얼로그·필드 도움말 규약
+
+- **상태**: 채택 (2026-07-04)
+- **결정자**: 사용자, AI agent
+
+### 맥락
+운영 화면(수집·설정·상태·검수·상세)이 화면마다 `MetricCard`/`Panel`/`EmptyState` 등 같은 조각을
+복붙하고, 파괴적 액션은 `window.confirm`·무확인 삭제·인라인 확인이 혼재했으며, raw
+`<input type="checkbox">`/`<textarea>`가 shadcn 프리미티브와 섞여 있었다. 설명 문구도 화면 상시
+노출과 생략이 뒤섞여 비전문가가 흐름을 예측하기 어려웠다. 사용자는 유사 기능의 유기적·일관적
+구성, shadcn 컴포넌트의 적재적소 활용과 공용화, 데이터 형태 기반 validation·assist 강화,
+간결한 한국어 카피와 툴팁형 도움말을 요구했다(2026-07-03).
+
+### 결정
+- **프리미티브 단일 계열**: 폼/오버레이 프리미티브는 `@base-ui/react` 기반 `components/ui/*`
+  (checkbox·switch·textarea·popover·alert-dialog 추가)만 사용한다. raw `<input type="checkbox">`,
+  raw `<textarea>`, `window.confirm`을 새 코드에 쓰지 않는다.
+- **Checkbox vs Switch**: 저장 버튼으로 제출되는 폼 값은 Checkbox, 토글 즉시 적용되는 상태·표시
+  필터는 Switch를 쓴다(`ui/switch.tsx` 주석이 규약의 정본).
+- **파괴적 액션 확인**: 되돌릴 수 없는 액션(삭제·폐기·재실행)은 공용 `ConfirmActionButton`
+  (AlertDialog)으로 확인받는다. 한 줄 제목 + 필요한 경우에만 결과 설명 한 문장.
+- **대시보드 조각 공용화**: `Section`/`Panel`/`PanelHeader`/`MetricCard`/`Metric`/`CountList`/
+  `EmptyState`는 `components/panels.tsx`, 상세 화면 조각은 `components/detail.tsx`, 포맷터는
+  `lib/format.ts`가 단일 출처다. 화면 로컬 재정의를 금지한다.
+- **설명 문구 규약**: 화면 상시 노출 문구는 동작에 필요한 정보(보안 안내, 빈 상태, 검증 오류)로
+  제한한다. 배경 설명·긴 도움말은 라벨 옆 `HelpTip`(클릭형 popover, 터치 동작)으로 옮긴다.
+- **입력 assist**: 수집 대상 입력의 자동 판별 미리보기는 backend `source_resolve`와 같은 규칙을
+  유지한다(`lib/youtube.ts` — 판별 힌트는 참고용, 최종 판별은 backend). 형식이 정해진 입력
+  (영상 ID, 재생목록 URL, 좌표, 글자 수 상한)은 제출 전에 프런트에서 검증·안내한다.
+
+### 근거
+- 조각 공용화는 화면 간 시각·행동 일관성을 코드 수준에서 강제하고 중복 유지보수를 없앤다.
+- AlertDialog 통일은 브라우저 네이티브 confirm의 스타일 불일치·차단 문제를 없애고 E2E에서
+  결정적으로 검증 가능하다.
+- HelpTip은 정보를 잃지 않으면서 화면 밀도를 낮춘다 — 내부 도구에서 반복 사용자는 설명을
+  다시 읽지 않는다.
+
+### 결과 (긍정)
+- 사장 코드 제거(AppNav/SettingsDialog/OpsMetricsDialog)와 로컬 중복 정의 삭제로 프런트가 얇아졌다.
+- 무확인 삭제(반복 작업·공개 API 키)가 사라져 오조작 위험이 줄었다.
+- backend와 프런트 판별 규칙이 테스트로 고정됐다(vitest + backend 폴백 수정).
+
+### 결과 (부정)
+- Base UI 프리미티브 계약(role=checkbox 버튼 렌더 등)에 E2E 셀렉터가 결합된다 — 프리미티브
+  교체 시 live 스펙 갱신 필요.
+- Python `urlparse`와 WHATWG URL의 변칙 입력 차이는 완전히 좁힐 수 없어, 자동 인식 힌트는
+  참고용이라는 한계를 코드 주석으로 명시했다.
+
+### 관련
+- ADR-29(StyleSeed 디자인 규칙)를 컴포넌트 구성·도움말 규약으로 보강한다.
+- ADR-16(검수 UX)의 확인 흐름을 AlertDialog 기준으로 갱신한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

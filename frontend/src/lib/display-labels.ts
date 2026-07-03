@@ -12,6 +12,24 @@ export function runStateLabel(state: string | null | undefined): string {
   return labels[key] ?? fallbackLabel(state, "상태 없음");
 }
 
+// 작업 상태 → Badge variant. 상태 색 규칙 단일 출처(CollectWorkspace/StatusDashboard/JobLog 공용).
+export function runStateBadgeVariant(
+  state: string | null | undefined,
+): "outline" | "secondary" | "destructive" {
+  const key = normalizeKey(state);
+  if (key === "failed") return "destructive";
+  if (key === "running" || key === "done") return "secondary";
+  return "outline";
+}
+
+// 작업 상태 → 진행률 bar 색 클래스(공용).
+export function runProgressBarClass(state: string | null | undefined): string {
+  const key = normalizeKey(state);
+  if (key === "failed") return "h-full rounded-full bg-destructive";
+  if (key === "done") return "h-full rounded-full bg-success";
+  return "h-full rounded-full bg-primary";
+}
+
 export function candidateStatusLabel(status: string | null | undefined): string {
   const key = normalizeKey(status);
   const labels: Record<string, string> = {

@@ -33,6 +33,18 @@ def _with_scheme(raw: str) -> str:
     return raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
 
 
+def _safe_urlparse(raw: str):
+    """urlparse가 비정상 입력(`[` 불균형 등)에 ValueError를 던지면 None을 반환한다.
+
+    수집 폼 사용자 입력이 그대로 들어오므로, 파싱 실패는 서버 오류(500)가 아니라
+    '비URL 취급' 폴백이어야 한다.
+    """
+    try:
+        return urlparse(_with_scheme(raw))
+    except ValueError:
+        return None
+
+
 def parse_channel_input(raw: str) -> tuple[ChannelInputKind, str]:
     """채널 입력을 (종류, 값)으로 분류한다.
 
@@ -47,7 +59,9 @@ def parse_channel_input(raw: str) -> tuple[ChannelInputKind, str]:
         return "search", ""
 
     if _looks_like_url(value):
-        parsed = urlparse(_with_scheme(value))
+        parsed = _safe_urlparse(value)
+        if parsed is None:
+            return "search", value
         # 브라우저 주소창에서 복사하면 한글 handle/이름이 percent-encoding된다
         # (예: `/@%EB%B9%B5...tv`). 세그먼트를 디코드해 표준 handle/이름으로 되돌린다.
         segments = [unquote(seg) for seg in parsed.path.split("/") if seg]
@@ -82,7 +96,9 @@ def parse_playlist_id(raw: str) -> str | None:
         return None
 
     if _looks_like_url(value) or "list=" in value:
-        parsed = urlparse(_with_scheme(value))
+        parsed = _safe_urlparse(value)
+        if parsed is None:
+            return None
         listed = parse_qs(parsed.query).get("list")
         if listed and listed[0]:
             return listed[0]
@@ -103,7 +119,9 @@ def parse_video_id(raw: str) -> str | None:
     value = raw.strip()
     if not value or not _looks_like_url(value):
         return None
-    parsed = urlparse(_with_scheme(value))
+    parsed = _safe_urlparse(value)
+    if parsed is None:
+        return None
     host = parsed.netloc.lower()
     segments = [unquote(seg) for seg in parsed.path.split("/") if seg]
     if "youtu.be" in host:

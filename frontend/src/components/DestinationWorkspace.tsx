@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { PanelHeader } from "@/components/panels";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
 
@@ -531,12 +533,11 @@ function DestinationList({
             className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-lg border p-2 transition-colors data-[selected=true]:border-primary data-[selected=true]:bg-primary/5"
             data-selected={isSelected}
           >
-            <input
+            <Checkbox
               aria-label={`${place.name} 내보내기 선택`}
               checked={selectedExportIds.has(place.place_id)}
-              className="mt-3 size-4 rounded border"
-              onChange={() => onToggleExportSelection(place.place_id)}
-              type="checkbox"
+              className="mt-3"
+              onCheckedChange={() => onToggleExportSelection(place.place_id)}
             />
             <button
               className="flex min-w-0 flex-col gap-1 rounded-md p-1 text-left hover:bg-muted"
@@ -586,16 +587,6 @@ function DestinationList({
         })}
       </div>
     </section>
-  );
-}
-
-// 실행 큐 패널: running/pending 작업 + 중지/재시작 + 상세 모달.
-function PanelHeader({ title, count }: { title: string; count: number }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <h2 className="text-sm font-semibold">{title}</h2>
-      <Badge variant="secondary">{count}</Badge>
-    </div>
   );
 }
 

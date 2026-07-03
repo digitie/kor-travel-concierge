@@ -25,6 +25,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { CopyButton } from "@/components/CopyButton";
+import { HelpTip } from "@/components/HelpTip";
 
 const API_KEY_LABELS: { name: ApiKeyName; label: string }[] = [
   { name: "youtube_api_key", label: "YouTube Data API" },
@@ -37,6 +41,9 @@ const API_KEY_LABELS: { name: ApiKeyName; label: string }[] = [
   { name: "vworld_service_key", label: "VWorld 서비스 키" },
   { name: "kor_travel_geo_v2_api_key", label: "kor travel geo v2 API" },
 ];
+
+// backend `settings_service.AI_PREPROMPT_MAX_LEN`과 동일 상한.
+const PREPROMPT_MAX_LEN = 4000;
 
 export function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -57,6 +64,7 @@ export function SettingsPanel() {
   const [createdPublicKey, setCreatedPublicKey] = useState<string | null>(null);
   const engine = engineEdit ?? settings?.gemini_engine_version ?? "";
   const preprompt = prepromptEdit ?? settings?.ai_preprompt ?? "";
+  const prepromptTooLong = preprompt.length > PREPROMPT_MAX_LEN;
 
   function resetEdits() {
     setEngineEdit(null);
@@ -120,13 +128,13 @@ export function SettingsPanel() {
           <div>
             <h2 className="text-[16px] font-bold">AI 엔진</h2>
             <p className="text-[13px] text-text-secondary">
-              모델과 사전 프롬프트는 저장 즉시 다음 작업부터 적용됩니다.
+              저장 즉시 다음 작업부터 적용됩니다.
             </p>
           </div>
           <Button
             id="settings-save-button"
             type="button"
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || prepromptTooLong}
             onClick={() => mutation.mutate()}
           >
             {mutation.isPending ? (
@@ -157,15 +165,31 @@ export function SettingsPanel() {
           <FieldDescription>기본값: {settings.gemini_engine_default}</FieldDescription>
         </Field>
 
-        <Field>
-          <FieldLabel htmlFor="settings-preprompt">AI 사전 프롬프트</FieldLabel>
-          <textarea
+        <Field data-invalid={prepromptTooLong}>
+          <div className="flex items-center gap-1">
+            <FieldLabel htmlFor="settings-preprompt">AI 사전 프롬프트</FieldLabel>
+            <HelpTip>
+              모든 AI 호출 프롬프트 앞에 붙는 지시문입니다. 말투·판단 기준·출력
+              형식 같은 공통 규칙을 적어 두면 검색어 보정, POI 추출, 카테고리
+              제안에 함께 적용됩니다.
+            </HelpTip>
+          </div>
+          <Textarea
             id="settings-preprompt"
-            className="min-h-44 w-full rounded-lg border border-input bg-card p-3 text-[14px] outline-none focus-visible:border-brand focus-visible:ring-3 focus-visible:ring-brand/20"
+            className="min-h-44"
+            aria-invalid={prepromptTooLong}
             value={preprompt}
             onChange={(event) => setPrepromptEdit(event.target.value)}
           />
-          <FieldDescription>모든 AI 호출 프롬프트 앞에 붙습니다.</FieldDescription>
+          <p
+            className={
+              prepromptTooLong
+                ? "text-right text-[12px] text-destructive"
+                : "text-right text-[12px] text-text-tertiary"
+            }
+          >
+            {preprompt.length.toLocaleString()} / {PREPROMPT_MAX_LEN.toLocaleString()}자
+          </p>
         </Field>
 
         {mutation.error ? (
@@ -217,9 +241,15 @@ export function SettingsPanel() {
 
       <section className="flex flex-col gap-4 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
         <div>
-          <h2 className="text-[16px] font-bold">외부 공개 API 키</h2>
+          <div className="flex items-center gap-1">
+            <h2 className="text-[16px] font-bold">외부 공개 API 키</h2>
+            <HelpTip>
+              외부 소비자가 이 서비스의 공급 API(/api/v1/features/*)를 호출할 때
+              쓰는 키입니다. VWorld처럼 key 파라미터로 전달합니다.
+            </HelpTip>
+          </div>
           <p className="text-[13px] text-text-secondary">
-            VWorld와 같은 `key` 파라미터 형태로 사용합니다. 원문 키는 생성 직후에만 표시됩니다.
+            원문 키는 생성 직후에만 표시됩니다.
           </p>
         </div>
         <div className="flex gap-2">
@@ -228,6 +258,11 @@ export function SettingsPanel() {
             placeholder="라벨"
             value={publicKeyLabel}
             onChange={(event) => setPublicKeyLabel(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !createKeyMutation.isPending) {
+                createKeyMutation.mutate();
+              }
+            }}
           />
           <Button
             type="button"
@@ -244,13 +279,14 @@ export function SettingsPanel() {
           </Button>
         </div>
         {createdPublicKey ? (
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Input
               readOnly
               aria-label="생성된 공개 API 키"
               value={createdPublicKey}
               onFocus={(event) => event.currentTarget.select()}
             />
+            <CopyButton text={createdPublicKey} />
             <Button
               type="button"
               variant="outline"
@@ -276,15 +312,22 @@ export function SettingsPanel() {
                   </p>
                 </div>
                 {item.state === "active" ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => revokeKeyMutation.mutate(item.id)}
-                    disabled={revokeKeyMutation.isPending}
-                  >
-                    폐기
-                  </Button>
+                  <ConfirmActionButton
+                    title={`${item.label || "무제"} 키를 폐기할까요?`}
+                    description="이 키를 쓰는 외부 호출이 즉시 거부됩니다. 되돌릴 수 없습니다."
+                    confirmLabel="폐기"
+                    onConfirm={() => revokeKeyMutation.mutate(item.id)}
+                    trigger={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={revokeKeyMutation.isPending}
+                      >
+                        폐기
+                      </Button>
+                    }
+                  />
                 ) : null}
               </div>
             ))
@@ -294,6 +337,11 @@ export function SettingsPanel() {
             </p>
           )}
         </div>
+        {createKeyMutation.error || revokeKeyMutation.error ? (
+          <p className="text-xs text-destructive">
+            {(createKeyMutation.error ?? revokeKeyMutation.error)?.message}
+          </p>
+        ) : null}
       </section>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -19,7 +19,9 @@ import {
   type RunVideoStat,
 } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { JobDetailView } from "@/components/JobDetailView";
+import { EmptyState, MetricCard, Panel } from "@/components/panels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { categoryDisplayLabel } from "@/lib/display-labels";
@@ -46,7 +48,6 @@ export default function JobDetailPage() {
     <AppShell
       title="작업 상세"
       description={`작업 ID ${jobId}`}
-      section="상태"
       actions={
         <>
           <Button
@@ -117,12 +118,7 @@ function VideoStatsSection({
 
   return (
     <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-[15px] font-bold">영상 처리</h2>
-        <p className="text-[13px] text-text-secondary">
-          영상별 POI 추출 결과, 보정 자막, 재실행 액션을 확인합니다.
-        </p>
-      </div>
+      <h2 className="text-[15px] font-bold">영상 처리</h2>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
@@ -241,23 +237,23 @@ function VideoStatRows({ stat }: { stat: RunVideoStat }) {
             >
               {showTranscript ? "자막 닫기" : "자막"}
             </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={reprocess.isPending}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "이 영상의 자막 교정 → POI 추출을 다시 실행할까요?",
-                  )
-                ) {
-                  reprocess.mutate();
-                }
-              }}
-            >
-              재실행
-            </Button>
+            <ConfirmActionButton
+              title="이 영상을 다시 처리할까요?"
+              description="자막 교정 → POI 추출을 처음부터 다시 실행합니다."
+              confirmLabel="재실행"
+              confirmVariant="default"
+              onConfirm={() => reprocess.mutate()}
+              trigger={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={reprocess.isPending}
+                >
+                  재실행
+                </Button>
+              }
+            />
           </div>
         </td>
       </tr>
@@ -282,58 +278,3 @@ function VideoStatRows({ stat }: { stat: RunVideoStat }) {
   );
 }
 
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <h2 className="mb-3 flex items-center gap-1.5 text-[14px] font-bold">
-        <CheckCircle2Icon className="size-4 text-brand" />
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
-
-function MetricCard({
-  icon,
-  label,
-  value,
-  tone = "neutral",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone?: "neutral" | "active" | "warn";
-}) {
-  return (
-    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <span
-        className={
-          tone === "active"
-            ? "mt-0.5 text-brand"
-            : tone === "warn"
-              ? "mt-0.5 text-warning"
-              : "mt-0.5 text-text-secondary"
-        }
-      >
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[12px] font-bold uppercase tracking-[0.05em] text-text-secondary">
-          {label}
-        </span>
-        <span className="mt-1 block text-[16px] font-bold leading-snug text-text-primary">
-          {value}
-        </span>
-      </span>
-    </div>
-  );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-lg border border-surface-muted bg-surface-subtle p-3 text-[13px] text-text-secondary">
-      {children}
-    </p>
-  );
-}

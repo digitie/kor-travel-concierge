@@ -88,7 +88,17 @@ async def search_google_places(
             "maxResultCount": max_results,
         },
     )
-    resp.raise_for_status()
+    if resp.is_error:
+        # raise_for_status는 응답 본문을 버려 일반 '403 Forbidden'만 남긴다. Google이 돌려준
+        # error.status/reason(SERVICE_DISABLED, API_KEY_HTTP_REFERRER_BLOCKED, BILLING_DISABLED 등)을
+        # 그대로 노출해야 403 원인(미활성 API·키 제한·결제 미설정 등)을 진단할 수 있으므로
+        # 본문 일부를 예외 메시지에 싣는다(이 메시지는 /place-search의 errors.google로 노출됨).
+        detail = " ".join(resp.text.split())[:500]
+        raise httpx.HTTPStatusError(
+            f"Google Places {resp.status_code}: {detail}",
+            request=resp.request,
+            response=resp,
+        )
     out: list[dict[str, Any]] = []
     for place in resp.json().get("places", []):
         if not isinstance(place, dict):

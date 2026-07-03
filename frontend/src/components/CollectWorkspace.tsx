@@ -27,11 +27,15 @@ import {
 import {
   categoryDisplayLabel,
   jobTypeDisplayLabel,
+  runProgressBarClass,
+  runStateBadgeVariant,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
+import { formatDateTime, formatTime, intervalLabel } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -49,6 +53,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { EmptyState, PanelHeader } from "@/components/panels";
 import { HarvestConsole } from "@/components/HarvestConsole";
 import { JobDetailDialog } from "@/components/JobDetailDialog";
 import { RecurringEditDialog } from "@/components/RecurringEditDialog";
@@ -178,48 +184,11 @@ export function CollectWorkspace() {
 
 // ─── labels ───────────────────────────────────────────────────────────────
 
-function targetTypeLabel(type: string | null | undefined): string {
-  return targetTypeDisplayLabel(type);
-}
-
-function jobTypeLabel(type: string | null | undefined): string {
-  return jobTypeDisplayLabel(type);
-}
-
 function runTargetType(run: CrawlRunSummary): string {
-  return run.target_type_label ?? targetTypeLabel(run.target_type);
+  return run.target_type_label ?? targetTypeDisplayLabel(run.target_type);
 }
 function runTargetValue(run: CrawlRunSummary): string {
   return run.target_label ?? run.target_id ?? "-";
-}
-
-function intervalLabel(minutes: number | null) {
-  if (!minutes) return "-";
-  if (minutes % 43200 === 0) return `${minutes / 43200}달`;
-  if (minutes % 10080 === 0) return `${minutes / 10080}주일`;
-  if (minutes % 1440 === 0) return `${minutes / 1440}일`;
-  if (minutes % 60 === 0) return `${minutes / 60}시간`;
-  return `${minutes}분`;
-}
-
-function formatRunTime(value: string | null) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("ko-KR", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function latestRunLog(run: CrawlRunSummary) {
@@ -228,20 +197,6 @@ function latestRunLog(run: CrawlRunSummary) {
 
 function runProgressPercent(run: CrawlRunSummary) {
   return `${Math.round(run.progress * 100)}%`;
-}
-
-function runStateVariant(state: string): "outline" | "secondary" | "destructive" {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "destructive";
-  if (normalized === "running" || normalized === "done") return "secondary";
-  return "outline";
-}
-
-function progressBarClass(state: string) {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "h-full rounded-full bg-destructive";
-  if (normalized === "done") return "h-full rounded-full bg-success";
-  return "h-full rounded-full bg-primary";
 }
 
 // ─── panels ───────────────────────────────────────────────────────────────
@@ -266,13 +221,11 @@ function ActiveRunPanel({
       aria-label="진행 중 작업"
       className="flex flex-col gap-3 border-t p-3"
     >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <ListChecksIcon className="size-4 text-muted-foreground" />
-          진행 중 작업
-        </h2>
-        <Badge variant="secondary">{run ? "1" : "0"}</Badge>
-      </div>
+      <PanelHeader
+        title="진행 중 작업"
+        count={run ? "1" : "0"}
+        icon={<ListChecksIcon className="size-4 text-muted-foreground" />}
+      />
       {errorMessage ? (
         <p role="alert" className="text-xs text-destructive">
           {errorMessage}
@@ -292,7 +245,7 @@ function ActiveRunPanel({
           <TableBody>
             <TableRow>
               <TableCell>
-                <Badge variant={runStateVariant(run.state)}>
+                <Badge variant={runStateBadgeVariant(run.state)}>
                   {runStateLabel(run.state)}
                 </Badge>
               </TableCell>
@@ -307,7 +260,7 @@ function ActiveRunPanel({
                   </span>
                   <span className="font-bold leading-snug">{runTargetValue(run)}</span>
                   <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                    {run.job_type_label ?? jobTypeLabel(run.job_type)}
+                    {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
                   </span>
                 </button>
               </TableCell>
@@ -315,7 +268,7 @@ function ActiveRunPanel({
                 <div className="flex w-24 flex-col gap-1">
                   <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
-                      className={progressBarClass(run.state)}
+                      className={runProgressBarClass(run.state)}
                       style={{ width: runProgressPercent(run) }}
                     />
                   </div>
@@ -342,9 +295,7 @@ function ActiveRunPanel({
           </TableBody>
         </Table>
       ) : (
-        <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-          실행 중이거나 대기 중인 작업이 없습니다.
-        </p>
+        <EmptyState>실행 중이거나 대기 중인 작업이 없습니다.</EmptyState>
       )}
     </section>
   );
@@ -379,9 +330,8 @@ function JobsPanel({
       aria-label="반복 작업"
       className="flex h-full min-h-0 flex-col gap-3 pt-3"
     >
-      <div className="flex items-center justify-between gap-3 px-3">
-        <h2 className="text-sm font-semibold">반복 작업</h2>
-        <Badge variant="secondary">{targets.length}</Badge>
+      <div className="px-3">
+        <PanelHeader title="반복 작업" count={targets.length} />
       </div>
       {errorMessage ? (
         <p role="alert" className="px-3 text-xs text-destructive">
@@ -416,7 +366,7 @@ function JobsPanel({
                       >
                         <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
                           {target.target_type_label ??
-                            targetTypeLabel(target.target_type)}
+                            targetTypeDisplayLabel(target.target_type)}
                         </span>
                         <span className="font-bold leading-snug">{targetName}</span>
                       </button>
@@ -445,7 +395,7 @@ function JobsPanel({
                             : `${target.run_count}/${target.max_runs}회`}
                         </span>
                         <span className="text-[12px] text-text-secondary">
-                          최근 {formatRunTime(target.last_crawled_at)}
+                          최근 {formatTime(target.last_crawled_at)}
                         </span>
                       </div>
                     </TableCell>
@@ -494,17 +444,23 @@ function JobsPanel({
                           <PencilIcon data-icon="inline-start" />
                           수정
                         </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="destructive"
-                          disabled={isDeleting}
-                          onClick={() => onDeleteTarget(target.id)}
-                          aria-label={`${targetName} 반복 삭제`}
-                        >
-                          <Trash2Icon data-icon="inline-start" />
-                          삭제
-                        </Button>
+                        <ConfirmActionButton
+                          title={`${targetName} 반복 작업을 삭제할까요?`}
+                          description="예약된 반복 수집이 중단됩니다. 이미 수집한 영상과 장소는 남습니다."
+                          onConfirm={() => onDeleteTarget(target.id)}
+                          trigger={
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="destructive"
+                              disabled={isDeleting}
+                              aria-label={`${targetName} 반복 삭제`}
+                            >
+                              <Trash2Icon data-icon="inline-start" />
+                              삭제
+                            </Button>
+                          }
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -514,9 +470,12 @@ function JobsPanel({
           </Table>
         </div>
       ) : (
-        <p className="mx-3 rounded-lg border p-2 text-xs text-muted-foreground">
-          반복 수집 중인 작업이 없습니다. 수집 시작 시 “반복 검색”을 켜면 등록됩니다.
-        </p>
+        <div className="px-3">
+          <EmptyState>
+            반복 수집 중인 작업이 없습니다. 수집 시작 시 &ldquo;반복 검색&rdquo;을
+            켜면 등록됩니다.
+          </EmptyState>
+        </div>
       )}
       <Dialog
         open={runNowTarget != null}
@@ -530,11 +489,9 @@ function JobsPanel({
             </DialogDescription>
           </DialogHeader>
           <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              className="size-4 rounded border"
+            <Checkbox
               checked={runNowForce}
-              onChange={(event) => setRunNowForce(event.target.checked)}
+              onCheckedChange={(checked) => setRunNowForce(Boolean(checked))}
             />
             강제 다운로드 (전체 재수집)
           </label>

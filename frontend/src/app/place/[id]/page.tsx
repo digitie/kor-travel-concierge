@@ -13,11 +13,7 @@ export default function PlaceDetailPage() {
   const id = Number(params.id);
 
   return (
-    <AppShell
-      title="장소 상세"
-      description="확정된 여행지의 출처 영상과 언급 근거를 확인합니다."
-      section="결과"
-    >
+    <AppShell title="장소 상세">
       <div className="mx-auto w-full max-w-2xl p-4">
         <Link
           href="/"

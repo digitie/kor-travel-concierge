@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -22,41 +21,16 @@ import {
 import {
   categoryDisplayLabel,
   jobTypeDisplayLabel,
+  runProgressBarClass,
+  runStateBadgeVariant,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
+import { durationLabel, formatDateTime, intervalLabel } from "@/lib/format";
 import { JobLogView } from "@/components/JobLogDialog";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
 
-export function intervalLabel(minutes: number | null | undefined): string {
-  if (!minutes) return "-";
-  if (minutes % 43200 === 0) return `${minutes / 43200}달`;
-  if (minutes % 10080 === 0) return `${minutes / 10080}주일`;
-  if (minutes % 1440 === 0) return `${minutes / 1440}일`;
-  if (minutes % 60 === 0) return `${minutes / 60}시간`;
-  return `${minutes}분`;
-}
-export function targetTypeLabel(type: string | null | undefined): string {
-  return targetTypeDisplayLabel(type);
-}
-export function durationLabel(seconds: number | null): string {
-  if (seconds == null) return "-";
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m > 0 ? `${m}분 ${s}초` : `${s}초`;
-}
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("ko-KR", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 function runResultLabel(result: Record<string, unknown>, hasResult: boolean): string {
   if (!hasResult) return "진행 중";
   const parts: string[] = [];
@@ -125,7 +99,7 @@ export function JobDetailView({
           {
             label: "대상 유형",
             value:
-              target.target_type_label ?? targetTypeLabel(target.target_type),
+              target.target_type_label ?? targetTypeDisplayLabel(target.target_type),
           },
           {
             label: "대상",
@@ -166,14 +140,7 @@ export function JobDetailView({
         <TargetSummaryCards target={target} videosCount={videos.length} />
       ) : null}
 
-      <DashboardGroup
-        title={run ? "작업" : "반복 작업"}
-        description={
-          run
-            ? "대상, 진행률, 결과 값을 한 화면에서 확인합니다."
-            : "반복 수집 설정과 누적 실행 정보를 확인합니다."
-        }
-      >
+      <Section title={run ? "작업" : "반복 작업"}>
         <section className={detailGridClass}>
           {run ? (
             <RunProgressPanel run={run} result={result} />
@@ -184,13 +151,10 @@ export function JobDetailView({
             <MetricGrid fields={fields} singleColumn={variant === "page"} />
           </Panel>
         </section>
-      </DashboardGroup>
+      </Section>
 
       {run ? (
-        <DashboardGroup
-          title="로그와 결과"
-          description="처리 로그와 이번 작업에서 추출된 장소 후보를 확인합니다."
-        >
+        <Section title="로그와 결과">
           <section className={detailGridClass}>
             <Panel title="상태 로그·오류">
               <JobLogView status={run} />
@@ -203,21 +167,18 @@ export function JobDetailView({
               />
             </Panel>
           </section>
-        </DashboardGroup>
+        </Section>
       ) : null}
 
       {!hideVideos ? (
-        <DashboardGroup
-          title="수집 영상"
-          description="반복 작업이 지금까지 가져온 영상을 확인합니다."
-        >
+        <Section title="수집 영상">
           <Panel title="누적 수집 영상">
             <CollectedVideosTable
               videos={videos}
               isLoading={videosQuery.isLoading}
             />
           </Panel>
-        </DashboardGroup>
+        </Section>
       ) : null}
     </div>
   );
@@ -309,14 +270,14 @@ function RunProgressPanel({
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <Badge variant={runStateVariant(run.state)}>
+            <Badge variant={runStateBadgeVariant(run.state)}>
               {runStateLabel(run.state)}
             </Badge>
             <Badge variant="outline">
               {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
             </Badge>
             <Badge variant="outline">
-              {run.target_type_label ?? targetTypeLabel(run.target_type)}
+              {run.target_type_label ?? targetTypeDisplayLabel(run.target_type)}
             </Badge>
           </div>
           <h2 className="break-words text-[18px] font-bold leading-snug">
@@ -336,7 +297,7 @@ function RunProgressPanel({
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-surface-muted">
             <div
-              className={progressBarClass(run.state)}
+              className={runProgressBarClass(run.state)}
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -359,7 +320,7 @@ function TargetProgressPanel({ target }: { target: SourceTargetSummary }) {
           {target.is_active ? "활성" : "중지"}
         </Badge>
         <Badge variant="outline">
-          {target.target_type_label ?? targetTypeLabel(target.target_type)}
+          {target.target_type_label ?? targetTypeDisplayLabel(target.target_type)}
         </Badge>
       </div>
       <h2 className="mt-2 break-words text-[18px] font-bold leading-snug">
@@ -495,38 +456,6 @@ function CollectedVideosTable({
   );
 }
 
-function DashboardGroup({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-[15px] font-bold">{title}</h2>
-        <p className="text-[13px] text-text-secondary">{description}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <h2 className="mb-3 flex items-center gap-1.5 text-[14px] font-bold">
-        <CheckCircle2Icon className="size-4 text-brand" />
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
-
 function MetricGrid({
   fields,
   singleColumn,
@@ -547,64 +476,4 @@ function MetricGrid({
       ))}
     </div>
   );
-}
-
-function MetricCard({
-  icon,
-  label,
-  value,
-  tone = "neutral",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone?: "neutral" | "active" | "warn";
-}) {
-  return (
-    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <span
-        className={
-          tone === "active"
-            ? "mt-0.5 text-brand"
-            : tone === "warn"
-              ? "mt-0.5 text-warning"
-              : "mt-0.5 text-text-secondary"
-        }
-      >
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[12px] font-bold uppercase tracking-[0.05em] text-text-secondary">
-          {label}
-        </span>
-        <span className="mt-1 block text-[16px] font-bold leading-snug text-text-primary">
-          {value}
-        </span>
-      </span>
-    </div>
-  );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-lg border border-surface-muted bg-surface-subtle p-3 text-[13px] text-text-secondary">
-      {children}
-    </p>
-  );
-}
-
-function runStateVariant(
-  state: string,
-): "outline" | "secondary" | "destructive" {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "destructive";
-  if (normalized === "running" || normalized === "done") return "secondary";
-  return "outline";
-}
-
-function progressBarClass(state: string) {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "h-full rounded-full bg-destructive";
-  if (normalized === "done") return "h-full rounded-full bg-success";
-  return "h-full rounded-full bg-primary";
 }
