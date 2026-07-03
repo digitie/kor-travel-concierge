@@ -6,6 +6,11 @@ const e2eAdminPassword = process.env.KTC_E2E_ADMIN_PASSWORD ?? '';
 
 test.describe('n150 live UI 셸 검증', () => {
   test.skip(!liveEnabled, 'KTC_LIVE_E2E=1 일 때만 n150 live UI를 검증한다.');
+  // live 데이터(수천 검수 후보)와 실제 provider 검색·지도 타일을 상대하므로
+  // 기본 30초로는 검수 큐 시나리오가 빠듯하다.
+  test.beforeEach(() => {
+    test.setTimeout(60_000);
+  });
 
   test('메뉴, 상단 작업 상태, 상태 페이지, 설정 페이지가 동작한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);

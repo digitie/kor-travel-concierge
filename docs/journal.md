@@ -34,9 +34,21 @@
   갱신했고, 로컬 시드 스펙(`ktc.spec.ts`)에 live 모드 skip 게이트를 넣어 n150에서
   `npx playwright test`가 live 스펙만 실행하게 했다(이 저장소 E2E에는 백업/리스토어 스펙이 없음 —
   해당 시나리오는 docker-manager 쪽 하니스 소관).
+- **검수 큐 성능 회귀 수정**: 첫 live E2E에서 검수 큐(실데이터 2,000행) 선택/버튼 클릭이
+  수 초 이상 멈추는 회귀를 발견했다. 행마다 `ConfirmActionButton`(AlertDialog root)을 두고
+  memo 없이 전 행이 재렌더된 것이 원인 — 행을 `CandidateRow`(`React.memo` + `useCallback`
+  안정화)로 추출하고 행 삭제 확인은 페이지 공용 단일 AlertDialog로 바꿔 해결했다.
+  live 스펙 기본 30초는 실데이터·실제 provider 검색 기준으로 빠듯해 60초로 상향했다.
 - **검증**: vitest(신규 youtube 판별 테스트 포함) / eslint / tsc / `next build --webpack` 통과,
   자체 적대 리뷰 워크플로(4렌즈 → 반박 검증)로 확인된 11건(P1 1건 포함)을 모두 수정 또는
-  코드 주석으로 문서화. n150 배포 후 live UI E2E 실행.
+  코드 주석으로 문서화. n150 배포(런북 절차: env 재적용 + 로그인 POST 200/401 + 공개 도메인
+  200) 후 live UI E2E 4/4 통과 (이 저장소 하니스에는 백업/리스토어 스펙 없음).
+- **E2E 실행 위치(ADR-33 fallback 기록)**: n150 직접 실행은 OS가 Ubuntu 26.04로 올라가
+  Playwright가 `chromium on ubuntu26.04-x64` 미지원을 선언하고 기존 캐시 브라우저도
+  `libatk-1.0.so.0` 결손으로 기동 불가 → Windows 호스트에서 같은 live 스위트를
+  `E2E_FRONTEND_URL=http://<n150>:12605`로 fallback 실행했다(검증 대상은 동일하게 n150
+  live 인스턴스). n150에서 재실행하려면 Playwright의 Ubuntu 26.04 지원 또는 컨테이너
+  기반 하니스가 필요하다.
 
 ## 2026-07-01: T-151 — Google Places 403 진단 강화 (부수 수정)
 
