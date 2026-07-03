@@ -61,8 +61,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { VWorldMap } from "@/components/VWorldMap";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -490,18 +493,26 @@ export default function ReviewPage() {
     },
   });
 
-  const canSave =
-    Boolean(form.name.trim()) &&
-    Number.isFinite(Number(form.latitude)) &&
-    Number.isFinite(Number(form.longitude)) &&
+  // 좌표 입력 검증: 숫자 여부(차단) + 대한민국 대략 범위(경고만, 저장은 허용).
+  const latInvalid = Boolean(form.latitude) && !Number.isFinite(Number(form.latitude));
+  const lngInvalid =
+    Boolean(form.longitude) && !Number.isFinite(Number(form.longitude));
+  const coordsFilled =
     Boolean(form.latitude) &&
-    Boolean(form.longitude);
+    Boolean(form.longitude) &&
+    !latInvalid &&
+    !lngInvalid;
+  const coordsOutOfKorea =
+    coordsFilled &&
+    (Number(form.latitude) < 33 ||
+      Number(form.latitude) > 39 ||
+      Number(form.longitude) < 124 ||
+      Number(form.longitude) > 132);
+  const canSave = Boolean(form.name.trim()) && coordsFilled;
 
   return (
     <AppShell
       title="검수 큐"
-      description="Google, Kakao, Naver 검색과 Gemini 의견을 비교해 후보 위치를 확정합니다."
-      section="검수"
       actions={<Badge variant="secondary">{candidates.length}개 대기</Badge>}
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
       viewportLocked
@@ -563,24 +574,24 @@ export default function ReviewPage() {
               <span className="text-xs font-medium text-destructive">
                 후보 {selectedCandidateIds.length}개 선택됨
               </span>
-              <Button
-                type="button"
-                size="xs"
-                variant="destructive"
-                disabled={deleteCandidatesMutation.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `선택한 후보 ${selectedCandidateIds.length}개를 삭제할까요?`,
-                    )
-                  ) {
-                    deleteCandidatesMutation.mutate(selectedCandidateIds);
-                  }
-                }}
-              >
-                <Trash2Icon data-icon="inline-start" />
-                선택 삭제
-              </Button>
+              <ConfirmActionButton
+                title={`선택한 후보 ${selectedCandidateIds.length}개를 삭제할까요?`}
+                description="되돌릴 수 없습니다."
+                onConfirm={() =>
+                  deleteCandidatesMutation.mutate(selectedCandidateIds)
+                }
+                trigger={
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="destructive"
+                    disabled={deleteCandidatesMutation.isPending}
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                    선택 삭제
+                  </Button>
+                }
+              />
               <Button
                 type="button"
                 size="xs"
@@ -645,11 +656,9 @@ export default function ReviewPage() {
             </div>
           ) : null}
           <label className="flex items-center gap-1.5 px-1 pb-1 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              className="size-3.5 rounded border"
+            <Switch
               checked={hideForeign}
-              onChange={(event) => setHideForeign(event.target.checked)}
+              onCheckedChange={(checked) => setHideForeign(Boolean(checked))}
             />
             해외(국내 아님) 후보 숨기기
           </label>
@@ -663,11 +672,9 @@ export default function ReviewPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10">
-                      <input
-                        type="checkbox"
-                        className="size-4 rounded border"
+                      <Checkbox
                         checked={allVisibleCandidatesSelected}
-                        onChange={toggleAllVisibleCandidates}
+                        onCheckedChange={toggleAllVisibleCandidates}
                         aria-label="보이는 후보 전체 선택"
                       />
                     </TableHead>
@@ -684,11 +691,11 @@ export default function ReviewPage() {
                       data-state={candidate.id === selected?.id ? "selected" : undefined}
                     >
                       <TableCell>
-                        <input
-                          type="checkbox"
-                          className="size-4 rounded border"
+                        <Checkbox
                           checked={selectedCandidateSet.has(candidate.id)}
-                          onChange={() => toggleCandidateSelection(candidate.id)}
+                          onCheckedChange={() =>
+                            toggleCandidateSelection(candidate.id)
+                          }
                           aria-label={`${candidate.ai_place_name} 후보 선택`}
                         />
                       </TableCell>
@@ -740,20 +747,24 @@ export default function ReviewPage() {
                           >
                             <InfoIcon className="size-4" />
                           </Button>
-                          <Button
-                            type="button"
-                            size="icon-xs"
-                            variant="destructive"
-                            aria-label={`${candidate.ai_place_name} 후보 삭제`}
-                            disabled={deleteCandidatesMutation.isPending}
-                            onClick={() => {
-                              if (window.confirm("이 검수 후보를 삭제할까요?")) {
-                                deleteCandidatesMutation.mutate([candidate.id]);
-                              }
-                            }}
-                          >
-                            <Trash2Icon className="size-4" />
-                          </Button>
+                          <ConfirmActionButton
+                            title={`${candidate.ai_place_name} 후보를 삭제할까요?`}
+                            description="되돌릴 수 없습니다."
+                            onConfirm={() =>
+                              deleteCandidatesMutation.mutate([candidate.id])
+                            }
+                            trigger={
+                              <Button
+                                type="button"
+                                size="icon-xs"
+                                variant="destructive"
+                                aria-label={`${candidate.ai_place_name} 후보 삭제`}
+                                disabled={deleteCandidatesMutation.isPending}
+                              >
+                                <Trash2Icon className="size-4" />
+                              </Button>
+                            }
+                          />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -851,6 +862,7 @@ export default function ReviewPage() {
                     aria-label="위도"
                     inputMode="decimal"
                     placeholder="위도"
+                    aria-invalid={latInvalid}
                     value={form.latitude}
                     onChange={(event) =>
                       setForm((prev) => ({
@@ -863,6 +875,7 @@ export default function ReviewPage() {
                     aria-label="경도"
                     inputMode="decimal"
                     placeholder="경도"
+                    aria-invalid={lngInvalid}
                     value={form.longitude}
                     onChange={(event) =>
                       setForm((prev) => ({
@@ -872,6 +885,16 @@ export default function ReviewPage() {
                     }
                   />
                 </div>
+                {latInvalid || lngInvalid ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    위도·경도는 숫자로 입력하세요.
+                  </p>
+                ) : coordsOutOfKorea ? (
+                  <p className="text-xs text-warning">
+                    대한민국 범위를 벗어난 좌표입니다. 저장은 가능하지만 다시
+                    확인하세요.
+                  </p>
+                ) : null}
                 {/* 카테고리 드롭다운으로 강제(검색결과 카테고리는 #5에서 매핑해 미리 채움). */}
                 <Select
                   value={form.categoryCode}

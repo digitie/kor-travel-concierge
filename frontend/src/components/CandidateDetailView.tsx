@@ -1,13 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
 
@@ -20,6 +14,7 @@ import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DetailRow, DetailSection } from "@/components/detail";
 
 function durationLabel(seconds: number | null): string {
   if (seconds == null) return "";
@@ -343,26 +338,3 @@ export function CandidateDetailView({
   );
 }
 
-function DetailSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-1.5">
-      <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
-      {children}
-    </section>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="truncate text-right font-medium">{value}</span>
-    </div>
-  );
-}

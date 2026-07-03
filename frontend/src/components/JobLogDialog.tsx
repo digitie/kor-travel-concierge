@@ -1,12 +1,8 @@
 "use client";
 
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { useState } from "react";
-
 import type { RunStatusLog } from "@/lib/api";
-import { runStateLabel } from "@/lib/display-labels";
+import { runStateBadgeVariant, runStateLabel } from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CopyButton } from "@/components/CopyButton";
 
 // 수집 상태 로그·오류를 전체로 보여주고 복사할 수 있는 공용 다이얼로그.
 // HarvestConsole(수집 패널)과 JobDetailDialog(작업 상세) 양쪽에서 재사용한다.
@@ -36,15 +33,6 @@ function formatLogTime(value: string): string {
   }).format(date);
 }
 
-function stateVariant(
-  state: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "destructive";
-  if (normalized === "done") return "default";
-  return "secondary";
-}
-
 export function buildJobReport(status: JobLogLike): string {
   const lines = [
     "[작업 정보]",
@@ -61,41 +49,14 @@ export function buildJobReport(status: JobLogLike): string {
   return lines.join("\n");
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        } catch {
-          // 클립보드 권한이 막힌 환경에서는 조용히 무시한다.
-        }
-      }}
-    >
-      {copied ? (
-        <CheckIcon data-icon="inline-start" />
-      ) : (
-        <CopyIcon data-icon="inline-start" />
-      )}
-      {copied ? "복사됨" : "전체 복사"}
-    </Button>
-  );
-}
-
 export function JobLogView({ status }: { status: JobLogLike }) {
   return (
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <Badge variant={stateVariant(status.state)}>
+        <Badge variant={runStateBadgeVariant(status.state)}>
           {runStateLabel(status.state)}
         </Badge>
-        <CopyButton text={buildJobReport(status)} />
+        <CopyButton text={buildJobReport(status)} label="전체 복사" />
       </div>
 
       {status.current_message ? (
@@ -156,8 +117,7 @@ export function JobLogDialog({
         <DialogHeader>
           <DialogTitle>{title ?? "작업 로그·오류"}</DialogTitle>
           <DialogDescription>
-            전체 상태 로그와 오류 메시지입니다. &quot;전체 복사&quot;로 그대로
-            복사해 공유·문의할 수 있습니다.
+            전체 상태 로그와 오류 메시지
           </DialogDescription>
         </DialogHeader>
         {status ? <JobLogView status={status} /> : null}

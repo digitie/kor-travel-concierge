@@ -11,8 +11,10 @@ import {
   type CategoryOption,
   type SourceTargetSummary,
 } from "@/lib/api";
-import { categoryDisplayLabel } from "@/lib/display-labels";
+import { categoryDisplayLabel, targetTypeDisplayLabel } from "@/lib/display-labels";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -22,7 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -32,6 +34,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { HelpTip } from "@/components/HelpTip";
+import { Metric } from "@/components/panels";
 
 const INTERVAL_OPTIONS = [
   { value: 60, label: "1시간" },
@@ -43,48 +47,16 @@ const INTERVAL_OPTIONS = [
   { value: 129600, label: "3달" },
 ];
 
-function intervalLabel(value: number): string {
+function intervalOptionLabel(value: number): string {
   return (
     INTERVAL_OPTIONS.find((option) => option.value === value)?.label ??
     `${value}분`
   );
 }
 
-function targetTypeLabel(type: string | null | undefined): string {
-  if (type === "channel") return "유튜버";
-  if (type === "playlist") return "재생목록";
-  if (type === "keyword") return "검색어";
-  if (type === "video") return "영상";
-  return type ?? "대상";
-}
-
 function targetDisplayName(target: SourceTargetSummary | null): string {
   if (!target) return "작업";
   return target.target_label ?? target.display_name ?? target.source_value;
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("ko-KR", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleDateString("ko-KR", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
 }
 
 function categoryLabel(
@@ -122,7 +94,7 @@ export function RecurringEditDialog({
     defaultCategoryEdit ?? target?.default_category_code ?? "0";
   const title = `${targetDisplayName(target)} 작업 수정`;
   const targetKind =
-    target?.target_type_label ?? targetTypeLabel(target?.target_type);
+    target?.target_type_label ?? targetTypeDisplayLabel(target?.target_type);
 
   const videosQuery = useQuery({
     queryKey: ["source-target-videos", target?.id],
@@ -187,11 +159,13 @@ export function RecurringEditDialog({
         </DialogHeader>
 
         <section className="grid gap-2 sm:grid-cols-2">
-          <SummaryItem
+          <Metric
             label="누적 수집 영상"
-            value={videosQuery.isLoading ? "확인 중" : `${videos.length.toLocaleString()}개`}
+            value={
+              videosQuery.isLoading ? "확인 중" : `${videos.length.toLocaleString()}개`
+            }
           />
-          <SummaryItem
+          <Metric
             label="실행 횟수"
             value={
               target?.max_runs === 0
@@ -199,23 +173,11 @@ export function RecurringEditDialog({
                 : `${target?.run_count ?? 0}회 / ${target?.max_runs ?? 0}회`
             }
           />
-          <SummaryItem
-            label="마지막 수집"
-            value={formatDateTime(target?.last_crawled_at)}
-          />
-          <SummaryItem
-            label="마지막 영상 날짜"
-            value={formatDate(lastVideoPublishedAt)}
-          />
-          <SummaryItem
-            label="마지막 스캔"
-            value={formatDateTime(target?.last_scan_at)}
-          />
-          <SummaryItem
-            label="다음 실행"
-            value={formatDateTime(target?.next_crawl_at)}
-          />
-          <SummaryItem
+          <Metric label="마지막 수집" value={formatDateTime(target?.last_crawled_at)} />
+          <Metric label="마지막 영상 날짜" value={formatDate(lastVideoPublishedAt)} />
+          <Metric label="마지막 스캔" value={formatDateTime(target?.last_scan_at)} />
+          <Metric label="다음 실행" value={formatDateTime(target?.next_crawl_at)} />
+          <Metric
             label="기본 카테고리"
             value={categoryLabel(categoriesQuery.data, defaultCategoryCode)}
           />
@@ -235,7 +197,7 @@ export function RecurringEditDialog({
               onValueChange={(value) => setIntervalEdit(Number(value))}
             >
               <SelectTrigger id="recurring-edit-interval" className="w-full">
-                <SelectValue>{intervalLabel(interval)}</SelectValue>
+                <SelectValue>{intervalOptionLabel(interval)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
@@ -251,7 +213,10 @@ export function RecurringEditDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel htmlFor="recurring-edit-count">반복 횟수</FieldLabel>
+              <div className="flex items-center gap-1">
+                <FieldLabel htmlFor="recurring-edit-count">반복 횟수</FieldLabel>
+                <HelpTip>0이면 중지할 때까지 무한 반복합니다.</HelpTip>
+              </div>
               <Input
                 id="recurring-edit-count"
                 type="number"
@@ -261,11 +226,15 @@ export function RecurringEditDialog({
                   setMaxRunsEdit(Math.max(0, Number(event.target.value) || 0))
                 }
               />
-              <FieldDescription>0이면 무한 반복합니다.</FieldDescription>
             </Field>
 
             <Field>
-              <FieldLabel htmlFor="recurring-edit-max-videos">수집개수(영상 수)</FieldLabel>
+              <div className="flex items-center gap-1">
+                <FieldLabel htmlFor="recurring-edit-max-videos">
+                  수집개수(영상 수)
+                </FieldLabel>
+                <HelpTip>반복 1회당 받을 영상 수(1~300)입니다.</HelpTip>
+              </div>
               <Input
                 id="recurring-edit-max-videos"
                 type="number"
@@ -278,12 +247,14 @@ export function RecurringEditDialog({
                   )
                 }
               />
-              <FieldDescription>반복 1회당 받을 영상 수 (1-300).</FieldDescription>
             </Field>
           </div>
 
           <Field>
-            <FieldLabel htmlFor="recurring-edit-category">기본 카테고리</FieldLabel>
+            <div className="flex items-center gap-1">
+              <FieldLabel htmlFor="recurring-edit-category">기본 카테고리</FieldLabel>
+              <HelpTip>카테고리 매칭에 실패한 장소는 이 값으로 저장합니다.</HelpTip>
+            </div>
             <Select
               value={defaultCategoryCode}
               onValueChange={(value) => setDefaultCategoryEdit(value)}
@@ -303,27 +274,22 @@ export function RecurringEditDialog({
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <FieldDescription>
-              카테고리 매칭 실패 시 이 값으로 저장합니다.
-            </FieldDescription>
           </Field>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4 rounded border"
+          {/* 저장 버튼으로 반영되는 폼 값이므로 Switch(즉시 적용 암시)가 아니라 Checkbox. */}
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Checkbox
               checked={active}
-              onChange={(event) => setActiveEdit(event.target.checked)}
+              onCheckedChange={(checked) => setActiveEdit(Boolean(checked))}
             />
             반복 수집 사용
           </label>
 
           <label className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 size-4 rounded border"
+            <Checkbox
+              className="mt-0.5"
               checked={forceRunOnce}
-              onChange={(event) => setForceRunOnce(event.target.checked)}
+              onCheckedChange={(checked) => setForceRunOnce(Boolean(checked))}
             />
             <span className="flex flex-col gap-0.5">
               <span className="font-medium">강제 다운로드 (전체 재수집)</span>
@@ -356,16 +322,5 @@ export function RecurringEditDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function SummaryItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-surface-muted bg-surface-subtle p-3">
-      <span className="text-[12px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-        {label}
-      </span>
-      <span className="text-[14px] font-bold text-text-primary">{value}</span>
-    </div>
   );
 }

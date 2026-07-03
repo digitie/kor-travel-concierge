@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 
 import { JobStatusLink } from "@/components/JobStatusLink";
-import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +37,6 @@ function isActive(pathname: string, href: string) {
 export function AppShell({
   title,
   description,
-  section,
   actions,
   children,
   contentClassName,
@@ -46,7 +44,6 @@ export function AppShell({
 }: {
   title: string;
   description?: string;
-  section?: string;
   actions?: ReactNode;
   children: ReactNode;
   contentClassName?: string;
@@ -123,32 +120,22 @@ export function AppShell({
             viewportLocked && "ktc-viewport-locked",
           )}
         >
-          <header className="shrink-0 px-4 pt-4 lg:px-6 lg:pt-6">
-            <div className="rounded-2xl bg-card p-4 shadow-[var(--shadow-card)] ring-1 ring-border/70 lg:p-6">
-              <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {section ? <Badge variant="secondary">{section}</Badge> : null}
-                    <span className="break-all font-mono text-[12px] text-text-secondary">
-                      {pathname}
-                    </span>
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h1 className="text-[24px] leading-snug font-bold">{title}</h1>
-                  </div>
-                  {description ? (
-                    <p className="max-w-4xl text-[13px] leading-normal text-text-secondary">
-                      {description}
-                    </p>
-                  ) : null}
-                </div>
-                {actions ? (
-                  <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
-                    {actions}
-                  </div>
-                ) : null}
-              </div>
+          <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-surface-muted bg-card px-4 py-3 lg:px-6">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h1 className="min-w-0 truncate text-[16px] leading-snug font-bold">
+                {title}
+              </h1>
+              {description ? (
+                <span className="truncate text-[12px] text-text-secondary">
+                  {description}
+                </span>
+              ) : null}
             </div>
+            {actions ? (
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {actions}
+              </div>
+            ) : null}
           </header>
           <div
             className={cn(

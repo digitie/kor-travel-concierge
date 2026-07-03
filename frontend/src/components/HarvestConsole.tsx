@@ -1,11 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  Loader2Icon,
-  PlayIcon,
-} from "lucide-react";
+import { Loader2Icon, PlayIcon } from "lucide-react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
@@ -16,8 +14,11 @@ import {
   type HarvestContentFilter,
   type HarvestTargetType,
 } from "@/lib/api";
-import { categoryDisplayLabel } from "@/lib/display-labels";
+import { categoryDisplayLabel, targetTypeDisplayLabel } from "@/lib/display-labels";
+import { detectSourceInput, validateTargetValue } from "@/lib/youtube";
+import { HelpTip } from "@/components/HelpTip";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
   FieldError,
@@ -91,22 +92,34 @@ function categoryLabel(
   );
 }
 
-const harvestFormSchema = z.object({
-  targetType: z.enum(["auto", "keyword", "channel", "playlist", "video"]),
-  targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
-  maxVideos: z.coerce
-    .number()
-    .int("정수로 입력하세요.")
-    .min(1, "최소 1개 이상 입력하세요.")
-    .max(300, "한 번에 최대 300개까지 요청할 수 있습니다."),
-  repeat: z.boolean(),
-  repeatIntervalMinutes: z.coerce.number().int().min(1),
-  repeatMaxRuns: z.coerce.number().int().min(0),
-  contentFilter: z.enum(["both", "shorts", "videos"]),
-  // 강제 다운로드: 증분 워터마크 무시하고 처음부터 재수집(기본은 증분 추가).
-  force: z.boolean(),
-  defaultCategoryCode: z.string().min(1),
-});
+const harvestFormSchema = z
+  .object({
+    targetType: z.enum(["auto", "keyword", "channel", "playlist", "video"]),
+    targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
+    maxVideos: z.coerce
+      .number()
+      .int("정수로 입력하세요.")
+      .min(1, "최소 1개 이상 입력하세요.")
+      .max(300, "한 번에 최대 300개까지 요청할 수 있습니다."),
+    repeat: z.boolean(),
+    repeatIntervalMinutes: z.coerce.number().int().min(1),
+    repeatMaxRuns: z.coerce.number().int().min(0),
+    contentFilter: z.enum(["both", "shorts", "videos"]),
+    // 강제 다운로드: 증분 워터마크 무시하고 처음부터 재수집(기본은 증분 추가).
+    force: z.boolean(),
+    defaultCategoryCode: z.string().min(1),
+  })
+  // 대상 유형별 형식 검사(영상 ID/재생목록 URL) — lib/youtube가 backend 판별과 동일.
+  .superRefine((values, ctx) => {
+    const message = validateTargetValue(values.targetType, values.targetValue);
+    if (message) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["targetValue"],
+        message,
+      });
+    }
+  });
 
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
 
@@ -129,6 +142,7 @@ export function HarvestConsole() {
     control: form.control,
     name: "targetType",
   });
+  const targetValue = useWatch({ control: form.control, name: "targetValue" });
   const repeat = useWatch({ control: form.control, name: "repeat" });
   const repeatIntervalMinutes = useWatch({
     control: form.control,
@@ -145,6 +159,9 @@ export function HarvestConsole() {
     name: "defaultCategoryCode",
   });
   const effectiveDefaultCategoryCode = defaultCategoryCode ?? "0";
+  // 자동 판별 미리보기: 백엔드와 같은 규칙으로 어떤 유형으로 수집될지 보여준다.
+  const detected =
+    targetType === "auto" ? detectSourceInput(targetValue ?? "") : null;
 
   const categoriesQuery = useQuery({
     queryKey: ["categories"],
@@ -179,7 +196,14 @@ export function HarvestConsole() {
       >
         <FieldGroup>
           <Field data-invalid={Boolean(form.formState.errors.targetType)}>
-            <FieldLabel>대상 유형</FieldLabel>
+            <div className="flex items-center gap-1">
+              <FieldLabel>대상 유형</FieldLabel>
+              <HelpTip>
+                &lsquo;자동&rsquo;으로 두면 붙여넣은 링크·문자열을 재생목록 → 영상
+                → 채널 → 검색어 순으로 판별합니다. 특정 유형만 받으려면 직접
+                선택하세요.
+              </HelpTip>
+            </div>
             <Select
               value={targetType}
               onValueChange={(value) =>
@@ -218,14 +242,29 @@ export function HarvestConsole() {
               aria-invalid={Boolean(form.formState.errors.targetValue)}
               {...form.register("targetValue")}
             />
+            {detected ? (
+              <p className="text-[12px] text-text-secondary" aria-live="polite">
+                자동 인식:{" "}
+                <span className="font-medium text-brand">
+                  {targetTypeDisplayLabel(detected.kind)}
+                </span>
+                {detected.kind === "playlist" || detected.kind === "video"
+                  ? ` (${detected.value})`
+                  : null}
+              </p>
+            ) : null}
             <FieldError errors={[form.formState.errors.targetValue]} />
           </Field>
 
           <div className="grid gap-3 md:grid-cols-2">
             <Field data-invalid={Boolean(form.formState.errors.maxVideos)}>
-              <FieldLabel htmlFor="harvest-max-videos">
-                최대 영상 수 (최대 300개)
-              </FieldLabel>
+              <div className="flex items-center gap-1">
+                <FieldLabel htmlFor="harvest-max-videos">최대 영상 수</FieldLabel>
+                <HelpTip>
+                  한 번 실행에서 가져올 영상 상한(1~300). YouTube API 할당량을
+                  아끼려면 필요한 만큼만 지정하세요.
+                </HelpTip>
+              </div>
               <Input
                 id="harvest-max-videos"
                 type="number"
@@ -265,7 +304,12 @@ export function HarvestConsole() {
           </div>
 
           <Field>
-            <FieldLabel htmlFor="harvest-default-category">기본 카테고리</FieldLabel>
+            <div className="flex items-center gap-1">
+              <FieldLabel htmlFor="harvest-default-category">기본 카테고리</FieldLabel>
+              <HelpTip>
+                장소의 카테고리를 자동으로 정하지 못하면 이 값으로 저장합니다.
+              </HelpTip>
+            </div>
             <Select
               value={effectiveDefaultCategoryCode}
               onValueChange={(value) =>
@@ -297,18 +341,19 @@ export function HarvestConsole() {
               htmlFor="harvest-force"
               className="flex items-center gap-2 text-sm font-medium"
             >
-              <input
+              <Checkbox
                 id="harvest-force"
-                type="checkbox"
-                className="size-4 rounded border"
                 checked={force}
-                onChange={(event) =>
-                  form.setValue("force", event.target.checked, {
+                onCheckedChange={(checked) =>
+                  form.setValue("force", Boolean(checked), {
                     shouldDirty: true,
                   })
                 }
               />
               강제 다운로드(전체 재수집)
+              <HelpTip>
+                이미 받은 영상 이후만 받는 증분 수집 대신 처음부터 다시 받습니다.
+              </HelpTip>
             </label>
           </Field>
 
@@ -317,18 +362,20 @@ export function HarvestConsole() {
               htmlFor="harvest-repeat"
               className="flex items-center gap-2 text-sm font-medium"
             >
-              <input
+              <Checkbox
                 id="harvest-repeat"
-                type="checkbox"
-                className="size-4 rounded border"
                 checked={repeat}
-                onChange={(event) =>
-                  form.setValue("repeat", event.target.checked, {
+                onCheckedChange={(checked) =>
+                  form.setValue("repeat", Boolean(checked), {
                     shouldDirty: true,
                   })
                 }
               />
               반복 검색
+              <HelpTip>
+                켜면 이 대상을 반복 작업으로 등록해 간격마다 새 영상을 수집합니다.
+                반복 목록은 아래 &ldquo;반복 작업&rdquo;에서 관리합니다.
+              </HelpTip>
             </label>
             {repeat ? (
               <div className="mt-2 flex flex-col gap-1.5">
@@ -357,9 +404,10 @@ export function HarvestConsole() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <FieldLabel htmlFor="harvest-repeat-count" className="mt-2">
-                  반복 횟수
-                </FieldLabel>
+                <div className="mt-2 flex items-center gap-1">
+                  <FieldLabel htmlFor="harvest-repeat-count">반복 횟수</FieldLabel>
+                  <HelpTip>0이면 중지할 때까지 무한 반복합니다.</HelpTip>
+                </div>
                 <Input
                   id="harvest-repeat-count"
                   type="number"
@@ -388,6 +436,17 @@ export function HarvestConsole() {
         </Button>
       </form>
 
+      {mutation.data ? (
+        <p className="text-sm text-text-secondary" aria-live="polite">
+          수집 작업을 등록했습니다 ·{" "}
+          <Link
+            href={`/jobs/${mutation.data.job_id}`}
+            className="font-medium text-brand hover:underline"
+          >
+            진행 상황 보기
+          </Link>
+        </p>
+      ) : null}
       {mutation.error ? (
         <p className="text-sm text-destructive" role="alert">
           {mutation.error.message}

@@ -13,11 +13,7 @@ export default function CandidateDetailPage() {
   const id = Number(params.id);
 
   return (
-    <AppShell
-      title="검수 후보 상세"
-      description="후보 장소의 출처 영상, 근거 문장, 같은 영상의 다른 장소를 확인합니다."
-      section="검수"
-    >
+    <AppShell title="검수 후보 상세">
       <div className="mx-auto w-full max-w-2xl p-4">
         <Link
           href="/review"

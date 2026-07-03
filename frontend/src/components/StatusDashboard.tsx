@@ -1,11 +1,9 @@
 "use client";
 
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangleIcon,
-  CheckCircle2Icon,
   DatabaseIcon,
   HardDriveIcon,
   ListChecksIcon,
@@ -29,46 +27,23 @@ import {
   jobTypeDisplayLabel,
   loginEventLabel,
   loginOutcomeLabel,
+  runProgressBarClass,
+  runStateBadgeVariant,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
+import { asNum, asRecord, formatBytes, formatDateTimeShort } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-function asNum(value: unknown): number {
-  return typeof value === "number" ? value : 0;
-}
-
-function asRecord(value: unknown): Record<string, number> {
-  return value && typeof value === "object"
-    ? (value as Record<string, number>)
-    : {};
-}
-
-function formatBytes(bytes: number | undefined): string {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+import {
+  CountList,
+  EmptyState,
+  Metric,
+  MetricCard,
+  Panel,
+  Section,
+} from "@/components/panels";
 
 function targetLabel(run: CrawlRunSummary): string {
   return run.target_label ?? run.target_id ?? run.source ?? "-";
@@ -155,12 +130,7 @@ export function StatusDashboard() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-[16px] font-bold">운영 요약</h2>
-          <p className="text-[13px] text-text-secondary">
-            작업, 데이터, 보안 상태를 주제별로 묶어 표시합니다.
-          </p>
-        </div>
+        <h2 className="text-[16px] font-bold">운영 요약</h2>
         <Button type="button" variant="outline" size="sm" onClick={refresh}>
           <RefreshCwIcon data-icon="inline-start" />
           새로고침
@@ -199,10 +169,7 @@ export function StatusDashboard() {
         />
       </section>
 
-      <DashboardGroup
-        title="작업"
-        description="현재 큐와 최근 실행 이력을 함께 봅니다."
-      >
+      <Section title="작업">
         <section className="grid gap-4 xl:grid-cols-[1fr_18rem]">
           <Panel title="작업 테이블">
             {queueQuery.isError ? (
@@ -243,12 +210,9 @@ export function StatusDashboard() {
             />
           </Panel>
         </section>
-      </DashboardGroup>
+      </Section>
 
-      <DashboardGroup
-        title="데이터"
-        description="DB 적재량, 객체 저장소, 검수 대기 상태를 확인합니다."
-      >
+      <Section title="데이터">
         <section className="grid gap-4 xl:grid-cols-2">
           <Panel title="저장소 상세">
             <div className="grid grid-cols-2 gap-2">
@@ -287,12 +251,9 @@ export function StatusDashboard() {
             />
           </Panel>
         </section>
-      </DashboardGroup>
+      </Section>
 
-      <DashboardGroup
-        title="보안"
-        description="관리자 로그인 이력과 설정 변경 감사 로그를 확인합니다."
-      >
+      <Section title="보안">
         <section className="grid gap-4 xl:grid-cols-2">
           <Panel title="로그인 기록">
             {(loginEventsQuery.data ?? []).length > 0 ? (
@@ -315,7 +276,7 @@ export function StatusDashboard() {
                       </Badge>
                     </div>
                     <p className="mt-1 text-[12px] text-text-secondary">
-                      {formatDateTime(event.created_at)} ·{" "}
+                      {formatDateTimeShort(event.created_at)} ·{" "}
                       {event.attempted_username || "-"} · {event.reason || "-"}
                     </p>
                     <p className="truncate text-[12px] text-text-secondary">
@@ -337,7 +298,7 @@ export function StatusDashboard() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{auditActionLabel(log.action)}</span>
                       <span className="text-[12px] text-text-secondary">
-                        {formatDateTime(log.created_at)}
+                        {formatDateTimeShort(log.created_at)}
                       </span>
                     </div>
                     <p className="truncate text-text-secondary">
@@ -353,7 +314,7 @@ export function StatusDashboard() {
             )}
           </Panel>
         </section>
-      </DashboardGroup>
+      </Section>
     </div>
   );
 }
@@ -391,7 +352,7 @@ function RunStatusTable({
           {runs.map((run) => (
             <tr key={run.job_id} className="border-t border-surface-muted">
               <td className="px-3 py-2 align-top">
-                <Badge variant={runStateVariant(run.state)}>
+                <Badge variant={runStateBadgeVariant(run.state)}>
                   {runStateLabel(run.state)}
                 </Badge>
               </td>
@@ -419,7 +380,7 @@ function RunStatusTable({
                 <div className="flex w-28 flex-col gap-1">
                   <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
-                      className={progressBarClass(run.state)}
+                      className={runProgressBarClass(run.state)}
                       style={{ width: progressPercent(run) }}
                     />
                   </div>
@@ -442,9 +403,9 @@ function RunStatusTable({
               </td>
               <td className="px-3 py-2 align-top">
                 <div className="flex flex-col text-[12px] text-text-secondary">
-                  <span>등록 {formatDateTime(run.created_at)}</span>
-                  <span>시작 {formatDateTime(run.started_at)}</span>
-                  <span>종료 {formatDateTime(run.finished_at)}</span>
+                  <span>등록 {formatDateTimeShort(run.created_at)}</span>
+                  <span>시작 {formatDateTimeShort(run.started_at)}</span>
+                  <span>종료 {formatDateTimeShort(run.finished_at)}</span>
                 </div>
               </td>
               <td className="px-3 py-2 align-top">
@@ -462,131 +423,5 @@ function RunStatusTable({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function runStateVariant(
-  state: string,
-): "outline" | "secondary" | "destructive" {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "destructive";
-  if (normalized === "running" || normalized === "done") return "secondary";
-  return "outline";
-}
-
-function progressBarClass(state: string) {
-  const normalized = state.toLowerCase();
-  if (normalized === "failed") return "h-full rounded-full bg-destructive";
-  if (normalized === "done") return "h-full rounded-full bg-success";
-  return "h-full rounded-full bg-primary";
-}
-
-function DashboardGroup({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-[15px] font-bold">{title}</h2>
-        <p className="text-[13px] text-text-secondary">{description}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function MetricCard({
-  icon,
-  label,
-  value,
-  tone = "neutral",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone?: "neutral" | "active" | "warn";
-}) {
-  return (
-    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <span
-        className={
-          tone === "active"
-            ? "mt-0.5 text-brand"
-            : tone === "warn"
-              ? "mt-0.5 text-warning"
-              : "mt-0.5 text-text-secondary"
-        }
-      >
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[12px] font-bold uppercase tracking-[0.05em] text-text-secondary">
-          {label}
-        </span>
-        <span className="mt-1 block text-[16px] font-bold leading-snug text-text-primary">
-          {value}
-        </span>
-      </span>
-    </div>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
-      <h2 className="mb-3 flex items-center gap-1.5 text-[14px] font-bold">
-        <CheckCircle2Icon className="size-4 text-brand" />
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-surface-muted bg-surface-subtle p-2.5">
-      <span className="text-[12px] text-text-secondary">{label}</span>
-      <span className="font-bold">{value}</span>
-    </div>
-  );
-}
-
-function CountList({
-  counts,
-  empty,
-  labeler,
-}: {
-  counts: Record<string, number>;
-  empty: string;
-  labeler?: (key: string) => string;
-}) {
-  const entries = Object.entries(counts);
-  if (entries.length === 0) {
-    return <EmptyState>{empty}</EmptyState>;
-  }
-  return (
-    <div className="flex flex-col divide-y divide-surface-muted rounded-lg border border-surface-muted text-[13px]">
-      {entries.map(([key, value]) => (
-        <div key={key} className="flex items-center justify-between gap-3 px-3 py-2">
-          <span className="text-text-secondary">{labeler ? labeler(key) : key}</span>
-          <span className="font-medium">{value.toLocaleString()}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-lg border border-surface-muted bg-surface-subtle p-3 text-[13px] text-text-secondary">
-      {children}
-    </p>
   );
 }

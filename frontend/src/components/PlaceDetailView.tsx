@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -25,6 +18,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DetailSection } from "@/components/detail";
+import { Metric } from "@/components/panels";
 
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
@@ -166,27 +161,27 @@ export function PlaceDetailView({
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <Stat label="언급 횟수" value={detail.stats.mention_count} />
-        <Stat label="동영상 수" value={detail.stats.video_count} />
-        <Stat label="유튜버 수" value={detail.stats.channel_count} />
+        <Metric size="lg" label="언급 횟수" value={detail.stats.mention_count.toLocaleString()} />
+        <Metric size="lg" label="동영상 수" value={detail.stats.video_count.toLocaleString()} />
+        <Metric size="lg" label="유튜버 수" value={detail.stats.channel_count.toLocaleString()} />
       </div>
 
       {p.description ? (
-        <DetailSection title="영상 설명">
+        <DetailSection divided title="영상 설명">
           <p className="text-xs whitespace-pre-wrap text-muted-foreground">
             {p.description}
           </p>
         </DetailSection>
       ) : null}
       {p.gemini_enriched_description ? (
-        <DetailSection title="AI 보강 설명">
+        <DetailSection divided title="AI 보강 설명">
           <p className="text-xs whitespace-pre-wrap text-muted-foreground">
             {p.gemini_enriched_description}
           </p>
         </DetailSection>
       ) : null}
       {p.detailed_research_content ? (
-        <DetailSection title="심층 조사">
+        <DetailSection divided title="심층 조사">
           <p className="line-clamp-6 text-xs whitespace-pre-wrap text-muted-foreground">
             {p.detailed_research_content}
           </p>
@@ -194,6 +189,7 @@ export function PlaceDetailView({
       ) : null}
 
       <DetailSection
+        divided
         title={`출처 동영상 · 어디에 나왔는지 (${detail.source_videos.length})`}
       >
         <div className="flex flex-col gap-2">
@@ -244,7 +240,7 @@ export function PlaceDetailView({
       </DetailSection>
 
       {expandedVideo ? (
-        <DetailSection title="출처 동영상 상세">
+        <DetailSection divided title="출처 동영상 상세">
           <div className="grid gap-3 lg:grid-cols-[0.85fr_1.15fr]">
             <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs">
               <div className="flex items-start justify-between gap-2">
@@ -417,26 +413,3 @@ export function PlaceDetailView({
   );
 }
 
-function DetailSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-1.5 border-t pt-3">
-      <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
-      {children}
-    </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border p-2.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-lg font-semibold">{value.toLocaleString()}</span>
-    </div>
-  );
-}

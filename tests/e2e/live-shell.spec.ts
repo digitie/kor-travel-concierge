@@ -138,7 +138,7 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(page.getByRole('columnheader', { name: '상태', exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '액션', exact: true })).toBeVisible();
 
-    await firstRow.locator('input[type="checkbox"]').check();
+    await firstRow.getByRole('checkbox').check();
     await expect(page.getByText('후보 1개 선택됨')).toBeVisible();
     await expect(page.getByRole('button', { name: '선택 삭제' })).toBeVisible();
     await page.getByRole('button', { name: '선택 해제' }).click();
@@ -184,9 +184,12 @@ test.describe('n150 live UI 셸 검증', () => {
 
     const seededRow = page.locator('tbody tr').filter({ hasText: 'KTC Live E2E 검수 후보' });
     if ((await seededRow.count()) > 0) {
-      await seededRow.first().locator('input[type="checkbox"]').check();
-      page.once('dialog', (confirmDialog) => confirmDialog.accept());
+      await seededRow.first().getByRole('checkbox').check();
+      // window.confirm 대신 AlertDialog로 확인한다 (ConfirmActionButton).
       await page.getByRole('button', { name: '선택 삭제' }).click();
+      const confirmDialog = page.getByRole('alertdialog');
+      await expect(confirmDialog.getByText(/삭제할까요/)).toBeVisible();
+      await confirmDialog.getByRole('button', { name: '삭제', exact: true }).click();
       await expect(seededRow).toHaveCount(0);
     }
 

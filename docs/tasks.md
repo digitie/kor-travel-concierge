@@ -18,6 +18,21 @@
 
 ## 완료
 
+- [x] **T-150**: 유지보수 UI/UX 개편 — `@base-ui/react` 기반 shadcn 프리미티브 확장
+  (checkbox/switch/textarea/popover/alert-dialog), `window.confirm`·raw input 전면 교체와
+  파괴적 액션 확인 다이얼로그 통일(`ConfirmActionButton`), 중복 대시보드 조각 공용화
+  (`components/panels.tsx`·`detail.tsx`·`CopyButton`·`lib/format.ts`), 사장 코드
+  (AppNav/SettingsDialog/OpsMetricsDialog) 삭제, 수집 폼 자동 인식 미리보기와 유형별 형식
+  검증(`lib/youtube.ts` + vitest), 검수 좌표 검증·설정 프롬프트 글자 수 카운터, 긴 설명의
+  `HelpTip`(popover) 이관. 부수로 backend `source_resolve`의 불균형 `[` 입력 500 크래시를
+  `_safe_urlparse`로 수정하고 legacy custom URL 채널 판별 패리티를 맞췄다. live E2E 스펙을
+  새 확인 흐름에 맞게 갱신하고 로컬 시드 스펙에 live 모드 skip 게이트를 추가했다. (2026-07-04, ADR-34)
+- [x] **T-151**: Google Places 403 진단 강화 — 검수 장소 검색의 Google 403 응답 본문(원인 코드)을
+  `/place-search` `errors.google`에 노출. prod 진단으로 원인이 API 키 제한임을 확정(코드 정상,
+  Cloud Console 키 설정 사안). (2026-07-01)
+- [x] **T-149**: 화면 타이틀 섹션 컴팩트화 — `AppShell` 헤더를 얇은 한 줄 바로 축소하고 페이지
+  설명 문구·섹션 배지·경로 표시와 반복 부제를 제거(내부 도구 기준). E2E가 검증하는 제목
+  heading과 실동작 안내 문구는 유지. (2026-06-29)
 - [x] **T-148**: 개발 명령 Linux 전용과 Playwright n150 우선 정책 문서화 — 개발·검증·리포지토리
   작업 명령은 `git`/`gh`/codegraph 계열 분석까지 모두 WSL2(Ubuntu)를 포함한 Linux bash에서
   실행하도록 정리했다. E2E Playwright는 n150 live/Linux 환경에서 우선 실행하고, n150 접근·브라우저·

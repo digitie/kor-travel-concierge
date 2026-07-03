@@ -11,6 +11,11 @@ const e2eAdminUsername = process.env.KTC_E2E_ADMIN_USERNAME ?? 'admin';
 const e2eAdminPassword = process.env.KTC_E2E_ADMIN_PASSWORD ?? 'e2e-admin-password';
 
 test.describe('Kor Travel Concierge E2E 검증', () => {
+  // live 모드(n150)는 로컬 시드/로컬 backend가 없으므로 live-shell.spec.ts만 실행한다.
+  test.skip(
+    process.env.KTC_LIVE_E2E === '1',
+    'live 모드에서는 로컬 시드 기반 스펙을 건너뛴다.',
+  );
   test.beforeEach(() => {
     seedE2EData();
   });
@@ -61,9 +66,11 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     const job = (await response.json()) as { job_id: string; state: string };
     expect(job.state).toBe('pending');
 
-    const statusPanel = page.locator('section[aria-live="polite"]');
-    await expect(statusPanel).toContainText(job.job_id);
-    await expect(statusPanel).toContainText('pending');
+    // 수집 폼 성공 안내(작업 링크 포함)와 진행 중 작업 패널 표시를 확인한다.
+    await expect(page.getByText('수집 작업을 등록했습니다')).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: '진행 상황 보기' }),
+    ).toHaveAttribute('href', `/jobs/${job.job_id}`);
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });

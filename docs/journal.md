@@ -4,6 +4,56 @@
 
 ---
 
+## 2026-07-04: T-150 — 유지보수 UI/UX 개편 (공용 컴포넌트·validation 강화·툴팁 도움말)
+
+- **shadcn 프리미티브 확장**: `@base-ui/react` 기반으로 `ui/checkbox`, `ui/switch`, `ui/textarea`,
+  `ui/popover`, `ui/alert-dialog`를 추가했다(kor-travel-map admin primitive와 동일 규칙,
+  DESIGN-RULES 5의 hit area 보강 포함). 화면 곳곳의 raw `<input type="checkbox">`·`<textarea>`를
+  전부 교체했다.
+- **확인 다이얼로그 통일**: `window.confirm` 3곳(검수 선택/개별 삭제, 작업 상세 재실행)을
+  공용 `ConfirmActionButton`(AlertDialog)으로 교체하고, 확인 없이 즉시 지워지던 수집 반복 작업
+  삭제와 설정 공개 API 키 폐기에도 같은 확인 흐름을 추가했다.
+- **중복 컴포넌트 공용화**: StatusDashboard/JobDetailView/작업 상세 페이지/다이얼로그에 복붙돼
+  있던 `MetricCard`/`Panel`/`Section(DashboardGroup)`/`Metric`/`CountList`/`EmptyState`/`PanelHeader`를
+  `components/panels.tsx`로, `DetailSection`/`DetailRow`를 `components/detail.tsx`로,
+  복사 버튼을 `components/CopyButton.tsx`로 모았다. 날짜·용량·간격 포맷터도 `lib/format.ts`
+  단일 출처로 정리했다. 사용처가 없던 `AppNav`/`SettingsDialog`/`OpsMetricsDialog`(설정 화면과
+  중복되는 사장 코드 약 1,000줄)를 삭제했다.
+- **validation·assist 강화**: 수집 폼에 backend `source_resolve.classify_source_input`을 이식한
+  `lib/youtube.ts`(vitest 단위 테스트 포함)를 붙여 "자동 인식: 재생목록/영상/채널/검색어" 미리보기와
+  유형별 형식 검증(영상 ID·재생목록 URL)을 추가했다. 검수 확정 정보에는 위도·경도 숫자 검증과
+  대한민국 범위 경고를, 설정 사전 프롬프트에는 backend 상한(4,000자)과 같은 글자 수 카운터를
+  추가했다. 수집 시작 성공 시 작업 링크("진행 상황 보기")를 보여준다.
+- **간결한 카피 + 툴팁 도움말**: 화면에 상시 노출되던 긴 설명 문구를 걷어내고, 상세 설명이 필요한
+  필드(대상 유형, 최대 영상 수, 강제 다운로드, 반복 검색/횟수, 기본 카테고리, 사전 프롬프트,
+  공개 API 키)는 라벨 옆 `HelpTip`(클릭형 popover — 터치에서도 동작)으로 옮겼다.
+- **backend 견고성(부수)**: 리뷰에서 발견한 P1 — 수집 입력에 불균형 `[`가 들어오면
+  `urlparse`가 `ValueError`로 500을 내던 문제를 `_safe_urlparse` 폴백(비URL 취급)으로 수정했다.
+  frontend 판별과 legacy custom URL(`youtube.com/이름/videos`) 채널 판별도 backend와 일치시켰다.
+- **E2E 정리**: live 스펙은 checkbox role(`getByRole('checkbox')`)과 AlertDialog 확인 흐름으로
+  갱신했고, 로컬 시드 스펙(`ktc.spec.ts`)에 live 모드 skip 게이트를 넣어 n150에서
+  `npx playwright test`가 live 스펙만 실행하게 했다(이 저장소 E2E에는 백업/리스토어 스펙이 없음 —
+  해당 시나리오는 docker-manager 쪽 하니스 소관).
+- **검증**: vitest(신규 youtube 판별 테스트 포함) / eslint / tsc / `next build --webpack` 통과,
+  자체 적대 리뷰 워크플로(4렌즈 → 반박 검증)로 확인된 11건(P1 1건 포함)을 모두 수정 또는
+  코드 주석으로 문서화. n150 배포 후 live UI E2E 실행.
+
+## 2026-07-01: T-151 — Google Places 403 진단 강화 (부수 수정)
+
+- 검수 장소 검색의 Google Places 호출이 403일 때 `raise_for_status()`가 Google 에러 본문
+  (`SERVICE_DISABLED`/`API_KEY_HTTP_REFERRER_BLOCKED` 등 원인)을 버리던 것을, 본문 일부를 예외
+  메시지에 실어 `/place-search` 응답 `errors.google`로 노출하도록 수정했다. prod 진단으로 실제
+  원인이 API 키 제한(`PERMISSION_DENIED`, details 없음)임을 확인 — Cloud Console 키 설정
+  (Application restrictions/API restrictions)에서 해결할 항목.
+
+## 2026-06-29: T-149 — 화면 타이틀 섹션 컴팩트화
+
+- 모든 화면 공통 `AppShell` 헤더를 큰 카드(24px 제목 + 설명 문단 + 섹션 배지 + 경로)에서 얇은
+  한 줄 바(16px 제목 + 선택적 인라인 메타)로 축소했다. 1~2인 내부 도구라 페이지 설명 문구는
+  불필요하다는 사용자 결정. 페이지별 `description`/`section` prop과 상태/작업 상세의
+  "…을 확인합니다" 반복 부제도 제거했다(제목 heading은 E2E 어서션 유지를 위해 보존).
+  설정 화면의 보안성 안내처럼 실제 동작 정보인 문구는 유지. rsync로 n150에 선반영·검증 완료.
+
 ## 2026-06-28: T-148 — 개발 명령 Linux 전용과 Playwright n150 우선 정책 문서화
 
 - **실행 위치 정리**: 개발·검증·리포지토리 작업 명령은 `git`, `gh`, codegraph 계열 인덱싱/분석까지
