@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-07-05: T-152 — 수집 폭 활용·검수 payload 경량화·테마 POI API·API 테스트 페이지
+
+- **수집 페이지 폭 활용**: 상단 밴드 grid를 `minmax(24rem,38rem)_1fr`(폼 좌측 캡 + 우측 대형 여백)에서
+  `minmax(0,1.7fr)_minmax(20rem,1fr)`로 재조정하고, 수집 폼 필드를 넓은 화면에서 2열로 배치(핵심
+  입력인 대상 유형·대상값·기본 카테고리만 전폭)해 좌측 폼 영역이 폭을 채우게 했다.
+- **검수 큐 payload 경량화**: `/destinations/unmatched?limit=2000` 응답을 실측하니 3.8MB 중 57%가
+  리스트 UI가 쓰지 않는 `provider_evidence_json`이었다(서버 쿼리 자체는 ~49ms로 빠름 — 병목은
+  payload 크기·네트워크·클라 파싱). 리스트 전용 경량 payload `_candidate_list_payload`를 추가해
+  원본 evidence는 빼고 파생값(8자리 카테고리 코드)만 서버에서 계산해 넣는다. 응답 3.8MB→~1.3MB.
+  상세 근거는 후보 상세 엔드포인트에서 그대로 개별 조회한다.
+- **테마 중심 POI 공급 API(ADR-35)**: 외부 소비자가 "특정 테마 중심으로 POI를" 가져가도록
+  `ktc/services/theme_service.py`와 3개 엔드포인트를 추가했다. `GET /api/v1/themes`(테마 목록+POI
+  수), `GET /api/v1/themes/places?kind=channel|playlist|keyword&value=`(유튜버/재생목록/보정 검색어
+  테마 POI), `GET /api/v1/themes/video/{video_id}/places`(동영상 테마 — **매치/검수 완료 POI 5개
+  이상일 때만** `places`를 채우고 미만이면 `sufficient=false`+빈 목록). 확정 POI/근거 계산은
+  `place_service.list_place_summaries`(결과 보기와 같은 출처 필터)를 재사용한다. X-API-Key
+  규약(ADR-24)을 그대로 상속한다. `tests/test_theme_service.py` 6케이스 통과.
+- **외부 API 테스트 페이지**: 관리 nav에 `API`를 추가하고 `/api-test`에서 features·themes 엔드포인트를
+  골라 파라미터를 넣고 호출해 상태·지연·건수·응답 본문을 확인한다(same-origin BFF 경유로 서버 키
+  자동 주입). 외부 호출용 curl 예시(공개 키 placeholder)도 복사 제공한다.
+- **검증**: frontend eslint/tsc/vitest/build, backend compileall + `test_theme_service`(6)·
+  `test_place_service`·`test_feature_export_api` 통과. n150 배포 후 live UI E2E(API 테스트 페이지
+  실행+HTTP 200 확인 포함)와 테마 API 라이브 스모크로 확인.
+
 ## 2026-07-04: T-150 — 유지보수 UI/UX 개편 (공용 컴포넌트·validation 강화·툴팁 도움말)
 
 - **shadcn 프리미티브 확장**: `@base-ui/react` 기반으로 `ui/checkbox`, `ui/switch`, `ui/textarea`,

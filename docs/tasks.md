@@ -18,6 +18,15 @@
 
 ## 완료
 
+- [x] **T-152**: 수집 폭 활용 + 검수 payload 경량화 + 테마 POI API + API 테스트 페이지 —
+  (a) 수집 상단 밴드 grid 재조정과 폼 2열 배치로 좌측 폼이 폭을 채우게 함. (b)
+  `/destinations/unmatched` 응답을 리스트 전용 경량 payload(`_candidate_list_payload`)로 바꿔
+  3.8MB→~1.3MB(리스트가 안 쓰는 provider_evidence_json 제외, 파생 카테고리 코드는 서버 계산).
+  (c) 테마 중심 POI 공급 API 3종(`/themes`, `/themes/places`, `/themes/video/{id}/places` — 동영상
+  테마는 매치/검수완료 POI ≥5일 때만 공개) + `theme_service` + 테스트(ADR-35). (d) 관리 nav `API`와
+  `/api-test` 페이지로 외부 공급 API를 파라미터 넣어 호출·검사. 부수로 stale해진
+  `test_list_place_summaries_sorts_by_mention_count`(고유 영상 수 semantics 미반영)를 바로잡음.
+  (2026-07-05, ADR-35)
 - [x] **T-150**: 유지보수 UI/UX 개편 — `@base-ui/react` 기반 shadcn 프리미티브 확장
   (checkbox/switch/textarea/popover/alert-dialog), `window.confirm`·raw input 전면 교체와
   파괴적 액션 확인 다이얼로그 통일(`ConfirmActionButton`), 중복 대시보드 조각 공용화

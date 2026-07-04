@@ -58,6 +58,7 @@ from ktc.services import (
     public_api_key_service,
     settings_service,
     source_scan_service,
+    theme_service,
 )
 
 # REST API는 버전 프리픽스(`/api/v1`) 아래에 노출한다. 새 버전이 필요하면 동일한
@@ -1123,7 +1124,10 @@ async def list_unmatched_candidates(
         playlist_id=playlist_id,
         keyword=keyword,
     )
-    return [_candidate_payload(candidate) for candidate in candidates]
+    # 목록은 경량 payload만 반환한다. 상세 근거(provider_evidence_json 등)는 후보 상세
+    # 엔드포인트에서 개별 조회하므로, 2,000행 응답에 무거운 JSONB를 실어 검수 화면을
+    # 느리게 만들지 않는다(응답 크기 ~3.8MB → ~1.3MB).
+    return [_candidate_list_payload(candidate) for candidate in candidates]
 
 
 @router.post("/destinations/{place_id}/correct")
@@ -2079,6 +2083,46 @@ async def features_changes(
     }
 
 
+# --- 테마 중심 POI 공급 (외부 소비자용, X-API-Key) ---
+
+
+@router.get("/themes")
+async def list_themes(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """공급 가능한 테마 목록(유튜버/재생목록/보정 검색어)과 각 테마의 확정 POI 수."""
+    return await theme_service.list_themes(session)
+
+
+@router.get("/themes/places")
+async def theme_places(
+    kind: str = Query(..., pattern="^(channel|playlist|keyword)$"),
+    value: str = Query(..., min_length=1),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """테마(유튜버/재생목록/보정 검색어) 하나의 확정 POI 목록.
+
+    `kind`는 `channel`(유튜버)/`playlist`(재생목록)/`keyword`(보정 검색어),
+    `value`는 채널 ID/재생목록 ID/검색어 문자열이다.
+    """
+    return await theme_service.get_theme_places(
+        session, kind=kind, value=value  # type: ignore[arg-type]
+    )
+
+
+@router.get("/themes/video/{video_id}/places")
+async def video_theme_places(
+    video_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """특정 동영상을 테마로 한 확정 POI 목록.
+
+    매치되거나 검수 완료된 POI가 5개 이상일 때에만 `places`를 채워 반환한다
+    (미만이면 `sufficient=false` + 빈 목록).
+    """
+    return await theme_service.get_video_theme_places(session, video_id=video_id)
+
+
 # --- 관리자 인증/공개 API 키 ---
 
 
@@ -2254,6 +2298,23 @@ def _place_payload(place) -> dict[str, Any]:
         "legal_dong_name": place.legal_dong_name,
         "api_source": place.api_source,
         "is_geocoded": place.is_geocoded,
+    }
+
+
+def _candidate_list_payload(candidate) -> dict[str, Any]:
+    """검수 큐 목록용 경량 payload. 리스트 UI가 쓰지 않는 무거운 필드
+    (provider_evidence_json·source_text·review_note 등)를 제외하고, 파생값인
+    8자리 카테고리 코드는 서버에서 계산해 넣는다(원본 evidence는 보내지 않음)."""
+    return {
+        "id": candidate.id,
+        "video_id": candidate.video_id,
+        "ai_place_name": candidate.ai_place_name,
+        "location_hint": candidate.location_hint,
+        "timestamp_start": candidate.timestamp_start,
+        "candidate_category": candidate.candidate_category,
+        "candidate_category_code": place_service.candidate_category_code(candidate),
+        "match_status": candidate.match_status,
+        "is_domestic": candidate.is_domestic,
     }
 
 

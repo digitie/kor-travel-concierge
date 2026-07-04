@@ -799,6 +799,43 @@ ADR-23은 Windows 네이티브 앱 실행 경로를 제거하고 Linux Docker/WS
 
 ---
 
+## ADR-35: 테마 중심 POI 공급 API
+
+- **상태**: 채택 (2026-07-05)
+- **결정자**: 사용자, AI agent
+
+### 맥락
+외부 소비자는 전체 feature 스트림(`/features/snapshot`·`/changes`, ADR-26)뿐 아니라 **특정 테마를
+중심으로 POI를** 가져가려 한다. 테마는 (1) 유튜버·재생목록·보정 검색어처럼 출처를 묶는 것과
+(2) 특정 동영상 하나가 소개한 장소 모음 두 종류다. 동영상 테마는 아직 확정이 적은 영상을 섣불리
+공개하지 않도록 하한이 필요하다는 사용자 요구가 있었다.
+
+### 결정
+- `/api/v1` 아래 X-API-Key(ADR-24) 규약을 그대로 상속하는 3개 엔드포인트를 추가한다:
+  - `GET /themes` — 공급 가능한 테마 목록(유튜버/재생목록/보정 검색어)과 각 확정 POI 수(discovery).
+  - `GET /themes/places?kind={channel|playlist|keyword}&value=` — 그 테마의 확정 POI 목록.
+  - `GET /themes/video/{video_id}/places` — 동영상 테마 POI. **매치되거나 검수 완료된 POI가
+    5개 이상(`VIDEO_THEME_MIN_POIS`)일 때에만** `places`를 채우고, 미만이면 `sufficient=false`와
+    빈 목록을 반환한다(이유를 명시적으로 노출).
+- 확정 POI와 출처 근거는 결과 보기와 동일한 출처 필터(`place_service.list_place_summaries`,
+  `video_place_mappings ↔ youtube_videos` 조인)를 재사용한다. 별도 저장/집계 컬럼을 만들지 않는다.
+- POI payload는 확정 장소(travel_places) 중심으로 좌표·주소·8자리 카테고리 제안·출처 동영상
+  근거를 담는다. `feature_id` 확정은 여전히 consumer 책임(ADR-26)이다.
+
+### 근거
+- 기존 확정·출처 로직 재사용으로 계약과 데이터 정합을 한 곳에서 유지한다.
+- 동영상 테마의 5개 하한은 소개 밀도가 낮은 영상을 걸러 소비자가 받는 테마 품질을 지킨다.
+- REST path에 특정 consumer 이름을 넣지 않아 범용 공급 계약을 유지한다(ADR-26).
+
+### 결과
+- (긍정) 외부에서 테마 단위로 POI를 바로 pull할 수 있고, 관리 `/api-test` 페이지로 계약을 즉시
+  검증한다. (부정) 동영상 테마의 하한(5)은 정책값이라 소비자 기대와 어긋나면 조정이 필요하다.
+
+### 관련
+- ADR-24(REST 버저닝·X-API-Key), ADR-26(YouTube feature 범용 공급)을 테마 축으로 확장한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.
