@@ -209,24 +209,36 @@ async def test_delete_place_missing_raises(session):
 
 
 async def test_list_place_summaries_sorts_by_mention_count(session):
-    video = YoutubeVideo(
-        video_id="v-source",
-        title="부산 여행",
-        url="https://youtu.be/source",
+    # mention_count는 매핑 행 수가 아니라 고유 영상 수다(한 영상에서 여러 번 언급돼도 1회).
+    # '반복 장소'는 서로 다른 영상 2개에서 언급 → mention_count=2, '첫 장소'는 1개 → 1.
+    video_a = YoutubeVideo(
+        video_id="v-source-a",
+        title="부산 여행 A",
+        url="https://youtu.be/source-a",
+        channel_id="uc-source",
+        channel_name="여행 채널",
+    )
+    video_b = YoutubeVideo(
+        video_id="v-source-b",
+        title="부산 여행 B",
+        url="https://youtu.be/source-b",
         channel_id="uc-source",
         channel_name="여행 채널",
     )
     first = TravelPlace(name="첫 장소", latitude=35.0, longitude=129.0, is_geocoded=True)
     second = TravelPlace(name="반복 장소", latitude=35.1, longitude=129.1, is_geocoded=True)
-    session.add_all([video, first, second])
+    session.add_all([video_a, video_b, first, second])
     await session.commit()
     await session.refresh(first)
     await session.refresh(second)
     session.add_all(
         [
-            VideoPlaceMapping(video_id=video.video_id, place_id=second.place_id, ai_summary="1"),
-            VideoPlaceMapping(video_id=video.video_id, place_id=second.place_id, ai_summary="2"),
-            VideoPlaceMapping(video_id=video.video_id, place_id=first.place_id, ai_summary="3"),
+            # '반복 장소': 영상 A에서 2번 언급(1회로 셈) + 영상 B에서 1번 → 고유 영상 2.
+            VideoPlaceMapping(video_id=video_a.video_id, place_id=second.place_id, ai_summary="1"),
+            VideoPlaceMapping(video_id=video_a.video_id, place_id=second.place_id, ai_summary="2"),
+            VideoPlaceMapping(video_id=video_b.video_id, place_id=second.place_id, ai_summary="3"),
+            # '첫 장소': 영상 A에서만 → 고유 영상 1.
+            VideoPlaceMapping(video_id=video_a.video_id, place_id=first.place_id, ai_summary="4"),
         ]
     )
     await session.commit()
