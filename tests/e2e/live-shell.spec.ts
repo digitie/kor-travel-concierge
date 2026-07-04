@@ -65,6 +65,14 @@ test.describe('n150 live UI 셸 검증', () => {
     await page.waitForURL('**/collect');
     await expect(page.getByRole('heading', { name: '수집', exact: true })).toBeVisible();
 
+    // 외부 공급 API 테스트 페이지: 엔드포인트 선택 → 실행 → 응답 상태 표시.
+    await page.getByRole('link', { name: /^API/ }).first().click();
+    await page.waitForURL('**/api-test');
+    await expect(page.getByRole('heading', { name: 'API 테스트', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '요청', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText(/^HTTP 200$/)).toBeVisible();
+
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 

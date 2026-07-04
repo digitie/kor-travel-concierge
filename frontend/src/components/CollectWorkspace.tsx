@@ -115,7 +115,7 @@ export function CollectWorkspace() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="grid min-h-0 shrink-0 grid-cols-1 border-b lg:h-96 lg:grid-cols-[minmax(24rem,38rem)_1fr] lg:overflow-hidden">
+      <div className="grid min-h-0 shrink-0 grid-cols-1 border-b lg:h-80 lg:grid-cols-[minmax(0,1.7fr)_minmax(20rem,1fr)] lg:overflow-hidden">
         <div className="min-h-0 lg:overflow-y-auto lg:border-r">
           <HarvestConsole />
         </div>

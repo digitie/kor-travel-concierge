@@ -344,6 +344,52 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+// 외부 공급 API 테스트용 raw 프로브. requestJson과 달리 실패해도 throw/redirect 하지
+// 않고 상태·본문·지연을 그대로 돌려준다(관리자 API 테스트 페이지에서 사용). 호출은
+// same-origin BFF를 거치므로 서버 전용 백엔드 키가 주입된다.
+export type ApiProbeResult = {
+  status: number;
+  ok: boolean;
+  ms: number;
+  body: unknown;
+  rawText: string;
+};
+
+export async function probeApi(path: string): Promise<ApiProbeResult> {
+  const started =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: buildHeaders(),
+  });
+  const rawText = await response.text();
+  const ended =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+  let body: unknown = rawText;
+  try {
+    body = JSON.parse(rawText);
+  } catch {
+    // 비 JSON 응답은 원문 문자열 그대로 둔다.
+  }
+  return {
+    status: response.status,
+    ok: response.ok,
+    ms: Math.round(ended - started),
+    body,
+    rawText,
+  };
+}
+
+export type ThemeItem = { value: string; title: string; poi_count: number };
+export type ThemeList = {
+  channels: ThemeItem[];
+  playlists: ThemeItem[];
+  keywords: ThemeItem[];
+};
+
+export async function listThemes(): Promise<ThemeList> {
+  return requestJson<ThemeList>("/api/v1/themes");
+}
+
 export async function startHarvest(input: StartHarvestInput): Promise<HarvestJob> {
   return requestJson<HarvestJob>("/api/v1/harvest", {
     method: "POST",

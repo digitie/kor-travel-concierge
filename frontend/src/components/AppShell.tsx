@@ -8,6 +8,7 @@ import {
   DownloadCloudIcon,
   LogOutIcon,
   MapIcon,
+  PlugIcon,
   SettingsIcon,
   ActivityIcon,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/collect", label: "수집", icon: DownloadCloudIcon },
   { href: "/review", label: "검수", icon: ClipboardCheckIcon },
   { href: "/status", label: "상태", icon: ActivityIcon },
+  { href: "/api-test", label: "API", icon: PlugIcon },
   { href: "/settings", label: "설정", icon: SettingsIcon },
 ] as const;
 

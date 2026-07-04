@@ -194,8 +194,13 @@ export function HarvestConsole() {
           }),
         )}
       >
-        <FieldGroup>
-          <Field data-invalid={Boolean(form.formState.errors.targetType)}>
+        {/* 넓은 화면(수집 페이지 폭 활용)에서는 필드를 2열로 배치해 좌측 폼 영역을 채운다.
+            핵심 입력(대상 유형·대상값·기본 카테고리)만 전폭으로 둔다. */}
+        <FieldGroup className="lg:grid lg:grid-cols-2 lg:gap-x-5">
+          <Field
+            data-invalid={Boolean(form.formState.errors.targetType)}
+            className="lg:col-span-2"
+          >
             <div className="flex items-center gap-1">
               <FieldLabel>대상 유형</FieldLabel>
               <HelpTip>
@@ -232,7 +237,10 @@ export function HarvestConsole() {
             <FieldError errors={[form.formState.errors.targetType]} />
           </Field>
 
-          <Field data-invalid={Boolean(form.formState.errors.targetValue)}>
+          <Field
+            data-invalid={Boolean(form.formState.errors.targetValue)}
+            className="lg:col-span-2"
+          >
             <FieldLabel htmlFor="harvest-target">
               {targetLabels[targetType]}
             </FieldLabel>
@@ -256,54 +264,52 @@ export function HarvestConsole() {
             <FieldError errors={[form.formState.errors.targetValue]} />
           </Field>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field data-invalid={Boolean(form.formState.errors.maxVideos)}>
-              <div className="flex items-center gap-1">
-                <FieldLabel htmlFor="harvest-max-videos">최대 영상 수</FieldLabel>
-                <HelpTip>
-                  한 번 실행에서 가져올 영상 상한(1~300). YouTube API 할당량을
-                  아끼려면 필요한 만큼만 지정하세요.
-                </HelpTip>
-              </div>
-              <Input
-                id="harvest-max-videos"
-                type="number"
-                min={1}
-                max={300}
-                aria-invalid={Boolean(form.formState.errors.maxVideos)}
-                {...form.register("maxVideos", { valueAsNumber: true })}
-              />
-              <FieldError errors={[form.formState.errors.maxVideos]} />
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor="harvest-content-filter">콘텐츠 유형</FieldLabel>
-              <Select
-                value={contentFilter}
-                onValueChange={(value) =>
-                  form.setValue("contentFilter", value as HarvestContentFilter, {
-                    shouldDirty: true,
-                    shouldValidate: true,
-                  })
-                }
-              >
-                <SelectTrigger id="harvest-content-filter" className="w-full">
-                  <SelectValue>{contentFilterLabel(contentFilter)}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {contentFilterOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
+          <Field data-invalid={Boolean(form.formState.errors.maxVideos)}>
+            <div className="flex items-center gap-1">
+              <FieldLabel htmlFor="harvest-max-videos">최대 영상 수</FieldLabel>
+              <HelpTip>
+                한 번 실행에서 가져올 영상 상한(1~300). YouTube API 할당량을
+                아끼려면 필요한 만큼만 지정하세요.
+              </HelpTip>
+            </div>
+            <Input
+              id="harvest-max-videos"
+              type="number"
+              min={1}
+              max={300}
+              aria-invalid={Boolean(form.formState.errors.maxVideos)}
+              {...form.register("maxVideos", { valueAsNumber: true })}
+            />
+            <FieldError errors={[form.formState.errors.maxVideos]} />
+          </Field>
 
           <Field>
+            <FieldLabel htmlFor="harvest-content-filter">콘텐츠 유형</FieldLabel>
+            <Select
+              value={contentFilter}
+              onValueChange={(value) =>
+                form.setValue("contentFilter", value as HarvestContentFilter, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            >
+              <SelectTrigger id="harvest-content-filter" className="w-full">
+                <SelectValue>{contentFilterLabel(contentFilter)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {contentFilterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field className="lg:col-span-2">
             <div className="flex items-center gap-1">
               <FieldLabel htmlFor="harvest-default-category">기본 카테고리</FieldLabel>
               <HelpTip>
