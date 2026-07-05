@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-07-06: T-153 — 수집 페이지 전폭 활용(콘텐츠 래퍼 flex-col 버그 수정)
+
+- **근본 원인**: 수집 페이지 `AppShell` 콘텐츠 래퍼가 `flex`(row)라 자식 `CollectWorkspace`가 교차축
+  stretch를 못 받아 콘텐츠 폭이 아니라 내부 grid의 내재 폭(≈997px)으로만 잡혔다. 1920px에서 콘텐츠
+  영역은 1648px인데 반복 작업 표가 981px에 머물고 우측이 ~650px 비었다(검수 페이지는 `flex-col`이라
+  전폭이었다). T-152의 grid 재조정만으로는 이 래퍼 버그를 못 고쳤다.
+- **수정**: collect 페이지 `contentClassName`에 `flex-col`을 추가(검수 페이지와 동일 패턴)하고
+  `CollectWorkspace` 루트에 `w-full min-w-0`를 더해 워크스페이스가 콘텐츠 폭 100%를 채우게 했다.
+  반복 작업 표가 981→1583px로 전폭 확장(라이브 DOM 측정으로 확인). frontend tsc/build 통과.
+  n150 UI 배포 후 시각·로그인 검증.
+
 ## 2026-07-05: T-152 — 수집 폭 활용·검수 payload 경량화·테마 POI API·API 테스트 페이지
 
 - **수집 페이지 폭 활용**: 상단 밴드 grid를 `minmax(24rem,38rem)_1fr`(폼 좌측 캡 + 우측 대형 여백)에서
