@@ -83,6 +83,9 @@ const PROVIDER_LABELS: Record<string, string> = {
   naver: "Naver",
 };
 const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
+const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
+const REVIEW_CANDIDATE_LIMIT_STEP = 300;
+const MAX_REVIEW_CANDIDATE_LIMIT = 2000;
 
 function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
   return {
@@ -137,6 +140,9 @@ export default function ReviewPage() {
     "ktc.review.groupValue",
     null,
   );
+  const [candidateLimit, setCandidateLimit] = useState(
+    INITIAL_REVIEW_CANDIDATE_LIMIT,
+  );
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
@@ -155,13 +161,13 @@ export default function ReviewPage() {
     return { keyword: groupValue };
   }, [groupDim, groupValue]);
   const candidatesKey = useMemo(
-    () => ["unmatched-candidates", groupDim, groupValue] as const,
-    [groupDim, groupValue],
+    () => ["unmatched-candidates", groupDim, groupValue, candidateLimit] as const,
+    [groupDim, groupValue, candidateLimit],
   );
   const candidatesQuery = useQuery({
     queryKey: candidatesKey,
-    queryFn: () => listUnmatchedCandidates(filter),
-    refetchInterval: 15_000,
+    queryFn: () => listUnmatchedCandidates(filter, candidateLimit),
+    refetchInterval: 60_000,
   });
   // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
   // 선택이 유지된다(쇼핑몰 장바구니). 영상 단위로 dedup.
@@ -194,6 +200,9 @@ export default function ReviewPage() {
     () => candidatesQuery.data ?? [],
     [candidatesQuery.data],
   );
+  const canLoadMoreCandidates =
+    candidates.length >= candidateLimit &&
+    candidateLimit < MAX_REVIEW_CANDIDATE_LIMIT;
   // 해외 후보 숨기기 토글 적용(장바구니/그룹 필터는 그대로 — 순수 표시 필터).
   const visibleCandidates = useMemo(
     () =>
@@ -536,7 +545,7 @@ export default function ReviewPage() {
   return (
     <AppShell
       title="검수 큐"
-      actions={<Badge variant="secondary">{candidates.length}개 대기</Badge>}
+      actions={<Badge variant="secondary">{candidates.length}개 표시</Badge>}
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
       viewportLocked
     >
@@ -554,6 +563,7 @@ export default function ReviewPage() {
               onValueChange={(value) => {
                 setGroupDim(value as DestinationGroupDim);
                 setGroupValue(null);
+                setCandidateLimit(INITIAL_REVIEW_CANDIDATE_LIMIT);
               }}
             >
               <SelectTrigger className="w-full" aria-label="검수 그룹 기준">
@@ -571,7 +581,10 @@ export default function ReviewPage() {
             {groupDim !== "none" ? (
               <Select
                 value={groupValue ?? ""}
-                onValueChange={(value) => setGroupValue(value || null)}
+                onValueChange={(value) => {
+                  setGroupValue(value || null);
+                  setCandidateLimit(INITIAL_REVIEW_CANDIDATE_LIMIT);
+                }}
               >
                 <SelectTrigger className="w-full" aria-label="그룹 값 선택">
                   <SelectValue placeholder={`${groupDimLabel(groupDim)} 선택`}>
@@ -725,6 +738,30 @@ export default function ReviewPage() {
                 </TableBody>
               </Table>
             )}
+            {canLoadMoreCandidates ? (
+              <div className="sticky bottom-0 border-t bg-background p-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  disabled={candidatesQuery.isFetching}
+                  onClick={() =>
+                    setCandidateLimit((current) =>
+                      Math.min(
+                        current + REVIEW_CANDIDATE_LIMIT_STEP,
+                        MAX_REVIEW_CANDIDATE_LIMIT,
+                      ),
+                    )
+                  }
+                >
+                  {candidatesQuery.isFetching ? (
+                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                  ) : null}
+                  후보 더 불러오기
+                </Button>
+              </div>
+            ) : null}
           </div>
         </aside>
 
@@ -1047,8 +1084,8 @@ export default function ReviewPage() {
   );
 }
 
-// 검수 대기 행 — 2,000행 목록이라 memo로 고정해 선택/장바구니 토글 시
-// 바뀐 행만 다시 그린다(콜백은 부모에서 useCallback으로 안정화).
+// 검수 대기 행 — 목록 확장 시 행 수가 많아지므로 memo로 고정해 선택/장바구니
+// 토글 시 바뀐 행만 다시 그린다(콜백은 부모에서 useCallback으로 안정화).
 const CandidateRow = memo(function CandidateRow({
   candidate,
   isCurrent,

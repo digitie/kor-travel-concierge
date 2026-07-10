@@ -18,6 +18,15 @@
 
 ## 완료
 
+- [x] **T-154**: 검수 큐 첫 진입 성능 개선 + Google Places 403 재진단 — 검수 페이지가 첫 진입부터
+  `limit=2000` 전체를 받아 DOM에 올리던 흐름을 최신 300개 초기 조회와 300개 단위 "후보 더 불러오기"로
+  바꿨고, 자동 refetch를 15초에서 60초로 완화했다. 백엔드는 `needs_review` 최신순 조회와 출처 필터에
+  맞춰 `extracted_place_candidates(match_status,id)`,
+  `extracted_place_candidates(source_channel_id,match_status,id)`,
+  `extracted_place_candidates(source_playlist_id,match_status,id)`,
+  `youtube_videos(source_search_query)` 인덱스를 추가했다. Google Places 403은 prod에서 env key가 실제로
+  사용되는 상태에서도 Google만 `PERMISSION_DENIED`를 반환하고 Kakao/Naver는 정상이라 Cloud Console의
+  API 키 application/API restriction 설정 문제로 재확인했다. (2026-07-10)
 - [x] **T-152**: 수집 폭 활용 + 검수 payload 경량화 + 테마 POI API + API 테스트 페이지 —
   (a) 수집 상단 밴드 grid 재조정과 폼 2열 배치로 좌측 폼이 폭을 채우게 함. (b)
   `/destinations/unmatched` 응답을 리스트 전용 경량 payload(`_candidate_list_payload`)로 바꿔
