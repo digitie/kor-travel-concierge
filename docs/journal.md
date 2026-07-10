@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-07-10: T-154 — 검수 큐 첫 진입 성능 개선과 Google Places 403 재진단
+
+- **검수 큐 병목**: T-152에서 payload는 줄였지만 프런트가 여전히 첫 진입부터
+  `/destinations/unmatched?limit=2000` 전체를 받아 2,000행을 DOM에 올리고, 15초마다 같은 큰 목록을
+  자동 갱신했다. n150 기준 기존 응답은 2,000건/약 541KB/약 0.13초로 서버보다는 브라우저 JSON 파싱과
+  행 렌더링 부담이 컸다.
+- **프런트 개선**: 검수 페이지 초기 조회를 최신 300개로 낮추고, 필요하면 "후보 더 불러오기"로 300개씩
+  최대 2,000개까지 확장하게 했다. 그룹 필터를 바꾸면 다시 300개부터 조회한다. 자동 refetch는
+  15초에서 60초로 완화해 화면 조작 중 큰 목록이 자주 교체되지 않게 했다.
+- **백엔드 개선**: `extracted_place_candidates`에 검수 큐 최신순/출처 필터용 복합 인덱스
+  (`match_status,id`, `source_channel_id,match_status,id`, `source_playlist_id,match_status,id`)를
+  추가하고, 검색어별 필터 join을 위해 `youtube_videos.source_search_query` 인덱스를 추가했다.
+  Alembic revision은 `20260710_0015`다.
+- **Google Places 403 분석**: prod에서 `google_places_api_key`는 DB 저장값 없이 env fallback으로 실제
+  설정되어 있었고, 같은 검색에서 Kakao/Naver는 각각 5건을 반환했다. Google만
+  `Google Places 403: ... PERMISSION_DENIED ... The caller does not have permission`을 반환하므로
+  호출 코드 형식 문제가 아니라 Cloud Console의 key application restriction 또는 API restriction
+  설정 문제로 재확인했다. 백엔드 테스트에는 Google 오류 본문 보존 케이스를 추가했다.
+- **검증**: backend compileall, `pytest --capture=no` 전체 133 passed/170 skipped, frontend
+  `npm ci`/audit 0, type-check, lint, vitest 29 passed, `next build --webpack`, Alembic head 확인,
+  `git diff --check` 통과.
+
 ## 2026-07-06: T-153 — 수집 페이지 전폭 활용(콘텐츠 래퍼 flex-col 버그 수정)
 
 - **근본 원인**: 수집 페이지 `AppShell` 콘텐츠 래퍼가 `flex`(row)라 자식 `CollectWorkspace`가 교차축

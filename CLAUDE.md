@@ -11,12 +11,19 @@
 2. **AI + 외부 API 보강**: 키워드 정제, 자막 정리, 자막에서의 POI 추출은 AI agent의 도움을 받고, 외부 API(지오코딩 등)로 정보를 수정·보완한다.
 3. **외부 공급**: REST API를 통해 외부에서 저장된 여행 정보를 가져갈 수 있다.
 
-## 프로젝트 현황 (2026-06-20)
+## 프로젝트 현황 (2026-07-10)
 
 Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시각화, MCP 읽기/쓰기 도구 UX를 함께 제공하는 `kor-travel-concierge` 개발 초기 단계이다. 최신 기준 문서는 Google Docs `AI유튜브여행_소형프로젝트_SpatiaLite_명세서`와 후속 RustFS 미디어 저장 요구사항이며, 1~2인 운영 기준 소형 프로젝트로 설계를 경량화한다.
 
 ### 현재 작업
 
+- **T-154 완료**: 검수 큐 첫 진입 성능을 개선했다. 프런트는 `/destinations/unmatched` 초기 조회를
+  최신 300개로 낮추고 필요 시 300개씩 확장하도록 바꿨으며, 자동 refetch를 15초→60초로 완화해
+  2,000행 전체 JSON 파싱·DOM 렌더를 첫 화면에서 피한다. 백엔드는 검수 큐 조회용 복합 인덱스
+  (`match_status,id`, `source_channel_id,match_status,id`, `source_playlist_id,match_status,id`)와
+  검색어 필터용 `youtube_videos.source_search_query` 인덱스를 추가했다. Google Places 403은
+  prod에서 유효 길이의 env key가 사용되는 상태에서도 Google만 `PERMISSION_DENIED`를 반환하고
+  Kakao/Naver는 정상이라 Cloud Console API 키 제한/API 제한 설정 문제로 재확인했다.
 - **T-152 완료**: (a) 수집 페이지 상단 밴드 grid 재조정 + 폼 2열 배치로 폭 활용. (b) 검수 큐 `/destinations/unmatched` 응답을 리스트 전용 경량 payload로 축소(3.8MB→~1.3MB, provider_evidence_json 제외·파생 카테고리 코드만 서버 계산). (c) 테마 중심 POI 공급 API 3종(`/api/v1/themes`, `/themes/places?kind=&value=`, `/themes/video/{id}/places` — 동영상 테마는 매치/검수완료 POI ≥5일 때만 공개) + `theme_service`(ADR-35). (d) 관리 nav `API`·`/api-test` 외부 API 테스트 페이지. 부수로 stale 테스트 1건 정정.
 - **T-150 완료**: 유지보수 UI/UX 개편 — `@base-ui/react` 기반 shadcn 프리미티브 확장(checkbox/switch/textarea/popover/alert-dialog), `window.confirm`·raw input 전면 교체와 파괴적 액션 확인 다이얼로그 통일(`ConfirmActionButton`), 중복 대시보드 조각 공용화(`components/panels.tsx`·`detail.tsx`·`CopyButton`·`lib/format.ts`), 사장 코드(AppNav/SettingsDialog/OpsMetricsDialog) 삭제, 수집 폼 자동 인식 미리보기·유형별 형식 검증(`lib/youtube.ts`+vitest), 검수 좌표 검증, 설정 프롬프트 글자 수 카운터, 긴 설명의 `HelpTip`(popover) 이관, backend `source_resolve` 불균형 `[` 500 크래시 수정(ADR-34).
 - **T-151 완료**: Google Places 403 응답 본문(원인 코드)을 `/place-search` `errors.google`에 노출. prod 진단으로 원인이 Cloud Console API 키 제한임을 확정(코드 정상).

@@ -74,6 +74,31 @@ async def test_search_google_places_normalizes():
 
 
 @pytest.mark.asyncio
+async def test_search_google_places_error_includes_google_body():
+    def handler(request):
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "code": 403,
+                    "message": "Requests from this Android client application are blocked.",
+                    "status": "PERMISSION_DENIED",
+                }
+            },
+        )
+
+    async with _client_for(handler) as http:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await place_search.search_google_places(
+                http, query="감천문화마을", api_key="k"
+            )
+    message = str(exc_info.value)
+    assert "Google Places 403" in message
+    assert "PERMISSION_DENIED" in message
+    assert "Android client" in message
+
+
+@pytest.mark.asyncio
 async def test_search_kakao_normalizes_xy():
     def handler(request):
         assert "dapi.kakao.com" in str(request.url)

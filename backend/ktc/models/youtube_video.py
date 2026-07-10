@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,9 @@ class CrawlStatus(str, Enum):
 
 class YoutubeVideo(Base):
     __tablename__ = "youtube_videos"
+    __table_args__ = (
+        Index("ix_youtube_videos_source_search_query", "source_search_query"),
+    )
 
     # 영상은 생성 시각보다 마지막 수집 시각이 도메인 상태라 `crawled_at`을 별도 유지한다.
     video_id: Mapped[str] = mapped_column(String(32), primary_key=True)

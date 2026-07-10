@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -32,6 +32,21 @@ class MatchStatus(str, Enum):
 
 class ExtractedPlaceCandidate(TimestampMixin, Base):
     __tablename__ = "extracted_place_candidates"
+    __table_args__ = (
+        Index("ix_epc_review_queue_status_id", "match_status", "id"),
+        Index(
+            "ix_epc_review_queue_channel_status_id",
+            "source_channel_id",
+            "match_status",
+            "id",
+        ),
+        Index(
+            "ix_epc_review_queue_playlist_status_id",
+            "source_playlist_id",
+            "match_status",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     video_id: Mapped[str] = mapped_column(
