@@ -292,6 +292,7 @@ export default function ReviewPage() {
 
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
+  const autoSearchTimerRef = useRef<number | null>(null);
   // 검색 버튼은 검색어가 그대로여도 항상 재요청해야 한다. queryKey에 nonce를 넣어
   // runSearch/pickCandidate마다 증가시키면 동일 검색어로도 강제 refetch된다(무반응 방지).
   const [searchNonce, setSearchNonce] = useState(0);
@@ -351,6 +352,15 @@ export default function ReviewPage() {
   });
   const [categoryEdited, setCategoryEdited] = useState(false);
 
+  const clearAutoSearchTimer = useCallback(() => {
+    if (autoSearchTimerRef.current != null) {
+      window.clearTimeout(autoSearchTimerRef.current);
+      autoSearchTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearAutoSearchTimer, [clearAutoSearchTimer]);
+
   function candidateCategoryForm(candidate: UnmatchedCandidate) {
     return {
       category: categoryDisplayLabel(
@@ -362,6 +372,7 @@ export default function ReviewPage() {
 
   function runSearch() {
     if (query.trim()) {
+      clearAutoSearchTimer();
       setOpinionRequested(false);
       setSearchNonce((n) => n + 1);
       setActiveQuery(query.trim());
@@ -374,6 +385,7 @@ export default function ReviewPage() {
     void queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
     queryClient.removeQueries({ queryKey: ["place-search", activeQuery] });
     queryClient.removeQueries({ queryKey: ["place-opinion", activeQuery] });
+    clearAutoSearchTimer();
     setOpinionRequested(false);
     setActiveQuery("");
   }
@@ -391,14 +403,16 @@ export default function ReviewPage() {
   const pickCandidate = useCallback(
     (candidate: UnmatchedCandidate) => {
       // 검색 진행 중 다른 후보로 전환하면 진행 중 요청을 취소하고(이전 검색 결과가
-      // 새 후보에 매달리지 않도록) nonce를 올려 새 후보 검색을 깨끗하게 시작한다.
+      // 새 후보에 매달리지 않도록) 새 후보 검색을 깨끗하게 시작한다. 자동 검색은
+      // 다음 틱으로 미뤄 후보 선택/폼 반영이 먼저 그려지게 한다.
       void queryClient.cancelQueries({ queryKey: ["place-search"] });
       void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
+      clearAutoSearchTimer();
+      const nextQuery = buildHintedQuery(candidate);
       setSelectedId(candidate.id);
       setQueryEdit(null);
       setOpinionRequested(false);
-      setSearchNonce((n) => n + 1);
-      setActiveQuery(buildHintedQuery(candidate));
+      setActiveQuery("");
       setCategoryEdited(false);
       setForm({
         name: "",
@@ -406,8 +420,13 @@ export default function ReviewPage() {
         longitude: "",
         ...candidateCategoryForm(candidate),
       });
+      autoSearchTimerRef.current = window.setTimeout(() => {
+        autoSearchTimerRef.current = null;
+        setSearchNonce((n) => n + 1);
+        setActiveQuery(nextQuery);
+      }, 120);
     },
-    [queryClient],
+    [clearAutoSearchTimer, queryClient],
   );
   function selectHit(hit: PlaceSearchHit) {
     setForm((prev) => ({
@@ -1129,17 +1148,24 @@ const CandidateRow = memo(function CandidateRow({
         </button>
       </TableCell>
       <TableCell>
-        <button
-          type="button"
-          className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary"
-          onClick={() => onToggleCart(candidate.video_id)}
-          title="영상 재처리 선택"
-        >
-          <span>{candidate.location_hint ?? "위치 힌트 없음"}</span>
-          <span className="font-mono">
-            {inCart ? "재처리 선택됨" : candidate.video_id}
-          </span>
-        </button>
+        <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary">
+          <button
+            type="button"
+            className="text-left hover:text-primary hover:underline"
+            onClick={() => onPick(candidate)}
+          >
+            {candidate.location_hint ?? "위치 힌트 없음"}
+          </button>
+          <span className="font-mono">{candidate.video_id}</span>
+          <button
+            type="button"
+            className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary"
+            onClick={() => onToggleCart(candidate.video_id)}
+            title="영상 재처리 선택"
+          >
+            {inCart ? "재처리 선택됨" : "재처리 선택"}
+          </button>
+        </div>
       </TableCell>
       <TableCell>
         <div className="flex flex-col gap-1">
