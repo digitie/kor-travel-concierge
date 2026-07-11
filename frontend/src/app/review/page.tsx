@@ -402,17 +402,13 @@ export default function ReviewPage() {
   );
   const pickCandidate = useCallback(
     (candidate: UnmatchedCandidate) => {
-      // 검색 진행 중 다른 후보로 전환하면 진행 중 요청을 취소하고(이전 검색 결과가
-      // 새 후보에 매달리지 않도록) 새 후보 검색을 깨끗하게 시작한다. 자동 검색은
-      // 다음 틱으로 미뤄 후보 선택/폼 반영이 먼저 그려지게 한다.
-      void queryClient.cancelQueries({ queryKey: ["place-search"] });
-      void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
+      // 검색 취소와 새 자동 검색을 함께 조금 늦춰 후보 선택/폼 반영이 먼저 그려지게 한다.
+      // 이전 검색 결과는 새 검색을 시작하기 직전에 취소해 새 후보에 매달리지 않도록 한다.
       clearAutoSearchTimer();
       const nextQuery = buildHintedQuery(candidate);
       setSelectedId(candidate.id);
       setQueryEdit(null);
       setOpinionRequested(false);
-      setActiveQuery("");
       setCategoryEdited(false);
       setForm({
         name: "",
@@ -422,6 +418,8 @@ export default function ReviewPage() {
       });
       autoSearchTimerRef.current = window.setTimeout(() => {
         autoSearchTimerRef.current = null;
+        void queryClient.cancelQueries({ queryKey: ["place-search"] });
+        void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
         setSearchNonce((n) => n + 1);
         setActiveQuery(nextQuery);
       }, 120);
