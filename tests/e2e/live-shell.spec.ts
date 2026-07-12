@@ -157,7 +157,8 @@ test.describe('n150 live UI 셸 검증', () => {
     await page.getByRole('button', { name: '선택 해제' }).click();
     await expect(page.getByText('후보 1개 선택됨')).toHaveCount(0);
 
-    await firstRow.locator('td').nth(1).locator('button').click();
+    await firstRow.locator('td').nth(3).click();
+    await expect(firstRow).toHaveAttribute('data-state', 'selected');
     await expect(page.getByRole('button', { name: '검색', exact: true })).toBeVisible();
     await expect(page.getByText('확정 정보')).toBeVisible();
     await expect(page.getByText('Google Places', { exact: true })).toBeVisible();

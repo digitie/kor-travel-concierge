@@ -1,7 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -1124,39 +1133,55 @@ const CandidateRow = memo(function CandidateRow({
   onOpenDetail: (candidateId: number) => void;
   onRequestDelete: (candidate: UnmatchedCandidate) => void;
 }) {
+  const isRowAction = (target: EventTarget | null) =>
+    target instanceof Element && target.closest("[data-row-action]") != null;
+
+  const handleRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
+    if (isRowAction(event.target)) return;
+    onPick(candidate);
+  };
+
+  const handleRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+    if (isRowAction(event.target)) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onPick(candidate);
+  };
+
   return (
-    <TableRow data-state={isCurrent ? "selected" : undefined}>
+    <TableRow
+      data-state={isCurrent ? "selected" : undefined}
+      aria-selected={isCurrent}
+      tabIndex={0}
+      className="group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      onClick={handleRowClick}
+      onKeyDown={handleRowKeyDown}
+    >
       <TableCell>
         <Checkbox
           checked={isChecked}
+          data-row-action="true"
           onCheckedChange={() => onToggleSelect(candidate.id)}
           aria-label={`${candidate.ai_place_name} 후보 선택`}
         />
       </TableCell>
       <TableCell>
-        <button
-          type="button"
-          onClick={() => onPick(candidate)}
-          className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left"
-        >
+        <div className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left">
           <span className="font-bold leading-snug">{candidate.ai_place_name}</span>
           <span className="text-[12px] text-text-secondary">
             {categoryDisplayLabel(candidate.candidate_category)}
           </span>
-        </button>
+        </div>
       </TableCell>
       <TableCell>
         <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary">
-          <button
-            type="button"
-            className="text-left hover:text-primary hover:underline"
-            onClick={() => onPick(candidate)}
-          >
+          <span className="text-left group-hover:text-primary">
             {candidate.location_hint ?? "위치 힌트 없음"}
-          </button>
+          </span>
           <span className="font-mono">{candidate.video_id}</span>
           <button
             type="button"
+            data-row-action="true"
             className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary"
             onClick={() => onToggleCart(candidate.video_id)}
             title="영상 재처리 선택"
@@ -1181,6 +1206,7 @@ const CandidateRow = memo(function CandidateRow({
             type="button"
             size="icon-xs"
             variant="ghost"
+            data-row-action="true"
             aria-label={`${candidate.ai_place_name} 상세`}
             onClick={() => onOpenDetail(candidate.id)}
           >
@@ -1190,6 +1216,7 @@ const CandidateRow = memo(function CandidateRow({
             type="button"
             size="icon-xs"
             variant="destructive"
+            data-row-action="true"
             aria-label={`${candidate.ai_place_name} 후보 삭제`}
             onClick={() => onRequestDelete(candidate)}
           >
