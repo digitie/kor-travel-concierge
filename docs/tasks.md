@@ -12,12 +12,59 @@
 
 ## 대기 (우선순위 순)
 
-없음.
+개선 로드맵(`docs/improvement-roadmap-2026-07.md`, Codex 리뷰 §10 반영판) 실행 작업이다. **Agent A / Agent B 두 트랙이 병렬 진행**하며, 트랙 내 순서·교차 선행·파일 소유는 로드맵 §4를 따른다. 각 태스크는 해당 PR 블록의 "개정(2026-07-13)" 항목과 §7.1 acceptance gate(G1~G10)를 완료 조건에 포함한다.
+
+### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
+
+- [ ] **T-158**: Phase -1 외부 provider 정책·데이터 권리 게이트 — provider별 표시/지도/영구 저장/cache/attribution/export/TTL/약관 확인일 matrix(`docs/provider-policy.md`), production kill switch(미디어 다운로드·Google 표시·cache), RustFS asset·prod 키·Whisper runtime 인벤토리, ADR-15 재검토 초안. T-169·T-173과 제한 provider 영구 저장의 release gate. (로드맵 PR-29, §10 B4, G10)
+- [ ] **T-159**: `exclude_video` 컬럼 버그 hotfix — 존재하지 않는 `ExtractedPlaceCandidate.place_id` 참조를 `matched_place_id`로 수정, 매핑 보유 영상 제외 시 AttributeError 재현·회귀 테스트. (PR-30, §1.5 C2)
+- [ ] **T-160**: candidate soft delete 상태 모델 — `deleted_at/deletion_reason/deleted_by`+partial index, 삭제 트랜잭션에서 매핑 해제+export tombstone 전이(ledger 선삭제 코드 제거), undo/reopen 백엔드, `exclude_video` 통합, CHECK 제약. (PR-09 백엔드 선행+PR-22 선행, §10 B1, G1)
+- [ ] **T-161**: LLM async/multimodal 게이트웨이 — 전 LLM 호출 수렴(quota reservation 포함: deep research·키워드 확장·검수 의견·카테고리·video analysis의 리미터 우회 해소), timeout/retry/usage 실측/provider·model 기록, direct SDK guard, 실제 결제 티어 확인·`.env.example` 숫자는 예시 표기. (PR-23+PR-05 통합, §10 B6)
+- [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
+- [ ] **T-163**: 워커 레인 분리 — lane 컬럼+인덱스, `create_run` 호출 전수 표 기반 enqueue 매핑(restart lane 복사, run-now, `/jobs/poi-batch`, MCP harvest/deep research, transcript child 포함), parent lane·lineage 전파, 구 job id(`crawl-run-worker`) 제거. 선행: T-161·T-162 권장. (PR-04 개정판)
+- [ ] **T-164**: transcript_attempts 관측 — provider별 시도·순서·시각·duration·outcome·language·tool version durable 기록(성공 전 실패 보존), `TRANSCRIPT_PROVIDER_ORDER` 연결, yt-dlp 실제 언어 기록, 절단 로그. 수율 기준선 재설정(실측: no-whisper 3/27, whisper 11/27). (PR-11 개정판, G7)
+- [ ] **T-165**: raw grounding 게이트 — `evidence_quote`+segment ID를 raw 자막 기준으로 대조, `grounding_status` enum(verified_raw|unverified|missing|not_applicable|legacy_unknown) 저장, transcript 후보는 verified_raw 아니면 자동확정·export 차단. 선행: T-164. (PR-13 개정판, §10 B3, G4)
+- [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
+- [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
+- [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
+- [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판)
+- [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판)
+- [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
+- [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
+- [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9)
+
+### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
+
+- [ ] **T-174**: 검수 선택 provenance 보존 — typed hit state, provider native ID·query·시각·원본/수정값 분리 evidence, `api_source`·주소 전달(Google은 T-158 결정 전 저장 차단), `create_place` 근접 병합 identity gate+사용자 선택, category match race 방지. (PR-31, §10 B2, G3)
+- [ ] **T-175**: API 키 read/admin 스코프 — scope CHECK 제약, `key_hash→scope` cache+무효화, `?key=` read 한정, read 정확 경로 화이트리스트+deny-by-default 부정 테스트(unmatched·candidates 403), `/admin/*` proxy 전용 유지. (PR-01 개정판, §10 B5)
+- [ ] **T-176**: 소비자 read key 회전 rollout — kor-travel-map read 키 교체→snapshot/changes 다중 page smoke→write 403 확인→구 static consumer 키 제거→BFF/operator 키 분리, runbook(키 값 비기록). 선행: T-175. (PR-33, §10 B5, G2)
+- [ ] **T-177**: 목록 공통 envelope 계약 — `{items,next_cursor,has_more,total,newest_id}`, 안정 keyset+filter fingerprint cursor, `newer_than` count, page 밖 딥링크 단건 조회. 검수/작업/장소/테마 backend(features 계약 불변). (PR-32, §10 B7, G5)
+- [ ] **T-178**: `/destinations` 접근 최소 수리 — 101/501번째 접근: 프런트 limit 명시+더 보기 + cursor/offset 계약(backend 실효 상한 500 해소). 선행: T-177 권장. (PR-20a 확장판)
+- [ ] **T-179**: 검수 저장 후 자동 다음 후보 + 타임스탬프 링크 — visible 목록 기준·미로드 page prefetch 후 종료 판단, `pickCandidate` autoSearch 옵션, URLSearchParams, 범위 문자열 파서, E2E 갱신. (PR-02 개정판)
+- [ ] **T-180**: 실패 작업 재시작 UI — terminal 한정·`ConfirmActionButton`(ADR-34)·중복 클릭 멱등, lineage·attention 표시, 비성공 outcome(quota_deferred) 구분. 선행: T-162(A). (PR-03 개정판, G6)
+- [ ] **T-181**: run-queue 폴링 통합 — 단일 endpoint(`USER_JOB_TYPES` 유지)+쿼리키 통일+mutation invalidate+staleTime 정비, attention 기반 배지, 라우트 등록 순서 주의. 선행: T-162(A). (PR-06 개정판)
+- [ ] **T-182**: 검수 목록 payload 확장 — `queue_reason` 안정 enum+우선순위 문서화, 영상 제목·채널·신뢰도·생성일 스칼라, reason·source·grounding 서버 필터(grounding 노출은 T-165 후). (PR-07 개정판)
+- [ ] **T-183**: 검수 서버 검색·정렬·cursor + URL 상태화 — envelope 기반 append, oldest 정렬, `newer_than` 새 후보 배너, page 밖 딥링크. 선행: T-177·T-182. (PR-08 개정판, G5)
+- [ ] **T-184**: undo/reopen UI + 제외 목록 뷰 — 마지막 처리 undo 토스트, IGNORED·삭제 복구, reference count 기반 장소 정리(공유 장소 보호). 선행: T-160(A). (PR-09 개정판 UI)
+- [ ] **T-185**: 검수 bulk — filter snapshot 서버 액션+preview count+확인 token+크기/분할·retry 계약, 해외 일괄 제외 포함. 선행: T-160(A)·T-177. (PR-10 개정판)
+- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리, provider 요청 debounce 250~400ms+abort+identity, startTransition으로 120ms 해킹 제거. 선행: T-183. (PR-15 개정판)
+- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
+- [ ] **T-188**: `/destinations` SQL 푸시다운 — EXPLAIN(ANALYZE,BUFFERS) 검증, `source_videos` 사용처 전수→detail lazy 선배포→제거, `limit=None` 시그니처 호환. 선행: T-178. (PR-20 개정판, G8)
+- [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. (PR-25 개정판, G10)
+- [ ] **T-190**: themes 보강 — envelope 적용, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간, 소비자용 계약 문서. 선행: T-177. (PR-26 개정판)
+- [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). (PR-27 개정판)
+- [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스(안정 pagination·total·attention 필터 — state/job_types는 기존재), nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너. 선행: T-177·T-180·T-181. (PR-28 개정판)
 
 ---
 
 ## 완료
 
+- [x] **T-157 후속(반영)**: Codex 리뷰 검증·본문 통합·작업 등재 — §10의 사실 주장 22건을 3개 검증
+  에이전트가 코드 대조로 전부 확인(CONFIRMED, 이견 없음)하고, B1~B7·PR별 수정 의견·10단계
+  순서·acceptance gate(G1~G10)를 로드맵 본문 §0~§9에 통합했다(각 PR "개정(2026-07-13)" 항목,
+  신규 PR-29~34, §1.5 추가 문제 C1~C10, §2.4 반영 판단, §4 Agent A/B 트랙). 대기 작업
+  T-158~T-192를 Agent A(백엔드 상태 모델·파이프라인·정책 16건)/Agent B(검수 UX·공급 API·보안
+  표면 19건) 트랙으로 등재했다. (2026-07-13)
 - [x] **T-157**: 개선 로드맵 문서 작성(적대적 검토 기반) — 서브시스템 이해 분석 4건 → 적대적 검토
   3건(사용 편의성 / 속도 / 데이터 신뢰성+외부 API 실용성) → 검토별 사실·가치 교차 검증 6건 →
   최종 판단 → 문서 자체 반복 리뷰 2회(비평 6건)를 거쳐 `docs/improvement-roadmap-2026-07.md`를

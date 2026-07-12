@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-07-13: T-157 후속 — Codex 리뷰 검증·본문 통합·Agent A/B 작업 등재
+
+- **검증**: Codex 리뷰(§10)의 사실 주장 22건(FeatureExport FK NO ACTION·후보 삭제의 ledger
+  선삭제·`exclude_video`의 `place_id` AttributeError·tombstone이 잔존 ledger 행에만 발행
+  가능·provenance 유실·`api_source='manual'` 고정·create_place 무검증 병합·category race·
+  리미터 acquire 2곳뿐·row lock은 admission만·status_log 4필드 절단·`_names_compatible`
+  any-pair·수율 3/27→11/27·`sido_code` 부재·`/runs` 필터 기존재 등)을 독립 검증 에이전트
+  3개가 코드 대조로 전부 확인했다. CONFIRMED 22건 / REFUTED 0건 — 이견 없이 전건 수용.
+- **본문 통합**: 로드맵 §0~§9에 반영 — 기준 커밋 정정(bc514cd=T-154), 수율 수치 정정,
+  §1.5(추가 확정 문제 C1~C10), §2.4(반영 판단 12항), §3 목표 상태 보강(raw grounding 게이트·
+  soft delete·envelope·rollout 완결), §4 전면 교체(10단계 실행 순서 + Agent A/B 트랙 분배 +
+  교차 선행), §5에 신규 PR-29~34(Phase -1 정책·exclude_video hotfix·provenance·envelope·
+  key 회전·stage events)와 28개 전 PR "개정(2026-07-13)" 항목 삽입, §6 금지 5항 추가,
+  §7.1 acceptance gate G1~G10, §8·§9 갱신, §10에는 반영 완료 표기(원문 보존, 본문 우선).
+- **작업 등재**: `docs/tasks.md` 대기 섹션에 T-158~T-192(35건)를 두 트랙으로 등재 —
+  **Agent A**(T-158~T-173): Phase -1 정책, hotfix, soft delete 상태 모델, LLM 게이트웨이,
+  stage events·lineage·attention, 레인, transcript 관측, raw grounding, identity gate,
+  병합 제안, description/whisper, 캐시, outbox, [게이트] 병렬화·vision. **Agent B**(T-174~
+  T-192): provenance, 키 스코프+소비자 회전, envelope 계약, 목록 수리, 검수 UX 시리즈
+  (자동 다음·재시작·폴링·payload·검색·undo·bulk·분해·triage), SQL 푸시다운, features/themes/
+  MCP/IA. 교차 선행(T-180·181←T-162, T-182 grounding←T-165, T-184·185←T-160 등)은
+  로드맵 §4.2에 명시.
+- **검증(문서)**: `git diff --check`, §2.2 번호·상호참조 정합 재확인.
+
 ## 2026-07-12: T-157 후속 — 개선 로드맵 Codex 상세 리뷰
 
 - **검토 기준**: 최신 `origin/main` `52e64d2`를 받은 뒤
