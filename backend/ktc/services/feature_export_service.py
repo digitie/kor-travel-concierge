@@ -20,6 +20,7 @@ import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -263,6 +264,47 @@ async def _next_sequence(session: AsyncSession) -> int:
     return int(value)
 
 
+async def tombstone_candidate_exports(
+    session: AsyncSession,
+    candidate_ids: Sequence[int],
+    *,
+    reason: str | None = None,
+) -> int:
+    """후보 soft delete와 같은 트랜잭션에서 ledger 행을 tombstone으로 전환한다(T-160, B1).
+
+    이미 export된(ledger 행이 있는) 후보만 대상이다. 행이 없으면(한 번도 노출된 적
+    없는 후보) 의미 없는 tombstone을 만들지 않는다. 이미 tombstone인 행은 그대로
+    둔다 — soft delete된 후보는 `sync_feature_exports` 스캔에서도 제외돼 '후보 소멸'
+    분류(tombstone)로 잡히므로, 이 helper와 다음 sync의 결과가 같아야 한다(멱등).
+    전환 행에는 새 sequence를 할당해 consumer가 `changes` cursor로 제거를 전달받는다.
+    commit은 호출자 책임이다. 전환 건수를 반환한다.
+    """
+    ids = [int(cid) for cid in candidate_ids]
+    if not ids:
+        return 0
+    rows = list(
+        (
+            await session.execute(
+                select(FeatureExport).where(FeatureExport.candidate_id.in_(ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = utcnow()
+    changed = 0
+    for row in rows:
+        if row.operation == FeatureExportOperation.TOMBSTONE.value:
+            continue
+        row.operation = FeatureExportOperation.TOMBSTONE.value
+        if reason:
+            row.rejection_reason = reason
+        row.updated_at = now
+        row.sequence = await _next_sequence(session)
+        changed += 1
+    return changed
+
+
 async def _load_related(
     session: AsyncSession, candidates: list[ExtractedPlaceCandidate]
 ) -> tuple[
@@ -314,9 +356,22 @@ async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) ->
     """후보 테이블로부터 `feature_exports` ledger를 멱등 동기화한다.
 
     payload가 바뀐 export에만 새 sequence를 부여한다. 변경 건수를 반환한다.
+
+    soft delete된 후보(`deleted_at IS NOT NULL`)는 스캔에서 제외한다(T-160). 이들의
+    ledger 행은 아래 '후보 소멸' 루프에서 tombstone으로 잡히므로, 삭제 트랜잭션의
+    `tombstone_candidate_exports`가 어떤 이유로 누락돼도 다음 sync가 복구하는
+    이중 안전망이 된다.
     """
     candidates = list(
-        (await session.execute(select(ExtractedPlaceCandidate))).scalars().all()
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
     videos, channels, playlists, places = await _load_related(session, candidates)
 
@@ -392,7 +447,7 @@ async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) ->
         row.sequence = await _next_sequence(session)
         changed += 1
 
-    # 후보가 사라진 ledger row는 tombstone으로 전환한다.
+    # 후보가 사라진(soft delete 포함 — 스캔 제외) ledger row는 tombstone으로 전환한다.
     for row in existing_rows:
         if (
             row.candidate_id not in seen_candidate_ids

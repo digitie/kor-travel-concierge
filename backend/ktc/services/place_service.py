@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +18,6 @@ from ktc.core.spatial import sync_place_geometry
 from ktc.etl import category_catalog
 from ktc.models import (
     ExtractedPlaceCandidate,
-    FeatureExport,
     FeatureExportStatus,
     MatchStatus,
     MediaAsset,
@@ -28,6 +28,7 @@ from ktc.models import (
     YoutubeVideo,
     utcnow,
 )
+from ktc.services import feature_export_service
 
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -42,6 +43,21 @@ class NearbyPlaceConfirmationRequired(ValueError):
     def __init__(self, nearby_places: list[dict[str, Any]]) -> None:
         super().__init__("100m 안의 기존 장소와 합칠지 새로 만들지 선택해야 한다")
         self.nearby_places = nearby_places
+
+
+class CandidateMappingConflictError(ValueError):
+    """확정 연결(video_place_mappings 보유) 후보를 `force` 없이 삭제하려 했다(라우트 409)."""
+
+
+class CandidateReopenConflictError(ValueError):
+    """이미 검수 대기(needs_review) 상태라 reopen이 무의미하다(라우트 409)."""
+
+
+class CandidateReopenUnsupportedError(ValueError):
+    """`matched`/`user_corrected` 후보의 reopen은 T-160 범위 밖이다(라우트 400).
+
+    확정 장소 정리(고아 판정·공유 장소 보호) 정책은 T-184에서 다룬다.
+    """
 
 
 @dataclass(frozen=True)
@@ -533,10 +549,16 @@ async def get_videos_by_ids(
 async def list_candidates_for_place(
     session: AsyncSession, *, place_id: int
 ) -> list[ExtractedPlaceCandidate]:
-    """확정 장소에 연결된 추출 후보를 조회한다."""
+    """확정 장소에 연결된 추출 후보를 조회한다.
+
+    soft delete는 `matched_place_id`를 해제하므로(invariant) 조건은 방어적 명시다(T-160).
+    """
     stmt = (
         select(ExtractedPlaceCandidate)
-        .where(ExtractedPlaceCandidate.matched_place_id == place_id)
+        .where(
+            ExtractedPlaceCandidate.matched_place_id == place_id,
+            ExtractedPlaceCandidate.deleted_at.is_(None),
+        )
         .order_by(ExtractedPlaceCandidate.id.desc())
     )
     result = await session.execute(stmt)
@@ -625,7 +647,8 @@ async def merge_places(
 
     candidate_result = await session.execute(
         select(ExtractedPlaceCandidate).where(
-            ExtractedPlaceCandidate.matched_place_id == source_place_id
+            ExtractedPlaceCandidate.matched_place_id == source_place_id,
+            ExtractedPlaceCandidate.deleted_at.is_(None),
         )
     )
     moved_candidates = list(candidate_result.scalars().all())
@@ -668,7 +691,7 @@ async def review_candidate(
 ) -> ExtractedPlaceCandidate:
     """매칭 검수 후보에 검수 메타데이터를 남긴다."""
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None:
+    if candidate is None or candidate.deleted_at is not None:
         raise ValueError(f"candidate not found: {candidate_id}")
     candidate.reviewed_by = reviewed_by
     candidate.reviewed_at = utcnow()
@@ -915,6 +938,7 @@ async def resolve_candidate(
 
     신규 장소(`create_place`)의 8자리 category 코드 제안은 POI 추출 단계에서 후보
     evidence에 함께 저장해 둔 값을 복사한다(별도 Gemini 호출 없음, A안).
+    soft delete된 후보는 해결할 수 없다(먼저 reopen 필요, T-160).
     """
     candidate = (
         await session.execute(
@@ -923,7 +947,7 @@ async def resolve_candidate(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if candidate is None:
+    if candidate is None or candidate.deleted_at is not None:
         raise ValueError(f"candidate not found: {candidate_id}")
     if candidate.match_status != MatchStatus.NEEDS_REVIEW:
         raise ValueError("이미 해결되었거나 검수 대상이 아닌 candidate다")
@@ -1166,7 +1190,8 @@ async def delete_place(
         (
             await session.execute(
                 select(ExtractedPlaceCandidate).where(
-                    ExtractedPlaceCandidate.matched_place_id == place_id
+                    ExtractedPlaceCandidate.matched_place_id == place_id,
+                    ExtractedPlaceCandidate.deleted_at.is_(None),
                 )
             )
         )
@@ -1200,9 +1225,12 @@ async def list_unmatched_candidates(
 
     결과 보기와 동일하게 유튜버(channel)/재생목록(playlist)/검색어(keyword) 출처로
     필터할 수 있다. channel/keyword 필터는 후보의 출처 영상(youtube_videos)을 조인한다.
+    soft delete된 후보는 제외한다(T-160 — partial index `WHERE deleted_at IS NULL`과
+    같은 access path).
     """
     stmt = select(ExtractedPlaceCandidate).where(
-        ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW
+        ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
+        ExtractedPlaceCandidate.deleted_at.is_(None),
     )
     if channel_id or keyword:
         stmt = stmt.join(
@@ -1225,15 +1253,176 @@ async def list_unmatched_candidates(
     return list(result.scalars().all())
 
 
-async def exclude_video(
-    session: AsyncSession, video_id: str, *, reason: str | None = None
-) -> dict[str, Any] | None:
-    """동영상을 제외(블록리스트)하고 관련 POI를 삭제한다.
+@dataclass(frozen=True)
+class SoftDeleteSummary:
+    """`soft_delete_candidates` 실행 결과(감사 로그·고아 장소 판정용)."""
 
-    영상을 `is_excluded=True`로 표시(이후 수집에서 스킵), 이 영상의 추출 후보·언급
-    매핑을 삭제하고, 다른 영상이 더 이상 언급하지 않아 고아가 된 장소만 삭제한다.
-    다른 영상이 같은 장소를 언급하면 그 장소·언급은 보존한다. 반환: 삭제 건수 요약.
-    영상을 찾지 못하면 None.
+    candidate_ids: list[int]
+    deleted_candidates: int
+    deleted_mappings: int
+    affected_place_ids: frozenset[int]
+    tombstoned_exports: int
+
+
+_EMPTY_SOFT_DELETE = SoftDeleteSummary([], 0, 0, frozenset(), 0)
+
+
+async def soft_delete_candidates(
+    session: AsyncSession,
+    candidate_ids: Sequence[int],
+    *,
+    reason: str,
+    deleted_by: str | None = None,
+    force: bool = False,
+) -> SoftDeleteSummary:
+    """추출 후보를 soft delete 한다(T-160, 로드맵 B1).
+
+    후보 행과 export ledger(`feature_exports`) 행은 DELETE 하지 않는다. 대신:
+
+    - 후보의 `video_place_mappings`를 삭제하고 `matched_place_id`를 해제한다.
+      고아 장소 판정에 필요한 place 참조는 해제 **전에** 수집해 반환한다.
+    - `deleted_at`/`deletion_reason`/`deleted_by`를 세팅한다(사유는 CHECK로 필수).
+    - 같은 트랜잭션에서, 이미 export된 ledger 행을 tombstone(새 sequence + 사유)으로
+      전환한다. export된 적 없는 후보에는 아무 것도 만들지 않는다.
+
+    정책: `force=False`(검수 큐 개별 삭제)는 기존 라우트의 409 semantics를 유지한다 —
+    확정 연결(매핑 보유) 후보가 하나라도 있으면 `CandidateMappingConflictError`.
+    `force=True`(영상 제외)는 확정 포함 전체를 정리한다. 이미 soft delete된 후보는
+    건너뛴다(멱등). flush까지만 수행하고 commit은 호출자 책임이다.
+    """
+    reason_text = (reason or "").strip()
+    if not reason_text:
+        raise ValueError("soft delete에는 사유(reason)가 필요하다")
+    ids = [int(cid) for cid in candidate_ids]
+    if not ids:
+        return _EMPTY_SOFT_DELETE
+    candidates = list(
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.id.in_(ids),
+                    ExtractedPlaceCandidate.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not candidates:
+        return _EMPTY_SOFT_DELETE
+    live_ids = [candidate.id for candidate in candidates]
+
+    mappings = list(
+        (
+            await session.execute(
+                select(VideoPlaceMapping).where(
+                    VideoPlaceMapping.place_candidate_id.in_(live_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if mappings and not force:
+        raise CandidateMappingConflictError(
+            "확정 장소와 연결된 후보는 삭제할 수 없습니다."
+        )
+
+    # 고아 장소 판정용 참조를 해제/삭제 전에 수집한다(T-159 회귀 주의).
+    affected_place_ids = {
+        mapping.place_id for mapping in mappings if mapping.place_id is not None
+    }
+    affected_place_ids |= {
+        candidate.matched_place_id
+        for candidate in candidates
+        if candidate.matched_place_id is not None
+    }
+
+    deleted_mappings = 0
+    if mappings:
+        mapping_result = await session.execute(
+            delete(VideoPlaceMapping).where(
+                VideoPlaceMapping.place_candidate_id.in_(live_ids)
+            )
+        )
+        deleted_mappings = int(mapping_result.rowcount or 0)
+
+    now = utcnow()
+    for candidate in candidates:
+        candidate.matched_place_id = None
+        candidate.deleted_at = now
+        candidate.deletion_reason = reason_text
+        candidate.deleted_by = deleted_by
+
+    tombstoned = await feature_export_service.tombstone_candidate_exports(
+        session, live_ids, reason=reason_text
+    )
+    await session.flush()
+    return SoftDeleteSummary(
+        candidate_ids=live_ids,
+        deleted_candidates=len(candidates),
+        deleted_mappings=deleted_mappings,
+        affected_place_ids=frozenset(affected_place_ids),
+        tombstoned_exports=tombstoned,
+    )
+
+
+async def reopen_candidate(
+    session: AsyncSession, *, candidate_id: int
+) -> tuple[ExtractedPlaceCandidate, str]:
+    """soft delete 또는 제외(`ignored`)된 후보를 검수 대기로 복귀한다(T-160, PR-09 백엔드).
+
+    - soft deleted: 삭제 3필드를 clear 하고 `needs_review` + export `pending`으로
+      되돌린다. 다음 `sync_feature_exports`는 재확정 전까지 tombstone을 유지하고,
+      재확정(ready + 장소 매칭) 시 새 sequence의 upsert를 재발행한다.
+    - `ignored`: `needs_review` + `pending` 복귀.
+    - 이미 `needs_review`: `CandidateReopenConflictError`(409 — 복귀할 것이 없다).
+    - `matched`/`user_corrected`: 범위 밖 — `CandidateReopenUnsupportedError`(400).
+      확정 장소 정리 정책은 T-184에서 다룬다.
+
+    반환: (후보, 복귀 출처 라벨 `deleted`|`ignored`) — 감사 로그용. flush까지만
+    수행하고 commit은 호출자 책임이다.
+    """
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError(f"candidate not found: {candidate_id}")
+    if candidate.deleted_at is not None:
+        candidate.deleted_at = None
+        candidate.deletion_reason = None
+        candidate.deleted_by = None
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.flush()
+        return candidate, "deleted"
+    if candidate.match_status == MatchStatus.IGNORED.value:
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.flush()
+        return candidate, "ignored"
+    if candidate.match_status == MatchStatus.NEEDS_REVIEW.value:
+        raise CandidateReopenConflictError(
+            "이미 검수 대기(needs_review) 상태라 복귀할 것이 없습니다."
+        )
+    raise CandidateReopenUnsupportedError(
+        "확정(matched/user_corrected)된 후보의 되돌리기는 지원하지 않습니다"
+        " (장소 정리 정책은 T-184에서 다룬다)."
+    )
+
+
+async def exclude_video(
+    session: AsyncSession,
+    video_id: str,
+    *,
+    reason: str | None = None,
+    excluded_by: str | None = "web",
+) -> dict[str, Any] | None:
+    """동영상을 제외(블록리스트)하고 관련 POI를 정리한다.
+
+    영상을 `is_excluded=True`로 표시(이후 수집에서 스킵), 이 영상의 추출 후보를
+    **soft delete**(T-160 — 행·export ledger 보존, 이미 export된 건 tombstone 전환)
+    하고 언급 매핑을 삭제하며, 다른 영상이 더 이상 언급하지 않아 고아가 된 장소만
+    삭제한다. 다른 영상이 같은 장소를 언급하면 그 장소·언급은 보존한다.
+    반환: 정리 건수 요약. 영상을 찾지 못하면 None.
     """
     video = await session.get(YoutubeVideo, video_id)
     if video is None:
@@ -1242,7 +1431,7 @@ async def exclude_video(
     if reason:
         video.exclusion_reason = reason[:255]
 
-    # 고아 판정 대상: 이 영상이 매핑한 place_id 집합.
+    # 고아 판정 대상: 이 영상이 매핑한 place_id 집합(매핑 삭제 전에 수집).
     place_ids = {
         pid
         for pid in (
@@ -1258,25 +1447,27 @@ async def exclude_video(
         (
             await session.execute(
                 select(ExtractedPlaceCandidate.id).where(
-                    ExtractedPlaceCandidate.video_id == video_id
+                    ExtractedPlaceCandidate.video_id == video_id,
+                    ExtractedPlaceCandidate.deleted_at.is_(None),
                 )
             )
         ).scalars()
     )
-    # feature_exports.candidate_id FK(NO ACTION) 때문에 후보 삭제 전에 ledger 행을 정리한다.
-    # TODO: 이미 외부로 export된 장소의 다운스트림 tombstone은 feature_export_service 경유로
-    #       후속 보강(현재는 ledger 행만 제거해 FK 충돌을 막는다).
-    if candidate_ids:
-        await session.execute(
-            delete(FeatureExport).where(FeatureExport.candidate_id.in_(candidate_ids))
-        )
-    mapping_result = await session.execute(
+    soft_summary = await soft_delete_candidates(
+        session,
+        candidate_ids,
+        reason=reason or "동영상 제외",
+        deleted_by=excluded_by,
+        force=True,
+    )
+    place_ids |= set(soft_summary.affected_place_ids)
+
+    # 후보와 연결되지 않은(place_candidate_id 없는) 이 영상의 잔여 매핑도 삭제한다.
+    residual_result = await session.execute(
         delete(VideoPlaceMapping).where(VideoPlaceMapping.video_id == video_id)
     )
-    candidate_result = await session.execute(
-        delete(ExtractedPlaceCandidate).where(
-            ExtractedPlaceCandidate.video_id == video_id
-        )
+    deleted_mappings = soft_summary.deleted_mappings + int(
+        residual_result.rowcount or 0
     )
 
     deleted_places = 0
@@ -1292,7 +1483,10 @@ async def exclude_video(
             await session.execute(
                 select(func.count())
                 .select_from(ExtractedPlaceCandidate)
-                .where(ExtractedPlaceCandidate.matched_place_id == pid)
+                .where(
+                    ExtractedPlaceCandidate.matched_place_id == pid,
+                    ExtractedPlaceCandidate.deleted_at.is_(None),
+                )
             )
         ).scalar_one()
         if remaining_maps == 0 and remaining_cands == 0:
@@ -1304,7 +1498,8 @@ async def exclude_video(
     await session.commit()
     return {
         "video_id": video_id,
-        "deleted_candidates": candidate_result.rowcount or 0,
-        "deleted_mappings": mapping_result.rowcount or 0,
+        "deleted_candidates": soft_summary.deleted_candidates,
+        "deleted_mappings": deleted_mappings,
         "deleted_places": deleted_places,
+        "tombstoned_exports": soft_summary.tombstoned_exports,
     }
