@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -14,6 +16,7 @@ from main import app
 _GOOGLE_RESPONSE = {
     "places": [
         {
+            "id": "ChIJ-google-gamcheon",
             "displayName": {"text": "감천문화마을"},
             "formattedAddress": "부산 사하구 감내2로 203",
             "location": {"latitude": 35.0973904, "longitude": 129.0105924},
@@ -25,6 +28,7 @@ _GOOGLE_RESPONSE = {
 _KAKAO_RESPONSE = {
     "documents": [
         {
+            "id": "kakao-gamcheon-123",
             "place_name": "감천문화마을",
             "address_name": "부산 사하구 감천동 산10-2",
             "road_address_name": "부산 사하구 감내2로 203",
@@ -67,10 +71,13 @@ async def test_search_google_places_normalizes():
     assert len(hits) == 1
     hit = hits[0]
     assert hit["provider"] == "google"
+    assert hit["native_id"] == "ChIJ-google-gamcheon"
     assert hit["name"] == "감천문화마을"
     assert hit["latitude"] == 35.0973904
     assert hit["longitude"] == 129.0105924
     assert hit["category"] == "관광 명소"
+    assert hit["storage_allowed"] is False
+    assert "Google Places" in hit["storage_block_reason"]
 
 
 @pytest.mark.asyncio
@@ -108,10 +115,13 @@ async def test_search_kakao_normalizes_xy():
     async with _client_for(handler) as http:
         hits = await place_search.search_kakao(http, query="감천문화마을", api_key="k")
     assert hits[0]["provider"] == "kakao"
+    assert hits[0]["native_id"] == "kakao-gamcheon-123"
     # x=경도, y=위도
     assert hits[0]["longitude"] == 129.010592
     assert hits[0]["latitude"] == 35.097390
     assert hits[0]["road_address"] == "부산 사하구 감내2로 203"
+    assert hits[0]["storage_allowed"] is True
+    assert hits[0]["storage_block_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -127,10 +137,13 @@ async def test_search_naver_local_converts_and_strips():
         )
     hit = hits[0]
     assert hit["provider"] == "naver"
+    assert hit["native_id"] is None
     assert hit["name"] == "감천문화마을"  # <b> 제거됨
     # mapx/mapy(WGS84×10⁷) → 위경도
     assert hit["longitude"] == 129.0104393
     assert hit["latitude"] == 35.0986415
+    assert hit["storage_allowed"] is True
+    assert hit["storage_block_reason"] is None
 
 
 def test_gemini_place_opinion_parses(monkeypatch):
@@ -185,6 +198,8 @@ async def test_place_search_endpoint_isolates_missing_keys(api_client, monkeypat
     assert resp.status_code == 200
     body = resp.json()
     assert body["query"] == "감천문화마을"
+    searched_at = datetime.fromisoformat(body["searched_at"])
+    assert searched_at.tzinfo is not None
     assert body["google"] == [] and body["kakao"] == [] and body["naver"] == []
     assert set(body["errors"]).issuperset({"google", "kakao", "naver"})
     # Gemini 의견은 GET에서 제거됨(별도 POST /place-search/opinion).

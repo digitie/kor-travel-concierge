@@ -43,6 +43,7 @@ def _hit(
     provider: str,
     name: str | None,
     *,
+    native_id: str | None = None,
     address: str | None = None,
     road_address: str | None = None,
     latitude: float | None = None,
@@ -50,14 +51,25 @@ def _hit(
     category: str | None = None,
 ) -> dict[str, Any]:
     """provider별 응답을 공통 후보 dict로 정규화한다."""
+    storage_allowed = provider != "google"
     return {
         "provider": provider,
-        "name": name,
+        "native_id": str(native_id) if native_id is not None else None,
+        "name": name or "",
         "address": address,
         "road_address": road_address,
         "latitude": latitude,
         "longitude": longitude,
         "category": category,
+        # T-158(provider 정책) 결정 전에는 Google Places 결과를 영구 저장하거나
+        # VWorld 지도 선택값으로 승격하지 않는다. 프런트 UX용 capability이며
+        # 최종 강제는 place_service.resolve_candidate가 담당한다.
+        "storage_allowed": storage_allowed,
+        "storage_block_reason": (
+            None
+            if storage_allowed
+            else "provider 정책 결정 전에는 Google Places 결과를 저장할 수 없습니다."
+        ),
     }
 
 
@@ -77,7 +89,7 @@ async def search_google_places(
         headers={
             "X-Goog-Api-Key": api_key,
             "X-Goog-FieldMask": (
-                "places.displayName,places.formattedAddress,"
+                "places.id,places.displayName,places.formattedAddress,"
                 "places.location,places.primaryTypeDisplayName"
             ),
             "Content-Type": "application/json",
@@ -108,6 +120,7 @@ async def search_google_places(
             _hit(
                 "google",
                 (place.get("displayName") or {}).get("text"),
+                native_id=place.get("id"),
                 address=place.get("formattedAddress"),
                 latitude=_to_float(location.get("latitude")),
                 longitude=_to_float(location.get("longitude")),
@@ -135,6 +148,7 @@ async def search_kakao(
             _hit(
                 "kakao",
                 doc.get("place_name"),
+                native_id=doc.get("id"),
                 address=doc.get("address_name"),
                 road_address=doc.get("road_address_name") or None,
                 latitude=_to_float(doc.get("y")),
@@ -177,6 +191,9 @@ async def search_naver_local(
             _hit(
                 "naver",
                 title,
+                # NAVER Developers Local Search는 안정적인 장소 ID를 제공하지 않는다.
+                # link/map 좌표를 ID로 가장하지 않고 nullable 계약을 유지한다.
+                native_id=None,
                 address=item.get("address") or None,
                 road_address=item.get("roadAddress") or None,
                 latitude=mapy / 1e7 if mapy is not None else None,
