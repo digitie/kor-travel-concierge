@@ -275,6 +275,43 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       })
       .toBe('gemini-2.0-flash');
 
+    const scopeSelect = page.getByLabel('공개 API 키 권한');
+    await expect(scopeSelect).toContainText('읽기 전용');
+    await page.getByLabel('공개 API 키 라벨').fill('E2E 외부 소비자');
+    const createReadKeyResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/admin/public-api-keys') &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '생성', exact: true }).click();
+    const createdReadKey = await createReadKeyResponse;
+    expect(createdReadKey.ok()).toBeTruthy();
+    expect(createdReadKey.request().postDataJSON()).toMatchObject({
+      label: 'E2E 외부 소비자',
+      scope: 'read',
+    });
+    expect((await createdReadKey.json()).item.scope).toBe('read');
+    await expect(page.getByText(/끝자리 .* · 읽기 전용 · 활성/)).toBeVisible();
+
+    await page.getByLabel('공개 API 키 라벨').fill('E2E 운영 자동화');
+    await page.getByLabel('공개 API 키 권한').click();
+    await page.getByRole('option', { name: '관리자', exact: true }).click();
+    const createKeyResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/admin/public-api-keys') &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '생성', exact: true }).click();
+    const createdKey = await createKeyResponse;
+    expect(createdKey.ok()).toBeTruthy();
+    expect((await createdKey.json()).item).toMatchObject({
+      label: 'E2E 운영 자동화',
+      scope: 'admin',
+      state: 'active',
+    });
+    await expect(page.getByLabel('생성된 공개 API 키')).toBeVisible();
+    await expect(page.getByText(/끝자리 .* · 관리자 · 활성/)).toBeVisible();
+
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 });

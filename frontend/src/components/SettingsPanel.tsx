@@ -11,6 +11,7 @@ import {
   revokePublicApiKey,
   updateRuntimeSettings,
   type ApiKeyName,
+  type PublicApiKeySummary,
   type RuntimeSettingsUpdate,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +62,8 @@ export function SettingsPanel() {
   const [prepromptEdit, setPrepromptEdit] = useState<string | null>(null);
   const [keyEdits, setKeyEdits] = useState<Record<string, string>>({});
   const [publicKeyLabel, setPublicKeyLabel] = useState("");
+  const [publicKeyScope, setPublicKeyScope] =
+    useState<PublicApiKeySummary["scope"]>("read");
   const [createdPublicKey, setCreatedPublicKey] = useState<string | null>(null);
   const engine = engineEdit ?? settings?.gemini_engine_version ?? "";
   const preprompt = prepromptEdit ?? settings?.ai_preprompt ?? "";
@@ -91,10 +94,11 @@ export function SettingsPanel() {
     },
   });
   const createKeyMutation = useMutation({
-    mutationFn: () => createPublicApiKey(publicKeyLabel),
+    mutationFn: () => createPublicApiKey(publicKeyLabel, publicKeyScope),
     onSuccess: (result) => {
       setCreatedPublicKey(result.key);
       setPublicKeyLabel("");
+      setPublicKeyScope("read");
       queryClient.invalidateQueries({ queryKey: ["public-api-keys"] });
     },
   });
@@ -244,15 +248,16 @@ export function SettingsPanel() {
           <div className="flex items-center gap-1">
             <h2 className="text-[16px] font-bold">외부 공개 API 키</h2>
             <HelpTip>
-              외부 소비자가 이 서비스의 공급 API(/api/v1/features/*)를 호출할 때
-              쓰는 키입니다. VWorld처럼 key 파라미터로 전달합니다.
+              외부 소비자의 read 키와 운영 자동화의 admin 키를 발급합니다. 기본 read
+              키는 X-API-Key header로 전달하고, 호환용 key query도 DB read 키에만
+              허용됩니다. admin 키는 반드시 header로만 전달합니다.
             </HelpTip>
           </div>
           <p className="text-[13px] text-text-secondary">
             원문 키는 생성 직후에만 표시됩니다.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto]">
           <Input
             aria-label="공개 API 키 라벨"
             placeholder="라벨"
@@ -264,6 +269,24 @@ export function SettingsPanel() {
               }
             }}
           />
+          <Select
+            value={publicKeyScope}
+            onValueChange={(value) =>
+              setPublicKeyScope((value as PublicApiKeySummary["scope"]) ?? "read")
+            }
+          >
+            <SelectTrigger aria-label="공개 API 키 권한" className="w-full">
+              <SelectValue>
+                {publicKeyScope === "read" ? "읽기 전용" : "관리자"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="read">읽기 전용</SelectItem>
+                <SelectItem value="admin">관리자</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant="secondary"
@@ -277,6 +300,18 @@ export function SettingsPanel() {
             )}
             생성
           </Button>
+        </div>
+        <div className="flex items-start gap-1 text-[12px] text-text-secondary">
+          <span>
+            {publicKeyScope === "read"
+              ? "외부 소비자에는 공급 API만 허용하는 읽기 전용 키를 사용하세요."
+              : "관리자 키는 X-API-Key header로 전달하면 내부 API와 쓰기 작업까지 허용합니다."}
+          </span>
+          <HelpTip>
+            관리자 키가 유출되면 수집·설정·삭제를 포함한 모든 비관리자-proxy API가 노출됩니다.
+            운영자 자동화처럼 꼭 필요한 경우에만 발급하고, 외부 데이터 소비자에는 읽기 전용 키만
+            전달하세요. 관리자 키는 key 쿼리 파라미터로 전달할 수 없습니다.
+          </HelpTip>
         </div>
         {createdPublicKey ? (
           <div className="flex items-center gap-2">
@@ -308,7 +343,8 @@ export function SettingsPanel() {
                     {item.label || "무제"}
                   </p>
                   <p className="text-[12px] text-text-secondary">
-                    끝자리 {item.key_hint} · {item.state === "active" ? "활성" : "폐기"}
+                    끝자리 {item.key_hint} · {item.scope === "read" ? "읽기 전용" : "관리자"} ·{" "}
+                    {item.state === "active" ? "활성" : "폐기"}
                   </p>
                 </div>
                 {item.state === "active" ? (

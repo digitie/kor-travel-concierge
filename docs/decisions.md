@@ -836,6 +836,58 @@ ADR-23은 Windows 네이티브 앱 실행 경로를 제거하고 Linux Docker/WS
 
 ---
 
+## ADR-36: 공개 API 키 read/admin scope와 공급 경로 deny-by-default
+
+- **상태**: 채택 (2026-07-13)
+- **결정자**: 사용자, AI agent
+
+### 맥락
+
+ADR-24·ADR-32의 정적 `API_KEYS`와 DB 공개 키는 유효 여부만 판정해, 외부 feature 소비자에게
+전달한 키 하나가 수집 생성·검수 확정·설정 변경·삭제 같은 쓰기와 내부 운영 조회까지 실행할 수
+있었다. 단일 키 유출의 영향 범위를 공급 API 읽기로 제한하고, 새 GET route가 의도 없이 공개되는
+것도 막아야 한다.
+
+### 결정
+
+- `public_api_keys.scope`는 `read|admin`만 허용하는 `NOT NULL` TEXT 계열 column과 DB CHECK로
+  관리한다. 기존 DB 키는 `read`로 backfill하고 신규 발급 기본값도 `read`다. scope는 발급 뒤
+  변경하지 않으며, 잘못 발급했으면 폐기 후 재발급한다.
+- 활성 키 cache는 hash 집합이 아니라 `key_hash → scope` mapping을 저장한다. 생성·폐기 직후
+  프로세스 cache를 무효화하고, 평문 키는 기존처럼 생성 응답에서 한 번만 노출한다.
+- `read`의 scope 판정은 `GET`/`HEAD`라고 일괄 허용하지 않는다. `/destinations` 공급 목록·facet·export·숫자
+  ID detail, `/features/snapshot|changes`, 현재 `/themes` 3종, `/categories|categories/match`의
+  명시된 정확 경로·제한 정규식만 허용한다. 다른 모든 route와 method는 `admin`을 요구한다.
+  신규 공급 route는 이 목록을 코드와 테스트에서 함께 갱신해야 한다. 현재 FastAPI 공급 route는
+  GET만 등록되어 있어 HEAD 요청은 405이며, 향후 HEAD route를 명시적으로 등록할 때 같은 read
+  policy를 적용한다.
+- DB `read|admin` 키는 `X-API-Key` header로 전달한다. VWorld 호환 `?key=`는 DB `read` 키만
+  허용하며 DB admin 키와 정적 키는 403으로 거부한다. header와 query가 함께 오면 header를
+  우선하고, 빈 credential은 source 판정 전에 제거한다.
+- env `API_KEYS`는 BFF·운영 자동화용 `admin` header 키로 취급한다. T-176 전환 기간에는 기존
+  consumer가 공유하던 정적 entry도 호환하되, 외부 소비자를 DB read 키로 교체한 뒤 그 consumer용
+  entry만 env 목록에서 제거한다. BFF/operator용 static admin entry는 계속 유지한다.
+- 신뢰 관리자 proxy는 `admin`, 명시적으로 활성화한 무키 CIDR 우회는 `read`로 판정한다.
+  `/api/v1/admin/*`는 scope와 관계없이 계속 신뢰 BFF proxy만 허용한다. 로컬·테스트·E2E의
+  무인증 우회는 기존 개발 계약을 유지한다.
+
+### 결과
+
+- (긍정) 외부 소비자 키 유출이 공급용 읽기 표면으로 제한되고, 내부 route 추가가 자동 공개되지
+  않는다. 인증 실패 401과 인증됐지만 권한이 부족한 403도 구분된다.
+- (부정) 공급 route를 추가할 때 정책 목록과 부정 테스트를 함께 관리해야 한다. 기존 정적 키는
+  T-176에서 실제 소비자 key rotation과 제거를 마치기 전까지 넓은 admin 권한을 유지한다. cache
+  generation도 프로세스 로컬이므로 단일 Uvicorn worker 계약을 벗어날 때는 DB epoch나 pub/sub
+  기반 replica 전체 무효화를 선행해야 한다.
+
+### 관련
+
+- ADR-24의 `X-API-Key` 인증과 ADR-32의 공개 키 발급·cache를 scope 기반으로 보강한다.
+- T-175는 capability를 구현하고, T-176은 실제 소비자 read key 교체·구 정적 키 제거로 보안
+  전환을 마감한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

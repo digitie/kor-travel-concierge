@@ -244,6 +244,7 @@ class PublicApiKeySummary(BaseModel):
     id: int
     label: str | None
     key_hint: str
+    scope: Literal["read", "admin"]
     state: str
     created_at: datetime
     created_by: str | None
@@ -253,6 +254,7 @@ class PublicApiKeySummary(BaseModel):
 
 class PublicApiKeyCreateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=120)
+    scope: Literal["read", "admin"] = "read"
 
 
 class PublicApiKeyCreateResponse(BaseModel):
@@ -2241,6 +2243,8 @@ async def create_public_api_key(
         session,
         label=payload.label,
         created_by=actor,
+        scope=payload.scope,
+        commit=False,
     )
     await audit_service.record(
         session,
@@ -2248,8 +2252,9 @@ async def create_public_api_key(
         action="public_api_key.create",
         target_type="public_api_key",
         target_id=str(item.id),
-        payload={"label": item.label, "key_hint": item.key_hint},
+        payload={"label": item.label, "key_hint": item.key_hint, "scope": item.scope},
     )
+    public_api_key_service.invalidate_public_api_key_cache()
     return PublicApiKeyCreateResponse(key=api_key, item=_public_api_key_payload(item))
 
 
@@ -2263,6 +2268,7 @@ async def revoke_public_api_key(
         session,
         key_id,
         revoked_by=actor,
+        commit=False,
     )
     if item is None:
         raise HTTPException(status_code=404, detail="active public API key not found")
@@ -2272,8 +2278,9 @@ async def revoke_public_api_key(
         action="public_api_key.revoke",
         target_type="public_api_key",
         target_id=str(item.id),
-        payload={"key_hint": item.key_hint},
+        payload={"key_hint": item.key_hint, "scope": item.scope},
     )
+    public_api_key_service.invalidate_public_api_key_cache()
     return _public_api_key_payload(item)
 
 
@@ -2336,6 +2343,7 @@ def _public_api_key_payload(item) -> PublicApiKeySummary:
         id=item.id,
         label=item.label,
         key_hint=item.key_hint,
+        scope=item.scope,
         state=item.state,
         created_at=item.created_at,
         created_by=item.created_by,

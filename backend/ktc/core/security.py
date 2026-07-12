@@ -13,6 +13,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import logging
+import re
 
 from fastapi import Depends, HTTPException, Query, Request, Security, status
 from fastapi.security import APIKeyHeader
@@ -27,6 +28,27 @@ logger = logging.getLogger(__name__)
 API_KEY_HEADER_NAME = "X-API-Key"
 ADMIN_ACTOR_HEADER_NAME = "X-KTC-Actor"
 ADMIN_PROXY_SECRET_HEADER_NAME = "X-KTC-Admin-Proxy-Secret"
+ADMIN_PROXY_ONLY_PATH = "/api/v1/admin"
+
+# 공개 소비자용 read 키는 현재 공급 계약에 속하는 경로만 통과한다. 새 GET 라우트는
+# 여기에 명시적으로 추가하기 전까지 admin으로 남는다(deny-by-default).
+READ_SCOPE_EXACT_PATHS = frozenset(
+    {
+        "/api/v1/destinations",
+        "/api/v1/destinations/facets",
+        "/api/v1/destinations/export",
+        "/api/v1/features/snapshot",
+        "/api/v1/features/changes",
+        "/api/v1/themes",
+        "/api/v1/themes/places",
+        "/api/v1/categories",
+        "/api/v1/categories/match",
+    }
+)
+READ_SCOPE_PATH_PATTERNS = (
+    re.compile(r"^/api/v1/destinations/\d+/detail$"),
+    re.compile(r"^/api/v1/themes/video/[^/]+/places$"),
+)
 
 # auto_error=False: 키가 없어도 여기서 막지 않고, 로컬 우회 여부를 직접 판단한다.
 api_key_header = APIKeyHeader(name=API_KEY_HEADER_NAME, auto_error=False)
@@ -41,35 +63,50 @@ async def require_api_key(
 ) -> None:
     """비-local 환경에서 유효한 API 키를 요구한다.
 
-    기존 `X-API-Key` 정적 키와 Web UI에서 발급한 VWorld식 `?key=` 공개 키를
-    모두 허용한다. 인증된 Next.js 관리자 proxy와 명시적으로 신뢰한 클라이언트
-    CIDR은 키 검증을 생략할 수 있다.
+    기존 `X-API-Key` 정적 키는 admin, DB 공개 키는 저장된 scope로 판정한다.
+    VWorld식 `?key=`는 DB read 키만 허용한다. 인증된 Next.js 관리자 proxy는
+    admin, 명시적으로 신뢰한 클라이언트 CIDR의 무키 우회는 read로 취급한다.
     """
     if not settings.auth_required:
         return
 
     if resolve_admin_proxy_actor(request, settings) is not None:
+        request.state.api_scope = "admin"
         return
 
-    if request.url.path.startswith("/api/v1/admin/"):
+    if _is_admin_proxy_only_path(request.url.path):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="관리자 proxy 인증이 필요하다.",
         )
 
-    # 키 없는 CIDR 우회는 명시 활성화(+ CIDR 설정) 시에만 허용한다. client IP는
-    # FORWARDED_ALLOW_IPS=*에서 X-Forwarded-For로 위조 가능하므로 기본 비활성이다.
-    if settings.api_trusted_client_bypass_active and _peer_in_cidrs(
-        request, settings.api_trusted_client_cidrs
-    ):
-        return
+    # 명시적이고 비어 있지 않은 header가 query key보다 우선한다. 잘못된 header를
+    # 유효한 query key로 우회하지 않으며, 빈 header는 credential로 취급하지 않는다.
+    header_key = (api_key or "").strip() or None
+    query_key = (key or "").strip() or None
+    if header_key is not None:
+        provided_key = header_key
+        credential_source = "header"
+    elif query_key is not None:
+        provided_key = query_key
+        credential_source = "query"
+    else:
+        provided_key = None
+        credential_source = None
+    if provided_key is None:
+        # 키 없는 CIDR 우회는 read로만 취급한다. admin이 필요하면 header key를 써야
+        # 하며, client IP는 FORWARDED_ALLOW_IPS 설정에 따라 위조될 수 있어 기본 off다.
+        if settings.api_trusted_client_bypass_active and _peer_in_cidrs(
+            request, settings.api_trusted_client_cidrs
+        ):
+            _authorize_scope(request, "read")
+            return
 
-    provided_key = key or api_key
-    active_hashes = await public_api_key_service.cached_active_key_hashes(
+    active_scopes = await public_api_key_service.cached_active_key_scopes(
         session,
         ttl_seconds=settings.PUBLIC_API_KEY_CACHE_TTL_SECONDS,
     )
-    has_any_key = bool(settings.api_keys or active_hashes)
+    has_any_key = bool(settings.api_keys or active_scopes)
     if not has_any_key:
         logger.warning(
             "API 인증이 필요한 환경(APP_ENV=%s)이지만 API_KEYS와 공개 API 키가 비어 있어 모든 요청을 거부한다.",
@@ -81,13 +118,34 @@ async def require_api_key(
             headers={"WWW-Authenticate": API_KEY_HEADER_NAME},
         )
 
-    if provided_key and provided_key in settings.api_keys:
+    if credential_source == "header" and provided_key is not None and any(
+        hmac.compare_digest(provided_key, static_key)
+        for static_key in settings.api_keys
+    ):
+        _authorize_scope(request, "admin")
         return
 
-    if provided_key and public_api_key_service.public_api_key_matches(
-        provided_key,
-        active_hashes,
+    if credential_source == "query" and provided_key is not None and any(
+        hmac.compare_digest(provided_key, static_key)
+        for static_key in settings.api_keys
     ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="query key에는 read scope만 사용할 수 있다.",
+        )
+
+    db_scope = (
+        public_api_key_service.public_api_key_scope(provided_key, active_scopes)
+        if provided_key
+        else None
+    )
+    if db_scope is not None:
+        if credential_source == "query" and db_scope != "read":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="query key에는 read scope만 사용할 수 있다.",
+            )
+        _authorize_scope(request, db_scope)
         return
 
     raise HTTPException(
@@ -95,6 +153,31 @@ async def require_api_key(
         detail="유효한 API 인증 코드가 필요하다.",
         headers={"WWW-Authenticate": API_KEY_HEADER_NAME},
     )
+
+
+def is_read_scope_path(method: str, path: str) -> bool:
+    """요청이 명시적으로 공개한 read 공급 표면인지 판정한다."""
+    if method.upper() not in {"GET", "HEAD"}:
+        return False
+    if path in READ_SCOPE_EXACT_PATHS:
+        return True
+    return any(pattern.fullmatch(path) for pattern in READ_SCOPE_PATH_PATTERNS)
+
+
+def _authorize_scope(
+    request: Request,
+    scope: public_api_key_service.PublicApiKeyScope,
+) -> None:
+    request.state.api_scope = scope
+    if scope == "read" and not is_read_scope_path(request.method, request.url.path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 API에는 admin scope가 필요하다.",
+        )
+
+
+def _is_admin_proxy_only_path(path: str) -> bool:
+    return path == ADMIN_PROXY_ONLY_PATH or path.startswith(f"{ADMIN_PROXY_ONLY_PATH}/")
 
 
 def resolve_admin_proxy_actor(request: Request, settings: Settings) -> str | None:

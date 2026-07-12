@@ -26,7 +26,7 @@
 - **VWorld 우선 지오코딩**: 지오코딩과 역지오코딩은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고, Kakao Local 주소 검색·키워드 장소 검색과 Naver를 보조 경로로 사용합니다. `kraddr-geo` 지오코딩 연계는 현재 계획에 포함하지 않습니다.
 - **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
 - **장소 언급 소스와 내보내기**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지 확인하고, 언급 횟수로 정렬하며, 선택 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보낼 수 있습니다.
-- **범용 feature export API**: 검수 통과 YouTube 장소 후보를 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 노출합니다. `python-krtour-map`이 이를 `kor-travel-concierge-youtube` provider로 pull해 `feature_id`와 `feature_snapshot`을 만들고, PinVi는 그 값을 자체 feature 연계 POI row로 저장합니다. Curated plan은 feature 자체가 아니라 이 POI row들의 모음으로 구성됩니다. 계약 정본은 `docs/feature-export-api.md`입니다.
+- **범용 feature export API**: 검수 통과 YouTube 장소 후보를 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 노출합니다. `kor-travel-map`이 이를 `kor-travel-concierge-youtube` provider로 pull해 `feature_id`와 `feature_snapshot`을 만들고, PinVi는 그 값을 자체 feature 연계 POI row로 저장합니다. Curated plan은 feature 자체가 아니라 이 POI row들의 모음으로 구성됩니다. 계약 정본은 `docs/feature-export-api.md`입니다.
 - **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
 - **전면 비동기 실행**: `httpx.AsyncClient`, SQLAlchemy async session, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
@@ -57,7 +57,7 @@
 
 앱 런타임/배포는 **Linux Docker 전용**입니다(ADR-23). 기본 실행은 단일 호스트 Docker Compose이며, Windows 사용자는 WSL2(Ubuntu) + Docker 안에서 동일한 명령을 사용합니다. 에이전트/Codex 작업 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 실행합니다(ADR-33). **E2E Playwright 테스트는 n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행합니다.
 
-REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입합니다(키는 브라우저에 노출되지 않음). 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 `API_KEYS`를 설정합니다(ADR-24).
+REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 admin `BACKEND_API_KEY`를 주입합니다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB에서 발급한 `read` 키로 명시된 공급 GET만 호출하며, query `key`에는 DB read 키만 사용할 수 있습니다. production consumer의 실제 key rotation은 T-176 완료 전까지 대기합니다. 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 operator/BFF용 `API_KEYS`를 설정합니다(ADR-24·ADR-36).
 
 ### 환경 변수 설정
 
@@ -70,7 +70,7 @@ NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_browser_key_here
 NEXT_PUBLIC_API_BASE_URL=
 # BFF 프록시 대상(서버 전용). Compose는 http://api:8000, 로컬 기본 http://localhost:12601
 BACKEND_ORIGIN=
-# BFF가 주입하는 X-API-Key(서버 전용, NEXT_PUBLIC_* 아님). 외부 배포는 API_KEYS 중 하나와 동일하게
+# BFF가 주입하는 admin X-API-Key(서버 전용, NEXT_PUBLIC_* 아님). API_KEYS 중 하나와 동일하게
 BACKEND_API_KEY=
 
 # 고정 host port 계약
@@ -83,7 +83,7 @@ RUSTFS_CONSOLE_HOST_PORT=12105
 # 실행 환경 및 API 인증 (ADR-24)
 APP_ENV=local              # local/test/e2e는 무인증 우회, production은 X-API-Key 요구
 API_AUTH_ENABLED=false     # true이면 환경과 무관하게 인증 강제
-API_KEYS=                  # 외부 노출 배포에서 쉼표 구분 키 목록 설정
+API_KEYS=                  # 외부 노출 배포의 BFF/operator용 static admin 키 목록
 
 # PostgreSQL + PostGIS 목표(ADR-25, T-061)
 # Compose 컨테이너는 host.docker.internal:5432, 컨테이너 밖 로컬 venv는 localhost:5432 사용

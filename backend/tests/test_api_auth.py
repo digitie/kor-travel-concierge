@@ -7,12 +7,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ktc.core.config import Settings, get_settings
 from ktc.core.database import get_session
+from ktc.core.security import is_read_scope_path
+from ktc.models import PublicApiKey
 from ktc.services import public_api_key_service
 from main import app
 
@@ -91,7 +97,7 @@ async def test_non_local_accepts_db_public_api_key(session_factory):
             created_by="test",
         )
     async with _make_client(session_factory, settings) as ac:
-        resp = await ac.get(f"/api/v1/runs?key={api_key}")
+        resp = await ac.get(f"/api/v1/destinations?key={api_key}")
         assert resp.status_code == 200
     app.dependency_overrides.clear()
 
@@ -149,7 +155,7 @@ async def test_admin_proxy_rejects_missing_or_wrong_secret(session_factory):
 
 
 async def test_trusted_client_cidr_bypasses_key_when_enabled(session_factory):
-    """키 없는 CIDR 우회는 명시 활성화 시에만 동작한다."""
+    """키 없는 CIDR 우회는 명시 활성화해도 read 공급 경로만 허용한다."""
     settings = Settings(
         APP_ENV="production",
         API_AUTH_ENABLED=True,
@@ -158,8 +164,10 @@ async def test_trusted_client_cidr_bypasses_key_when_enabled(session_factory):
         API_TRUSTED_CLIENT_BYPASS_ENABLED=True,
     )
     async with _make_client(session_factory, settings) as ac:
-        resp = await ac.get("/api/v1/runs")
-        assert resp.status_code == 200
+        read_resp = await ac.get("/api/v1/destinations")
+        admin_resp = await ac.get("/api/v1/runs")
+        assert read_resp.status_code == 200
+        assert admin_resp.status_code == 403
     app.dependency_overrides.clear()
 
 
@@ -191,13 +199,13 @@ async def test_revoked_public_api_key_rejected(session_factory):
             session, label="폐기 대상", created_by="test"
         )
     async with _make_client(session_factory, settings) as ac:
-        ok = await ac.get(f"/api/v1/runs?key={api_key}")
+        ok = await ac.get(f"/api/v1/destinations?key={api_key}")
         assert ok.status_code == 200
         async with session_factory() as session:
             await public_api_key_service.revoke_key(
                 session, item.id, revoked_by="test"
             )
-        revoked = await ac.get(f"/api/v1/runs?key={api_key}")
+        revoked = await ac.get(f"/api/v1/destinations?key={api_key}")
         assert revoked.status_code == 401
     app.dependency_overrides.clear()
 
@@ -269,3 +277,318 @@ def test_settings_auth_required_rules():
     assert Settings(APP_ENV="test").auth_required is False
     assert Settings(APP_ENV="production").auth_required is True
     assert Settings(APP_ENV="local", API_AUTH_ENABLED=True).auth_required is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/destinations",
+        "/api/v1/destinations/facets",
+        "/api/v1/destinations/export",
+        "/api/v1/destinations/123/detail",
+        "/api/v1/features/snapshot",
+        "/api/v1/features/changes",
+        "/api/v1/themes",
+        "/api/v1/themes/places",
+        "/api/v1/themes/video/abc_123/places",
+        "/api/v1/categories",
+        "/api/v1/categories/match",
+    ],
+)
+def test_read_scope_policy_allows_only_declared_supply_paths(path):
+    assert is_read_scope_path("GET", path) is True
+    assert is_read_scope_path("HEAD", path) is True
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/api/v1/destinations"),
+        ("GET", "/api/v1/runs"),
+        ("GET", "/api/v1/destinations/unmatched"),
+        ("GET", "/api/v1/destinations/candidates/1/detail"),
+        ("GET", "/api/v1/destinations/not-a-number/detail"),
+        ("GET", "/api/v1/features/internal"),
+        ("GET", "/api/v1/themes/internal"),
+        ("GET", "/api/v1/categories/internal"),
+    ],
+)
+def test_read_scope_policy_denies_unmatched_paths_by_default(method, path):
+    assert is_read_scope_path(method, path) is False
+
+
+async def test_read_key_allows_supply_and_denies_write_and_internal_gets(
+    session_factory,
+):
+    settings = Settings(APP_ENV="production", API_AUTH_ENABLED=True, API_KEYS="")
+    async with session_factory() as session:
+        api_key, _item = await public_api_key_service.create_key(
+            session,
+            label="소비자 read 키",
+            created_by="test",
+            scope="read",
+        )
+
+    headers = {"X-API-Key": api_key}
+    async with _make_client(session_factory, settings) as ac:
+        destinations = await ac.get("/api/v1/destinations", headers=headers)
+        snapshot = await ac.get("/api/v1/features/snapshot", headers=headers)
+        harvest = await ac.post("/api/v1/harvest", headers=headers, json={})
+        delete_place = await ac.delete("/api/v1/destinations/1", headers=headers)
+        settings_get = await ac.get("/api/v1/settings", headers=headers)
+        unmatched = await ac.get("/api/v1/destinations/unmatched", headers=headers)
+        candidate = await ac.get(
+            "/api/v1/destinations/candidates/1/detail", headers=headers
+        )
+
+    assert destinations.status_code == 200
+    assert snapshot.status_code == 200
+    assert harvest.status_code == 403
+    assert delete_place.status_code == 403
+    assert settings_get.status_code == 403
+    assert unmatched.status_code == 403
+    assert candidate.status_code == 403
+    app.dependency_overrides.clear()
+
+
+async def test_admin_db_key_header_allows_internal_api_but_not_admin_proxy_api(
+    session_factory,
+):
+    settings = Settings(APP_ENV="production", API_AUTH_ENABLED=True, API_KEYS="")
+    async with session_factory() as session:
+        api_key, _item = await public_api_key_service.create_key(
+            session,
+            label="운영자 admin 키",
+            created_by="test",
+            scope="admin",
+        )
+
+    headers = {"X-API-Key": api_key}
+    async with _make_client(session_factory, settings) as ac:
+        internal = await ac.get("/api/v1/runs", headers=headers)
+        admin_proxy_only = await ac.get(
+            "/api/v1/admin/public-api-keys", headers=headers
+        )
+
+    assert internal.status_code == 200
+    assert admin_proxy_only.status_code == 403
+    app.dependency_overrides.clear()
+
+
+async def test_query_key_rejects_admin_db_and_static_keys(session_factory):
+    static_admin_key = "static-admin-key"
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS=static_admin_key,
+    )
+    async with session_factory() as session:
+        db_admin_key, _item = await public_api_key_service.create_key(
+            session,
+            label="query 금지 admin 키",
+            created_by="test",
+            scope="admin",
+        )
+        db_read_key, _read_item = await public_api_key_service.create_key(
+            session,
+            label="header 우선순위 read 키",
+            created_by="test",
+            scope="read",
+        )
+
+    async with _make_client(session_factory, settings) as ac:
+        db_admin = await ac.get(f"/api/v1/destinations?key={db_admin_key}")
+        db_admin_with_empty_header = await ac.get(
+            f"/api/v1/destinations?key={db_admin_key}",
+            headers={"X-API-Key": ""},
+        )
+        static_admin = await ac.get(f"/api/v1/destinations?key={static_admin_key}")
+        static_header = await ac.get(
+            "/api/v1/runs", headers={"X-API-Key": static_admin_key}
+        )
+        invalid_header_with_read_query = await ac.get(
+            f"/api/v1/destinations?key={db_read_key}",
+            headers={"X-API-Key": "invalid-header"},
+        )
+        valid_header_with_invalid_query = await ac.get(
+            "/api/v1/runs?key=invalid-query",
+            headers={"X-API-Key": static_admin_key},
+        )
+
+    assert db_admin.status_code == 403
+    assert db_admin_with_empty_header.status_code == 403
+    assert static_admin.status_code == 403
+    assert static_header.status_code == 200
+    assert invalid_header_with_read_query.status_code == 401
+    assert valid_header_with_invalid_query.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_key_scope_cache_is_invalidated_on_create_and_revoke(session_factory):
+    async with session_factory() as session:
+        assert not await public_api_key_service.cached_active_key_scopes(
+            session, ttl_seconds=600
+        )
+        api_key, item = await public_api_key_service.create_key(
+            session,
+            label="cache 무효화",
+            created_by="test",
+            scope="admin",
+        )
+        after_create = await public_api_key_service.cached_active_key_scopes(
+            session, ttl_seconds=600
+        )
+        assert (
+            public_api_key_service.public_api_key_scope(api_key, after_create)
+            == "admin"
+        )
+
+        await public_api_key_service.revoke_key(session, item.id, revoked_by="test")
+        after_revoke = await public_api_key_service.cached_active_key_scopes(
+            session, ttl_seconds=600
+        )
+        assert (
+            public_api_key_service.public_api_key_scope(api_key, after_revoke) is None
+        )
+
+
+async def test_cache_refill_does_not_republish_snapshot_stale_after_revoke(
+    session_factory,
+    monkeypatch,
+):
+    async with session_factory() as session:
+        api_key, item = await public_api_key_service.create_key(
+            session,
+            label="동시 폐기 cache",
+            created_by="test",
+            scope="admin",
+        )
+
+    first_select_finished = asyncio.Event()
+    resume_first_loader = asyncio.Event()
+    original_active_key_scopes = public_api_key_service.active_key_scopes
+    select_calls = 0
+
+    async def delayed_active_key_scopes(session):
+        nonlocal select_calls
+        select_calls += 1
+        snapshot = await original_active_key_scopes(session)
+        if select_calls == 1:
+            first_select_finished.set()
+            await resume_first_loader.wait()
+        return snapshot
+
+    monkeypatch.setattr(
+        public_api_key_service,
+        "active_key_scopes",
+        delayed_active_key_scopes,
+    )
+
+    async with session_factory() as loader_session:
+        loader = asyncio.create_task(
+            public_api_key_service.cached_active_key_scopes(
+                loader_session,
+                ttl_seconds=600,
+            )
+        )
+        await asyncio.wait_for(first_select_finished.wait(), timeout=2)
+        async with session_factory() as revoker_session:
+            await public_api_key_service.revoke_key(
+                revoker_session,
+                item.id,
+                revoked_by="test",
+            )
+        resume_first_loader.set()
+        scopes = await asyncio.wait_for(loader, timeout=2)
+
+    assert select_calls == 2
+    assert public_api_key_service.public_api_key_scope(api_key, scopes) is None
+
+
+async def test_admin_proxy_issues_requested_scope_and_defaults_to_read(session_factory):
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        KTC_ADMIN_PROXY_SECRET="proxy-secret-with-enough-length",
+    )
+    headers = {
+        "X-KTC-Actor": "admin",
+        "X-KTC-Admin-Proxy-Secret": "proxy-secret-with-enough-length",
+    }
+    async with _make_client(session_factory, settings) as ac:
+        admin_key = await ac.post(
+            "/api/v1/admin/public-api-keys",
+            headers=headers,
+            json={"label": "운영자", "scope": "admin"},
+        )
+        read_key = await ac.post(
+            "/api/v1/admin/public-api-keys",
+            headers=headers,
+            json={"label": "소비자"},
+        )
+        invalid = await ac.post(
+            "/api/v1/admin/public-api-keys",
+            headers=headers,
+            json={"label": "잘못된 키", "scope": "write"},
+        )
+
+    assert admin_key.status_code == 200
+    assert admin_key.json()["item"]["scope"] == "admin"
+    assert read_key.status_code == 200
+    assert read_key.json()["item"]["scope"] == "read"
+    assert invalid.status_code == 422
+    app.dependency_overrides.clear()
+
+
+async def test_admin_key_create_rolls_back_when_audit_write_fails(
+    session_factory,
+    monkeypatch,
+):
+    settings = Settings(
+        APP_ENV="production",
+        API_AUTH_ENABLED=True,
+        API_KEYS="",
+        KTC_ADMIN_PROXY_SECRET="proxy-secret-with-enough-length",
+    )
+
+    async def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("ktc.api.routes.audit_service.record", fail_audit)
+    headers = {
+        "X-KTC-Actor": "admin",
+        "X-KTC-Admin-Proxy-Secret": "proxy-secret-with-enough-length",
+    }
+    async with _make_client(session_factory, settings) as ac:
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            await ac.post(
+                "/api/v1/admin/public-api-keys",
+                headers=headers,
+                json={"label": "감사 실패 admin", "scope": "admin"},
+            )
+
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(PublicApiKey).where(PublicApiKey.label == "감사 실패 admin")
+            )
+        ).scalars().all()
+    assert rows == []
+    app.dependency_overrides.clear()
+
+
+async def test_public_api_key_scope_check_constraint_rejects_unknown_value(session):
+    session.add(
+        PublicApiKey(
+            label="DB 제약 검증",
+            key_hash=public_api_key_service.hash_public_api_key("invalid-scope-key"),
+            key_hint="ope-key",
+            scope="write",
+            state="active",
+            created_by="test",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()

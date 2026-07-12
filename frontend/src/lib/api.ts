@@ -243,6 +243,7 @@ export type PublicApiKeySummary = {
   id: number;
   label: string | null;
   key_hint: string;
+  scope: "read" | "admin";
   state: "active" | "revoked" | string;
   created_at: string;
   created_by: string | null;
@@ -623,10 +624,11 @@ export async function listPublicApiKeys(): Promise<PublicApiKeySummary[]> {
 
 export async function createPublicApiKey(
   label?: string,
+  scope: PublicApiKeySummary["scope"] = "read",
 ): Promise<PublicApiKeyCreateResponse> {
   return requestJson<PublicApiKeyCreateResponse>("/api/v1/admin/public-api-keys", {
     method: "POST",
-    body: JSON.stringify({ label: label?.trim() || null }),
+    body: JSON.stringify({ label: label?.trim() || null, scope }),
   });
 }
 

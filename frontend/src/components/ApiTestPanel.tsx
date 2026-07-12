@@ -118,9 +118,7 @@ export function ApiTestPanel() {
     mutationFn: () => probeApi(path),
   });
 
-  const origin =
-    typeof window !== "undefined" ? window.location.origin : "https://<도메인>";
-  const externalCurl = `curl -H "X-API-Key: <발급받은_키>" "${origin}${path}"`;
+  const externalCurl = `curl -H "X-API-Key: <발급받은_read_키>" "https://<REST-API-도메인>${path}"`;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
@@ -130,8 +128,9 @@ export function ApiTestPanel() {
             <h2 className="text-[16px] font-bold">요청</h2>
             <HelpTip>
               브라우저는 same-origin BFF를 거쳐 호출하므로 서버 전용 백엔드 키가
-              자동 주입됩니다. 외부(비-브라우저)에서는 아래 curl처럼 발급받은 공개
-              API 키를 X-API-Key로 직접 보냅니다.
+              자동 주입됩니다. 외부(비-브라우저)에서는 아래 curl처럼 읽기 전용으로
+              발급받은 공개 API 키를 X-API-Key로 직접 보냅니다. 예시의 REST API
+              도메인은 Web/BFF 도메인이 아니라 공개 backend API 도메인으로 바꾸세요.
             </HelpTip>
           </div>
           <p className="text-[13px] text-text-secondary">

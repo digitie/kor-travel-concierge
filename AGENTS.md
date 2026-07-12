@@ -78,7 +78,7 @@
 | ORM / 데이터베이스 | SQLAlchemy 2.0 / PostgreSQL + PostGIS (`asyncpg`, Alembic) |
 | 지도 뷰 라이브러리 | `maplibre-gl + VWorld WMTS` |
 | E2E 테스트 도구 | Playwright — **n150 live/Linux 환경에서 우선 실행**, 불가할 때만 Windows 호스트 fallback(앱 런타임/배포와 개발 명령은 Linux Docker/WSL 전용, ADR-33) |
-| REST API 경계 | 모든 엔드포인트는 `/api/v1` 프리픽스 아래(`/health`·`/`는 버전 없음). 브라우저는 same-origin Next BFF 경유로 호출하고 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입(키 비노출), 직접/외부 호출자는 `X-API-Key` 직접 전송, 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회 (ADR-24) |
+| REST API 경계 | 모든 엔드포인트는 `/api/v1` 프리픽스 아래(`/health`·`/`는 버전 없음). 브라우저는 same-origin Next BFF 경유로 호출하고 BFF가 서버 전용 admin `BACKEND_API_KEY`를 주입(키 비노출), 외부 소비자는 DB `read` 키로 명시된 공급 GET만 호출, 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회 (ADR-24/36) |
 | LLM API | Gemini API (1.5 / 2.0 / Flash 등 설정 가능) |
 | MCP UX | 읽기/쓰기 모두 가능한 MCP 서버 |
 | Geocoding / Reverse Geocoding | VWorld 최우선(`python-vworld-api`의 `AsyncVworldClient` 직접 사용), Kakao Local 주소·키워드 장소 검색 보조, Naver 보조 검증 (`kraddr-geo` 지오코딩 연계 없음; ADR-25의 `python-kraddr-geo` PostgreSQL/PostGIS DB 서버 재사용은 별도) |
@@ -92,7 +92,7 @@
 앱 런타임/배포 실행 환경은 **Linux Docker 전용**이다(ADR-23). Windows 네이티브 **앱** 실행 경로는 배제하며, Windows 호스트에서는 **WSL2(Ubuntu) 안에서 Linux/Docker로 구동**한다. 모든 신규 스크립트·명령은 bash·Linux 기준으로 작성한다. **개발·검증·리포지토리 작업 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 실행한다**(ADR-33). **E2E Playwright 테스트 하니스는 n150 live/Linux 환경에서 우선 실행하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행한다**.
 - **Codex 명령 실행 위치 강제**: 이 저장소에서 에이전트/Codex가 실행하는 모든 작업 명령은 WSL2(Ubuntu)를 포함한 Linux bash에서 수행한다. 과거 예외였던 `git` 명령, `gh`, codegraph 계열 인덱싱/분석 명령도 Linux에서 실행한다. Windows PowerShell/cmd는 n150 Playwright가 불가능할 때의 E2E fallback에만 사용한다.
 - **기본 실행**: 단일 호스트 Docker Compose(ADR-18). `docker compose up --build`로 backend(8000), frontend(3000), rustfs, mcp를 함께 띄운다. Windows 사용자는 WSL2 + Docker Engine(또는 Docker Desktop WSL backend) 안에서 같은 명령을 bash로 실행한다.
-- **REST API 경계**: REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있다(`/health`·`/`만 버전 없음). 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부(비-브라우저) 호출자는 `X-API-Key`를 직접 보내며, 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 우회한다. 외부 노출 배포는 `APP_ENV=production`과 `API_KEYS`를 설정한다(ADR-24).
+- **REST API 경계**: REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있다(`/health`·`/`만 버전 없음). 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 admin `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB `read` 키를 header로 보내며 명시된 공급 GET만 호출한다. DB/static `admin` 키는 일반 운영 API용 header에서만 허용하고 `/admin/*`는 BFF proxy 전용이다. 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 우회한다. 외부 노출 배포는 `APP_ENV=production`과 BFF/operator용 `API_KEYS`를 설정한다(ADR-24/36).
 - **Python 환경**: 컨테이너 밖 로컬 개발은 Linux/WSL에서 `python3 -m venv .venv && . .venv/bin/activate`로 Python 3.10+ 가상환경을 만들어 FastAPI, SQLAlchemy, ETL 스크립트를 구동한다. DB 연결은 PostgreSQL/PostGIS 기준이다.
 - **Node.js 환경**: Node.js 20+ 버전을 사용하며, frontend 폴더 내에서 Next.js를 구동한다.
 - **Playwright 구동(n150 우선)**: E2E 테스트 하니스는 **n150 live/Linux 환경에서 우선 실행**한다 — `cd tests; npm install; npx playwright install; npx playwright test`. n150 접근, 브라우저 설치, 네트워크, DB, 계정 상태 때문에 해당 검증이 불가능할 때만 Windows 호스트에서 같은 명령을 fallback으로 실행한다. 이 fallback은 테스트 하니스에 한정되며 Windows 네이티브 앱 실행 경로나 앱 런타임 코드의 `win32` 분기를 되살리지 않는다. E2E 런처 스크립트 `tests/scripts/*.mjs`의 Windows 처리도 fallback 하니스 호환성 범위에서만 유지한다.

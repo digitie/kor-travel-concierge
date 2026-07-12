@@ -56,7 +56,7 @@
    cd ..
    ./ktcctl api
    ```
-   서버는 `http://localhost:12601`에서 실행되며(`ktcctl api` 기본값은 host 고정 포트 `12601`에 바인딩), API 명세(Swagger UI)는 `http://localhost:12601/docs`에서 확인할 수 있습니다. REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회합니다(ADR-24).
+   서버는 `http://localhost:12601`에서 실행되며(`ktcctl api` 기본값은 host 고정 포트 `12601`에 바인딩), API 명세(Swagger UI)는 `http://localhost:12601/docs`에서 확인할 수 있습니다. REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. DB `read` 키는 명시된 공급 GET만, DB/static `admin` header 키는 일반 운영 API까지 허용하고 `/admin/*`는 BFF proxy만 허용합니다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회합니다(ADR-24·ADR-36).
 
 ---
 
@@ -129,7 +129,7 @@ RustFS health 확인 후 `api` 컨테이너 안에서 `scripts/verify_rustfs.py`
    ```bash
    npm run dev
    ```
-   웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다. 브라우저는 same-origin `/api/v1`(`NEXT_PUBLIC_API_BASE_URL` 기본 빈 값)로 호출하고, Next BFF Route Handler가 이를 서버 사이드에서 `BACKEND_ORIGIN`(기본 `http://localhost:12601`)으로 프록시하므로 별도 API base를 지정할 필요가 없습니다. 인증 환경에서는 BFF가 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입하며, 로컬(`APP_ENV=local/test/e2e`)에서는 인증이 우회됩니다(ADR-24).
+   웹 브라우저에서 `http://localhost:3000`으로 접속하여 프론트엔드 화면을 확인합니다. 브라우저는 same-origin `/api/v1`(`NEXT_PUBLIC_API_BASE_URL` 기본 빈 값)로 호출하고, Next BFF Route Handler가 이를 서버 사이드에서 `BACKEND_ORIGIN`(기본 `http://localhost:12601`)으로 프록시하므로 별도 API base를 지정할 필요가 없습니다. 인증 환경에서는 BFF가 서버 전용 admin `BACKEND_API_KEY`로 `X-API-Key`를 주입하며, 로컬(`APP_ENV=local/test/e2e`)에서는 인증이 우회됩니다(ADR-24·ADR-36).
 
    `CORS_ALLOW_ORIGINS`는 환경변수, `.env`, 기본값 순서로 적용됩니다. 기본값에는 Web 고정 포트 `12605`, 프론트엔드 단독 개발 포트 `3000`, E2E 포트 `13100`의 `localhost` 및 `127.0.0.1` origin을 포함합니다.
 
@@ -406,7 +406,7 @@ RustFS 매핑: `s3-api.<...>`=S3 API/공개 객체 URL(`RUSTFS_PUBLIC_BASE_URL`)
 ```bash
 APP_ENV=production
 API_AUTH_ENABLED=true
-API_KEYS=<강한 무작위 키>           # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+API_KEYS=<강한 무작위 키>           # BFF/operator용 static admin 키
 BACKEND_API_KEY=<위 API_KEYS 중 하나>  # BFF가 백엔드에 주입; API_KEYS와 동일해야 함
 CORS_ALLOW_ORIGINS=https://<web>
 NEXT_PUBLIC_API_BASE_URL=            # 비워 둠(same-origin BFF)
@@ -452,4 +452,4 @@ caddy run --config deploy/Caddyfile --envfile .env.production
 
 - `docker compose config`로 prod env substitution을 확인합니다.
 - `https://<api>/health` 200, `https://<web>` 로드, 지도/미디어 URL이 `https://<s3-api>/...`로 나오는지 확인합니다.
-- 인증: `X-API-Key` 없이 `https://<api>/api/v1/...` 호출이 401, 올바른 키면 200인지 확인합니다. 브라우저는 same-origin BFF가 키를 주입하므로 정상 동작합니다.
+- 인증: 키 없이 공급 API가 401, DB read 키 header로 공급 GET이 200, 같은 키로 내부 GET·안전한 쓰기가 403인지 확인합니다. static admin header는 일반 운영 API에 사용하되 `/admin/*`는 계속 BFF proxy만 통과해야 합니다. 브라우저는 same-origin BFF가 admin 키와 proxy credential을 주입하므로 정상 동작합니다. 외부 소비자에는 static admin 키를 배포하지 않습니다.
