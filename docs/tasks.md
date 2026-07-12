@@ -17,7 +17,6 @@
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
 - [ ] **T-158**: Phase -1 외부 provider 정책·데이터 권리 게이트 — provider별 표시/지도/영구 저장/cache/attribution/export/TTL/약관 확인일 matrix(`docs/provider-policy.md`), production kill switch(미디어 다운로드·Google 표시·cache), RustFS asset·prod 키·Whisper runtime 인벤토리, ADR-15 재검토 초안. T-169·T-173과 제한 provider 영구 저장의 release gate. (로드맵 PR-29, §10 B4, G10)
-- [ ] **T-159**: `exclude_video` 컬럼 버그 hotfix — 존재하지 않는 `ExtractedPlaceCandidate.place_id` 참조를 `matched_place_id`로 수정, 매핑 보유 영상 제외 시 AttributeError 재현·회귀 테스트. (PR-30, §1.5 C2)
 - [ ] **T-160**: candidate soft delete 상태 모델 — `deleted_at/deletion_reason/deleted_by`+partial index, 삭제 트랜잭션에서 매핑 해제+export tombstone 전이(ledger 선삭제 코드 제거), undo/reopen 백엔드, `exclude_video` 통합, CHECK 제약. (PR-09 백엔드 선행+PR-22 선행, §10 B1, G1)
 - [ ] **T-161**: LLM async/multimodal 게이트웨이 — 전 LLM 호출 수렴(quota reservation 포함: deep research·키워드 확장·검수 의견·카테고리·video analysis의 리미터 우회 해소), timeout/retry/usage 실측/provider·model 기록, direct SDK guard, 실제 결제 티어 확인·`.env.example` 숫자는 예시 표기. (PR-23+PR-05 통합, §10 B6)
 - [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
@@ -59,6 +58,13 @@
 
 ## 완료
 
+- [x] **T-159**: `exclude_video` 컬럼 버그 hotfix — 고아 장소 판정 루프의 존재하지 않는
+  `ExtractedPlaceCandidate.place_id` 참조를 `matched_place_id`로 수정(1줄). 수정 전 코드에서
+  AttributeError 재현을 실제 확인한 회귀 테스트(고아 장소 삭제, 타 영상 매핑·matched 후보 참조
+  장소 보존)를 추가했다. 검증: backend compileall, `test_place_service.py` 11 passed, backend 전체
+  pytest 302 passed(실패 2건 — `test_destinations_reflect_db`,
+  `test_process_harvest_videos_creates_place_from_summarized_poi` — 은 pristine HEAD에서도 동일
+  실패하는 기존 결함으로 확인, 별도 조사 필요), `git diff --check`. (2026-07-13, 로드맵 PR-30)
 - [x] **T-157 후속(반영)**: Codex 리뷰 검증·본문 통합·작업 등재 — §10의 사실 주장 22건을 3개 검증
   에이전트가 코드 대조로 전부 확인(CONFIRMED, 이견 없음)하고, B1~B7·PR별 수정 의견·10단계
   순서·acceptance gate(G1~G10)를 로드맵 본문 §0~§9에 통합했다(각 PR "개정(2026-07-13)" 항목,
