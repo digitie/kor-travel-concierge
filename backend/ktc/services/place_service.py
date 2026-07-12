@@ -1004,7 +1004,7 @@ async def exclude_video(
             await session.execute(
                 select(func.count())
                 .select_from(ExtractedPlaceCandidate)
-                .where(ExtractedPlaceCandidate.place_id == pid)
+                .where(ExtractedPlaceCandidate.matched_place_id == pid)
             )
         ).scalar_one()
         if remaining_maps == 0 and remaining_cands == 0:
