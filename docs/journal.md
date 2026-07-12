@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-07-13: T-175 — 공개 API 키 read/admin scope 분리
+
+- **DB·인증 경계**: `public_api_keys.scope`에 `read|admin` NOT NULL·CHECK를 추가하고 기존
+  행은 `read`로 backfill했다. scope는 발급 뒤 변경하지 않고 폐기 후 재발급한다. 활성 키 cache는
+  hash 집합에서 `key_hash → scope` mapping으로 바꿨고, create/revoke 무효화 generation을
+  비교해 DB SELECT 뒤 stale snapshot이 재게시되는 race를 차단했다. 공급용 장소·feature·theme·
+  category GET 11경로만 exact/제한 정규식 allowlist로 열고, 내부 GET과 모든 write는
+  deny-by-default 403으로 막았다. query `key`는 DB read만, DB/static admin은 header만 허용하며,
+  신뢰 CIDR 무키 우회는 read, `/admin/*`는 scope와 무관하게 BFF proxy 전용이다.
+- **관리·UX·계약**: 발급 요청·응답·목록·감사 로그에 scope를 포함하고 기본 `read` select, 목록
+  scope 표시, admin 위험 HelpTip을 설정 화면에 추가했다. 외부 curl은 session BFF가 아닌 실제 REST
+  API origin과 read header를 안내한다. key create/revoke와 audit를 한 transaction에 묶어 audit
+  실패 시 활성 admin key가 고아로 남지 않게 했다. ADR-36, architecture, feature export 정본,
+  README/env/dev/agent 문서를 같은 계약으로 정렬했다. T-175는 capability 완료이며 production
+  `kor-travel-map` key 발급·교체·구 consumer static entry 제거는 T-176 대기다.
+- **반복 적대적 검토**: 1차 route·계약 감사와 2차 수정 후 재검토에서 빈 header+admin query
+  source 오판, cache refill/invalidation race, key/audit 비원자성, Web/BFF origin을 가리키는 외부
+  curl, query 전달 도움말, HEAD 405 문서 모순, T-176 완료 전환 오표기를 발견해 모두 보강했다.
+  최종 P0/P1은 없고, 프로세스 로컬 cache는 현 단일 Uvicorn worker 계약에서 유지하되 다중 replica
+  전환 시 DB epoch/pub/sub 무효화를 선행하도록 ADR에 기록했다.
+- **n150 검증**: 일회성 PostGIS DB에서 auth 42건과 기존 기준선 실패 2건을 제외한 backend 전체가
+  통과했다. Alembic `0015→0016` upgrade, 기존 active 행 read backfill, invalid scope CHECK 거부,
+  `0016→0015` downgrade 뒤 행 보존·column 제거를 검증했다. frontend lint/type-check/Vitest 33건/
+  production build와 Playwright 설정 scope 시나리오가 통과했다.
+
 ## 2026-07-13: T-158 — Phase -1 외부 provider 정책·데이터 권리 게이트
 
 - **산출물**: `docs/provider-policy.md` 신설 — YouTube/Google Places/NCP Maps/Naver Local

@@ -34,7 +34,7 @@ bash scripts/verify-docker-compose.sh
 ```
 기동 후 API는 `http://localhost:12601`, MCP는 `http://localhost:12602/mcp`, Web은 `http://localhost:12605`, 외부 RustFS는 S3 API `http://127.0.0.1:12101`과 콘솔 `http://127.0.0.1:12105`로 접속한다. `scripts/start-live.sh`는 `docker compose up` 이전에 `scripts/stop-fixed-ports.sh`로 이 repo 소유 고정 포트 `12601`/`12602`/`12605`를 점유한 리스너(Linux/Docker/WSL/Windows)를 회수해 재시작을 보장한다. RustFS 포트 `12101`/`12105`는 외부 서비스가 소유하므로 회수하지 않는다(포트 회수 패턴은 `python-krtour-map`에서 차용).
 
-REST API는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받는다. 브라우저는 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하고 BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 직접/외부 호출자는 `X-API-Key`를 직접 보낸다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+`API_KEYS`로 인증을 강제한다(ADR-24).
+REST API는 `/api/v1` 프리픽스 아래에 있고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받는다. 브라우저는 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하고 BFF가 서버 사이드에서 백엔드로 프록시하며 서버 전용 admin `BACKEND_API_KEY`를 주입한다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB `read` 키로 명시된 공급 GET만 호출하고, DB/static `admin` 키는 header에서 일반 운영 API를 허용하되 `/admin/*`는 BFF proxy 전용이다. 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회, 외부 노출 배포는 `APP_ENV=production`+BFF/operator용 `API_KEYS`로 인증을 강제한다(ADR-24/36).
 
 ### 백엔드 단독 실행 (컨테이너 밖 로컬 개발, Linux/WSL)
 ```bash
