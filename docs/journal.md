@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-07-13: T-159 — exclude_video 컬럼 버그 hotfix
+
+- **수정**: `place_service.exclude_video`의 고아 장소 판정 루프가 모델에 없는
+  `ExtractedPlaceCandidate.place_id`를 참조해 매핑 보유 영상 제외 시 AttributeError로 크래시하던
+  문제를 실제 컬럼 `matched_place_id`로 수정했다(1줄, 로드맵 PR-30/§1.5 C2). ledger 선삭제·
+  tombstone 미발행 문제는 T-160 소관으로 보존.
+- **테스트**: 수정 전 코드로 AttributeError 재현을 확인한 회귀 테스트 추가 — 제외 영상의 고아
+  장소는 삭제되고, 타 영상 매핑 공유 장소와 타 영상 matched 후보가 참조하는 장소는 보존.
+- **검증**: backend compileall, `test_place_service.py` 11 passed, backend 전체 pytest
+  302 passed / 2 failed — 실패 2건(`test_destinations_reflect_db`,
+  `test_process_harvest_videos_creates_place_from_summarized_poi`)은 pristine HEAD에서도 동일
+  실패하는 기존 결함으로 확인(T-159 무관, 별도 조사 필요). `git diff --check` 통과.
+
 ## 2026-07-13: T-157 후속 — Codex 리뷰 검증·본문 통합·Agent A/B 작업 등재
 
 - **검증**: Codex 리뷰(§10)의 사실 주장 22건(FeatureExport FK NO ACTION·후보 삭제의 ledger
