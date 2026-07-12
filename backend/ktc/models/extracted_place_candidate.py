@@ -11,7 +11,18 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -33,18 +44,32 @@ class MatchStatus(str, Enum):
 class ExtractedPlaceCandidate(TimestampMixin, Base):
     __tablename__ = "extracted_place_candidates"
     __table_args__ = (
-        Index("ix_epc_review_queue_status_id", "match_status", "id"),
+        # soft delete 시 사유를 강제한다(T-160, 로드맵 B1 절차 5).
+        CheckConstraint(
+            "deleted_at IS NULL OR deletion_reason IS NOT NULL",
+            name="ck_epc_deleted_requires_reason",
+        ),
+        # 검수 큐 access path는 항상 `deleted_at IS NULL`을 포함하므로(T-160)
+        # T-154의 복합 인덱스 3종을 같은 이름의 partial index로 대체한다.
+        Index(
+            "ix_epc_review_queue_status_id",
+            "match_status",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index(
             "ix_epc_review_queue_channel_status_id",
             "source_channel_id",
             "match_status",
             "id",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
             "ix_epc_review_queue_playlist_status_id",
             "source_playlist_id",
             "match_status",
             "id",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
@@ -103,6 +128,14 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         default=FeatureExportStatus.PENDING.value,
         index=True,
     )
+    # soft delete 상태(T-160, 로드맵 B1). 후보는 감사 가능한 도메인 기록이므로 물리
+    # 삭제하지 않는다. `deleted_at IS NOT NULL`이면 삭제된 것으로 보고 검수 큐·dedup·
+    # 자동 처리·export 스캔에서 제외한다. reopen은 세 필드를 모두 clear 한다.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deletion_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 검수 메타데이터
     reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(
