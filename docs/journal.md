@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-13: T-158 — Phase -1 외부 provider 정책·데이터 권리 게이트
+
+- **산출물**: `docs/provider-policy.md` 신설 — YouTube/Google Places/NCP Maps/Naver Local
+  Search/Kakao/VWorld × (표시/지도/영구 저장/임시 cache/attribution/외부 export/허용 TTL/약관
+  버전·확인일) matrix를 전부 공식 원문 대조로 작성. 핵심: YouTube audiovisual 다운로드·저장은
+  서면 승인 필요(III.E.1)·metadata 30일(III.E.4, 통계 예외는 Authorized Data 한정이라 적용 불가),
+  Google Places는 비-Google 지도 표시 금지(SST §14.2)·No Scraping/No Caching(ToS §3.2.3),
+  NCP Maps는 "즉시 1회 사용"(제7조⑪), Naver Local Search는 저장·DB화 금지(7.3.③), Kakao는
+  조건부 cache(최신성 의무). 현행 코드 충돌 C-1~C-7, ADR-15 재검토 초안(옵션 4종), release gate
+  선언, 인벤토리(dev RustFS 버킷 부재, env 플래그 상태 — 비밀 미기록) 포함.
+- **kill switch**: `RAW_MEDIA_STORE_ENABLED`(RustFS 원본 저장 게이트), `GOOGLE_PLACE_SEARCH_ENABLED`
+  (`/place-search`의 google provider 게이트 — off면 빈 목록+`errors.google`) — 기본 true(현행 유지,
+  사용자 승인). 테스트 4건(off 시 스킵·무HTTP·기본값 고정).
+- **적대적 리뷰(PR 전)**: 3렌즈(정책 원문 재대조·코드/비밀 스캔·명세 완결성)에서 BLOCKER 1건
+  (prod 호스트 IP가 문서에 기록 — 푸시 전 제거)·MAJOR 5건(YouTube 통계 예외 오적용, 플래그
+  이름/범위 불일치→`RAW_MEDIA_STORE_ENABLED` 개명, Kakao release gate 누락, 기본값 스펙 이탈의
+  사용자 승인 기록, journal/tasks 미갱신)·MINOR 6건을 전부 머지 전 반영.
+- **사용자 결정(2026-07-13)**: ① Google 결과의 VWorld 지도 표시는 의도된 현행 유지(인지된 정책
+  리스크로 기록), ② prod whisper 자동 전사 현행 유지 — 자막 품질 개선은 신규 T-193(조건부)으로
+  분리, ③ NCP Maps 결과는 캐시·저장 대상에서 제외(T-170에서 matrix 기반 처리).
+- **검증**: compileall, kill switch·place_search 테스트 10 passed 2 skipped, backend 전체 pytest
+  305 passed(+pre-existing 2 failed), 문서 비밀 재스캔 clean, `git diff --check` 통과.
+
 ## 2026-07-13: T-174 — 검수 선택 provenance·근접 중복 결정 보강
 
 - **선택 근거 보존**: Google/Kakao/Naver 검색 결과에 provider native ID와 저장 capability,
