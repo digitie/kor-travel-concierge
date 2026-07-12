@@ -696,3 +696,443 @@ Phase 6 (공급·IA 마감):     PR-25 → PR-26 → PR-27 → PR-28
 - `docs/decisions.md`: ADR 신규 3건 후보 — (a) 검수 큐 서버 소유·처리 흐름 모델과 **자동확정 게이트에 의한 ADR-16 경계 재정의**(ambiguous 단일 통과 자동확정 포함 — PR-12에서 작성 의무), (b) 워커 레인 분리와 LLM 게이트웨이(ADR-13 보강), (c) API 키 스코프 모델(ADR-24 보강). 기각 결정(§2.3)도 해당 ADR에 "고려 후 기각"으로 남기면 재론 비용을 줄인다.
 - `CLAUDE.md`: "현재 작업"과 "다음 착수 대상"에 Phase 0 반영.
 - `docs/feature-export-api.md`: PR-01(read 키)·PR-25(schema_version·재등장 규칙)·PR-26(테마 섹션) 시점에 각각 갱신.
+
+---
+
+## 10. Codex 상세 리뷰 — 3개 적대적 검토·2회 교차 검증 (2026-07-12)
+
+> **최종 판정: 수정 후 승인.** 문제 정의와 큰 방향은 채택할 가치가 높지만, 현재 문서를 그대로
+> 작업 계약으로 삼으면 삭제 복구·export tombstone·자동확정 신뢰성·외부 provider 정책에서
+> 회복하기 어려운 오류를 만들 수 있다. 아래 BLOCKER가 문서에 반영되기 전에는 §9의
+> `T-158` 이후 작업 등록과 구현 PR 착수를 보류한다. 이 절은 원문을 보존한 채 덧붙인 리뷰이며,
+> 원문과 충돌할 때는 이 절의 정정이 우선한다.
+
+### 10.1 검토 범위와 반복 방법
+
+- **검토 기준**: 최신 `origin/main` `52e64d2`에서 문서·프런트엔드·FastAPI·ETL·scheduler·
+  SQLAlchemy 모델·Alembic·형제 소비자 계약을 대조했다.
+- **1회차 독립 적대적 검토**:
+  1. 사용 편의성·검수 동선·job 생명주기 관점
+  2. 데이터 신뢰성·자막·grounding·OCR·외부 API 정책 관점
+  3. 코드 사실성·DB 제약·의존 순서·PR 실행 가능성 관점
+- **2회차 교차 검토**: 각 검토자가 다른 두 관점의 BLOCKER를 반박하고 코드·ADR·운영 문서로
+  다시 확인했다. 이 과정에서 근거가 약한 주장은 아래처럼 완화하거나 철회했다.
+  - NCP Maps Geocoding에 NAVER Developers Local Search 약관을 그대로 적용한 주장은
+    **제품이 다르므로 철회**한다. NCP 계정에 적용되는 별도 약관을 확인해야 한다.
+  - geocoding 조회 자체가 grounding보다 반드시 늦어야 한다는 주장은 **완화**한다.
+    조회는 먼저 또는 병렬로 할 수 있지만, 자동확정·export 전에는 raw grounding이 필수다.
+  - 외부 소비자 static key 교체는 PR-01 코드 merge의 선행 조건이 아니라
+    **production 보안 목표 완료 조건**으로 정정한다.
+  - YouTube 30일 규칙을 모든 파생 POI 삭제로 확대하는 해석과 Kakao cache 전면 금지 해석은
+    **철회**한다. API Data 범위와 provider별 허용 조건을 구분해야 한다.
+- **확정된 반증**: 원문의 “구조적 오류 0건” 판단은 유지할 수 없다. 아래 B1~B7은 코드와
+  제약으로 재현 가능한 구조 오류 또는 실행계획 누락이다.
+
+문서 상단의 기준 커밋도 정정이 필요하다. `bc514cd`는 T-154이며, T-156 반영 커밋은
+`ead57bb`다. 이 문서를 추가한 최신 커밋은 `52e64d2`다. 또한 번호상 PR-01~28에
+PR-20a가 별도 PR로 추가되므로 실제 독립 PR 수는 29개다. “Phase 0 전부 독립”도
+PR-06이 PR-03에 의존한다고 문서 자체가 명시하므로 사실과 다르다.
+
+### 10.2 유지할 판단
+
+다음 방향은 세 검토 모두에서 유효했다.
+
+1. 검수를 “목록 브라우징”에서 서버 소유 queue와 연속 처리 흐름으로 바꾸는 것
+2. 검색·필터·정렬·페이지네이션을 서버 계약으로 내리고 URL에 상태를 남기는 것
+3. 실패를 숨기지 않고 provider별 자막 시도·단계별 소요·판정 사유를 관측 가능하게 만드는 것
+4. 자동확정 임계값을 낮추지 않고 이름·지역·원문 근거를 독립 gate로 쓰는 것
+5. 외부 API 키를 read/admin으로 분리하고 공급 API를 명시적 계약으로 다듬는 것
+6. LLM 호출을 단일 async gateway로 수렴하고 실제 사용량을 측정한 뒤 병렬도를 조정하는 것
+7. 큰 기능을 PR 단위로 나누고 각 PR에 완료 기준과 회귀 테스트를 두는 문서 형식
+
+문제는 방향이 아니라 **상태 모델, 정책 gate, 의존 순서와 완료 기준**이다.
+
+### 10.3 승인 전 BLOCKER
+
+| ID | BLOCKER | 현재 문서의 문제 | 승인 조건 |
+|---|---|---|---|
+| B1 | 삭제·undo·tombstone 상태 모델 | PR-09와 PR-22가 현재 hard delete와 양립하지 않는다. ledger를 먼저 지우면 다음 full sync가 tombstone을 만들 수 없다. | candidate soft delete와 같은 transaction의 tombstone 전이를 먼저 설계한다. |
+| B2 | 검수 선택 provenance 유실 | provider hit의 주소·provider가 저장 직전에 사라지고, 수동 확정은 근처 첫 장소에 이름 검증 없이 합쳐질 수 있다. | 선택 hit 원본과 수동 수정값을 분리 저장하고 사용자 확정 경로에도 identity gate를 둔다. |
+| B3 | raw grounding이 자동확정 gate가 아님 | PR-13은 교정본을 검사하고 배지만 표시한다. 그럴듯한 hallucination이 PR-12를 통과할 수 있다. | raw segment grounding을 상태로 저장하고 미확인·불일치 후보의 자동확정/export를 차단한다. |
+| B4 | 외부 미디어·provider 정책 gate 부재 | PR-18/19는 YouTube 미디어 취득을 확대하고 Google 결과는 실제로 VWorld 지도·영구 저장에 쓰인다. | Phase -1에서 provider별 표시·저장·cache·export 계약과 production flag를 확정한다. |
+| B5 | read key rollout 미완결 | static `API_KEYS`를 admin으로 남긴 채 실제 소비자가 계속 쓰면 A1은 해소되지 않는다. | read 키 발급→소비자 secret 회전→write 403→구 consumer key 제거까지 완료 기준에 넣는다. |
+| B6 | LLM gateway·lane·측정 순서 오류 | rate limiter는 모든 호출을 감싸지 않고 network call을 직렬화하지도 않는다. lane 전파와 구조화 측정도 빠졌다. | gateway와 durable event를 먼저 만들고 모든 parent/child enqueue에 lane·lineage를 전달한다. |
+| B7 | 목록 완료 여부를 알 수 없는 pagination | PR-08의 list 응답과 `limit=1` 비교만으로 “새 후보 N건”, n/m, 마지막 page를 정확히 알 수 없다. | 검수·작업·장소·테마 목록에 일관된 envelope와 filter 기준 total을 정의한다. |
+
+#### B1. 삭제·undo·feature export는 하나의 상태 전이여야 한다
+
+현재 `FeatureExport.candidate_id`는 non-null, unique, `ON DELETE NO ACTION` FK다.
+후보 삭제와 영상 제외는 FK 충돌을 피하려고 `feature_exports` 행을 먼저 삭제한다.
+반면 `sync_feature_exports()`의 tombstone 복구는 **남아 있는 ledger 행**만 순회한다.
+즉 ledger를 지운 순간 `export_id`, 마지막 payload, sequence와 downstream 비활성화 수단이
+함께 사라진다. 모듈 메모리의 “전량 sync 필요” flag나 시간당 full sync로는 복구할 수 없다.
+
+원문의 hard delete 3경로 설명도 정정해야 한다.
+
+- 후보 삭제와 영상 제외는 candidate hard delete다.
+- 장소 삭제는 candidate를 삭제하지 않고 `needs_review`로 되돌리는 별도 상태 전이다.
+- `exclude_video()`에는 존재하지 않는
+  `ExtractedPlaceCandidate.place_id`를 조회하는 현재 코드 결함도 있다. 실제 컬럼은
+  `matched_place_id`이며, 이 문제는 로드맵보다 앞선 hotfix로 분리해야 한다.
+
+이상적 방향은 candidate를 감사 가능한 도메인 기록으로 보고 물리 삭제를 중단하는 것이다.
+
+1. `extracted_place_candidates`에 `deleted_at`, `deletion_reason`, `deleted_by`를 추가한다.
+2. queue·dedup·자동 처리 조회는 `deleted_at IS NULL`을 명시하고, 실제 access path에 맞는
+   partial/composite index를 migration에 함께 둔다.
+3. 삭제 transaction에서 mapping과 `matched_place_id`를 해제하고, 이미 export된 ledger는
+   같은 transaction에서 tombstone·새 sequence·사유로 전환한다. export된 적 없는 후보에는
+   의미 없는 tombstone을 만들지 않는다.
+4. undo/reopen은 삭제 필드를 지우고 `needs_review`로 되돌린다. 영상 제외도 같은 helper를 쓴다.
+5. `deleted_at IS NOT NULL`이면 삭제 사유가 필수라는 CHECK와 FK/index 회귀 테스트를 둔다.
+6. 물리 purge가 실제로 필요해질 때만 archive table 또는 nullable `candidate_id` +
+   `ON DELETE SET NULL` detached ledger를 별도 설계한다.
+
+필수 검증은 “export 완료 후보 삭제”, “영상 bulk 제외”, “process 재시작”, “changes cursor 소비”,
+“undo 후 재발행”을 한 시나리오로 묶어 downstream이 조용히 stale 상태에 남지 않음을 확인하는 것이다.
+
+#### B2. 검수에서 선택한 출처가 영구 데이터가 되기 전에 사라진다
+
+`PlaceSearchHit`에는 `provider`, `address`, `road_address`가 있고 화면에도 주소가 보인다.
+그러나 `selectHit()`은 이름·위도·경도만 form에 복사하고, resolve 요청은
+`api_source`를 보내지 않는다. backend 기본값은 `manual`이다. 따라서 사용자가 provider 결과를
+선택해도 확정 장소에는 주소가 null이고 출처는 manual로 남는다. 원문의
+“Google/Kakao/Naver는 검수 참고용” 전제도 틀렸다. hit은 VWorld 지도에 표시되고 선택한
+이름·좌표가 `TravelPlace`로 영구 승격될 수 있다.
+
+또한 사용자 `create_place` 경로는 100m 내 후보가 있으면 이름 검증 없이 첫 장소에 합친다.
+자동 geocode 경로만 고쳐서는 사용자 검수로 생기는 오병합을 막지 못한다.
+
+별도 Phase 0 PR로 다음을 먼저 수행해야 한다.
+
+- 선택된 `PlaceSearchHit` 전체를 form의 숨은 문자열이 아니라 typed state로 보존한다.
+- provider native ID, 검색 query, 검색·선택 시각, 원본 이름·주소·좌표·카테고리,
+  reviewer를 resolution evidence에 기록한다.
+- provider 원본과 사용자가 수정한 최종값을 분리한다. 최종값만 덮어쓰면 감사와 재검증이 불가능하다.
+- 허용된 provider에 한해 `official_address`, `road_address`, `api_source`를 resolve에 전달한다.
+- 사용자 확정의 근접 중복도 이름·provider ID·좌표를 함께 비교하고, 불확실하면
+  “기존 장소에 합치기”와 “새 장소 만들기”를 사용자가 고르게 한다.
+- category match의 늦은 응답이 다음 후보 form을 덮어쓰지 않도록 candidate/request identity를
+  확인하거나 abort한다.
+
+#### B3. 신뢰성 gate는 “표시”가 아니라 상태 전이를 막아야 한다
+
+원문의 PR-13은 `evidence_quote`를 LLM 교정 자막에서 검사한다. 교정본 역시 생성 모델 산출물이므로
+원문 증거가 아니다. 더 큰 문제는 grounding 실패를 badge로만 표시하고 같은 실행의 geocoding·
+자동확정을 막지 않는다는 점이다.
+
+권장 상태는 boolean 하나가 아니라 다음과 같이 source별 의미를 보존해야 한다.
+
+- `verified_raw`: raw timestamp segment에서 quote와 segment ID를 확인
+- `unverified`: quote/segment 불일치
+- `missing`: 모델이 근거를 주지 않음
+- `not_applicable`: source 특성상 별도 규칙 적용
+- `legacy_unknown`: 기존 데이터
+
+순서는 `PR-11 → PR-13 → PR-12 → PR-14`로 바꾼다. geocoding API 조회는 먼저 해도 되지만,
+transcript 후보는 `grounding_status=verified_raw`가 아니면 자동확정과 export가 불가능해야 한다.
+description은 raw description substring, visual은 frame asset ID·timestamp·OCR bounding region을
+증거로 쓴다. 기존 후보는 자동으로 신뢰하지 말고 `legacy_unknown`으로 두어 재처리 또는 사람 검수를
+요구한다.
+
+PR-12의 이름 gate도 그대로 구현하면 대량 오판한다. Kakao 주소검색과 VWorld 주소 정제 결과는
+`place_name`에 POI명이 아니라 주소가 들어갈 수 있다. 먼저 result를
+`result_kind=poi|address|coordinate`로 구분하고 각 kind에 다른 gate를 적용해야 한다.
+현재 `_names_compatible(a,b,c)`는 세 값 중 아무 한 쌍만 맞아도 true라서 provider 결과 이름이
+틀려도 기존 장소명과 AI명이 같으면 통과한다. 비교 목적별 pairwise gate로 분리한다.
+`is_domestic` 미확인을 true로 간주하는 현행도 fail-closed로 바꾼다. 문서가 재사용한다고 한
+행정구역 축약 alias parser는 현재 그 형태로 존재하지 않으므로 명시적 alias asset과 fixture가 필요하다.
+
+PR-14의 지점 접미 제거와 반경 300m 자동 병합은 이 gate가 안정되기 전 금지한다.
+“본점”, “1호점”은 실제 다른 지점일 수 있다. 정규화는 후보 제안에만 쓰고 provider native ID,
+주소와 좌표가 없으면 자동 병합하지 않는다. 현재 `_normalize_name`은 공백만 제거하므로
+원문의 “특수문자 제거는 현행 유지”도 사실 정정이 필요하다.
+
+#### B4. Phase -1 — 외부 정책과 데이터 권리
+
+이 절은 법률 자문이 아니라, 공식 정책과 현재 기술 흐름의 충돌 가능성을 release gate로 명시하는
+검토다. 보안·queue·일반 UX 작업은 병행할 수 있지만, 아래 결론 전에는 제3자 미디어 취득 확대와
+제한 provider의 영구 저장을 배포하지 않는다.
+
+- **YouTube**: 공식 [YouTube API Developer Policies](https://developers.google.com/youtube/terms/developer-policies)는
+  사전 서면 승인 없는 audiovisual content 다운로드·cache·저장과 비공식 기술을 통한 content 접근을
+  제한한다. 현재의 원본 미디어 무기한 보존 계약과 PR-18/19의 `yt-dlp`·오디오·프레임 경로는
+  compliance audit, 서면 승인 또는 권리가 확인된 사용자 제공 원본 경로 중 하나가 선행돼야 한다.
+  30일 refresh/delete는 YouTube API metadata 범위로 정확히 한정하고, 파생 POI 전체 삭제로
+  과도하게 확대하지 않는다.
+- **Google Places**: 공식 [Places API 정책](https://developers.google.com/maps/documentation/places/web-service/policies)은
+  Places content 저장을 허용된 예외로 제한하고, Places 결과를 지도에 표시할 때 Google Map과
+  attribution을 요구한다. 현재 Google hit은 VWorld 지도에 표시되고 선택·저장 가능하다.
+  prod 403을 안전장치로 보지 말고 기본 off로 둔 뒤 제거, Google 전용 표면, place ID 중심 재조회,
+  비선택 reference 중 하나를 결정한다.
+- **Naver**: PR-21의 NCP Maps Geocoding과 검수 화면의 NAVER Developers Local Search를
+  구분한다. 공개 [NAVER API 서비스 이용약관](https://developers.naver.com/products/terms/)이
+  적용되는 Local Search 결과는 별도 DB 관리 제한을 검토해야 한다. NCP Maps cache는 실제 계정에
+  적용되는 제품별 약관을 확인하기 전 기본 off로 둔다.
+- **Kakao/VWorld**: [Kakao Developers 운영정책](https://developers.kakao.com/terms/ko/site-policies)은
+  UX 개선 목적 cache를 전면 금지하지 않지만 최신성 의무가 있다. “모든 provider 60일” 같은
+  공통값 대신 계정·API별 허용 필드와 TTL을 확인한다. VWorld도 발급 시 동의한 조건과 데이터
+  라이선스를 운영 기록으로 남긴다.
+
+Phase -1 산출물은 provider별 `표시 / 지도 / 영구 저장 / 임시 cache / attribution / 외부 export /
+허용 TTL / 약관 버전·확인일` matrix, production kill switch, 기존 RustFS asset inventory,
+ADR-15 보존 결정의 재검토다. 기존 객체 삭제는 현재 계약을 조용히 어기지 말고 사용자 결정과 ADR을
+거쳐야 한다.
+
+#### B5. API scope는 코드 merge가 아니라 소비자 회전까지가 완료다
+
+이 저장소의 과거 문서는 소비자를 `python-krtour-map`으로 적었지만, 로컬의 현재 형제 저장소는
+`kor-travel-map`이며 `KOR_TRAVEL_MAP_KOR_TRAVEL_CONCIERGE_API_KEY`를
+Concierge의 static `API_KEYS` 중 하나로 설명하고 실제 `X-API-Key`로 보낸다.
+실제 production 값은 저장소만으로 단정할 수 없으므로 inventory가 필요하다.
+
+PR-01은 다음을 보강한다.
+
+1. `public_api_keys.scope`는 TEXT + CHECK 또는 동등한 DB 제약으로 `read|admin`만 허용한다.
+2. 현재 hash 집합 cache는 scope를 반환할 수 없으므로 `key_hash → scope` cache로 바꾸고
+   revoke·scope 변경 시 무효화한다.
+3. `?key=`는 공유 링크용 read에만 허용하고 admin key는 header/proxy 경로만 허용한다.
+4. `/api/v1/admin/*`는 기존 계약대로 admin proxy 전용이다. “admin key면 전부 200”이라는
+   원문의 테스트 기대를 이 경로에 적용하면 안 된다.
+5. route 문자열의 우연한 prefix에 권한이 붙지 않도록 read 공급 표면을 명시적 policy/dependency로
+   등록하고 deny-by-default 테스트를 둔다.
+6. DB read key 발급→`kor-travel-map` secret 교체→snapshot/changes 다중 page smoke→
+   read key write 403→구 consumer static key 제거 순으로 배포한다.
+7. BFF/operator static key와 consumer key가 같으면 먼저 분리한다. rollback 창과 제거 시점을
+   runbook에 남기되 키 값은 문서·로그에 쓰지 않는다.
+
+#### B6. job lifecycle·LLM gateway·lane을 같은 순서 문제로 다룬다
+
+현재 `gemini_rate_limiter.acquire()` 호출은 자막 교정과 batch POI에만 있고, Deep Research,
+키워드 확장, 장소 의견, 카테고리, video analysis 등은 같은 quota 예약을 우회한다.
+DB row lock은 quota 숫자를 갱신하는 짧은 transaction 동안만 유지되며 network call을 직렬화하지
+않는다. 따라서 “DB 단일 행 때문에 batch lane을 늘려도 처리량이 늘지 않는다”는 PR-04의 근거는
+철회해야 한다. 공식 [Gemini API rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)도
+모델·tier·계정 상태에 따라 달라지고 실제 한도는 AI Studio에서 확인하도록 안내하므로
+PR-05의 숫자는 계약값이 아니라 예시로만 둔다.
+
+PR-23을 Phase 5가 아니라 lane·vision보다 앞으로 옮긴다. gateway는 text/json뿐 아니라 향후
+video/multi-image 입력, timeout, retry, quota reservation, usage, provider/model, 결과 상태를
+한 계약으로 처리해야 한다. direct SDK guard는 이 계약이 준비된 뒤 적용한다.
+
+PR-04는 모든 `create_run` 호출을 표로 만들고 parent→child에 `lane`과
+`parent_run_id/restart_of_run_id`를 명시적으로 전달해야 한다. 특히 수동 transcript가 만드는
+`poi_batch` child와 MCP Deep Research를 누락하면 대화형 작업이 다시 batch에 떨어진다.
+
+재시작은 단순 버튼 배선이 아니다.
+
+- terminal run만 restart 허용하고 원본 lane과 입력 snapshot을 복사한다.
+- `restart_of_run_id` self FK와 index로 lineage를 남기고 같은 원본의 중복 click을 멱등 처리한다.
+- `failed_recent 24h` 대신 최신 leaf attempt의
+  `attention=open|acknowledged|superseded|resolved|none`을 관리한다.
+- 재시작 성공은 원본 실패 attention을 superseded/resolved로 바꾸고, 별도 acknowledge API를 둔다.
+- ADR-34는 재실행을 확인 대상으로 명시한다. PR-03의 “파괴적이지 않아 확인 없음”은 철회하고
+  `ConfirmActionButton`을 사용한다.
+
+PR-04가 요구하는 단계별 구조화 시간은 현재 `status_log_json`에 임의 필드를 넣는 것으로
+달성되지 않는다. parser가 timestamp·level·message·progress만 남기고 최근 80건으로 자른다.
+`crawl_run_stage_events` 또는 동등한 durable event에 stage, provider, attempt, elapsed_ms,
+outcome을 저장하고 UI 로그는 그 요약 view로 둔다.
+
+PR-24는 전체 `transcript_fetcher`를 같은 semaphore로 gather하지 않는다. network caption/yt-dlp
+경로만 제한 병렬화하고 Whisper는 별도 queue 또는 concurrency 1을 유지한다. 병렬 task 사이에
+SQLAlchemy session을 공유하지 않는다.
+
+#### B7. queue·목록의 “끝”을 계약으로 정의한다
+
+features API의 기존 `{items,next_cursor,has_more}`는 실소비자가 있으므로 변경하지 않는다.
+그 외 검수·작업·장소·테마 목록은 다음 최소 envelope를 공통 원칙으로 삼는다.
+
+```json
+{
+  "items": [],
+  "next_cursor": null,
+  "has_more": false,
+  "total": 0,
+  "newest_id": null
+}
+```
+
+`total`은 cursor 적용 전 현재 filter 전체 건수다. newest/oldest 정렬은 동률을 포함한 안정 keyset을
+정의하고, cursor에는 sort·filter fingerprint 또는 버전을 넣어 다른 filter에 재사용하지 못하게 한다.
+“새 후보 N건”은 `limit=1` 결과 비교가 아니라 `newer_than_id` count 또는 동등한 경량 endpoint로
+계산한다. `?candidate=`가 현재 page 밖이어도 detail 1건을 직접 가져올 수 있어야 한다.
+
+이 계약은 다음 문제도 함께 해결해야 한다.
+
+- triage 기본은 oldest로 두고 queue reason·source kind·grounding·channel·playlist·keyword를
+  서버 filter와 URL 상태로 제공한다.
+- n/m은 현재 loaded item 수가 아니라 filtered total을 사용하며 `has_more=false`일 때만
+  “모두 처리”를 표시한다.
+- “해외 후보 모두 제외”는 최대 500 ID만 가져와 all이라고 부르면 안 된다. filter snapshot을
+  server bulk action에 넘기고 preview count·확인 token·상한/분할 규칙을 정의한다.
+- `/destinations`의 frontend limit 확장만으로는 backend 상한 500을 넘어갈 수 없다.
+  PR-20a는 cursor/offset 계약까지 포함하거나 501번째가 여전히 사라진다.
+- `/runs`는 이미 state·job_types filter가 있다. PR-28은 이를 다시 추가하지 말고 cursor·total과
+  `USER_JOB_TYPES` 보존을 구현한다.
+- themes의 `sufficient`와 `poi_count`는 page가 아니라 filter 전체 집합 기준이어야 한다.
+
+### 10.4 PR별 상세 수정 의견
+
+#### Phase 0 / PR-01~06
+
+- **PR-01**: B5의 DB 제약·scope cache·query-key 제한·cross-repo rotation을 완료 기준에 추가한다.
+  static key 호환은 migration window이지 최종 상태가 아니다.
+- **PR-02**: timestamp parser는 `HH:MM:SS`뿐 아니라 실제 범위 문자열의 첫 시각,
+  잘못된 값, 기존 YouTube query/hash를 다뤄야 한다. URL 문자열 연결보다 `URL`/
+  `URLSearchParams`를 쓴다. 자동 다음 후보는 아직 불러오지 않은 page가 있을 때 prefetch한 뒤
+  종료 상태를 판단한다.
+- **PR-03**: B6의 lineage·terminal state·attention·멱등·ADR-34 확인 없이는 S 크기 “배선”이 아니다.
+  `done` 안에서도 quota deferred 같은 비성공 outcome을 분리해 사용자에게 재시작 이유를 보여준다.
+- **PR-04**: schema, 모든 enqueue call site, parent/child propagation, scheduler stale job 제거,
+  durable stage event까지 포함하면 S가 아니라 최소 M이다. lane 공정성·starvation과 process 재시작
+  테스트를 추가한다.
+- **PR-05/23**: 실제 quota 확인→gateway 전 호출 강제→usage 수집→추정식 조정 순으로 합친다.
+  hardcoded 무료/유료 숫자를 `.env.example`의 신뢰 가능한 기본 계약처럼 쓰지 않는다.
+- **PR-06**: queue query는 `USER_JOB_TYPES` filter semantics를 유지한다. `failed_recent`는
+  attention 모델로 교체하고, PR-28 뒤 `JobStatusLink`의 링크도 `/jobs`로 바꾼다.
+
+#### Phase 1 / PR-07~10
+
+- **PR-07**: `queue_reason`은 파생 문자열 하나로 끝내지 말고 안정 enum과 우선순위 규칙을
+  문서화한다. 목록 filter에 reason·source kind·grounding을 함께 노출한다.
+- **PR-08**: B7의 envelope·total·new count·page 밖 deep link를 포함한다. backend와 frontend를
+  분리한다면 contract PR을 먼저 머지한다. “2,000건에서 3초”는 server latency, 첫 paint,
+  검색 debounce 중 무엇인지 측정 조건을 명시한다.
+- **PR-09**: hard delete 성공에 대한 undo는 불가능하다. B1 soft delete가 선행돼야 한다.
+  “후보가 만든 고아 장소”와 여러 후보가 공유하는 장소를 reference count와 mapping 기준으로
+  분리하고, place 전체 삭제 helper를 그대로 재사용하지 않는다.
+- **PR-10**: 현재 상한 500과 “모두” 표현이 충돌한다. filter snapshot bulk action과 preview count를
+  쓰고, 실패 ID 때문에 전체 transaction이 장시간 lock되지 않도록 크기·retry 계약을 정한다.
+
+#### Phase 2 / PR-11~14
+
+- **PR-11**: `youtube_videos`의 마지막 source/failure 두 컬럼만으로는 provider 개선이 불가능하다.
+  영상·run·provider·순서·시작/종료·duration·outcome·language·detail·tool version을 담는
+  `transcript_attempts` 또는 durable event를 둔다. 성공 전 실패도 보존한다.
+- **수율 수치**: 역사적 no-Whisper 실행은 `3/27=11.1%`, 별도 Whisper 재실행은
+  `11/27=40.7%`다. “11~30%”는 근거가 없고 두 실행은 통제 A/B도 아니다. 현재 production 수율과
+  Whisper 활성 여부는 runtime 확인 전 미확인으로 표시한다.
+- **PR-12/13**: B3 순서와 state gate를 따른다. raw segment ID를 먼저 보존하고 주소 결과와 POI
+  결과를 같은 name gate에 넣지 않는다.
+- **PR-14**: 접미 제거·300m 자동 병합 대신 중복 **제안**부터 시작한다. 오병합률을 수동 표본으로
+  측정한 뒤 provider ID·주소가 일치하는 좁은 경우에만 자동화한다.
+
+#### Phase 3 / PR-15~16
+
+- **PR-15**: `startTransition`은 network debounce나 request cancellation의 대체가 아니다.
+  선택 highlight는 transition으로 분리하되 provider 요청은 250~400ms debounce·abort·candidate
+  identity를 유지한다. component 분해는 동작 보존 commit과 UX 변경 commit을 분리한다.
+- **PR-16**: shortcut guard는 input 계열뿐 아니라 button/link/dialog, IME composition,
+  modifier key, 반복 keydown을 다룬다. `1~9`는 provider별 번호 충돌과 loading 중 재정렬을 막는다.
+  모바일 상세 route에서도 처리 후 다음 후보와 undo가 끊기지 않는 별도 acceptance test가 필요하다.
+- **정밀도 측정**: MATCHED 후보는 현재 queue에서 사라져 뒤집힘 표본을 만들기 어렵다.
+  reopen 가능한 result link 또는 소량의 auto-match audit queue를 먼저 만들어야 자동확정 정밀도
+  지표가 실제로 계산된다.
+
+#### Phase 4 / PR-17~19
+
+- **PR-17**: description은 recall 경로다. 후보 수가 늘어나는 것을 신뢰성 향상으로 계산하지 말고
+  검수 승인율·중복률·후보당 처리시간을 별도 측정한다. YouTube API description의 refresh/delete와
+  provenance 상태도 Phase -1 결정에 맞춘다.
+- **PR-18**: T-091은 과거 `TRANSCRIPT_WHISPER_ENABLED=true`, model base로 실행해 3/27→11/27을
+  기록했지만 현재 production env는 gitignored라 확인되지 않는다. `AUTO_ENABLED`와 manual force를
+  분리하고 auto 기본값, model, duration, 일일 CPU 예산, concurrency 1을 운영 결정으로 명시한다.
+  “기본 경로 불변”이라는 현재 문구는 역사 문서와 충돌한다.
+- **PR-19**: 하나의 OCR 기능을 두 실험으로 나눈다.
+  1. 기존 candidate timestamp 주변 frame을 OCR/vision으로 확인하는 **corroboration** —
+     이름·간판이 일치하면 검수 근거를 강화해 검수 횟수를 줄일 수 있다.
+  2. 자막 없는 영상의 균등 frame에서 후보를 찾는 **source recovery** —
+     recall은 늘지만 visual-only 검수도 늘므로 검수 감소 지표와 분리한다.
+  `EvidenceSourceKind.VISUAL`, job type/handler, config, multimodal gateway, media asset API/BFF,
+  썸네일 UI, 비용·quota, source별 grounding을 변경 파일에 포함한다. B4 승인과 PR-23 이후에만
+  배포한다.
+
+#### Phase 5 / PR-20~24
+
+- **PR-20a/20**: frontend limit 확장은 backend 상한 500 때문에 완전한 hotfix가 아니다.
+  pagination contract를 Phase 1로 올린다. `source_videos`는 현재 UI와 service 호출부 사용을
+  전수 확인하고 detail lazy-load를 먼저 배포한 뒤 제거한다. O(전체)→O(limit)는 count/facets/
+  정렬 aggregate까지 `EXPLAIN (ANALYZE, BUFFERS)`로 확인한 뒤 주장한다.
+- **PR-21**: 공통 60일 cache를 철회한다. key에는 provider·endpoint·전체 canonical parameter·
+  normalization version을 넣고, response를 `success_nonempty|success_empty|transient_error|
+  permanent_error`로 구분한다. error를 빈 성공으로 60일 cache하지 않고 positive/negative TTL을
+  분리한다. provider policy matrix에서 허용된 필드만 cache한다.
+- **PR-22**: process-local throttle/watermark/dirty flag는 API·scheduler 두 process와 재시작에서
+  정본이 될 수 없다. candidate뿐 아니라 연결된 place·video·channel·playlist 변경도 payload를
+  바꾼다. DB durable dirty queue/outbox에 관련 candidate ID와 reason을 같은 transaction으로 쓰고,
+  주기 full reconciliation은 안전망으로만 둔다. B1 tombstone transaction이 선행이다.
+- **PR-23**: Phase 0~1로 이동하고 multimodal까지 포함하는 gateway 계약을 먼저 확정한다.
+- **PR-24**: caption network I/O와 Whisper CPU 작업을 분리하고 각 semaphore를 따로 둔다.
+  처리량뿐 아니라 provider별 실패율, 429, CPU load, queue latency를 전후 비교한다.
+
+#### Phase 6 / PR-25~28
+
+- **PR-25**: `TravelPlace`에는 현재 `sigungu_code`와 `legal_dong_code`만 있고
+  `sido_code` 컬럼은 없다. 유도 규칙을 계약으로 정하거나 schema/migration을 추가해야 한다.
+  JSON endpoint에는 Pydantic response model을, GPX/기타 binary export에는 OpenAPI content schema를
+  별도로 둔다. 전체 payload hash 재발급은 consumer canary·cursor drain·rollback까지 계획한다.
+  `geocoded_only`가 적용될 정확한 endpoint와 기존 기본값 변경 영향을 명시한다.
+- **PR-26**: offset만 추가하지 말고 B7 envelope를 따른다. `source_videos` 기본 제거는 파괴적
+  변경이므로 실제 소비자 0을 운영 inventory로 확인하거나 additive version/opt-in 전환 기간을 둔다.
+- **PR-27**: 목록만으로는 “근거 확인”이 완결되지 않는다. 경량 목록과 별도로
+  `get_review_candidate_detail(candidate_id)`를 추가해 raw evidence·provider 판정·영상 링크를
+  읽을 수 있어야 한다. docstring만으로 사람 검수를 강제할 수 없으므로 resolve 감사 actor와
+  필요한 review evidence를 서버에서 검증한다.
+- **PR-28**: `/runs`의 state·job_types는 이미 구현돼 있다. 실제 누락은 안정 pagination·total,
+  attention filter, `JobStatusLink` 이동, 모바일 job action이다. PR-03/06의 잘못된 전제를
+  그대로 복제하지 않는다.
+
+### 10.5 수정된 실행 순서 — 최대 10단계
+
+| 순서 | 작업 묶음 | 핵심 산출물과 종료 조건 |
+|---|---|---|
+| 1 | **Phase -1 정책·기준선** | YouTube/Google/Naver/Kakao/VWorld matrix, kill switch, RustFS inventory, production key·Whisper runtime inventory, 기준 커밋·수치 정정 |
+| 2 | **현재 정확성 hotfix** | `exclude_video` 잘못된 컬럼 수정, 선택 hit provenance 보존, 101/501번째 장소 접근 가능한 목록 contract 최소 수리 |
+| 3 | **candidate 상태 모델** | soft delete, mapping 해제, transactional tombstone, undo/reopen, video exclude 통합 테스트 |
+| 4 | **API scope와 rollout** | read/admin DB 제약·cache·route policy, `kor-travel-map` read-key 회전, 구 consumer key 제거 |
+| 5 | **job·LLM 실행 기반** | restart lineage·attention·ADR-34, durable stage events, 전 호출 async/multimodal gateway, quota 실측, lane 상속 |
+| 6 | **서버 목록 계약** | review/runs/destinations/themes envelope, stable cursor, filtered total, new count, filter snapshot bulk |
+| 7 | **검수 UX** | 자동 다음·timestamp·URL filter·reason/source/grounding·undo·안전한 shortcut·모바일 E2E |
+| 8 | **자막 관측과 raw evidence** | provider attempt history, 정확한 baseline, raw segment ID, grounding state, manual/auto Whisper 정책 |
+| 9 | **자동확정·identity gate** | result kind, raw grounding block, pairwise name·region·domestic gate, auto-match audit 표본, 보수적 dedup |
+| 10 | **측정 후 확장·성능·공급 마감** | SQL pushdown, durable export outbox, provider별 cache, 승인된 OCR/vision, features/themes/MCP/IA 계약 |
+
+병렬화는 가능하지만 다음 선행 관계는 고정한다.
+
+- Phase -1은 PR-18/19와 제한 provider 영구 저장의 release gate다.
+- candidate 상태 모델은 PR-09/10/22보다 먼저다.
+- gateway·durable metrics는 lane 처리량 조정과 vision보다 먼저다.
+- `PR-11 → raw PR-13 → PR-12 → 보수적 PR-14` 순서를 지킨다.
+- 목록 contract는 table/triage 대규모 UI 재작성보다 먼저다.
+
+### 10.6 수정 문서의 필수 acceptance gate
+
+| Gate | 통과 조건 |
+|---|---|
+| G1 삭제 정합성 | export된 후보를 삭제·영상 제외한 뒤 process를 재시작해도 changes가 tombstone을 전달하고, undo 후 새 upsert가 전달된다. |
+| G2 인증 | read key로 snapshot/changes 다중 page 200, 모든 쓰기와 내부 검수 GET 403, 구 consumer static key 제거 확인. |
+| G3 provenance | provider hit 선택 후 주소·provider·native ID·query·원본값·수정값이 감사 가능하며 제한 provider 데이터는 정책대로 차단된다. |
+| G4 자동확정 | 신규 transcript auto-match 100%가 raw grounding verified이며 address result·unknown domestic·이름/지역 불일치는 export되지 않는다. |
+| G5 queue 완결성 | 301/501건 fixture에서 total·has_more·cursor·new count가 정확하고 page 밖 deep link와 “모두 처리”가 거짓말하지 않는다. |
+| G6 job 복구 | 중복 restart 1회만 생성, lineage·lane 유지, 원본 failure attention 해소, 모든 재실행에 확인 UI가 적용된다. |
+| G7 자막 관측 | 각 provider 시도·latency·outcome이 보존되고 현재 runtime 기준 수율을 재현할 수 있다. |
+| G8 성능 | p50/p95, queue latency, stage duration, 429/실패율을 전후 비교하며 “O(limit)”은 query plan과 부하 fixture로 증명한다. |
+| G9 검수 품질 | auto-match audit 표본의 오확정률과 source별 사람 승인율을 기록한다. OCR source recovery는 검수 증가량도 함께 보고한다. |
+| G10 외부 계약 | provider 정책 확인일·버전, attribution, cache 만료, downstream canary와 rollback 결과가 runbook/ADR에 남는다. |
+
+### 10.7 최종 판단
+
+이 문서는 문제를 넓게 발견하고 PR 단위로 쪼갠 **좋은 초안**이다. 특히 queue 중심 검수,
+실패 사유 관측, read/admin 분리, LLM gateway라는 축은 유지해야 한다. 다만 현재 상태는
+다음 세 이유로 실행 계약으로 승인할 수 없다.
+
+1. undo와 tombstone이 hard delete 뒤에도 복구될 것이라는 전제가 DB 제약상 성립하지 않는다.
+2. “신뢰성 개선”의 핵심인 raw grounding이 자동확정을 막지 않고, 검수자가 선택한 provider
+   provenance도 실제 저장 직전에 사라진다.
+3. 미디어·provider 정책과 실제 소비자 key rotation이 rollout 밖에 있어 보안·외부 API
+   실용성 완료 기준이 닫히지 않는다.
+
+따라서 **방향 승인 / 실행계획 수정 요구**로 판정한다. §10.3의 B1~B7, §10.5의 순서,
+§10.6의 gate를 원문 계획에 반영한 뒤 사용자 리뷰를 받아야 하며, 그 전에는 §9에 따라
+`tasks.md`와 ADR을 선반영하지 않는다.
