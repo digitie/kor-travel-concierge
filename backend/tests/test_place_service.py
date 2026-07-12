@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from ktc.models import (
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     MediaAsset,
     TravelPlace,
@@ -637,7 +638,7 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
     assert shared.place_id in remaining_place_ids
     assert kept_by_candidate.place_id in remaining_place_ids
 
-    # 제외 대상 영상의 매핑·후보는 모두 사라지고, 다른 영상의 데이터는 남는다.
+    # 제외 대상 영상의 매핑은 사라지고, 다른 영상의 데이터는 남는다.
     remaining_mappings = (
         (
             await session.execute(
@@ -648,15 +649,186 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
         .all()
     )
     assert remaining_mappings == ["v-ex-2"]
-    remaining_candidates = (
+    # T-160: 후보는 hard delete 대신 soft delete — 행은 보존되고 활성 조회에서만 제외.
+    active_candidates = (
         (
             await session.execute(
-                select(ExtractedPlaceCandidate.video_id).order_by(
-                    ExtractedPlaceCandidate.id
-                )
+                select(ExtractedPlaceCandidate.video_id)
+                .where(ExtractedPlaceCandidate.deleted_at.is_(None))
+                .order_by(ExtractedPlaceCandidate.id)
             )
         )
         .scalars()
         .all()
     )
-    assert remaining_candidates == ["v-ex-2"]
+    assert active_candidates == ["v-ex-2"]
+    deleted_candidate = (
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.video_id == "v-ex-1"
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert deleted_candidate.deleted_at is not None
+    assert deleted_candidate.deletion_reason == "스팸 영상"
+    assert deleted_candidate.matched_place_id is None
+
+
+async def _seed_candidate(
+    session,
+    *,
+    video_id: str = "v-sd-1",
+    name: str = "후보",
+    status: MatchStatus = MatchStatus.NEEDS_REVIEW,
+    matched_place_id: int | None = None,
+) -> ExtractedPlaceCandidate:
+    if await session.get(YoutubeVideo, video_id) is None:
+        session.add(YoutubeVideo(video_id=video_id, title="t", url="u", channel_id="c"))
+        await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id=video_id,
+        source_text="s",
+        ai_place_name=name,
+        match_status=status,
+        matched_place_id=matched_place_id,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+    return candidate
+
+
+async def test_soft_delete_requires_reason_and_is_idempotent(session):
+    candidate = await _seed_candidate(session)
+
+    with pytest.raises(ValueError):
+        await svc.soft_delete_candidates(session, [candidate.id], reason="  ")
+
+    summary = await svc.soft_delete_candidates(
+        session, [candidate.id], reason="테스트 삭제", deleted_by="web"
+    )
+    assert summary.deleted_candidates == 1
+    assert summary.candidate_ids == [candidate.id]
+    await session.commit()
+    await session.refresh(candidate)
+    assert candidate.deleted_at is not None
+    assert candidate.deletion_reason == "테스트 삭제"
+    assert candidate.deleted_by == "web"
+
+    # 이미 soft delete된 후보는 건너뛴다(멱등).
+    again = await svc.soft_delete_candidates(
+        session, [candidate.id], reason="재시도"
+    )
+    assert again.deleted_candidates == 0
+    await session.refresh(candidate)
+    assert candidate.deletion_reason == "테스트 삭제"
+
+
+async def test_soft_delete_conflict_without_force_and_cleanup_with_force(session):
+    place = await _add_place(session, "확정 장소", 35.0, 129.0)
+    candidate = await _seed_candidate(
+        session,
+        status=MatchStatus.USER_CORRECTED,
+        matched_place_id=place.place_id,
+    )
+    session.add(
+        VideoPlaceMapping(
+            video_id=candidate.video_id,
+            place_id=place.place_id,
+            place_candidate_id=candidate.id,
+            ai_summary="s",
+        )
+    )
+    await session.commit()
+
+    # force=False(검수 큐 개별 삭제): 확정 연결(매핑 보유) 후보는 409 semantics.
+    with pytest.raises(svc.CandidateMappingConflictError):
+        await svc.soft_delete_candidates(session, [candidate.id], reason="개별 삭제")
+    await session.refresh(candidate)
+    assert candidate.deleted_at is None
+    assert candidate.matched_place_id == place.place_id
+
+    # force=True(영상 제외): 매핑 삭제 + matched_place_id 해제 + 삭제 필드 세팅.
+    summary = await svc.soft_delete_candidates(
+        session, [candidate.id], reason="영상 제외", deleted_by="web", force=True
+    )
+    await session.commit()
+    assert summary.deleted_candidates == 1
+    assert summary.deleted_mappings == 1
+    assert summary.affected_place_ids == frozenset({place.place_id})
+    await session.refresh(candidate)
+    assert candidate.deleted_at is not None
+    assert candidate.matched_place_id is None
+    remaining = (
+        await session.execute(
+            select(VideoPlaceMapping).where(
+                VideoPlaceMapping.place_candidate_id == candidate.id
+            )
+        )
+    ).scalars().all()
+    assert remaining == []
+
+
+async def test_reopen_candidate_transitions(session):
+    # soft deleted → needs_review 복귀 + 삭제 필드 clear + export pending.
+    deleted = await _seed_candidate(session, name="삭제 후보")
+    await svc.soft_delete_candidates(session, [deleted.id], reason="실수 삭제")
+    await session.commit()
+    reopened, source = await svc.reopen_candidate(session, candidate_id=deleted.id)
+    await session.commit()
+    assert source == "deleted"
+    assert reopened.deleted_at is None
+    assert reopened.deletion_reason is None
+    assert reopened.deleted_by is None
+    assert reopened.match_status == MatchStatus.NEEDS_REVIEW.value
+    assert reopened.feature_export_status == FeatureExportStatus.PENDING.value
+
+    # ignored → needs_review 복귀.
+    ignored = await _seed_candidate(
+        session, video_id="v-sd-2", name="제외 후보", status=MatchStatus.IGNORED
+    )
+    reopened2, source2 = await svc.reopen_candidate(session, candidate_id=ignored.id)
+    await session.commit()
+    assert source2 == "ignored"
+    assert reopened2.match_status == MatchStatus.NEEDS_REVIEW.value
+
+    # 이미 needs_review → 409용 conflict.
+    with pytest.raises(svc.CandidateReopenConflictError):
+        await svc.reopen_candidate(session, candidate_id=reopened2.id)
+
+    # matched/user_corrected → 범위 밖(400) — 장소 정리 정책은 T-184.
+    corrected = await _seed_candidate(
+        session, video_id="v-sd-3", name="확정 후보", status=MatchStatus.USER_CORRECTED
+    )
+    with pytest.raises(svc.CandidateReopenUnsupportedError):
+        await svc.reopen_candidate(session, candidate_id=corrected.id)
+
+    # 존재하지 않는 후보 → 404용 ValueError.
+    with pytest.raises(ValueError):
+        await svc.reopen_candidate(session, candidate_id=999_999)
+
+
+async def test_list_unmatched_excludes_soft_deleted(session):
+    keep = await _seed_candidate(session, name="유지 후보")
+    drop = await _seed_candidate(session, name="삭제 후보")
+    await svc.soft_delete_candidates(session, [drop.id], reason="정리")
+    await session.commit()
+
+    unmatched = await svc.list_unmatched_candidates(session)
+    ids = {candidate.id for candidate in unmatched}
+    assert keep.id in ids
+    assert drop.id not in ids
+
+    # resolve/review 접근도 soft delete 후보를 거부한다.
+    with pytest.raises(ValueError):
+        await svc.resolve_candidate(
+            session, candidate_id=drop.id, action="ignore", reviewed_by="web"
+        )
+    with pytest.raises(ValueError):
+        await svc.review_candidate(
+            session, candidate_id=drop.id, reviewed_by="web"
+        )
