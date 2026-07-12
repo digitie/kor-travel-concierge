@@ -168,6 +168,31 @@ class ReviewUnmatchedPlaceInput(StrictModel):
     review_note: str | None = None
 
 
+class SelectedPlaceHitInput(StrictModel):
+    """MCP가 선택한 외부 장소 검색 결과의 원본 snapshot."""
+
+    provider: Literal["google", "kakao", "naver"]
+    native_id: str | None = Field(default=None, max_length=512)
+    query: str = Field(min_length=1, max_length=500)
+    searched_at: datetime
+    selected_at: datetime
+    name: str = Field(min_length=1)
+    address: str | None = None
+    road_address: str | None = None
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    category: str | None = None
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> "SelectedPlaceHitInput":
+        for value in (self.searched_at, self.selected_at):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("검색·선택 시각에는 timezone이 필요하다")
+        if self.selected_at < self.searched_at:
+            raise ValueError("선택 시각은 검색 시각보다 빠를 수 없다")
+        return self
+
+
 class ResolvePlaceCandidateInput(StrictModel):
     idempotency_key: str = Field(min_length=8)
     candidate_id: int = Field(gt=0)
@@ -184,6 +209,9 @@ class ResolvePlaceCandidateInput(StrictModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
     api_source: str | None = None
     category: str | None = None
+    selected_hit: SelectedPlaceHitInput | None = None
+    duplicate_resolution: Literal["merge_existing", "create_new"] | None = None
+    duplicate_place_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_action_payload(self) -> "ResolvePlaceCandidateInput":
@@ -201,6 +229,12 @@ class ResolvePlaceCandidateInput(StrictModel):
             ]
             if missing:
                 raise ValueError(f"create_place에는 {', '.join(missing)} 값이 필요하다")
+        if self.duplicate_resolution is not None and self.action != "create_place":
+            raise ValueError("근접 중복 결정은 create_place에서만 사용할 수 있다")
+        if self.duplicate_resolution == "merge_existing" and self.duplicate_place_id is None:
+            raise ValueError("merge_existing에는 duplicate_place_id가 필요하다")
+        if self.duplicate_place_id is not None and self.duplicate_resolution != "merge_existing":
+            raise ValueError("duplicate_place_id는 merge_existing 결정에만 사용할 수 있다")
         return self
 
 
@@ -469,7 +503,7 @@ class ToolRuntime:
         payload = ResolvePlaceCandidateInput.model_validate(kwargs)
         self._ensure_write_enabled()
         action = "candidate.resolve"
-        request = payload.model_dump(exclude_none=True)
+        request = payload.model_dump(mode="json", exclude_none=True)
         async with self.session_factory() as session:
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
@@ -489,16 +523,32 @@ class ToolRuntime:
                     "api_source": payload.api_source,
                     "category": payload.category,
                 }
-            candidate, place, mapping = await place_service.resolve_candidate(
-                session,
-                candidate_id=payload.candidate_id,
-                action=payload.action,
-                reviewed_by=payload.reviewed_by,
-                review_note=payload.review_note,
-                place_id=payload.place_id,
-                place_data=place_data,
-                commit=False,
-            )
+            try:
+                candidate, place, mapping = await place_service.resolve_candidate(
+                    session,
+                    candidate_id=payload.candidate_id,
+                    action=payload.action,
+                    reviewed_by=payload.reviewed_by,
+                    reviewer_type="mcp",
+                    review_note=payload.review_note,
+                    place_id=payload.place_id,
+                    place_data=place_data,
+                    resolution_evidence=(
+                        payload.selected_hit.model_dump(mode="json")
+                        if payload.selected_hit
+                        else None
+                    ),
+                    duplicate_resolution=payload.duplicate_resolution,
+                    duplicate_place_id=payload.duplicate_place_id,
+                    commit=False,
+                )
+            except place_service.NearbyPlaceConfirmationRequired as exc:
+                return {
+                    "status": "confirmation_required",
+                    "code": "nearby_place_confirmation_required",
+                    "nearby_places": exc.nearby_places,
+                    "idempotent": False,
+                }
             result = {
                 "candidate": _serialize_candidate(candidate),
                 "place": _serialize_place(place) if place else None,
@@ -730,6 +780,9 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
         longitude: float | None = None,
         api_source: str | None = None,
         category: str | None = None,
+        selected_hit: dict[str, Any] | None = None,
+        duplicate_resolution: Literal["merge_existing", "create_new"] | None = None,
+        duplicate_place_id: int | None = None,
     ) -> dict[str, Any]:
         return await runtime.resolve_place_candidate(
             idempotency_key=idempotency_key,
@@ -747,6 +800,9 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
             longitude=longitude,
             api_source=api_source,
             category=category,
+            selected_hit=selected_hit,
+            duplicate_resolution=duplicate_resolution,
+            duplicate_place_id=duplicate_place_id,
         )
 
 

@@ -34,7 +34,7 @@
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
 
-- [ ] **T-174**: 검수 선택 provenance 보존 — typed hit state, provider native ID·query·시각·원본/수정값 분리 evidence, `api_source`·주소 전달(Google은 T-158 결정 전 저장 차단), `create_place` 근접 병합 identity gate+사용자 선택, category match race 방지. (PR-31, §10 B2, G3)
+- [x] **T-174**: 검수 선택 provenance 보존 — 선택 `PlaceSearchHit`을 typed state로 유지하고 provider native ID·query·검색/선택 시각·원본 이름/주소/좌표/카테고리와 실제 확정값을 `provider_evidence_json.review.resolutions[]`에 분리 누적한다. 허용 provider의 주소와 서버 도출 `api_source`를 전달하며 Google 저장·VWorld marker·Gemini 우회는 차단한다. 100m 근접 장소는 이름·provider ID·거리 identity gate와 명시적 병합/신규 결정으로 처리하고, 후보 row lock+신규 생성 advisory lock으로 동시 검수 중복을 방지한다. 웹 409는 최초 요청 snapshot으로 재시도하고 MCP도 같은 구조화 후보/결정 계약을 지원한다. category 요청 abort·candidate identity, 폼 소유 후보 검증, 원본/수정 표시와 접근성 근거를 보강했다. n150에서 backend 타깃 17건, 기준선 실패 2건 제외 전체 회귀, frontend lint/type-check/Vitest 33건/build, Playwright 5건 통과. (2026-07-13, PR-31, §10 B2, G3)
 - [ ] **T-175**: API 키 read/admin 스코프 — scope CHECK 제약, `key_hash→scope` cache+무효화, `?key=` read 한정, read 정확 경로 화이트리스트+deny-by-default 부정 테스트(unmatched·candidates 403), `/admin/*` proxy 전용 유지. (PR-01 개정판, §10 B5)
 - [ ] **T-176**: 소비자 read key 회전 rollout — kor-travel-map read 키 교체→snapshot/changes 다중 page smoke→write 403 확인→구 static consumer 키 제거→BFF/operator 키 분리, runbook(키 값 비기록). 선행: T-175. (PR-33, §10 B5, G2)
 - [ ] **T-177**: 목록 공통 envelope 계약 — `{items,next_cursor,has_more,total,newest_id}`, 안정 keyset+filter fingerprint cursor, `newer_than` count, page 밖 딥링크 단건 조회. 검수/작업/장소/테마 backend(features 계약 불변). (PR-32, §10 B7, G5)

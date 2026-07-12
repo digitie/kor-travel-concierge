@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-from io import BytesIO
+import json
 import re
 import threading
+from io import BytesIO
 from zipfile import ZipFile
 
 import pytest_asyncio
@@ -639,6 +640,246 @@ async def test_resolve_candidate_and_deep_research(client, session_factory):
     research = await client.post(f"/api/v1/destinations/{place.place_id}/deep-research", json={})
     assert research.status_code == 200
     assert research.json()["state"] == "pending"
+
+
+async def test_resolve_candidate_rejects_google_without_mutation(
+    client, session_factory
+):
+    from sqlalchemy import select
+
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+
+    async with session_factory() as s:
+        s.add(YoutubeVideo(video_id="v-google-api", title="t", url="u", channel_id="c"))
+        await s.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="v-google-api",
+            source_text="s",
+            ai_place_name="Google 저장 금지",
+            match_status=MatchStatus.NEEDS_REVIEW,
+            provider_evidence_json={"transcript": {"segment": "보존"}},
+        )
+        s.add(candidate)
+        await s.commit()
+        await s.refresh(candidate)
+        candidate_id = candidate.id
+
+    response = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={
+            "action": "create_place",
+            "corrected_name": "Google 저장 금지",
+            "latitude": 37.0,
+            "longitude": 127.0,
+            "api_source": "google",
+            "selected_hit": {
+                "provider": "google",
+                "native_id": "google-place-id",
+                "query": "Google 저장 금지",
+                "searched_at": "2026-07-13T01:00:00Z",
+                "selected_at": "2026-07-13T01:00:01Z",
+                "name": "Google 저장 금지",
+                "latitude": 37.0,
+                "longitude": 127.0,
+            },
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "provider_persistence_disabled"
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.match_status == MatchStatus.NEEDS_REVIEW
+        assert candidate.matched_place_id is None
+        assert candidate.reviewed_at is None
+        assert candidate.provider_evidence_json == {
+            "transcript": {"segment": "보존"}
+        }
+        assert (await s.execute(select(TravelPlace))).scalars().all() == []
+        logs = await audit_service.list_recent(s)
+        assert all(log.action != "candidate.resolve" for log in logs)
+
+
+async def test_resolve_candidate_rejects_invalid_selected_hit_timestamps(client):
+    selected_hit = {
+        "provider": "kakao",
+        "native_id": "kakao-timestamp-1",
+        "query": "타임스탬프 검증",
+        "searched_at": "2026-07-13T01:00:00Z",
+        "selected_at": "2026-07-13T01:00:01Z",
+        "name": "타임스탬프 검증 장소",
+        "latitude": 37.0,
+        "longitude": 127.0,
+    }
+    payload = {
+        "action": "create_place",
+        "corrected_name": "타임스탬프 검증 장소",
+        "latitude": 37.0,
+        "longitude": 127.0,
+        "selected_hit": selected_hit,
+    }
+
+    for invalid_hit, expected_message in (
+        ({**selected_hit, "searched_at": "2026-07-13T01:00:00"}, "timezone"),
+        ({**selected_hit, "selected_at": "2026-07-13T01:00:01"}, "timezone"),
+        (
+            {
+                **selected_hit,
+                "searched_at": "2026-07-13T01:00:02Z",
+                "selected_at": "2026-07-13T01:00:01Z",
+            },
+            "선택 시각은 검색 시각보다",
+        ),
+    ):
+        response = await client.post(
+            "/api/v1/destinations/unmatched/999999/resolve",
+            json={**payload, "selected_hit": invalid_hit},
+        )
+
+        assert response.status_code == 422
+        assert expected_message in response.text
+
+
+async def test_resolve_candidate_nearby_409_then_explicit_decisions_and_audit(
+    client, session_factory
+):
+    from sqlalchemy import select
+
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        MatchStatus,
+        TravelPlace,
+        YoutubeVideo,
+    )
+
+    async with session_factory() as s:
+        existing = TravelPlace(
+            name="기존 관광지",
+            latitude=35.1587,
+            longitude=129.1604,
+            is_geocoded=True,
+        )
+        s.add_all(
+            [
+                existing,
+                YoutubeVideo(
+                    video_id="v-near-api-merge", title="t", url="u", channel_id="c"
+                ),
+                YoutubeVideo(
+                    video_id="v-near-api-create", title="t", url="u", channel_id="c"
+                ),
+            ]
+        )
+        await s.commit()
+        merge_candidate = ExtractedPlaceCandidate(
+            video_id="v-near-api-merge",
+            source_text="s",
+            ai_place_name="유사 관광지",
+            match_status=MatchStatus.NEEDS_REVIEW,
+            provider_evidence_json={"transcript": {"segment": "보존"}},
+        )
+        create_candidate = ExtractedPlaceCandidate(
+            video_id="v-near-api-create",
+            source_text="s",
+            ai_place_name="독립 관광지",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add_all([merge_candidate, create_candidate])
+        await s.commit()
+        await s.refresh(existing)
+        await s.refresh(merge_candidate)
+        await s.refresh(create_candidate)
+        existing_id = existing.place_id
+        merge_candidate_id = merge_candidate.id
+        create_candidate_id = create_candidate.id
+
+    selected_hit = {
+        "provider": "kakao",
+        "native_id": "kakao-near-123",
+        "query": "새 관광지",
+        "searched_at": "2026-07-13T01:00:00Z",
+        "selected_at": "2026-07-13T01:00:02Z",
+        "name": "새관광지 원본",
+        "address": "부산 해운대구 원본동 1",
+        "road_address": "부산 해운대구 원본로 1",
+        "latitude": 35.1588,
+        "longitude": 129.1604,
+        "category": "여행 > 관광지",
+    }
+    payload = {
+        "action": "create_place",
+        "corrected_name": "새 관광지",
+        "official_address": "부산광역시 해운대구 수정동 1",
+        "road_address": "부산광역시 해운대구 수정로 1",
+        "latitude": 35.1588,
+        "longitude": 129.1604,
+        "selected_hit": selected_hit,
+    }
+
+    conflict = await client.post(
+        f"/api/v1/destinations/unmatched/{merge_candidate_id}/resolve",
+        json=payload,
+    )
+    assert conflict.status_code == 409
+    detail = conflict.json()["detail"]
+    assert detail["code"] == "nearby_place_confirmation_required"
+    assert detail["nearby_places"][0]["place_id"] == existing_id
+    assert detail["nearby_places"][0]["distance_m"] < 100
+    assert detail["nearby_places"][0]["name_compatible"] is False
+
+    merged = await client.post(
+        f"/api/v1/destinations/unmatched/{merge_candidate_id}/resolve",
+        json={
+            **payload,
+            "duplicate_resolution": "merge_existing",
+            "duplicate_place_id": existing_id,
+        },
+    )
+    assert merged.status_code == 200
+    assert merged.json()["place"]["place_id"] == existing_id
+
+    created = await client.post(
+        f"/api/v1/destinations/unmatched/{create_candidate_id}/resolve",
+        json={
+            **payload,
+            "corrected_name": "독립 관광지",
+            "duplicate_resolution": "create_new",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["place"]["place_id"] != existing_id
+    assert created.json()["place"]["api_source"] == "kakao"
+
+    async with session_factory() as s:
+        places = (await s.execute(select(TravelPlace))).scalars().all()
+        assert len(places) == 2
+        candidate = await s.get(ExtractedPlaceCandidate, merge_candidate_id)
+        assert candidate is not None
+        assert candidate.matched_place_id == existing_id
+        assert candidate.provider_evidence_json["transcript"] == {
+            "segment": "보존"
+        }
+        logs = [
+            log
+            for log in await audit_service.list_recent(s)
+            if log.action == "candidate.resolve"
+            and log.target_id == str(merge_candidate_id)
+        ]
+        assert len(logs) == 1
+        audit_payload = json.loads(logs[0].payload_json)
+        audited_hit = audit_payload["request"]["selected_hit"]
+        assert audited_hit["provider"] == "kakao"
+        assert audited_hit["native_id"] == "kakao-near-123"
+        assert audited_hit["query"] == "새 관광지"
+        assert audited_hit["name"] == "새관광지 원본"
+        assert audited_hit["searched_at"]
+        assert audited_hit["selected_at"]
+        resolution = audit_payload["resolution"]
+        assert resolution["selection"]["original"]["name"] == "새관광지 원본"
+        assert resolution["final"]["name"] == "기존 관광지"
+        assert resolution["nearby"]["decision"] == "merge_existing"
+        assert resolution["nearby"]["selected_place_id"] == existing_id
 
 
 async def test_settings_post_saves_api_key_and_exposes_set_flag(client, session):

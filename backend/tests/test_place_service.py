@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy import select
 
@@ -139,6 +141,323 @@ async def test_resolve_create_place_without_evidence_code_uses_unknown(session):
     assert place is not None
     assert place.category_code_suggestion == "0"
     assert place.category == "unknown"
+
+
+async def test_resolve_preserves_evidence_and_copies_versioned_resolution_to_mapping(
+    session,
+):
+    session.add(YoutubeVideo(video_id="v-provenance", title="t", url="u", channel_id="c"))
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="v-provenance",
+        source_text="원본 자막",
+        ai_place_name="AI 원본 이름",
+        match_status=MatchStatus.NEEDS_REVIEW,
+        provider_evidence_json={
+            "transcript": {"category_code": "01050100", "segment": "원본"},
+            "vision": {"frame_key": "frames/original.jpg"},
+        },
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    selected_hit = {
+        "provider": "kakao",
+        "native_id": "kakao-place-123",
+        "query": "월정리 해변",
+        "searched_at": "2026-07-13T01:00:00+00:00",
+        "selected_at": "2026-07-13T01:00:03+00:00",
+        "name": "월정리해수욕장",
+        "address": "제주 구좌읍 월정리 1",
+        "road_address": "제주 구좌읍 해맞이해안로 480-1",
+        "latitude": 33.5563,
+        "longitude": 126.7958,
+        "category": "여행 > 해수욕장",
+    }
+    resolved, place, mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="reviewer@example.com",
+        review_note="공식 이름으로 보정",
+        place_data={
+            "name": "월정리 해변",
+            "official_address": "제주특별자치도 제주시 구좌읍 월정리 1",
+            "road_address": "제주특별자치도 제주시 구좌읍 해맞이해안로 480-1",
+            "latitude": 33.55631,
+            "longitude": 126.79581,
+            "api_source": "kakao",
+        },
+        resolution_evidence=selected_hit,
+    )
+
+    assert place is not None and mapping is not None
+    assert resolved.provider_evidence_json["transcript"] == {
+        "category_code": "01050100",
+        "segment": "원본",
+    }
+    assert resolved.provider_evidence_json["vision"] == {
+        "frame_key": "frames/original.jpg"
+    }
+    resolution = svc.latest_candidate_resolution(resolved)
+    assert resolution is not None
+    assert resolution["schema_version"] == 1
+    assert resolution["reviewer"] == {
+        "actor_type": "internal",
+        "actor_id": "reviewer@example.com",
+    }
+    assert resolution["selection"]["provider"] == "kakao"
+    assert resolution["selection"]["native_id"] == "kakao-place-123"
+    assert resolution["selection"]["original"] == {
+        "name": "월정리해수욕장",
+        "official_address": "제주 구좌읍 월정리 1",
+        "road_address": "제주 구좌읍 해맞이해안로 480-1",
+        "latitude": 33.5563,
+        "longitude": 126.7958,
+        "category": "여행 > 해수욕장",
+    }
+    assert resolution["final"]["name"] == "월정리 해변"
+    assert resolution["final"]["official_address"].startswith("제주특별자치도")
+    assert resolution["final"]["latitude"] == 33.55631
+    assert resolution["final"]["api_source"] == "kakao"
+    assert resolution["selection"]["original"]["name"] != resolution["final"]["name"]
+    assert mapping.provider_evidence_json == resolved.provider_evidence_json
+
+
+async def test_resolve_google_selection_is_rejected_without_mutation(session):
+    session.add(YoutubeVideo(video_id="v-google-block", title="t", url="u", channel_id="c"))
+    await session.commit()
+    original_evidence = {"transcript": {"segment": "보존"}}
+    candidate = ExtractedPlaceCandidate(
+        video_id="v-google-block",
+        source_text="s",
+        ai_place_name="저장 금지",
+        match_status=MatchStatus.NEEDS_REVIEW,
+        provider_evidence_json=original_evidence,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    with pytest.raises(svc.ProviderPersistenceDisabled):
+        await svc.resolve_candidate(
+            session,
+            candidate_id=candidate.id,
+            action="create_place",
+            reviewed_by="web",
+            place_data={
+                "name": "저장 금지",
+                "latitude": 37.0,
+                "longitude": 127.0,
+                "api_source": "google",
+            },
+            resolution_evidence={
+                "provider": "google",
+                "native_id": "google-place-id",
+                "query": "저장 금지",
+            },
+        )
+
+    await session.refresh(candidate)
+    assert candidate.match_status == MatchStatus.NEEDS_REVIEW
+    assert candidate.matched_place_id is None
+    assert candidate.reviewed_at is None
+    assert candidate.provider_evidence_json == original_evidence
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_nearby_place_requires_confirmation_then_supports_both_decisions(session):
+    existing = await _add_place(session, "기존 관광지", 35.1587, 129.1604)
+    session.add_all(
+        [
+            YoutubeVideo(video_id="v-near-merge", title="t", url="u", channel_id="c"),
+            YoutubeVideo(video_id="v-near-create", title="t", url="u", channel_id="c"),
+        ]
+    )
+    await session.commit()
+    merge_candidate = ExtractedPlaceCandidate(
+        video_id="v-near-merge",
+        source_text="s",
+        ai_place_name="유사 관광지",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    create_candidate = ExtractedPlaceCandidate(
+        video_id="v-near-create",
+        source_text="s",
+        ai_place_name="독립 관광지",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add_all([merge_candidate, create_candidate])
+    await session.commit()
+    await session.refresh(merge_candidate)
+    await session.refresh(create_candidate)
+    place_data = {
+        "name": "새 관광지",
+        "latitude": 35.1588,
+        "longitude": 129.1604,
+    }
+
+    with pytest.raises(svc.NearbyPlaceConfirmationRequired) as exc_info:
+        await svc.resolve_candidate(
+            session,
+            candidate_id=merge_candidate.id,
+            action="create_place",
+            reviewed_by="web",
+            place_data=place_data,
+        )
+    assert exc_info.value.nearby_places[0]["place_id"] == existing.place_id
+    assert exc_info.value.nearby_places[0]["distance_m"] < 100
+    assert exc_info.value.nearby_places[0]["name_compatible"] is False
+    await session.refresh(merge_candidate)
+    assert merge_candidate.match_status == MatchStatus.NEEDS_REVIEW
+
+    _, merged_place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=merge_candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data=place_data,
+        duplicate_resolution="merge_existing",
+        duplicate_place_id=existing.place_id,
+    )
+    assert merged_place is not None
+    assert merged_place.place_id == existing.place_id
+
+    _, created_place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=create_candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={**place_data, "name": "독립 관광지"},
+        duplicate_resolution="create_new",
+    )
+    assert created_place is not None
+    assert created_place.place_id != existing.place_id
+    places = (await session.execute(select(TravelPlace))).scalars().all()
+    assert {place.place_id for place in places} == {
+        existing.place_id,
+        created_place.place_id,
+    }
+
+
+async def test_nearby_place_auto_merges_only_with_exact_identity_gate(session):
+    existing = await _add_place(session, "감천문화마을", 35.09739, 129.01059)
+    session.add_all(
+        [
+            YoutubeVideo(video_id="v-identity-old", title="t", url="u", channel_id="c"),
+            YoutubeVideo(video_id="v-identity-new", title="t", url="u", channel_id="c"),
+        ]
+    )
+    await session.commit()
+    previous = ExtractedPlaceCandidate(
+        video_id="v-identity-old",
+        source_text="s",
+        ai_place_name="감천문화마을",
+        match_status=MatchStatus.USER_CORRECTED,
+        matched_place_id=existing.place_id,
+        provider_evidence_json={
+            "review": {
+                "schema_version": 1,
+                "resolutions": [
+                    {
+                        "selection": {
+                            "provider": "kakao",
+                            "native_id": "kakao-gamcheon-123",
+                        },
+                        "final": {"place_id": existing.place_id},
+                    }
+                ],
+            }
+        },
+    )
+    incoming = ExtractedPlaceCandidate(
+        video_id="v-identity-new",
+        source_text="s",
+        ai_place_name="감천문화마을",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add_all([previous, incoming])
+    await session.commit()
+    await session.refresh(incoming)
+
+    resolved, place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=incoming.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={
+            "name": "감천문화마을",
+            "latitude": 35.0974,
+            "longitude": 129.01059,
+            "api_source": "kakao",
+        },
+        resolution_evidence={
+            "provider": "kakao",
+            "native_id": "kakao-gamcheon-123",
+            "query": "감천문화마을",
+        },
+    )
+
+    assert place is not None
+    assert place.place_id == existing.place_id
+    resolution = svc.latest_candidate_resolution(resolved)
+    assert resolution is not None
+    assert resolution["nearby"]["decision"] == "merge_existing"
+    assert resolution["nearby"]["candidate_place_ids"] == [existing.place_id]
+
+
+async def test_concurrent_create_place_requests_cannot_both_create_nearby_places(
+    session_factory,
+):
+    async with session_factory() as session:
+        session.add_all(
+            [
+                YoutubeVideo(video_id="v-concurrent-1", title="t", url="u", channel_id="c"),
+                YoutubeVideo(video_id="v-concurrent-2", title="t", url="u", channel_id="c"),
+            ]
+        )
+        await session.commit()
+        candidates = [
+            ExtractedPlaceCandidate(
+                video_id=f"v-concurrent-{index}",
+                source_text="s",
+                ai_place_name=f"동시 장소 {index}",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            )
+            for index in (1, 2)
+        ]
+        session.add_all(candidates)
+        await session.commit()
+        candidate_ids = [candidate.id for candidate in candidates]
+
+    async def resolve(candidate_id: int, name: str):
+        async with session_factory() as session:
+            return await svc.resolve_candidate(
+                session,
+                candidate_id=candidate_id,
+                action="create_place",
+                reviewed_by="web",
+                place_data={
+                    "name": name,
+                    "latitude": 35.1588,
+                    "longitude": 129.1604,
+                },
+            )
+
+    results = await asyncio.gather(
+        resolve(candidate_ids[0], "동시 장소 1"),
+        resolve(candidate_ids[1], "동시 장소 2"),
+        return_exceptions=True,
+    )
+
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert sum(
+        isinstance(result, svc.NearbyPlaceConfirmationRequired) for result in results
+    ) == 1
+    async with session_factory() as session:
+        places = (await session.execute(select(TravelPlace))).scalars().all()
+        assert len(places) == 1
 
 
 async def test_delete_place_reverts_candidate_unlinks_media_removes_mapping(session):

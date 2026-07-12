@@ -494,6 +494,21 @@ T-065 이후 `extracted_place_candidates`와 `video_place_mappings`에는
 `provider_evidence_json.geocoding`에 VWorld/Kakao/Naver 후보와 선택 결과를
 저장한다.
 
+T-174 이후 웹·MCP 검수 결과는 기존 evidence를 덮어쓰지 않고
+`provider_evidence_json.review.resolutions[]`에 `schema_version=1` 이력으로 누적한다.
+각 resolution은 서버가 만든 ID·확정 시각·reviewer, 외부 검색 결과를 선택한 당시의
+provider native ID·query·검색/선택 시각·원본 이름/주소/좌표/카테고리, 실제 확정된
+`travel_places` 최종값을 서로 분리해 보존한다. 같은 JSONB snapshot은 매핑 생성 전에
+`video_place_mappings.provider_evidence_json`에도 복사한다. provider 정책이 확정되지 않은
+Google Places 결과는 검색 참고용으로만 반환하고 영구 저장·VWorld 지도 선택을 차단한다.
+신규 확정 좌표 100m 안에 장소가 있으면 이름·provider ID·거리를 모두 만족하는 단일
+동일성 후보만 자동 병합하고, 나머지는 `409 nearby_place_confirmation_required`로 반환해
+사용자가 기존 장소 병합 또는 신규 생성을 명시하도록 한다. 확정 후보 행은 `FOR UPDATE`,
+신규 장소 중복 조회·생성 구간은 PostgreSQL transaction advisory lock으로 직렬화해 동시
+검수의 resolution 유실과 100m 내 이중 생성을 막는다. 웹과 MCP는 같은 선택 evidence와
+근접 중복 결정 계약을 사용하며, `api_source`는 client 기본값이 아니라 검증된 selected
+provider에서 서버가 도출한다.
+
 ### 6.12 범용 feature export 상태
 
 `kor-travel-concierge`는 feature owner가 아니므로 `feature_id`를 직접 생성하지 않는다.

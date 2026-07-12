@@ -14,14 +14,18 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
 from ktc.core.database import get_session
-from ktc.core.security import require_admin_proxy, require_api_key
+from ktc.core.security import (
+    require_admin_proxy,
+    require_api_key,
+    resolve_admin_proxy_actor,
+)
 from ktc.etl import (
     category_catalog,
     media_store,
@@ -153,6 +157,35 @@ class CorrectPlaceRequest(BaseModel):
     api_source: str | None = None
 
 
+class SelectedPlaceHitRequest(BaseModel):
+    """검수자가 외부 검색 결과에서 선택한 당시의 원본 snapshot."""
+
+    provider: Literal["google", "kakao", "naver"]
+    native_id: str | None = Field(default=None, max_length=512)
+    query: str = Field(min_length=1, max_length=500)
+    searched_at: datetime
+    selected_at: datetime
+    name: str = Field(min_length=1)
+    address: str | None = None
+    road_address: str | None = None
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    category: str | None = None
+
+    @field_validator("searched_at", "selected_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("검색·선택 시각에는 timezone이 필요하다")
+        return value
+
+    @model_validator(mode="after")
+    def require_chronological_selection(self) -> "SelectedPlaceHitRequest":
+        if self.selected_at < self.searched_at:
+            raise ValueError("선택 시각은 검색 시각보다 빠를 수 없다")
+        return self
+
+
 class ResolveCandidateRequest(BaseModel):
     """매칭 실패 후보 해결 요청."""
 
@@ -168,7 +201,10 @@ class ResolveCandidateRequest(BaseModel):
     category: str | None = None
     # 사용자가 드롭다운으로 강제하는 8자리 카탈로그 코드(있으면 label로 category도 덮어씀).
     category_code: str | None = None
-    api_source: str | None = "manual"
+    api_source: str | None = None
+    selected_hit: SelectedPlaceHitRequest | None = None
+    duplicate_resolution: Literal["merge_existing", "create_new"] | None = None
+    duplicate_place_id: int | None = Field(default=None, gt=0)
     reviewed_by: str = "web"
     review_note: str | None = None
 
@@ -715,6 +751,7 @@ async def place_search_endpoint(
 
     return {
         "query": query,
+        "searched_at": datetime.now(timezone.utc).isoformat(),
         "google": normalized["google"],
         "kakao": normalized["kakao"],
         "naver": normalized["naver"],
@@ -1219,6 +1256,7 @@ async def match_category(q: str | None = None) -> dict[str, Any]:
 async def resolve_unmatched_candidate(
     candidate_id: int,
     payload: ResolveCandidateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다."""
@@ -1237,25 +1275,51 @@ async def resolve_unmatched_candidate(
             "api_source": payload.api_source,
         }
     try:
+        actor = resolve_admin_proxy_actor(request, get_settings()) or "unverified-web"
         candidate, place, mapping = await place_service.resolve_candidate(
             session,
             candidate_id=candidate_id,
             action=payload.action,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=actor,
+            reviewer_type="web",
             review_note=payload.review_note,
             place_id=payload.place_id,
             place_data=place_data,
+            resolution_evidence=(
+                payload.selected_hit.model_dump(mode="json")
+                if payload.selected_hit
+                else None
+            ),
+            duplicate_resolution=payload.duplicate_resolution,
+            duplicate_place_id=payload.duplicate_place_id,
             commit=False,
         )
+    except place_service.ProviderPersistenceDisabled as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "provider_persistence_disabled", "message": str(exc)},
+        ) from exc
+    except place_service.NearbyPlaceConfirmationRequired as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "nearby_place_confirmation_required",
+                "nearby_places": exc.nearby_places,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    resolution = place_service.latest_candidate_resolution(candidate)
     await audit_service.record(
         session,
         actor_type="web",
         action="candidate.resolve",
         target_type="extracted_place_candidate",
         target_id=str(candidate_id),
-        payload=payload.model_dump(exclude_none=True),
+        payload={
+            "request": payload.model_dump(mode="json", exclude_none=True),
+            "resolution": resolution,
+        },
     )
     return {
         "status": "resolved",

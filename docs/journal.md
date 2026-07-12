@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-07-13: T-174 — 검수 선택 provenance·근접 중복 결정 보강
+
+- **선택 근거 보존**: Google/Kakao/Naver 검색 결과에 provider native ID와 저장 capability,
+  검색 완료 시각을 추가했다. 프런트는 선택 hit 전체를 후보 ID와 결박된 typed state로 유지하고,
+  주소·provider·native ID·query·검색/선택 시각·원본 이름/좌표/카테고리를 resolve에 보낸다.
+  백엔드는 기존 transcript/geocoding 등 JSONB namespace를 보존하면서 버전된
+  `review.resolutions[]`에 원본 snapshot, 실제 `TravelPlace` 최종값, reviewer, 근접 결정을
+  누적하고 동일 snapshot을 영상 매핑에도 복사한다. `api_source`는 selected provider에서 서버가
+  도출하며 신뢰 proxy가 없는 웹 호출은 `unverified-web`으로 구분한다.
+- **정책·오판 차단**: T-158 정책 확정 전 Google hit은 카드에서 사유와 함께 비활성화하고
+  VWorld marker·Gemini 의견 입력·REST/MCP 영속화에서 제외했다. 신규 좌표 100m 안의 장소는
+  이름·provider ID·30m 거리까지 모두 맞는 단일 후보만 자동 병합하며, 나머지는 409로 기존
+  장소 병합/새 장소 생성을 사용자에게 묻는다. 과거 resolution은 실제 최종 place ID가 현재
+  매칭과 같은 경우에만 identity로 재사용한다.
+- **동시성·UX 신뢰성**: 후보 resolve는 row lock, 신규 장소 중복 조회·생성은 transaction
+  advisory lock으로 직렬화했다. 409 재시도는 현재 화면값이 아니라 최초 요청 snapshot을
+  보존하며, 필터/refetch 뒤에는 폼 소유 후보가 다르면 저장을 막고 초기화한다. category match는
+  AbortSignal·request/candidate identity로 늦은 응답을 폐기한다. 제한 provider는 지도에서도
+  선택할 수 없고, 근접 다이얼로그는 이름/provider ID의 일치·불일치·비교 불가를 모두 표시한다.
+  MCP도 구조화 근접 후보 반환과 `merge_existing`/`create_new` 재시도를 지원한다.
+- **반복 리뷰**: 백엔드와 프런트 적대적 리뷰를 병행해 MCP 재시도 불가, 동시 resolve 유실,
+  과거 provider ID 오귀속, `api_source` 기본값 모순, 409 snapshot 유실, 후보-폼 소유권 혼선,
+  Google→Gemini 저장 우회, 다이얼로그 근거·접근성 누락을 확인하고 전부 보강했다. 공개 API key
+  read/admin 경계는 별도 schema·정책 PR인 T-175에서 처리하며, provider 검색 receipt는 공유
+  secret/다중 프로세스 계약 없이 임시 도입하지 않고 T-158 정책 결정과 연계한다. 반영 뒤 2차
+  적대적 재검토에서 새 P0/P1이 없음을 확인했고, 잔여 P2였던 검색/선택 시각의 순서·timezone
+  검증과 409 대화상자의 충돌 당시 장소명 문맥도 추가로 보강했다.
+- **n150 검증**: Docker Python 3.11 이미지와 일회성 PostGIS DB에서 `compileall`, T-174
+  backend 타깃 17건, 전체 backend suite 중 기준선 실패 2건 제외 전건 통과. 제외 2건
+  (`mention_count` 2 기대/1 반환, legacy category `음식점` 기대/`unknown` 반환)은 n150의 현
+  `latest-main` 이미지에서도 각각 동일 재현했다. frontend `npm run lint`, `npm run type-check`,
+  Vitest 33건, production build와 n150 cached Chromium Playwright 5건이 통과했다. 2차 리뷰
+  보완 뒤에도 관련 backend 66건(기준선 `mention_count` 1건 제외), frontend 전 검증, provider
+  provenance/409 E2E를 n150에서 다시 통과했다.
+
 ## 2026-07-13: T-159 — exclude_video 컬럼 버그 hotfix
 
 - **수정**: `place_service.exclude_video`의 고아 장소 판정 루프가 모델에 없는

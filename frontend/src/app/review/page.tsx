@@ -39,10 +39,21 @@ import {
   type DestinationSummary,
   type PlaceOpinion,
   type PlaceSearchHit,
+  type PlaceSearchProvider,
   type ReprocessStage,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
+import {
+  buildCreatePlaceResolution,
+  isPlaceHitStorageAllowed,
+  isSelectedHitModified,
+  parseNearbyPlaceConflict,
+  placeHitStorageBlockReason,
+  type NearbyPlaceCandidate,
+  type ReviewResolutionForm,
+  type SelectedPlaceHit,
+} from "@/lib/review-provenance";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
@@ -86,7 +97,7 @@ import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { VWorldMap } from "@/components/VWorldMap";
 
-const PROVIDER_LABELS: Record<string, string> = {
+const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
   google: "Google Places",
   kakao: "Kakao",
   naver: "Naver",
@@ -95,6 +106,22 @@ const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
 const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
 const REVIEW_CANDIDATE_LIMIT_STEP = 300;
 const MAX_REVIEW_CANDIDATE_LIMIT = 2000;
+
+type ResolveCommand = {
+  candidateId: number;
+  action: "create_place" | "ignore";
+  form: ReviewResolutionForm;
+  selectedHit: SelectedPlaceHit | null;
+  duplicate?: {
+    resolution: "merge_existing" | "create_new";
+    placeId?: number;
+  };
+};
+
+type NearbyConflict = {
+  command: ResolveCommand;
+  places: NearbyPlaceCandidate[];
+};
 
 function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
   return {
@@ -105,7 +132,7 @@ function hitPlace(hit: PlaceSearchHit, placeId: number): DestinationSummary {
     latitude: hit.latitude ?? 0,
     longitude: hit.longitude ?? 0,
     category: hit.category,
-    official_address: hit.road_address ?? hit.address,
+    official_address: hit.address,
     road_address: hit.road_address,
     is_geocoded: true,
     mention_count: 0,
@@ -135,6 +162,15 @@ function buildHintedQuery(candidate: UnmatchedCandidate): string {
     return `${hint} ${name}`;
   }
   return name;
+}
+
+function candidateCategoryForm(candidate: UnmatchedCandidate) {
+  return {
+    category: categoryDisplayLabel(
+      candidate.candidate_category ?? candidate.candidate_category_code,
+    ),
+    categoryCode: candidate.candidate_category_code ?? "0",
+  };
 }
 
 export default function ReviewPage() {
@@ -295,7 +331,10 @@ export default function ReviewPage() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const selected = useMemo(
-    () => candidates.find((c) => c.id === selectedId) ?? candidates[0] ?? null,
+    () =>
+      selectedId == null
+        ? (candidates[0] ?? null)
+        : (candidates.find((candidate) => candidate.id === selectedId) ?? null),
     [candidates, selectedId],
   );
 
@@ -329,7 +368,7 @@ export default function ReviewPage() {
       ...(result?.google ?? []),
       ...(result?.kakao ?? []),
       ...(result?.naver ?? []),
-    ],
+    ].filter(isPlaceHitStorageAllowed),
     [result],
   );
   // AI(Gemini) 의견은 자동이 아니라 사용자가 버튼으로 수동 요청한다(쿼터 절약).
@@ -359,7 +398,13 @@ export default function ReviewPage() {
     // 강제 카테고리 코드(드롭다운). category(label)는 코드 선택 시 함께 채운다.
     categoryCode: "",
   });
+  const [formCandidateId, setFormCandidateId] = useState<number | null>(null);
   const [categoryEdited, setCategoryEdited] = useState(false);
+  const [selectedHit, setSelectedHit] = useState<SelectedPlaceHit | null>(null);
+  const [nearbyConflict, setNearbyConflict] = useState<NearbyConflict | null>(null);
+  const categoryMatchAbortRef = useRef<AbortController | null>(null);
+  const categoryMatchRequestRef = useRef(0);
+  const selectedCandidateIdRef = useRef<number | null>(selected?.id ?? null);
 
   const clearAutoSearchTimer = useCallback(() => {
     if (autoSearchTimerRef.current != null) {
@@ -368,16 +413,54 @@ export default function ReviewPage() {
     }
   }, []);
 
-  useEffect(() => clearAutoSearchTimer, [clearAutoSearchTimer]);
+  const cancelCategoryMatch = useCallback(() => {
+    categoryMatchRequestRef.current += 1;
+    categoryMatchAbortRef.current?.abort();
+    categoryMatchAbortRef.current = null;
+  }, []);
 
-  function candidateCategoryForm(candidate: UnmatchedCandidate) {
-    return {
-      category: categoryDisplayLabel(
-        candidate.candidate_category ?? candidate.candidate_category_code,
-      ),
-      categoryCode: candidate.candidate_category_code ?? "0",
-    };
-  }
+  useEffect(
+    () => () => {
+      clearAutoSearchTimer();
+      cancelCategoryMatch();
+    },
+    [cancelCategoryMatch, clearAutoSearchTimer],
+  );
+  useEffect(() => {
+    selectedCandidateIdRef.current = selected?.id ?? null;
+  }, [selected?.id]);
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const candidateId = selected?.id ?? null;
+    if (candidateId === formCandidateId) return;
+    clearAutoSearchTimer();
+    cancelCategoryMatch();
+    setActiveQuery("");
+    setQueryEdit(null);
+    setOpinionRequested(false);
+    setFormCandidateId(candidateId);
+    setSelectedHit(null);
+    setNearbyConflict(null);
+    setCategoryEdited(false);
+    setForm(
+      selected
+        ? {
+            name: "",
+            latitude: "",
+            longitude: "",
+            ...candidateCategoryForm(selected),
+          }
+        : {
+            name: "",
+            latitude: "",
+            longitude: "",
+            category: "",
+            categoryCode: "",
+          },
+    );
+  }, [cancelCategoryMatch, clearAutoSearchTimer, formCandidateId, selected]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function runSearch() {
     if (query.trim()) {
@@ -418,7 +501,12 @@ export default function ReviewPage() {
       setSelectedId(candidate.id);
       setQueryEdit(null);
       setOpinionRequested(false);
+      cancelCategoryMatch();
       setCategoryEdited(false);
+      setSelectedHit(null);
+      setNearbyConflict(null);
+      setFormCandidateId(candidate.id);
+      setActiveQuery("");
       setForm({
         name: "",
         latitude: "",
@@ -433,32 +521,65 @@ export default function ReviewPage() {
         setActiveQuery(nextQuery);
       }, 120);
     },
-    [clearAutoSearchTimer, queryClient],
+    [cancelCategoryMatch, clearAutoSearchTimer, queryClient],
   );
   function selectHit(hit: PlaceSearchHit) {
+    if (!selected || !isPlaceHitStorageAllowed(hit)) return;
+    cancelCategoryMatch();
+    const candidateId = selected.id;
+    const nextSelectedHit: SelectedPlaceHit = {
+      candidateId,
+      hit,
+      query: result?.query ?? activeQuery,
+      searchedAt: result?.searched_at ?? new Date().toISOString(),
+      selectedAt: new Date().toISOString(),
+    };
+    setSelectedHit(nextSelectedHit);
+    setNearbyConflict(null);
+    setFormCandidateId(candidateId);
     setForm((prev) => ({
       ...prev,
       name: hit.name,
-      latitude: String(hit.latitude),
-      longitude: String(hit.longitude),
+      latitude: hit.latitude == null ? "" : String(hit.latitude),
+      longitude: hit.longitude == null ? "" : String(hit.longitude),
     }));
     // 검색결과 카테고리 매칭이 되면 그 값을 쓰고, 실패하면 후보의 기본 카테고리를 유지한다.
     // 사용자가 드롭다운을 직접 바꾼 뒤에는 자동 매칭으로 덮어쓰지 않는다.
-    if (hit.category) {
-      void matchCategory(hit.category)
+    if (hit.category && !categoryEdited) {
+      const controller = new AbortController();
+      categoryMatchAbortRef.current = controller;
+      const requestId = ++categoryMatchRequestRef.current;
+      void matchCategory(hit.category, controller.signal)
         .then((match) => {
-          if (!match || categoryEdited) return;
+          if (
+            !match ||
+            controller.signal.aborted ||
+            requestId !== categoryMatchRequestRef.current ||
+            candidateId !== selectedCandidateIdRef.current
+          ) {
+            return;
+          }
           setForm((prev) => ({
             ...prev,
             categoryCode: match.code,
             category: match.label,
           }));
         })
-        .catch(() => {});
+        // 카테고리 자동 매핑 실패는 후보 선택 자체를 막지 않는다.
+        .catch(() => {})
+        .finally(() => {
+          if (requestId === categoryMatchRequestRef.current) {
+            categoryMatchAbortRef.current = null;
+          }
+        });
     }
   }
   function applyGemini(gemini: PlaceOpinion) {
     // Gemini 의견도 카테고리는 덮어쓰지 않는다(드롭다운이 단일 출처).
+    cancelCategoryMatch();
+    setSelectedHit(null);
+    setNearbyConflict(null);
+    setFormCandidateId(selected?.id ?? null);
     setForm((prev) => ({
       ...prev,
       name: gemini.best_name ?? prev.name,
@@ -468,88 +589,103 @@ export default function ReviewPage() {
     }));
   }
 
+  const activeSelectedHit =
+    selectedHit?.candidateId === selected?.id ? selectedHit : null;
+  const mapHitEntries = useMemo(
+    () =>
+      allHits
+        .filter(
+          (hit) =>
+            isPlaceHitStorageAllowed(hit) &&
+            hit.latitude != null &&
+            hit.longitude != null,
+        )
+        .map((hit, index) => ({ placeId: index + 1, hit })),
+    [allHits],
+  );
   const mapPlaces = useMemo<DestinationSummary[]>(() => {
-    const hits = [
-      ...(result?.google ?? []),
-      ...(result?.kakao ?? []),
-      ...(result?.naver ?? []),
-    ]
-      .filter((h) => h.latitude != null && h.longitude != null)
-      .map((h, i) => hitPlace(h, i + 1));
+    const hits = mapHitEntries.map(({ hit, placeId }) => hitPlace(hit, placeId));
     const lat = Number(form.latitude);
     const lng = Number(form.longitude);
     if (Number.isFinite(lat) && Number.isFinite(lng) && form.latitude) {
-      hits.unshift(
-        hitPlace(
-          {
-            provider: "선택",
-            name: form.name || "선택 위치",
-            address: null,
-            road_address: null,
-            latitude: lat,
-            longitude: lng,
-            category: form.category || null,
-          },
-          9999,
-        ),
-      );
+      hits.unshift({
+        place_id: 9999,
+        name: form.name || "선택 위치",
+        description: null,
+        gemini_enriched_description: null,
+        latitude: lat,
+        longitude: lng,
+        category: form.category || null,
+        official_address: activeSelectedHit?.hit.address ?? null,
+        road_address: activeSelectedHit?.hit.road_address ?? null,
+        is_geocoded: true,
+        mention_count: 0,
+        source_channel_count: 0,
+        source_videos: [],
+      });
     }
     return hits;
-  }, [result, form]);
+  }, [activeSelectedHit, form, mapHitEntries]);
 
   const resolveMutation = useMutation({
-    mutationFn: (action: "create_place" | "ignore") => {
-      if (!selected) {
-        throw new Error("검수할 후보가 없습니다.");
-      }
-      if (action === "ignore") {
-        return resolveCandidate(selected.id, {
+    mutationFn: (command: ResolveCommand) => {
+      if (command.action === "ignore") {
+        return resolveCandidate(command.candidateId, {
           action: "ignore",
           reviewNote: "검수 페이지 제외",
         });
       }
-      return resolveCandidate(selected.id, {
-        action: "create_place",
-        correctedName: form.name,
-        latitude: Number(form.latitude),
-        longitude: Number(form.longitude),
-        category: form.category || undefined,
-        categoryCode: form.categoryCode || undefined,
-      });
+      return resolveCandidate(
+        command.candidateId,
+        buildCreatePlaceResolution(
+          command.form,
+          command.selectedHit,
+          command.duplicate,
+        ),
+      );
     },
-    onMutate: async () => {
-      // 저장/제외 즉시 검수 대기 목록에서 제거(낙관적) — 응답 round-trip을 기다리지
-      // 않고 사라진다. 진행 중 자동 refetch(15s)가 덮어쓰지 않도록 먼저 취소하고,
-      // 실패 시 onError에서 원래 목록을 복구한다.
-      const removedId = selected?.id ?? null;
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      const previous =
-        queryClient.getQueryData<UnmatchedCandidate[]>(candidatesKey);
-      if (removedId != null) {
-        queryClient.setQueryData<UnmatchedCandidate[]>(
-          candidatesKey,
-          (old) => (old ?? []).filter((c) => c.id !== removedId),
-        );
-      }
-      return { previous };
+    onError: (error, command) => {
+      const conflict = parseNearbyPlaceConflict(error);
+      if (conflict) setNearbyConflict({ command, places: conflict });
     },
-    onError: (_error, _action, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(candidatesKey, context.previous);
-      }
-    },
-    onSuccess: () => {
+    onSuccess: (_data, command) => {
+      // 409 중복 확인 응답은 성공이 아니므로 여기까지 오지 않는다. 실제 확정 뒤에만
+      // 큐에서 제거해 확인 다이얼로그가 뜰 때 후보가 사라졌다 복원되는 깜빡임을 막는다.
+      queryClient.setQueryData<UnmatchedCandidate[]>(
+        candidatesKey,
+        (old) => (old ?? []).filter((candidate) => candidate.id !== command.candidateId),
+      );
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
-      setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
-      setCategoryEdited(false);
-      setQueryEdit(null);
-      setActiveQuery("");
-      setSelectedId(null);
+      setNearbyConflict(null);
+      if (selectedCandidateIdRef.current === command.candidateId) {
+        cancelCategoryMatch();
+        setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
+        setCategoryEdited(false);
+        setSelectedHit(null);
+        setFormCandidateId(null);
+        setQueryEdit(null);
+        setActiveQuery("");
+        setSelectedId(null);
+      }
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
     },
   });
+
+  function resolveSelected(
+    action: "create_place" | "ignore",
+    duplicate?: ResolveCommand["duplicate"],
+  ) {
+    if (!selected || formCandidateId !== selected.id) return;
+    resolveMutation.mutate({
+      candidateId: selected.id,
+      action,
+      form: { ...form },
+      selectedHit: activeSelectedHit,
+      duplicate,
+    });
+  }
 
   // 좌표 입력 검증: 숫자 여부(차단) + 대한민국 대략 범위(경고만, 저장은 허용).
   const latInvalid = Boolean(form.latitude) && !Number.isFinite(Number(form.latitude));
@@ -566,7 +702,12 @@ export default function ReviewPage() {
       Number(form.latitude) > 39 ||
       Number(form.longitude) < 124 ||
       Number(form.longitude) > 132);
-  const canSave = Boolean(form.name.trim()) && coordsFilled;
+  const canSave =
+    selected != null &&
+    formCandidateId === selected.id &&
+    Boolean(form.name.trim()) &&
+    coordsFilled &&
+    (activeSelectedHit == null || isPlaceHitStorageAllowed(activeSelectedHit.hit));
 
   return (
     <AppShell
@@ -865,6 +1006,33 @@ export default function ReviewPage() {
                   <MapPinIcon className="size-4 text-muted-foreground" />
                   확정 정보
                 </p>
+                {activeSelectedHit ? (
+                  <div className="flex flex-col gap-1 rounded-lg bg-muted/60 p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium">선택 원본</span>
+                      <Badge variant="outline">
+                        {PROVIDER_LABELS[activeSelectedHit.hit.provider]}
+                      </Badge>
+                      {isSelectedHitModified(form, activeSelectedHit) ? (
+                        <Badge variant="secondary">최종 입력에서 수정됨</Badge>
+                      ) : null}
+                    </div>
+                    <span>{activeSelectedHit.hit.name}</span>
+                    <span className="text-muted-foreground">
+                      {activeSelectedHit.hit.road_address ??
+                        activeSelectedHit.hit.address ??
+                        "주소 없음"}
+                    </span>
+                    <span className="font-mono text-muted-foreground">
+                      {activeSelectedHit.hit.latitude?.toFixed(5)}, {" "}
+                      {activeSelectedHit.hit.longitude?.toFixed(5)}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    직접 입력값으로 저장하며 API 출처는 manual로 기록됩니다.
+                  </p>
+                )}
                 <Input
                   aria-label="확정 장소명"
                   placeholder="장소명"
@@ -915,6 +1083,7 @@ export default function ReviewPage() {
                 <Select
                   value={form.categoryCode}
                   onValueChange={(value) => {
+                    cancelCategoryMatch();
                     const code = value ?? "";
                     const option = (categoriesQuery.data ?? []).find(
                       (c) => c.code === code,
@@ -946,7 +1115,7 @@ export default function ReviewPage() {
                   <Button
                     type="button"
                     disabled={!canSave || resolveMutation.isPending}
-                    onClick={() => resolveMutation.mutate("create_place")}
+                    onClick={() => resolveSelected("create_place")}
                   >
                     저장
                   </Button>
@@ -954,12 +1123,13 @@ export default function ReviewPage() {
                     type="button"
                     variant="outline"
                     disabled={resolveMutation.isPending}
-                    onClick={() => resolveMutation.mutate("ignore")}
+                    onClick={() => resolveSelected("ignore")}
                   >
                     제외
                   </Button>
                 </div>
-                {resolveMutation.error ? (
+                {resolveMutation.error &&
+                parseNearbyPlaceConflict(resolveMutation.error) == null ? (
                   <p className="text-xs text-destructive">
                     {resolveMutation.error.message}
                   </p>
@@ -1012,6 +1182,7 @@ export default function ReviewPage() {
                     hits={result?.[provider] ?? []}
                     error={result?.errors?.[provider]}
                     loading={searchQuery.isFetching}
+                    selectedHit={activeSelectedHit?.hit ?? null}
                     onSelect={selectHit}
                   />
                 ))}
@@ -1033,15 +1204,8 @@ export default function ReviewPage() {
             places={mapPlaces}
             selectedPlaceId={form.latitude ? 9999 : null}
             onSelectPlace={(placeId) => {
-              const place = mapPlaces.find((p) => p.place_id === placeId);
-              if (place && place.place_id !== 9999) {
-                setForm((prev) => ({
-                  ...prev,
-                  name: place.name,
-                  latitude: String(place.latitude),
-                  longitude: String(place.longitude),
-                }));
-              }
+              const entry = mapHitEntries.find((item) => item.placeId === placeId);
+              if (entry) selectHit(entry.hit);
             }}
           />
         </section>
@@ -1068,6 +1232,102 @@ export default function ReviewPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={nearbyConflict != null}
+        onOpenChange={(open) => !open && setNearbyConflict(null)}
+      >
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>가까운 기존 장소를 확인하세요</AlertDialogTitle>
+            <AlertDialogDescription>
+              좌표가 100m 이내인 장소가 있습니다. 기존 장소에 합칠지 별도 장소로
+              만들지 선택하세요.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div
+            className="rounded-lg border bg-muted/40 px-3 py-2"
+            aria-label="근접 중복 확인 대상"
+          >
+            <p className="text-xs text-muted-foreground">확정하려는 장소</p>
+            <p className="font-medium">
+              {nearbyConflict?.command.form.name || "이름 없음"}
+            </p>
+          </div>
+          <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+            {(nearbyConflict?.places ?? []).map((place) => (
+              <div
+                key={place.placeId}
+                className="flex items-start justify-between gap-3 rounded-lg border p-3"
+              >
+                <div className="min-w-0 text-xs">
+                  <p className="font-medium">{place.name}</p>
+                  <p className="truncate text-muted-foreground">
+                    {place.roadAddress ?? place.officialAddress ?? "주소 없음"}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {place.distanceMeters.toFixed(1)}m
+                    {place.nameCompatible === true
+                      ? " · 이름 일치"
+                      : place.nameCompatible === false
+                        ? " · 이름 불일치"
+                        : " · 이름 비교 불가"}
+                    {place.providerIdMatch === true
+                      ? " · provider ID 일치"
+                      : place.providerIdMatch === false
+                        ? " · provider ID 불일치"
+                        : " · provider ID 비교 불가"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={`${place.name} 기존 장소에 합치기`}
+                  disabled={resolveMutation.isPending}
+                  onClick={() => {
+                    if (!nearbyConflict) return;
+                    resolveMutation.mutate({
+                      ...nearbyConflict.command,
+                      duplicate: {
+                        resolution: "merge_existing",
+                        placeId: place.placeId,
+                      },
+                    });
+                    setNearbyConflict(null);
+                  }}
+                >
+                  기존 장소에 합치기
+                </Button>
+              </div>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              render={
+                <Button type="button" variant="outline" size="sm">
+                  취소
+                </Button>
+              }
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={resolveMutation.isPending}
+              onClick={() => {
+                if (!nearbyConflict) return;
+                resolveMutation.mutate({
+                  ...nearbyConflict.command,
+                  duplicate: { resolution: "create_new" },
+                });
+                setNearbyConflict(null);
+              }}
+            >
+              새 장소로 만들기
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 행 삭제 확인 — 페이지 공용 단일 다이얼로그 */}
       <AlertDialog
@@ -1315,12 +1575,14 @@ function ProviderSection({
   hits,
   error,
   loading,
+  selectedHit,
   onSelect,
 }: {
   label: string;
   hits: PlaceSearchHit[];
   error?: string;
   loading: boolean;
+  selectedHit: PlaceSearchHit | null;
   onSelect: (hit: PlaceSearchHit) => void;
 }) {
   return (
@@ -1338,13 +1600,18 @@ function ProviderSection({
       ) : (
         hits.map((hit, index) => {
           const hasCoords = hit.latitude != null && hit.longitude != null;
+          const storageBlockReason = placeHitStorageBlockReason(hit);
+          const selectable = hasCoords && storageBlockReason == null;
+          const isSelected = selectedHit === hit;
           return (
             <button
-              key={`${label}-${index}`}
+              key={`${hit.provider}-${hit.native_id ?? index}`}
               type="button"
-              disabled={!hasCoords}
+              disabled={!selectable}
+              aria-pressed={isSelected}
+              title={storageBlockReason ?? undefined}
               onClick={() => onSelect(hit)}
-              className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted aria-pressed:border-primary aria-pressed:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="flex items-center justify-between gap-2">
                 <span className="truncate font-medium">{hit.name}</span>
@@ -1362,6 +1629,9 @@ function ProviderSection({
                   ? `${hit.latitude!.toFixed(5)}, ${hit.longitude!.toFixed(5)}`
                   : "좌표 없음(선택 불가)"}
               </span>
+              {storageBlockReason ? (
+                <span className="text-warning">{storageBlockReason}</span>
+              ) : null}
             </button>
           );
         })

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import math
+import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from geoalchemy2 import Geography
 from sqlalchemy import cast, delete, distinct, func, or_, select, update
@@ -27,6 +30,18 @@ from ktc.models import (
 )
 
 EARTH_RADIUS_M = 6_371_000.0
+
+
+class ProviderPersistenceDisabled(ValueError):
+    """영구 저장이 허용되지 않은 provider 결과가 resolve에 사용됨."""
+
+
+class NearbyPlaceConfirmationRequired(ValueError):
+    """근접 장소의 동일성을 확정할 수 없어 사용자 선택이 필요함."""
+
+    def __init__(self, nearby_places: list[dict[str, Any]]) -> None:
+        super().__init__("100m 안의 기존 장소와 합칠지 새로 만들지 선택해야 한다")
+        self.nearby_places = nearby_places
 
 
 @dataclass(frozen=True)
@@ -696,15 +711,204 @@ def _place_category_for_candidate(
     return _place_category_from_code(code)
 
 
+def _normalized_identity_name(value: str | None) -> str:
+    """근접 자동 병합에서만 쓰는 보수적인 이름 동일성 표현."""
+    return re.sub(r"[^0-9a-z가-힣]", "", (value or "").casefold())
+
+
+def _review_resolutions(candidate: ExtractedPlaceCandidate) -> list[dict[str, Any]]:
+    evidence = candidate.provider_evidence_json
+    if not isinstance(evidence, dict):
+        return []
+    review = evidence.get("review")
+    if not isinstance(review, dict):
+        return []
+    resolutions = review.get("resolutions")
+    if not isinstance(resolutions, list):
+        return []
+    return [item for item in resolutions if isinstance(item, dict)]
+
+
+def latest_candidate_resolution(
+    candidate: ExtractedPlaceCandidate,
+) -> dict[str, Any] | None:
+    """감사 응답과 테스트에서 후보의 최신 검수 resolution을 읽는다."""
+    resolutions = _review_resolutions(candidate)
+    return resolutions[-1] if resolutions else None
+
+
+async def _provider_identities_for_places(
+    session: AsyncSession, place_ids: list[int]
+) -> dict[int, set[tuple[str, str]]]:
+    """기존 후보 검수 이력에서 장소별 `(provider, native_id)`를 보수적으로 읽는다."""
+    if not place_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(ExtractedPlaceCandidate).where(
+                ExtractedPlaceCandidate.matched_place_id.in_(place_ids)
+            )
+        )
+    ).scalars()
+    identities: dict[int, set[tuple[str, str]]] = {}
+    for candidate in rows:
+        if candidate.matched_place_id is None:
+            continue
+        for resolution in _review_resolutions(candidate):
+            final = resolution.get("final")
+            if (
+                not isinstance(final, dict)
+                or final.get("place_id") != candidate.matched_place_id
+            ):
+                continue
+            selection = resolution.get("selection")
+            if not isinstance(selection, dict):
+                continue
+            provider = selection.get("provider")
+            native_id = selection.get("native_id")
+            if isinstance(provider, str) and isinstance(native_id, str) and native_id:
+                identities.setdefault(candidate.matched_place_id, set()).add(
+                    (provider, native_id)
+                )
+    return identities
+
+
+def _nearby_place_payload(
+    place: TravelPlace,
+    distance_m: float,
+    *,
+    final_name: str,
+    provider_identity: tuple[str, str] | None,
+    known_identities: set[tuple[str, str]],
+) -> dict[str, Any]:
+    name_compatible = bool(
+        _normalized_identity_name(final_name)
+        and _normalized_identity_name(final_name) == _normalized_identity_name(place.name)
+    )
+    provider_id_match = (
+        provider_identity in known_identities if provider_identity is not None else None
+    )
+    return {
+        "place_id": place.place_id,
+        "name": place.name,
+        "official_address": place.official_address,
+        "road_address": place.road_address,
+        "latitude": place.latitude,
+        "longitude": place.longitude,
+        "api_source": place.api_source,
+        "distance_m": round(distance_m, 1),
+        "name_compatible": name_compatible,
+        "provider_id_match": provider_id_match,
+    }
+
+
+def _append_resolution_evidence(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    action: str,
+    reviewed_by: str,
+    reviewer_type: str,
+    resolved_at,
+    selected_hit: dict[str, Any] | None,
+    place: TravelPlace | None,
+    nearby_decision: str | None,
+    nearby_place_ids: list[int],
+) -> dict[str, Any]:
+    """기존 evidence namespace를 보존하며 버전된 검수 이력을 누적한다."""
+    current = deepcopy(candidate.provider_evidence_json)
+    evidence = current if isinstance(current, dict) else {}
+    review = evidence.get("review")
+    review = deepcopy(review) if isinstance(review, dict) else {}
+    resolutions = review.get("resolutions")
+    resolutions = deepcopy(resolutions) if isinstance(resolutions, list) else []
+
+    if selected_hit:
+        selection = {
+            "kind": "provider_hit",
+            "provider": selected_hit.get("provider"),
+            "native_id": selected_hit.get("native_id"),
+            "query": selected_hit.get("query"),
+            "searched_at": selected_hit.get("searched_at"),
+            "selected_at": selected_hit.get("selected_at"),
+            "original": {
+                "name": selected_hit.get("name"),
+                "official_address": selected_hit.get("address"),
+                "road_address": selected_hit.get("road_address"),
+                "latitude": selected_hit.get("latitude"),
+                "longitude": selected_hit.get("longitude"),
+                "category": selected_hit.get("category"),
+            },
+        }
+    else:
+        selection = {
+            "kind": "manual",
+            "provider": None,
+            "native_id": None,
+            "query": None,
+            "searched_at": None,
+            "selected_at": None,
+            "original": {
+                "name": candidate.ai_place_name,
+                "official_address": None,
+                "road_address": None,
+                "latitude": None,
+                "longitude": None,
+                "category": candidate.candidate_category,
+            },
+        }
+
+    final = None
+    if place is not None:
+        final = {
+            "place_id": place.place_id,
+            "name": place.name,
+            "official_address": place.official_address,
+            "road_address": place.road_address,
+            "latitude": place.latitude,
+            "longitude": place.longitude,
+            "category": place.category,
+            "category_code": place.category_code_suggestion,
+            "api_source": place.api_source,
+        }
+    resolution = {
+        "schema_version": 1,
+        "resolution_id": str(uuid4()),
+        "action": action,
+        "resolved_at": resolved_at.isoformat(),
+        "reviewer": {"actor_type": reviewer_type, "actor_id": reviewed_by},
+        "selection": selection,
+        "final": final,
+        "nearby": {
+            "decision": nearby_decision or "none",
+            "selected_place_id": (
+                place.place_id
+                if nearby_decision == "merge_existing" and place
+                else None
+            ),
+            "candidate_place_ids": nearby_place_ids,
+        },
+    }
+    resolutions.append(resolution)
+    review["schema_version"] = 1
+    review["resolutions"] = resolutions
+    evidence["review"] = review
+    candidate.provider_evidence_json = evidence
+    return resolution
+
+
 async def resolve_candidate(
     session: AsyncSession,
     *,
     candidate_id: int,
     action: str,
     reviewed_by: str,
+    reviewer_type: str | None = None,
     review_note: str | None = None,
     place_id: int | None = None,
     place_data: dict[str, Any] | None = None,
+    resolution_evidence: dict[str, Any] | None = None,
+    duplicate_resolution: str | None = None,
+    duplicate_place_id: int | None = None,
     commit: bool = True,
 ) -> tuple[ExtractedPlaceCandidate, TravelPlace | None, VideoPlaceMapping | None]:
     """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다.
@@ -712,12 +916,37 @@ async def resolve_candidate(
     신규 장소(`create_place`)의 8자리 category 코드 제안은 POI 추출 단계에서 후보
     evidence에 함께 저장해 둔 값을 복사한다(별도 Gemini 호출 없음, A안).
     """
-    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    candidate = (
+        await session.execute(
+            select(ExtractedPlaceCandidate)
+            .where(ExtractedPlaceCandidate.id == candidate_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if candidate is None:
         raise ValueError(f"candidate not found: {candidate_id}")
+    if candidate.match_status != MatchStatus.NEEDS_REVIEW:
+        raise ValueError("이미 해결되었거나 검수 대상이 아닌 candidate다")
+
+    data = place_data or {}
+    selected_provider = (
+        resolution_evidence.get("provider") if resolution_evidence else None
+    )
+    requested_api_source = data.get("api_source")
+    if selected_provider == "google" or requested_api_source == "google":
+        raise ProviderPersistenceDisabled(
+            "provider 정책 결정 전에는 Google Places 결과를 저장할 수 없다"
+        )
+    if selected_provider and requested_api_source not in (None, selected_provider):
+        raise ValueError("selected_hit.provider와 api_source가 일치해야 한다")
+    if not selected_provider and requested_api_source not in (None, "manual"):
+        raise ValueError("외부 api_source에는 selected_hit 근거가 필요하다")
+    api_source = selected_provider or requested_api_source or "manual"
 
     place: TravelPlace | None = None
     mapping: VideoPlaceMapping | None = None
+    nearby_decision: str | None = None
+    nearby_place_ids: list[int] = []
     if action == "ignore":
         candidate.match_status = MatchStatus.IGNORED
         candidate.feature_export_status = FeatureExportStatus.REJECTED.value
@@ -740,24 +969,70 @@ async def resolve_candidate(
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value
-        mapping = await _ensure_candidate_mapping(session, candidate, place)
     elif action == "create_place":
-        data = place_data or {}
         required = ("name", "latitude", "longitude")
         missing = [key for key in required if data.get(key) is None]
         if missing:
             raise ValueError(f"신규 장소 생성에는 {', '.join(missing)} 값이 필요하다")
-        # 좌표 근접 중복: 같은 위치에 기존 장소가 있으면 신규 생성 대신 그 장소에 매핑한다
-        # (여러 영상이 같은 장소를 가리킬 때 동일 좌표 장소가 무한 중복되던 문제 방지).
+        # 서로 다른 후보를 동시에 확정해도 두 요청이 모두 "중복 없음"을 관측하지
+        # 않도록 신규 장소 승격 구간을 transaction 단위로 직렬화한다. 사람 검수 쓰기는
+        # 저빈도이므로 전역 advisory lock이 100m grid 경계 누락보다 안전하다.
+        await session.execute(select(func.pg_advisory_xact_lock(174)))
         dups = await find_duplicate_candidates(
             session, lat=data["latitude"], lng=data["longitude"]
         )
+        nearby_place_ids = [item.place_id for item, _ in dups]
+        identities = await _provider_identities_for_places(session, nearby_place_ids)
+        provider_identity = None
+        if selected_provider and resolution_evidence and resolution_evidence.get("native_id"):
+            provider_identity = (
+                selected_provider,
+                str(resolution_evidence["native_id"]),
+            )
+        nearby_payloads = [
+            _nearby_place_payload(
+                duplicate,
+                distance,
+                final_name=str(data["name"]),
+                provider_identity=provider_identity,
+                known_identities=identities.get(duplicate.place_id, set()),
+            )
+            for duplicate, distance in dups
+        ]
+        automatic_matches = [
+            payload
+            for payload in nearby_payloads
+            if payload["name_compatible"]
+            and payload["provider_id_match"] is True
+            and payload["distance_m"] <= 30.0
+        ]
+        if duplicate_resolution == "merge_existing":
+            selected = next(
+                (
+                    duplicate
+                    for duplicate, _ in dups
+                    if duplicate.place_id == duplicate_place_id
+                ),
+                None,
+            )
+            if selected is None:
+                raise ValueError("선택한 duplicate_place_id가 현재 100m 후보에 없다")
+            place = selected
+            nearby_decision = "merge_existing"
+        elif duplicate_resolution == "create_new":
+            nearby_decision = "create_new"
+        elif len(automatic_matches) == 1:
+            automatic_id = automatic_matches[0]["place_id"]
+            place = next(item for item, _ in dups if item.place_id == automatic_id)
+            nearby_decision = "merge_existing"
+        elif dups:
+            raise NearbyPlaceConfirmationRequired(nearby_payloads)
+
         forced_code = category_catalog.normalize_code(data.get("category_code"))
         selected_code, selected_label = _place_category_for_candidate(
             candidate, forced_code=forced_code
         )
-        if dups:
-            place = dups[0][0]
+        if place is not None:
             if (
                 forced_code
                 or place.category_code_suggestion
@@ -774,7 +1049,7 @@ async def resolve_candidate(
                 road_address=data.get("road_address"),
                 latitude=data["latitude"],
                 longitude=data["longitude"],
-                api_source=data.get("api_source") or "manual",
+                api_source=api_source,
                 category=selected_label,
                 category_code_suggestion=selected_code,
                 is_geocoded=True,
@@ -791,13 +1066,26 @@ async def resolve_candidate(
         candidate.match_status = MatchStatus.USER_CORRECTED
         candidate.matched_place_id = place.place_id
         candidate.feature_export_status = FeatureExportStatus.READY.value
-        mapping = await _ensure_candidate_mapping(session, candidate, place)
     else:
         raise ValueError(f"지원하지 않는 후보 해결 action: {action}")
 
+    reviewed_at = utcnow()
     candidate.reviewed_by = reviewed_by
-    candidate.reviewed_at = utcnow()
+    candidate.reviewed_at = reviewed_at
     candidate.review_note = review_note
+    _append_resolution_evidence(
+        candidate,
+        action=action,
+        reviewed_by=reviewed_by,
+        reviewer_type=reviewer_type or "internal",
+        resolved_at=reviewed_at,
+        selected_hit=resolution_evidence,
+        place=place,
+        nearby_decision=nearby_decision,
+        nearby_place_ids=nearby_place_ids,
+    )
+    if place is not None:
+        mapping = await _ensure_candidate_mapping(session, candidate, place)
     if commit:
         await session.commit()
         await session.refresh(candidate)

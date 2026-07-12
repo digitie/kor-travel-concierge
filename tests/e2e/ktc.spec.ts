@@ -20,14 +20,14 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     seedE2EData();
   });
 
-  test('결과 화면이 장소 목록·지도·실행 큐·내비를 렌더링한다', async ({ page }) => {
+  test('결과 화면이 장소 목록·지도·작업 상태·내비를 렌더링한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
 
     await expectSeedReady(page);
     await loginAsAdmin(page, '/');
 
-    await expect(page).toHaveTitle(/Kor Travel Concierge/);
-    // 결과(/) = 확정 장소 목록 + 지도 + 간단 실행 큐 상태(상세는 /collect·/review로 분리, T-097+)
+    await expect(page).toHaveTitle(/Korea Travel Concierge/);
+    // 결과(/) = 확정 장소 목록 + 지도 + 헤더 작업 상태(상세는 /status로 분리, T-097+)
     const placesRegion = page.getByRole('region', { name: '장소 목록' });
     await expect(placesRegion).toBeVisible();
     // 장소 행 버튼(이름 포함)과 ⓘ "월정리 해변 상세" 버튼 둘 다 매칭되므로 행 버튼(first)만.
@@ -39,11 +39,11 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       'data-status',
       'fallback',
     );
-    await expect(page.getByText('실행 큐').first()).toBeVisible();
-    // 멀티페이지 내비(결과/수집/검수) — 헤더 nav 안의 링크 텍스트로 확인
-    const nav = page.locator('header nav');
-    await expect(nav.getByText('수집')).toBeVisible();
-    await expect(nav.getByText('검수')).toBeVisible();
+    await expect(page.getByRole('link', { name: /작업 상태/ })).toBeVisible();
+    // 멀티페이지 내비(결과/수집/검수) 링크를 접근성 role로 확인한다.
+    const nav = page.getByRole('navigation');
+    await expect(nav.getByRole('link', { name: '수집' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: '검수' })).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
@@ -102,18 +102,17 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
     // Part B: 검수 화면에서 후보를 확정 저장
     await page.goto('/review');
-    await page.getByRole('button', { name: /성산 일출봉 카페/ }).first().click();
+    await page.getByRole('row', { name: /성산 일출봉 카페/ }).click();
     await page.getByLabel('확정 장소명').fill('성산 일출봉 카페');
     await page.getByLabel('위도').fill('33.4581');
     await page.getByLabel('경도').fill('126.9425');
-    await page.getByLabel('카테고리').fill('카페');
     const resolveResponse = page.waitForResponse(
       (response) =>
         response.url().includes('/api/v1/destinations/unmatched/') &&
         response.url().endsWith('/resolve') &&
         response.request().method() === 'POST',
     );
-    await page.getByRole('button', { name: '저장' }).click();
+    await page.getByRole('button', { name: '저장', exact: true }).click();
     expect((await resolveResponse).ok()).toBeTruthy();
 
     await expect
@@ -125,6 +124,137 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       .toBe(0);
 
     expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('provider 선택 provenance와 근접 신규 생성 결정을 보존한다', async ({ page }) => {
+    const resolveBodies: Array<Record<string, unknown>> = [];
+    await page.route('**/api/v1/place-search?**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          query: '제주 서귀포 성산 일출봉 카페',
+          searched_at: '2026-07-13T01:00:00Z',
+          google: [
+            {
+              provider: 'google',
+              native_id: 'google-blocked-1',
+              name: 'Google 정책 장소',
+              address: '제주 Google 주소',
+              road_address: null,
+              latitude: 33.45,
+              longitude: 126.94,
+              category: '카페',
+              storage_allowed: false,
+              storage_block_reason: '정책 결정 전에는 저장할 수 없습니다.',
+            },
+          ],
+          kakao: [
+            {
+              provider: 'kakao',
+              native_id: 'kakao-selected-1',
+              name: 'Kakao 저장 장소',
+              address: '제주 서귀포시 성산읍 1',
+              road_address: '제주 서귀포시 성산로 1',
+              latitude: 33.55631,
+              longitude: 126.79581,
+              category: '음식점 > 카페',
+              storage_allowed: true,
+              storage_block_reason: null,
+            },
+          ],
+          naver: [],
+          errors: {},
+        }),
+      });
+    });
+    await page.route('**/api/v1/categories/match?**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ match: null }),
+      });
+    });
+    await page.route('**/api/v1/destinations/unmatched/*/resolve', async (route) => {
+      resolveBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      if (resolveBodies.length === 1) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'nearby_place_confirmation_required',
+              nearby_places: [
+                {
+                  place_id: 9001,
+                  name: '근접 기존 장소',
+                  official_address: '제주 서귀포시',
+                  road_address: null,
+                  latitude: 33.5563,
+                  longitude: 126.7958,
+                  api_source: 'manual',
+                  distance_m: 18.4,
+                  name_compatible: false,
+                  provider_id_match: null,
+                },
+              ],
+            },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await loginAsAdmin(page, '/review');
+    await page.getByRole('row', { name: /성산 일출봉 카페/ }).click();
+    const googleHit = page.getByRole('button', { name: /Google 정책 장소/ });
+    await expect(googleHit).toBeDisabled();
+    await page.getByRole('button', { name: /^Kakao 저장 장소/ }).click();
+    await expect(page.getByText('선택 원본')).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'VWorld 지도' })
+        .getByRole('button', { name: /Google 정책 장소/ }),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+    const conflictDialog = page.getByRole('alertdialog');
+    await expect(conflictDialog).toBeVisible();
+    await expect(
+      conflictDialog.getByLabel('근접 중복 확인 대상').getByText('Kakao 저장 장소', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(conflictDialog.getByText('이름 불일치')).toBeVisible();
+    await expect(conflictDialog.getByText('provider ID 비교 불가')).toBeVisible();
+    const retryResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/v1/destinations/unmatched/') &&
+        response.url().endsWith('/resolve') &&
+        response.request().method() === 'POST',
+    );
+    await conflictDialog.getByRole('button', { name: '새 장소로 만들기' }).click();
+    expect((await retryResponse).ok()).toBeTruthy();
+
+    await expect.poll(() => resolveBodies.length).toBe(2);
+    expect(resolveBodies[0]).toMatchObject({
+      action: 'create_place',
+      corrected_name: 'Kakao 저장 장소',
+      official_address: '제주 서귀포시 성산읍 1',
+      road_address: '제주 서귀포시 성산로 1',
+      api_source: 'kakao',
+      selected_hit: {
+        provider: 'kakao',
+        native_id: 'kakao-selected-1',
+        query: '제주 서귀포 성산 일출봉 카페',
+        searched_at: '2026-07-13T01:00:00Z',
+      },
+    });
+    expect(resolveBodies[1]).toMatchObject({
+      ...resolveBodies[0],
+      duplicate_resolution: 'create_new',
+    });
   });
 
   test('설정 화면에서 AI 엔진을 저장한다', async ({ page }) => {

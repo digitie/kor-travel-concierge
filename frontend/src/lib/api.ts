@@ -278,6 +278,10 @@ export type ResolveCandidateInput = {
   category?: string;
   // 드롭다운으로 강제하는 8자리 카탈로그 코드(있으면 category를 label로 덮어씀).
   categoryCode?: string;
+  apiSource?: PlaceSearchProvider | "manual";
+  selectedHit?: SelectedPlaceHitEvidence;
+  duplicateResolution?: "merge_existing" | "create_new";
+  duplicatePlaceId?: number;
   reviewNote?: string;
 };
 
@@ -316,6 +320,18 @@ function buildHeaders(extra: HeadersInit = {}): HeadersInit {
   return { ...headers, ...(extra as Record<string, string>) };
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(status: number, body: unknown, message: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
@@ -333,9 +349,18 @@ async function requestJson<T>(
       const next = `${window.location.pathname}${window.location.search}`;
       window.location.assign(`/login?next=${encodeURIComponent(next)}`);
     }
-    const body = await response.text();
-    const message = body.length > 240 ? `${body.slice(0, 240)}...` : body;
-    throw new Error(
+    const rawBody = await response.text();
+    let body: unknown = rawBody;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      // JSON이 아닌 upstream/BFF 오류는 원문을 보존한다.
+    }
+    const message =
+      rawBody.length > 240 ? `${rawBody.slice(0, 240)}...` : rawBody;
+    throw new ApiRequestError(
+      response.status,
+      body,
       message
         ? `API 요청 실패(${response.status}): ${message}`
         : `API 요청 실패(${response.status})`,
@@ -633,6 +658,10 @@ export async function resolveCandidate(
         road_address: input.roadAddress,
         category: input.category,
         category_code: input.categoryCode,
+        api_source: input.apiSource,
+        selected_hit: input.selectedHit,
+        duplicate_resolution: input.duplicateResolution,
+        duplicate_place_id: input.duplicatePlaceId,
         review_note: input.reviewNote,
       }),
     },
@@ -647,10 +676,11 @@ export async function listCategories(): Promise<CategoryOption[]> {
 // 외부 검색결과 카테고리 문자열을 카탈로그 8자리 코드로 근사 매핑(LLM 없이). 없으면 null.
 export async function matchCategory(
   q: string,
+  signal?: AbortSignal,
 ): Promise<{ code: string; label: string } | null> {
   const data = await requestJson<{
     match: { code: string; label: string } | null;
-  }>(`/api/v1/categories/match?q=${encodeURIComponent(q)}`);
+  }>(`/api/v1/categories/match?q=${encodeURIComponent(q)}`, { signal });
   return data.match;
 }
 
@@ -797,12 +827,31 @@ export async function getMetrics(): Promise<MetricsSummary> {
   return requestJson<MetricsSummary>("/api/v1/metrics");
 }
 
+export type PlaceSearchProvider = "google" | "kakao" | "naver";
+
 export type PlaceSearchHit = {
-  provider: string;
+  provider: PlaceSearchProvider;
+  native_id: string | null;
   name: string;
   address: string | null;
   road_address: string | null;
   // 일부 provider 결과는 좌표가 없을 수 있다(역/주차장/플랫폼명 등) → null 허용.
+  latitude: number | null;
+  longitude: number | null;
+  category: string | null;
+  storage_allowed: boolean;
+  storage_block_reason: string | null;
+};
+
+export type SelectedPlaceHitEvidence = {
+  provider: PlaceSearchProvider;
+  native_id: string | null;
+  query: string;
+  searched_at: string;
+  selected_at: string;
+  name: string;
+  address: string | null;
+  road_address: string | null;
   latitude: number | null;
   longitude: number | null;
   category: string | null;
@@ -820,6 +869,7 @@ export type PlaceOpinion = {
 // /place-search는 이제 provider 결과만 즉시 반환한다(빠름). Gemini 의견은 별도 호출.
 export type PlaceSearchResult = {
   query: string;
+  searched_at: string;
   google: PlaceSearchHit[];
   kakao: PlaceSearchHit[];
   naver: PlaceSearchHit[];

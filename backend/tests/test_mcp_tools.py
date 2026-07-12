@@ -261,6 +261,91 @@ async def test_resolve_place_candidate_create_place_adds_mapping(session_factory
         assert mappings[0].feature_export_status == FeatureExportStatus.READY
 
 
+async def test_resolve_place_candidate_returns_nearby_choices_and_retries(session_factory):
+    async with session_factory() as session:
+        existing = await _add_place(
+            session,
+            "기존 장소",
+            35.1587,
+            129.1604,
+            is_geocoded=True,
+        )
+        _, candidate = await _add_video_and_candidate(session)
+
+    runtime = _runtime(session_factory)
+    first = await runtime.resolve_place_candidate(
+        idempotency_key="resolve-nearby-key-1",
+        candidate_id=candidate.id,
+        action="create_place",
+        corrected_name="별도 장소",
+        latitude=35.1588,
+        longitude=129.1604,
+        reviewed_by="tester",
+    )
+
+    assert first["status"] == "confirmation_required"
+    assert first["code"] == "nearby_place_confirmation_required"
+    assert first["nearby_places"][0]["place_id"] == existing.place_id
+
+    retried = await runtime.resolve_place_candidate(
+        idempotency_key="resolve-nearby-key-1",
+        candidate_id=candidate.id,
+        action="create_place",
+        corrected_name="별도 장소",
+        latitude=35.1588,
+        longitude=129.1604,
+        duplicate_resolution="create_new",
+        reviewed_by="tester",
+    )
+
+    assert retried["place"]["place_id"] != existing.place_id
+    assert retried["candidate"]["match_status"] == MatchStatus.USER_CORRECTED
+
+
+async def test_resolve_place_candidate_rejects_invalid_selected_hit_timestamps(
+    session_factory,
+):
+    runtime = _runtime(session_factory)
+    selected_hit = {
+        "provider": "kakao",
+        "native_id": "kakao-timestamp-1",
+        "query": "타임스탬프 검증",
+        "searched_at": "2026-07-13T01:00:00Z",
+        "selected_at": "2026-07-13T01:00:01Z",
+        "name": "타임스탬프 검증 장소",
+        "latitude": 37.0,
+        "longitude": 127.0,
+    }
+    request = {
+        "idempotency_key": "resolve-timestamp-1",
+        "candidate_id": 999999,
+        "action": "create_place",
+        "corrected_name": "타임스탬프 검증 장소",
+        "latitude": 37.0,
+        "longitude": 127.0,
+    }
+
+    for invalid_hit in (
+        {**selected_hit, "searched_at": "2026-07-13T01:00:00"},
+        {**selected_hit, "selected_at": "2026-07-13T01:00:01"},
+    ):
+        with pytest.raises(ValueError, match="timezone"):
+            await runtime.resolve_place_candidate(
+                **request,
+                selected_hit=invalid_hit,
+            )
+
+    with pytest.raises(ValueError, match="선택 시각은 검색 시각보다"):
+        await runtime.resolve_place_candidate(
+            **request,
+            selected_hit={
+                **selected_hit,
+                "searched_at": "2026-07-13T01:00:02Z",
+                "selected_at": "2026-07-13T01:00:01Z",
+            },
+        )
+
+
 async def test_resolve_place_candidate_can_ignore_candidate(session_factory):
     async with session_factory() as session:
         _, candidate = await _add_video_and_candidate(session)
