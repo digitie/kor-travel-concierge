@@ -276,8 +276,14 @@ async def _new_candidates_for_video(
     video_id: str,
     existing_ids: set[int],
 ) -> list[ExtractedPlaceCandidate]:
+    """지오코딩 대상(요약 단계에서 새로 생긴) 후보를 고른다.
+
+    soft delete된 후보는 자동 처리(지오코딩) 대상에서 제외한다(T-160).
+    `_candidate_ids_for_video`의 제외 스냅샷은 삭제 여부와 무관하게 넓게 잡는다.
+    """
     stmt = select(ExtractedPlaceCandidate).where(
-        ExtractedPlaceCandidate.video_id == video_id
+        ExtractedPlaceCandidate.video_id == video_id,
+        ExtractedPlaceCandidate.deleted_at.is_(None),
     )
     if existing_ids:
         stmt = stmt.where(ExtractedPlaceCandidate.id.not_in(existing_ids))
