@@ -223,12 +223,13 @@ async def store_raw_media(
 ) -> MediaAsset | None:
     """원본 동영상 또는 오디오를 RustFS에 무기한 보존한다.
 
-    Phase -1 provider 정책 kill switch(`RAW_MEDIA_DOWNLOAD_ENABLED`, T-158)가
+    Phase -1 provider 정책 kill switch(`RAW_MEDIA_STORE_ENABLED`, T-158)가
     꺼져 있으면 저장을 스킵하고 None을 반환한다(작업 로그 1줄 기록).
+    다운로드 자체는 이 플래그가 막지 않는다(저장 게이트).
     """
-    if not get_settings().RAW_MEDIA_DOWNLOAD_ENABLED:
+    if not get_settings().RAW_MEDIA_STORE_ENABLED:
         logger.info(
-            "RAW_MEDIA_DOWNLOAD_ENABLED=false — 원본 미디어 저장 스킵 "
+            "RAW_MEDIA_STORE_ENABLED=false — 원본 미디어 저장 스킵 "
             "(video_id=%s, filename=%s, Phase -1 정책 게이트 docs/provider-policy.md)",
             video_id,
             filename,
