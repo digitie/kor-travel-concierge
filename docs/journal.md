@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-07-12: T-157 후속 — 개선 로드맵 Codex 상세 리뷰
+
+- **검토 기준**: 최신 `origin/main` `52e64d2`를 받은 뒤
+  `docs/improvement-roadmap-2026-07.md`와 프런트엔드·FastAPI·ETL·scheduler·PostgreSQL 모델,
+  ADR·과거 실측·형제 소비자 계약을 대조했다.
+- **반복 검토**: 사용 편의성/job 운영, 데이터 신뢰성/외부 API, 코드 사실성/DB 제약의
+  적대적 검토 3건을 독립 수행하고, 각 검토가 다른 결론을 반박하는 2회차 교차 검증을 수행했다.
+  NCP Maps와 NAVER Local Search 약관 혼용, Kakao cache 전면 금지, geocoding 호출 자체의
+  grounding 선행 주장처럼 과도한 1차 의견은 철회·완화했다.
+- **판정**: 방향은 유효하나 실행계획은 수정 후 승인으로 판정했다. candidate hard delete와
+  export tombstone/undo의 모순, 검수 선택 address/provider provenance 유실, raw grounding의
+  자동확정 차단 누락, 외부 정책 Phase -1, 실제 소비자 read-key rotation, LLM gateway/lane 순서,
+  목록 pagination envelope 등 BLOCKER 7건을 확정했다.
+- **산출물**: 원문을 수정하지 않고 같은 파일 하단 §10에 유지할 판단, BLOCKER 근거,
+  PR-01~28(+20a)별 수정 의견, 최대 10단계 재정렬, acceptance gate를 상세히 덧붙였다.
+  사용자 리뷰 전에는 §9의 T-158 이후 backlog와 ADR을 선반영하지 않는다.
+- **검증**: Markdown 문서 변경만 수행했으며 `git diff --check`와 문서 구조·링크 검사를 통과했다.
+
 ## 2026-07-12: T-157 — 개선 로드맵 문서 작성 (적대적 검토 기반)
 
 - **방법**: 서브시스템 이해 분석 4건(프런트엔드/파이프라인/공급 API/문서 이력) → 적대적 검토
