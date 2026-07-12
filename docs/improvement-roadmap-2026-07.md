@@ -1,0 +1,698 @@
+# 개선 로드맵 2026-07 — 사용 편의성·속도·데이터 신뢰성·외부 API 실용성
+
+- **작성일**: 2026-07-12 / **기준 코드**: `main` `bc514cd` (T-156 반영 시점)
+- **작성 방법**: 서브시스템 이해 분석 4건(프런트엔드·파이프라인·공급 API·문서 이력) → 적대적 검토 3건(① 사용 편의성, ② 속도, ③ 데이터 신뢰성+외부 API) → 검토별 사실 검증·가치 검증 교차 반박 6건 → 최종 판단 → 문서 자체 반복 리뷰 2회.
+- **판단 원칙**: 사용자 지시대로 "최소 수정·기존 계약 유지보다 이상적인 방향"을 우선하되, (a) 사실 검증에서 확인된 코드 현실, (b) 1~2인 운영 소형 프로젝트 규모, (c) prod가 저사양 N150 호스트에 공개 노출돼 있고 실소비자(`python-krtour-map`)가 features API를 pull 중이라는 운영 현실은 존중한다. 큰 재설계는 채택하되 "측정 게이트"를 달아 낭비를 막는다.
+- **문서 내 파일:라인 인용**은 기준 코드 시점의 값이다. 착수 시점에 라인이 밀렸을 수 있으므로 함수·식별자 이름을 우선 기준으로 삼는다.
+
+---
+
+## 0. 요약 (TL;DR)
+
+**핵심 진단 4가지:**
+
+1. **검수는 이 도구의 핵심 노동인데 "큐 처리"가 아니라 "목록 브라우징"으로 설계돼 있다.** 저장해도 다음 후보로 진행되지 않고, 행에 영상 제목·신뢰도·판정 사유가 없고, 검색·정렬이 없어 백로그를 소진할 수단이 없다. T-150→T-152→T-154→T-155/156의 4연속 수정은 전부 이 모델의 증상을 하나씩 누른 땜질이었다.
+2. **느림의 원인은 직렬 3중 구조다.** 워커 1개가 작업을 직렬로(긴 poi_batch가 사용자 트리거 작업을 수십 분 막음), 작업 내부가 I/O를 직렬로(`asyncio.gather`가 제품 코드에 1곳뿐), rate limiter가 무료 티어 가정 기본값(RPM 10)으로 LLM을 필요 이상 직렬로 처리한다. 프런트는 "전량 로드 + 고빈도 중복 폴링"이 이를 증폭한다.
+3. **데이터 신뢰성의 두 급소는 자막 수율과 자동확정 정밀도다.** 자막 실패 원인이 전부 `except Exception: return None`으로 소실돼 개선 근거를 못 만들고(실측 수율 11~30%), 지오코딩 단일 결과는 이름 검증 없이 confidence 1.0으로 자동확정된다(T-113 쓰레기 POI 전력). 시각 근거(OCR/비전)는 0이다.
+4. **공급 API의 최대 리스크는 무스코프 인증이다.** 외부 공급용 키 하나로 `DELETE /destinations/{id}`, `POST /settings`, `POST /harvest`까지 전부 열린다. prod는 공개 도메인으로 노출돼 있다(ADR-28). 그다음이 `GET /features/snapshot`의 매 호출 전량 재동기화(O(N) 쓰기 부작용)다.
+
+**최우선 6개 PR (Phase 0)**: ① API 키 read/admin 스코프 분리, ② 검수 저장 후 자동 다음 후보 + 타임스탬프 링크, ③ 실패 작업 재시작 배선, ④ 워커 레인 분리(대화형/배치), ⑤ Gemini rate limiter 티어 현실화, ⑥ run-queue 폴링 통합. — 전부 S~S/M 크기이며 이 6개만으로 보안 P0 제거 + 검수 체감 + 처리량 병목 절반이 해소된다.
+
+**전체 구성**: 7개 Phase / 28개 PR + 백로그. 실행 순서와 의존 관계는 §4, 개별 PR 상세 지시는 §5.
+
+---
+
+## 1. 진단 — 무엇이 문제인가
+
+아래 문제는 전부 적대적 검토 후 별도 사실 검증 에이전트가 코드를 직접 열어 재확인한 것이다. 구조적 주장에서 반증된 것은 없었고, 검증이 잡아낸 세부 수치·표현 오류(재시도 대기 상한, 리미터 env 조정 가능성, staleTime 예외 개수 등)와 과장 표현은 아래 표와 각주에 정정해 반영했다.
+
+### 1.1 사용 편의성 (검수·job·정보구조)
+
+| # | 심각도 | 문제 | 근거 |
+|---|---|---|---|
+| U1 | P0 | **저장/제외 후 다음 후보로 진행되지 않고 선택이 목록 맨 위로 튄다.** `resolveMutation.onSuccess`가 `setSelectedId(null)` → `selected`가 `candidates[0]` fallback. 자동 검색·카테고리 프리필은 행을 다시 클릭해야(`pickCandidate`) 발동. 건당 3클릭이 실제로는 4~5 인터랙션 | `frontend/src/app/review/page.tsx:541-548`, `:298`, `:412-437` |
+| U2 | P0 | **후보 행에서 영상을 식별할 수 없다.** 경량 payload에 영상 제목·채널명·신뢰도·생성일이 없고 raw `video_id`만 노출. 신뢰도·판정 사유가 안 보여 "쉬운 것부터/의심스러운 것부터" 전략이 불가능 | `frontend/src/lib/api.ts:121-132`, `review/page.tsx:1181`, `backend/ktc/api/routes.py:2304-2318` |
+| U3 | P0 | **검수 큐에 텍스트 검색·정렬 선택이 없고 최신순 고정.** 오래된 후보는 영원히 묻힌다(FIFO 소진 불가). "더 불러오기"는 append가 아닌 limit 재조회(300→600이면 기존 300건 재전송) | `backend/ktc/services/place_service.py:903-937`, `review/page.tsx:95-97,172-179` |
+| U4 | P0 | **실패한 job을 다시 실행할 방법이 UI에 없다.** `RunActionButtons`의 "다시 시작" 분기는 `running ?? pending`만 선택하는 `ActiveRunPanel`에만 마운트돼 실패 순간 사라진다. `restartRun` API와 mutation까지 전부 있는데 배선만 끊긴 죽은 코드 | `frontend/src/components/CollectWorkspace.tsx:111-114,541-572`, `frontend/src/lib/api.ts:688` |
+| U5 | P0 | **키보드로 처리할 수 없다.** 행 Enter/Space 선택 외에 다음/이전·저장·제외 단축키 전무 | `review/page.tsx:1144-1149` |
+| U6 | P1 | **undo가 없다.** 저장/제외는 낙관적으로 즉시 사라지고 IGNORED 후보를 되살릴 경로가 UI에 없다(reopen 엔드포인트 부재) | `review/page.tsx:520-535`, `place_service.py:699-` |
+| U7 | P1 | **근거 컨텍스트 접근이 비싸다.** `timestamp_start`가 payload에 있는데 영상 링크에 `&t=`를 안 붙인다. 자막 근거 위치는 문자 비율 근사 스크롤 | `api.ts:129`, `review/page.tsx:815-822`, `CandidateDetailView.tsx:88-99` |
+| U8 | P1 | **일괄 처리는 삭제뿐이고 그마저 개별 DELETE N회.** 일괄 제외·해외 정리 불가. 해외 숨김은 클라이언트 표시 필터라 limit 예산을 그대로 소모 | `review/page.tsx:250-254,216-222` |
+| U9 | P1 | **job 실패가 조용히 사라진다.** 사이드바 배지는 running+pending만 집계 — 실패하면 배지가 오히려 줄어든다 | `frontend/src/components/JobStatusLink.tsx:32-34` |
+| U10 | P1 | **`/jobs` 인덱스가 없다.** 목록은 `/status`의 탭(limit 80 고정, 필터 없음)이 담당하고 nav는 `/jobs/*`를 "상태"로 하이라이트 | `frontend/src/app/jobs`(디렉터리), `StatusDashboard.tsx:78`, `AppShell.tsx:33-35` |
+| U11 | P1 | **필터·진행 상태가 URL에 없다.** sessionStorage+useState뿐이라 북마크·뒤로가기·탭 복제 불가. `?candidate=` 딥링크는 필터를 강제 해제 | `review/page.tsx:144-151,249,284-294` |
+| U12 | P1 | **"다음 행동"을 안내하는 화면이 없다.** "검수 대기 N건"은 `/status`의 링크 없는 MetricCard 텍스트일 뿐 | `StatusDashboard.tsx:162-169`, `panels.tsx:86-98` |
+| U13 | P2 | `/api-test`(개발자 도구)가 일상 nav 6칸 중 하나를 차지. `/status`는 시스템 건강+job+감사 로그 3역할 겸직 | `AppShell.tsx:20-27` |
+
+**job 생성 축 판정**: 사용자가 지목한 4개 축 중 "job 생성"의 폼 자체(자동 인식 미리보기 + zod 형식 검증, `HarvestConsole.tsx:95-122`)는 적대적 검토에서도 "잘 만들어졌다"로 판정돼 **변경하지 않는다**. 남은 것은 생성 이후의 생명주기 문제(U4 재시작, U9 실패 가시성, U10 목록 홈)이며, P2 잔결함 2건은 기존 PR에 편입한다 — 죽은 `detailRun` 상태 제거는 PR-28 절차 4, run-queue 이중 폴링은 PR-06.
+
+**구조 판정**: T-146이 limit을 500→2000으로 올렸다가 T-154가 300으로 되돌린 진동, 클릭 표면을 3회(T-140/155/156) 재정의한 이력은 "수천 행을 클라이언트로 가져와 테이블로 그린다"는 모델 자체가 원인임을 보여준다. 행 렌더를 아무리 최적화해도 **건당 처리 인터랙션 수는 한 번도 줄지 않았다.** 방향은 "서버가 큐를 소유하고, 처리하면 다음 항목이 온다"이다.
+
+### 1.2 속도
+
+| # | 심각도 | 문제 | 근거 |
+|---|---|---|---|
+| S1 | P0 | **단일 워커 + tick당 1건 claim.** 긴 poi_batch가 완주할 때까지 사용자가 방금 누른 재처리·deep research가 전부 뒤에 줄 선다. claim은 이미 `FOR UPDATE SKIP LOCKED`라 멀티 컨슈머 준비 완료인데 컨슈머가 1개 | `scheduler/worker.py:782-793,832-839`, `backend/ktc/services/crawl_run_service.py:147-152` |
+| S2 | P0 | **파이프라인 I/O 100% 순차.** 제품 코드에 `asyncio.gather` 1곳(검수 place-search)뿐. 자막 fetch(영상당 5~30초)가 N회 순차, 지오코딩도 후보별 순차. `CRAWL_MAX_CONCURRENT_VIDEOS`/`HTTP_MAX_CONCURRENT_REQUESTS`는 참조 0회 사문화 설정 | `backend/ktc/etl/batch_poi_service.py:90-191`, `postprocess_service.py:178-208`, `config.py:210-211` |
+| S3 | P0 | **rate limiter가 무료 티어 가정 기본값 + 60초 양자화 대기.** RPM 10/TPM 250k 기본값에, 토큰 추정(`chars//2+2048`)이 크면 잔여 윈도우 전체(최대 60초)를 통째로 대기. 유료 티어면 실쿼터 대비 최대 100배 보수적. env(`GEMINI_RATE_*`)로 조정 가능하지만 `.env.example`에 항목이 없어 사실상 아무도 조정하지 않음 | `backend/ktc/etl/gemini_rate_limiter.py:41,119`, `config.py:147-149` |
+| S4 | P0 | **모든 화면에서 run-queue를 3초마다 2회 HTTP 폴링, `/collect`는 쿼리키가 달라 2초 주기로 이중 폴링.** mutation 성공 후 invalidate 없이 폴링 주기에 의존(재처리 반영이 최대 2초+) | `JobStatusLink.tsx:26-31`, `api.ts:547-558`, `CollectWorkspace.tsx:75-78`, `review/page.tsx:202-207` |
+| S5 | P0 | **`/destinations`가 매 요청 전 테이블+전 매핑 로드 후 Python 필터·정렬 — 10초마다 refetch.** 응답은 기본 limit 100으로 잘리므로 **101번째 장소부터 결과 화면에서 아예 안 보이는 기능 버그**이기도 하다 | `place_service.py:153-200`, `routes.py:1035-1038`, `DestinationWorkspace.tsx:156` |
+| S6 | P0 | **`GET /features/snapshot·changes`마다 후보·ledger 전량 재동기화 + 쓰기 커밋.** 소비자가 폴링할수록 서버가 자신을 공격. GET 멱등성 위반 | `backend/ktc/services/feature_export_service.py:313-326,453-458,473,486` |
+| S7 | P1 | **지오코딩 캐시 전무.** 같은 장소가 영상 20개에 나오면 VWorld/Kakao/Naver를 20회씩 재호출. 100m 반경 재사용은 API 호출 후의 dedup | `backend/ktc/etl/geocoding.py`(캐시 없음), `place_service.py:94-109` |
+| S8 | P1 | **120ms 지연 해킹.** 후보 선택 하이라이트가 검색 시작 렌더에 밀리는 것을 setTimeout(120)+nonce로 가림 — 근본 원인은 1,371줄 단일 컴포넌트의 상태 결합 | `review/page.tsx:414,428-434` |
+| S9 | P2 | 전역 `staleTime 5s`로 정적 카탈로그성 데이터까지 화면 전환마다 refetch(1h 예외는 3곳뿐) | `QueryProvider.tsx:14` |
+
+**정정 반영 사항**: (a) LLM 재시도 최대 대기는 195초가 아니라 ~105초(마지막 시도 후 sleep 없음, `gemini_client.py:113-117`), (b) T-121-E의 51분 실측은 240초 타임아웃 도입 전 hung 사고라 현행 배치 소요 근거로는 부적절 — 다만 직렬 큐 구조 문제 자체는 유효.
+
+### 1.3 데이터 신뢰성
+
+| # | 심각도 | 문제 | 근거 |
+|---|---|---|---|
+| D1 | P0 | **자막 확보가 단일 실패점인데 실패 원인이 전부 소실된다.** 3개 provider 모두 `except Exception: return None` — IP 차단, 자막 비활성, yt-dlp 파손이 전부 "자막 없음"으로 뭉개짐. 자막 없으면 영상 통째로 FAILED(설명 단독 경로 없음). E2E 실측 수율 27개 중 3개(11%). `TRANSCRIPT_PROVIDER_ORDER` 설정은 파서만 있고 미연결 사문화 | `backend/ktc/etl/transcript.py:86-87,178-179,240-241,255-256,265-269`, `batch_poi_service.py:134-139`, `docs/e2e-report-2026-06-20-ui-10videos.md:38` |
+| D2 | P0 | **지오코딩 자동확정이 이름을 확인하지 않는다.** Kakao 키워드 검색 단일 결과면 무조건 matched/1.0. `_names_compatible` 검증은 100m 내 기존 장소가 있을 때만 발동 — **신규 장소 생성 경로는 무검증 통과.** T-113 라이브 점검에서 쓰레기 POI 자동확정 대량 발견 전력. FP가 export를 타고 downstream(PinVi)까지 전파 | `geocoding.py:393-401`, `geocode_service.py:117-131,139-163`, `docs/journal.md`(T-113) |
+| D3 | P1 | **신뢰도 점수가 사실상 3단 enum, 추출 단계 신뢰도는 0.** 배치 POI 스키마에 confidence 없음. `confidence_score`는 지오코딩만 채움(1.0/0.7/0.3/1÷n). 임계선을 어디에 둬도 정밀도/재현율 조절 불가 | `backend/ktc/etl/batch_poi.py:47-70`, `geocode_service.py:101` |
+| D4 | P1 | **좌표–행정구역 교차 검증 부재.** location_hint가 "대구 동성로"인데 서울 좌표로 확정돼도 경보 없음. LLM이 준 가장 싼 독립 검증 신호를 버리는 중 | `geocode_service.py:87-178`(location_hint 검증 참조 0회) |
+| D5 | P1 | **시각 근거 축 실질 미가동.** 프레임은 OCR 없는 JPEG 1장(그마저 확정 매핑에만 연결, 검수 후보 시점엔 대체로 부재). 하드섭·간판·지도 오버레이 정보를 전부 버림. 리포 전체 OCR/vision 코드 0건 | `backend/ktc/etl/frame_extraction.py:75-81,163-208`, `models/video_place_mapping.py:76` |
+| D6 | P1 | **변형 표기 병합 취약.** dedup이 `(video_id, official_name)` 완전 문자열 일치. "성심당/성심당 본점"이 별개 후보·별개 장소가 되고 언급 수가 흩어짐 | `batch_poi_service.py:244-262`, `geocode_service.py:181-203` |
+| D7 | P2 | 자잘한 정합성 결함: yt-dlp 임의 vtt 폴백 시 실제 언어 무관 `language="ko"` 기록, `is_domestic` 불확실 시 true(해외 장소가 국내 지오코딩으로 흘러 D2와 결합 시 FP), 350k자 절단의 미통지 | `transcript.py:186-196`, `batch_poi.py:40-42`, `batch_poi_service.py:44,204-208` |
+
+### 1.4 외부 API 실용성
+
+| # | 심각도 | 문제 | 근거 |
+|---|---|---|---|
+| A1 | P0 | **공급용 키 하나로 파괴적 쓰기 전체가 열린다.** `require_api_key`가 라우터 전역 단일 의존성이고 키에 스코프가 없다. 키 유출 = `DELETE /destinations`·`POST /settings`·`POST /harvest` 전부 개방. prod는 공개 노출(ADR-28) | `routes.py:69`, `backend/ktc/services/public_api_key_service.py`(scope 컬럼 부재) |
+| A2 | P1 | **`GET /features/snapshot`이 읽기가 아니다.** S6과 동일 — O(N) 재동기화+쓰기 커밋 | `feature_export_service.py:313-326,453-458` |
+| A3 | P1 | **테마 API는 `limit=None` 전량 덤프.** 커서·updated_since·문서 없음. 수천 POI 규모부터 실사용 불가 | `backend/ktc/services/theme_service.py:101-124` |
+| A4 | P1 | **공간·카테고리·기간 질의가 REST에 없다.** PostGIS 반경 검색은 구현돼 있으나 MCP 내부 도구로만 노출. bbox·8자리 코드·updated_since 파라미터 전무 → **처리: 백로그(§8)** — 실소비자 부재 + additive 추가라 지연 비용 0(§3.4) | `place_service.py:67-91`, `mcp_server/tools.py:29-31` |
+| A5 | P2 | **계약 잔결.** export payload의 행정코드 3종이 하드코딩 None(실데이터는 존재 — themes는 노출하는데 features는 누락), item `schema_version` 없음, 공급 엔드포인트 전부 `dict[str, Any]` 반환이라 OpenAPI 응답 스키마 공백, 에러가 한국어 detail 문자열뿐, 키별 rate limit·last_used 없음, `is_geocoded=false` 장소도 export 포함 | `feature_export_service.py:170-173`, `routes.py:2043,2071,2092` |
+| A6 | P2 | **MCP에 검수 후보 목록 조회 도구가 없다.** `resolve_place_candidate`가 있는데 candidate_id를 알아낼 방법이 MCP에 없어 단독 사용 불가 | `mcp_server/tools.py:23-36` |
+
+---
+
+## 2. 최종 판단 — 채택·수정·기각
+
+3개 적대적 검토의 제안을 사실 검증·가치 검증과 대조해 내린 결론이다. 쟁점이 있었던 항목은 판단 사유를 남긴다.
+
+### 2.1 채택 (검토·검증 합의)
+
+| 항목 | 반영 PR |
+|---|---|
+| 검수 저장 후 자동 다음 후보 + 자동 검색 (visibleCandidates 기준) | PR-02 |
+| 영상 링크 `&t=` 타임스탬프 부여 | PR-02 |
+| 실패 작업 재시작 배선(`restartRun` 기존재) | PR-03 |
+| 워커 레인 분리(대화형/배치 2레인, 레인당 1 인스턴스) | PR-04 |
+| rate limiter env 티어 현실화 + usage metadata 실측 로깅 | PR-05 |
+| run-queue 단일 엔드포인트 + 쿼리키 통일 + mutation invalidate | PR-06 |
+| 검수 목록 payload에 제목·채널·신뢰도·사유 스칼라 확장 | PR-07 |
+| 검수 큐 서버 검색(`q`)·정렬(oldest/newest)·커서 append | PR-08 |
+| reopen 엔드포인트 + 마지막 1건 undo + IGNORED 조회 | PR-09 |
+| bulk ignore/delete 배치 API | PR-10 |
+| 자막 실패 사유 코드 + `TRANSCRIPT_PROVIDER_ORDER` 연결 | PR-11 |
+| 지오코딩 자동확정 이름·행정구역 불리언 게이트 | PR-12 |
+| `evidence_quote` grounding 기계 검증 | PR-13 |
+| 이름 정규화·dedup 완화·병합 반경 조정 | PR-14 |
+| `startTransition`으로 120ms 해킹 제거 + 컴포넌트 분해 | PR-15 |
+| description 단독 후보 경로(검수 전용) | PR-17 |
+| `/destinations` SQL 푸시다운(101번째 버그 동시 수리) | PR-20 |
+| 지오코딩 캐시 테이블 | PR-21 |
+| API 키 read/admin 스코프 분리 | PR-01 |
+| features 계약 마감(행정코드·schema_version·response_model) | PR-25 |
+| themes limit 상한 + `include=sources` opt-in + 문서 | PR-26 |
+| MCP `list_review_candidates` 읽기 도구 | PR-27 |
+| LLM 호출 단일 async 게이트웨이 일원화(동기 호출 사고 4회 반복의 근본 수리) | PR-23 |
+| 정적 카탈로그성 쿼리 staleTime 상향(S9) | PR-06 |
+
+### 2.2 수정 채택 (쟁점 조정 — 판단 사유 포함)
+
+**① 검수 "처리 모드(triage)" 재설계 + 키보드 흐름** — *채택하되 측정 게이트 부여* (PR-16).
+UX 검토는 2모드 재설계를 본체로 제안했고, 가치 검증은 "PR-02(자동 다음 후보)가 핵심 가치를 이미 달성하므로 기각"을 주장했다. 최종 판단: **사용자가 명시적으로 '이상적 방향의 대대적 개편 허용'을 지시했고, 검수 큐를 4번 연속 땜질한 이력은 근본 재설계의 근거로 충분하다.** 다만 가치 검증의 회귀 위험 경고(가장 업무 크리티컬한 1,371줄 화면의 L 사이즈 재작성)는 타당하므로: Phase 0~1(PR-02~10) 적용 후 §7의 "건당 인터랙션 수·체감 소요"를 재측정하고, 그 결과로 PR-16의 범위를 "전체 triage 모드" 또는 "키보드 단축키만"으로 결정한다. 판정 기준: 건당 평균 인터랙션이 2를 초과하거나 마우스 왕복(목록↔폼↔결과)이 여전히 지배적이면 본안. **판단이 모호하면 본안(처리 모드) 채택이 기본값이다** — 사용자의 "이상적 방향 우선" 지시에 따라 게이트가 보수적 축소의 뒷문이 되지 않게 한다. 어느 쪽이든 키보드 단축키(포커스 가드 필수)는 수행한다.
+
+**② 프레임 OCR/비전 보강** — *재설계 후 조건부 채택* (PR-19).
+데이터 검토는 "POI 타임스탬프 프레임 vision 1콜"을 제안했고, 가치 검증은 논리 결함을 정확히 지적했다: **자막 없는 영상에는 POI도 타임스탬프도 없으므로 기존 프레임 추출로는 보완이 성립하지 않는다.** 그러나 사용자가 "이미지 OCR 보완"을 명시적 관심사로 지목했으므로 기각 대신 재설계한다 — 자막 최종 실패 영상 한정, 균등 샘플링 프레임 N장 → Gemini flash vision 1콜로 화면 텍스트(간판·하드섭·오버레이) 추출 → description 경로와 같은 검수 전용 후보 생성. 실험 플래그로 격리하고, PR-11이 만들 "원료 전무 영상 비율" 지표가 높게 유지될 때 착수한다(게이트). **게이트 시점에는 제3의 대안 — 기존 `video_analysis_service`(Gemini YouTube URL 직접 입력, T-064)를 자막 실패 영상의 원료 경로로 승격하는 안 — 과 반드시 비교 평가한다**: URL 분석은 영상+음성을 Gemini가 직접 처리해 CPU 비용 0·영상당 1콜로 같은 목적을 더 싸게 달성할 수 있는 기존 인프라이며, PR-05(유료 티어)로 쿼터 제약이 풀리면 유력해진다(실 키 smoke 미수행이 선행 과제).
+
+**③ whisper 활용** — *기본화 기각, 수동 액션 채택* (PR-18).
+whisper 기본 ON은 prod N150급 CPU에서 영상 1건 전사에 수 분~수십 분이 걸려 단일 배치 레인을 장시간 독점한다(T-121-E 유형 재발 위험). 대신 PR-11의 실패 사유 코드로 "자막 비활성 확정" 영상을 선별해 사용자가 명시적으로 실행하는 "whisper 재전사" 액션으로 노출한다. duration 상한(기본 20분)·model small 고정. 참고: STT 노동 없이 같은 공백을 메울 수 있는 Gemini URL 분석 승격안(위 ②의 제3안)이 PR-19 게이트 시점의 공동 평가 대상이며, 그 평가에서 URL 분석이 채택되면 whisper 액션의 역할은 축소될 수 있다.
+
+**④ 합성 가중 신뢰도 점수(`0.4*name+0.3*region+...`)** — *기각, 불리언 게이트 + 2축 정렬로 대체* (PR-12/13).
+가중치를 보정할 라벨 데이터가 없는 상태의 가중 합성은 가짜 정밀도다. 이름 호환(불리언)·행정구역 일치(불리언)·grounding 통과(불리언) 3개 게이트 + 기존 지오코딩 confidence로 자동확정과 검수 정렬 요구를 모두 충족한다. LLM 자가 보고 confidence는 기록만 하고 게이트에 쓰지 않는다. 검수 이력(승인/수정/제외)이 수백 건 쌓인 뒤 점수 구간별 승인율 테이블로 임계선을 재론한다.
+
+**⑤ feature export sync 최적화** — *쓰기 지점 분산(sync_one) 기각, 스로틀+더티 필터 채택* (PR-22).
+`sync_one`을 상태 전이 지점 4~5곳에 흩뿌리면 호출 누락 = 조용한 export 드리프트라는 정합성 리스크와 교환하게 된다. 실소비자가 pull 중인 정본 계약에서 자가 치유(전량 sync) 성질은 지켜야 한다. 대신 (a) GET 재진입 스로틀, (b) `updated_at` 워터마크 기반 더티 후보만 재해시, (c) 주기 전량 sync 안전망으로 같은 효과를 정합성 모델 불변으로 얻는다.
+
+**⑥ 배치 내부 I/O 병렬화** — *자막 fetch만, 측정 게이트 후* (PR-24).
+LLM이 지배항인 동안 자막 fetch 병렬화의 벽시계 효과는 제한적이고(Amdahl), yt-dlp 동시 다연발은 YouTube IP 스로틀을 자극해 수집 신뢰성을 해칠 수 있다. PR-04/05 적용 후 실측에서 비-LLM 시간이 여전히 지배적일 때만 Semaphore 2~3으로 자막 prefetch만 병렬화한다. 지오코딩 병렬화는 기각(PR-21 캐시가 더 싸게 같은 효과).
+
+**⑦ `/jobs` 인덱스 신설 + IA 재편** — *채택* (PR-28).
+가치 검증은 "기존 `/status` 보강으로 80% 효용"을 주장했으나, job 표면이 3화면(`/collect` 진행 패널, `/status` 탭, `/jobs/[id]` 상세)에 흩어져 있고 nav 하이라이트까지 왜곡된 현 IA는 사용자의 "이상적 방향" 지시 하에서 정리할 가치가 있다. 단 대시보드 전면 개편(`/`→`/places` 이동)은 검토자 스스로 제시한 차선책(기존 `/` 상단 행동 배너 1줄)을 채택하고 본안은 기각한다 — 근육기억·북마크·E2E 파괴 비용 대비 효용이 낮다.
+
+**⑧ 해외 후보 일괄 제외** — *조건부 채택* (PR-10).
+`is_domestic`은 LLM 판정이라 오판 위험이 있으나, PR-09(reopen + IGNORED 조회)가 가역성을 제공하고 건수 명시 확인 다이얼로그를 유지하는 조건으로 채택. 추가로 추출 단계에서 `is_domestic=false`를 자동 "보류"(IGNORED + review_note) 적재하는 파이프라인 옵션을 백로그에 둔다(자동 "확정"이 아니므로 ADR-16 위반 아님).
+
+**⑨ URL 상태화** — *단독 PR 기각, PR-08에 편승*.
+필터·정렬을 searchParams로 싣는 것은 PR-08 구현 시 거의 공짜다. 선택 후보 id는 URL에서 제외(저장마다 URL 갱신은 소음). `?candidate=` 진입 시 필터 강제 해제는 "필터 밖 후보" 배너로 완화.
+
+### 2.3 기각 (사유 포함)
+
+| 제안 | 기각 사유 |
+|---|---|
+| WebSocket/SSE 실시간 인프라 | 폴링 통합(PR-06)이 같은 체감을 1/10 비용으로 제공. 1~2인 운영에 연결 관리·프록시 설정 비용 부당 |
+| 버전 카운터(`/events/version`) 폴링 | seq 증가를 전 쓰기 지점에 심어야 하고 한 곳 놓치면 UI가 조용히 갱신을 멈춘다. 폴링의 미덕은 멍청해서 안 틀리는 것 |
+| LLM provider 이원 라우팅(교정=DeepSeek) | 유료 Gemini 티어(PR-05)면 효용 0. 이중 운영(과금·장애 도메인·한국어 교정 품질 미검증)은 유지보수 세금. PR-04/05 후 실측으로 Gemini 쿼터가 여전히 구속 조건일 때만 백로그에서 부활 |
+| rate limiter 슬라이딩 윈도우 전환 | fixed-window의 "잔여 대기"는 Google 측 계산과 정합하는 정확한 최소 대기. 슬라이딩 전환은 과승인→429 위험 |
+| `_ensure_row` startup 이동 | LLM 콜 10~60초 대비 수 ms 절약 — 측정 불가능한 마이크로 최적화 |
+| Celery/Redis/PgQueuer 도입 | claim은 이미 SKIP LOCKED. 부족한 건 브로커가 아니라 컨슈머 레인 수. ADR-20 수치 트리거 원칙 유지 |
+| 검수 큐 가상화(react-virtual) | 커서 append 후 1,000행+를 실제로 쌓는 패턴이 관측되고 버벅임이 보고될 때만. 지금 넣으면 PR-15 분해와 순서가 꼬임 |
+| 검수 통계 페이지·저장 필터 프리셋·다인 협업 기능 | 사용자 1명. URL 파라미터+기본 정렬+검색 입력으로 충분 |
+| 신뢰도 임계값 완화식 자동 확정 | 현행 점수는 변별력이 없어 임계 완화 = FP 직행. ADR-16(매칭 실패 자동 확정 금지)은 사용자 명시 결정 — 게이트(PR-12/13)로 자동확정의 "정밀도"를 올리는 방향만 허용 |
+| MCP 자동 승인 에이전트 워크플로 | ADR-16 충돌 + 상시 LLM 비용. 검수는 사람이 있어야 할 유일한 자리. 목록 도구(PR-27)까지만 |
+| Google Places 파이프라인 승격 | prod 403(Cloud Console 키 제한, 코드 외부 문제) + 재이용 약관·과금. 검수 화면 참고용 현 위치 유지 |
+| features 에러 envelope 전면 재설계(`{"error":{...}}`) | 실소비자가 pull 중인 계약의 파괴적 변경. `code` 필드 additive 추가로 대체(PR-25) |
+| LLM 다단 자기검증 체인(추출→검증→재검증) | 영상당 콜 수 증가는 처리량 붕괴. 검증은 비-LLM 신호(grounding·행정구역 대조) 우선 |
+| pg_trgm GIN 인덱스 병합 | 확정 장소 수백 건 규모에 과잉. 정규화 개선(PR-14)이 대부분을 잡고, 중복 실측치가 남을 때만 재론 |
+| 전 영상 whisper 무제한 전사 / 전 프레임 OCR 스캔 | N150 CPU·비용·단일 레인 점유 — §2.2 ②③의 게이트 방식으로만 |
+
+---
+
+## 3. 목표 상태 (이상적 설계)
+
+### 3.1 검수: 브라우징에서 큐 처리로
+
+- **서버가 큐를 소유한다.** 정렬 기본 선택지에 oldest(FIFO)를 제공하고, 커서 기반 append 페이지네이션으로 "전부 불러와 전부 렌더" 모델을 폐기한다. 자동 refetch 대신 "새 후보 N건" 배너로 큐를 안정시킨다.
+- **처리하면 다음 항목이 온다.** 저장/제외/삭제 직후 다음 후보가 자동 선택되고 자동 검색이 발동한다. 마지막 1건은 항상 undo 가능하다.
+- **행에서 판정에 필요한 정보가 보인다.** 영상 제목·채널·신뢰도·판정 사유(no_result/ambiguous/name_mismatch/region_mismatch/해외/description_only)·grounding 여부.
+- **키보드로 1건을 끝낼 수 있다.** J/K(이동), 1~9(검색 hit), Enter(저장), X(제외), U(undo), /(검색 포커스) — 입력 필드 포커스 가드 필수.
+- **근거가 한 클릭 안에 있다.** 영상 링크는 해당 타임스탬프로 열리고, 자막 발췌는 선택된 후보에 대해 지연 로드한다.
+
+### 3.2 파이프라인: 직렬 3중 구조 해소
+
+- **레인 2개**: interactive(사용자 버튼/API 발원 — 재처리·deep research·수동 transcript·수동 분석 트리거) / batch(스케줄러 발원 전부 — source_scan·harvest·poi_batch·스캔 발원 video_analysis). **기준은 job_type이 아니라 enqueue 지점이다**(같은 job_type이라도 발원에 따라 레인이 다르다 — 상세 매핑은 PR-04). 사용자 트리거 작업은 배치 뒤에 줄 서지 않는다. 프로세스 추가 없이 같은 스케줄러 안의 asyncio 태스크 2개.
+- **LLM 쿼터가 유일한 진짜 병목이 되도록**: 실제 결제 티어 값을 env로 반영하고, usage metadata 실측을 로그로 남겨 추정 계수를 데이터로 보정한다. 그 후에도 비-LLM I/O가 지배적이면 자막 prefetch만 제한 병렬화한다.
+- **읽기 경로는 SQL로**: 필터·정렬·집계·limit을 Python에서 하는 곳(`list_place_summaries`, `sync_feature_exports`)을 SQL로 내린다. PostGIS·인덱스는 이미 있다.
+- **폴링은 통합·완화하고 mutation은 즉시 invalidate**: 유휴 요청을 ~1/6로 줄이면서 반영 지연은 오히려 없앤다.
+- **LLM 호출은 단일 async 게이트웨이로**: 동기 SDK 호출이 이벤트 루프를 막는 사고(T-101/105/111/121-E 4회 반복)를 호출부 격리 반복이 아니라 `llm_client` 단일 경로 강제로 근절한다.
+
+### 3.3 신뢰도: 2신호 게이트와 관측 가능성
+
+- **자동확정 = 게이트 전부 통과**: 지오코딩 결과 존재 + 이름 호환(`_names_compatible`) + 행정구역 일치(location_hint 대조 — 검증 신호가 있을 때만 적용). 어느 하나라도 실패하면 needs_review에 사유 코드를 남긴다(규칙 상세는 PR-12). 목표: **자동확정 정밀도 상승과 needs_review 비율 하락을 동시에** (지금은 ambiguous 다건도 전부 검수로 가지만, 이름+행정구역이 맞는 최상위 후보는 자동확정 가능).
+- **모든 실패는 사유 코드를 남긴다**: 자막 provider별 실패 코드, 지오코딩 판정 코드, grounding 실패 — "왜 안 됐는지"가 곧 다음 개선의 우선순위 데이터다.
+- **원료 다단화**: 자막(2단) → [수동 whisper] → description 단독 → [실험: 프레임 vision]. 자막 이외 원료 후보는 자동확정 금지·검수 전용으로 격리한다.
+- **hallucination은 기계로 검증**: LLM에게 원문 인용(`evidence_quote`)을 강제하고 자막에 실존하는지 문자열 대조한다. LLM 자가 confidence는 기록만.
+
+### 3.4 공급 API: 읽기 스코프와 계약 마감
+
+- **키 스코프 read/admin 분리**가 외부 노출 prod의 최소 요건. 공급 GET은 read, 그 외 전부 admin.
+- **GET은 읽기다**: snapshot/changes에서 상시 전량 재동기화를 제거(스로틀+더티 필터+주기 안전망), 응답 형식은 불변.
+- **계약의 구멍을 막는다**: 행정코드 주입, `schema_version`, snapshot 페이징 중 재등장 규칙 문서화, response_model로 OpenAPI를 실계약 문서로.
+- **themes는 성장 준비만**: limit 상한과 `include=sources` opt-in. bbox·updated_since·keyset은 소비자가 등장하면 additive로 추가(백로그).
+
+### 3.5 정보구조(IA)
+
+- nav 주 그룹: **결과 / 수집 / 검수 / 작업 / 설정**, 보조 그룹(하단): 상태, API 테스트.
+- `/jobs` 인덱스 신설: 큐+이력(상태·유형 필터, 페이지네이션)+행 액션(중지/재시작). `/status`는 시스템 건강+감사 로그로 축소. `/collect` 진행 패널은 요약+링크로 축소.
+- `/` 상단에 행동 배너 1줄: "검수 대기 N건 → [처리 시작]", "실패 작업 K건 → [보기]".
+
+---
+
+## 4. 실행 계획 — 트랙·순서·의존 관계
+
+### 4.1 트랙 구성 (병렬 진행 가능)
+
+| 트랙 | 영역 | PR |
+|---|---|---|
+| A | 검수·UX | PR-02, 03, 07, 08, 09, 10, 15, 16, 28 |
+| B | 파이프라인·속도 | PR-04, 05, 06, 20, 21, 22, 23, 24 |
+| C | 데이터 신뢰성 | PR-11, 12, 13, 14, 17, 18, 19 |
+| D | 공급 API·보안 | PR-01, 25, 26, 27 |
+
+A/B/C/D를 서로 다른 에이전트가 병렬로 진행할 수 있으나, **트랙 A 내부(PR-07→08→09→10→15→16)와 트랙 C 내부(PR-11→[17,18,19])는 순서를 지킨다.**
+
+**파일 소유 규칙(병렬 시 필수)**: `frontend/src/app/review/page.tsx`(및 PR-15 분해 산출물)와 `backend/ktc/api/routes.py`·`backend/ktc/services/place_service.py`의 검수 관련 구간은 **트랙 A가 소유**한다. 트랙 B의 PR-06 중 review 페이지 invalidate 배선과 트랙 C의 PR-13 배지 표시(프런트 조각)는 그 시점까지 머지된 트랙 A 위에서 착수한다(리베이스 충돌 방지). `StatusDashboard.tsx`는 PR-03(A) → PR-06(B) → PR-28(A) 순서를 지킨다. 병렬이 부담스러우면 §4.2의 순차 실행이 기본값이다.
+
+### 4.2 권장 전체 순서 (1인 순차 기준)
+
+```
+Phase 0 (즉효·안전):        PR-01 → PR-02 → PR-03 → PR-04 → PR-05 → PR-06
+Phase 1 (검수 서버화):      PR-07 → PR-08 → PR-09 → PR-10 (+ 병행: PR-20 절차 0의 101번째 미표시 최소 수리)
+Phase 2 (신뢰성 코어):      PR-11 → PR-12 → PR-13 → PR-14
+Phase 3 (검수 재설계):      PR-15 → [측정] → PR-16
+Phase 4 (원료 확장):        PR-17 → PR-18 → [게이트] → PR-19
+Phase 5 (속도 심화):        PR-20 → PR-21 → PR-22 → PR-23 → [게이트] → PR-24
+Phase 6 (공급·IA 마감):     PR-25 → PR-26 → PR-27 → PR-28
+```
+
+### 4.3 의존 관계 요약
+
+- PR-06 ← PR-03 (실패 배지가 통합 엔드포인트의 `failed_recent` 필드 사용)
+- PR-08 ← PR-07 (같은 payload·타입 확장 위에서 작업)
+- PR-09/10 ← PR-08 (status 필터·`is_domestic` 서버 필터 재사용)
+- PR-16 ← PR-02, 08, 09, 15 + 측정 게이트
+- PR-12 ← PR-07 (queue_reason 파생에 decision 코드 연결 — soft, 병렬 시 주의)
+- PR-13 ← PR-07 (grounding 배지 표시 위치), PR-12와 evidence 구조 공유
+- PR-17/18 ← PR-11 (실패 사유 코드로 대상 선별)
+- PR-19 ← PR-11의 지표 게이트 + PR-17 (동일 후보 격리 규약 재사용)
+- PR-24 ← PR-04/05 후 실측 게이트
+- PR-28 ← PR-03, 06
+- PR-26 ← PR-20 (트랙 병렬 시 `place_service`/`theme_service` 경합 — PR-20 선행)
+- 각 PR은 하나의 `codex/*` 브랜치 = 하나의 PR로 만들고, 머지 후 다음 PR을 시작한다(스택 금지).
+
+---
+
+## 5. PR 단위 상세 작업 지시
+
+각 PR의 공통 규약:
+
+- **브랜치**: `codex/<pr-슬러그>` (예: `codex/api-key-scope`). main 직접 푸시 금지.
+- **검증 기본셋**(해당 영역만): backend — `python -m compileall backend`, disposable DB(`kor_travel_concierge_test`) 기준 `pytest`; frontend — `npm run lint`, `npm run type-check`, `npm run test`(vitest), `npm run build`; 공통 — `git diff --check`. 명령은 WSL2(Ubuntu) bash에서 실행(ADR-33).
+- **E2E**: 검수·수집·상태·작업 화면의 동작/셀렉터를 바꾸는 PR(특히 PR-02·03·06·08·09·10·15·16·28)은 `tests/e2e` 해당 스펙을 실행하고 필요 시 갱신한다(n150 live/Linux 우선, 불가 시 Windows 호스트 fallback — ADR-33).
+- **schema 변경 시**: Alembic revision 추가 + upgrade/downgrade 검증(`alembic upgrade head`), 모델과 migration 양쪽 반영.
+- **문서 의무**(각 PR마다): `docs/journal.md` 역시간순 항목, `docs/tasks.md` 완료 항목(T-NNN 채번), 계약 변경 시 `docs/feature-export-api.md`, 결정 변경 시 ADR.
+- **금지**: features API 응답 형식·cursor 의미 변경, `source_entity_id` 불변성 위반, RustFS 객체 자동 삭제, 매칭 실패 후보의 무게이트 자동 확정.
+
+---
+
+### Phase 0 — 즉효·안전 (전부 S, 서로 독립)
+
+#### PR-01. 공개 API 키 read/admin 스코프 분리 `[보안 P0]` `[S/M]`
+
+- **해결**: A1 (키 유출 = 전체 파괴 가능).
+- **변경 파일**: `backend/ktc/models/public_api_key.py`, `backend/alembic/versions/`(신규), `backend/ktc/core/security.py`, `backend/ktc/services/public_api_key_service.py`, `backend/ktc/api/routes.py`, `frontend/src/components/SettingsPanel.tsx`, `frontend/src/lib/api.ts`, `backend/tests/`, `docs/feature-export-api.md`.
+- **작업 절차**:
+  1. `public_api_keys`에 `scope VARCHAR(16) NOT NULL DEFAULT 'read'` 컬럼 추가(migration). **기존 행도 `read`로 백필** — 현재 발급된 공개 키의 실사용은 features pull(읽기)이므로 이상적 기본값을 택한다. env `API_KEYS`(=`BACKEND_API_KEY` 포함)는 코드에서 `admin`으로 취급.
+  2. `security.py`의 `require_api_key`가 인증 통과 시 caller scope(`admin`|`read`)를 판별해 `request.state.api_scope`에 저장하도록 확장. 스코프 규칙은 **read 화이트리스트 방식**(공급 표면만 read에 개방 — "GET 전면 read 허용"은 `/runs`·`/destinations/unmatched` 같은 내부 운영 데이터까지 노출하므로 뒤집는다):
+     - `read` 키로 허용하는 것은 `GET`/`HEAD` 중 공급 계열만이며, **prefix가 아니라 정확 경로 + 패턴 목록**으로 정의한다(순진한 prefix 매칭은 `/destinations` 하위 내부 경로까지 열어 자기모순이 된다): 정확 경로 `/api/v1/destinations`, `/api/v1/destinations/facets`, `/api/v1/destinations/export`, 패턴 `^/api/v1/destinations/\d+/detail$`, prefix `/api/v1/features/`, `/api/v1/themes`, `/api/v1/categories`. 이 목록을 `security.py`에 상수로 유지.
+     - 그 외 전부는 `admin`: 모든 쓰기 + 내부 운영 GET — `/runs*`, **`/destinations/unmatched*`**, **`/destinations/candidates/*`**(자막 원문·evidence 등 검수 내부 데이터), `/settings`, `/metrics`, `/storage/*`, `/audit-logs`, `/harvest/*` 등. **평가 규칙: read 목록에 일치하지 않으면 admin이다**(deny-by-default — allow/deny 우선순위 모호성 제거).
+     - 조기 return 우회 2경로의 스코프를 명시: 관리자 proxy(`resolve_admin_proxy_actor`) 통과 = `admin`, 신뢰 CIDR 우회(`api_trusted_client_bypass_active`) = `read`(admin이 필요하면 키를 쓰라는 의미 — CIDR 하나로 스코프 분리가 무력화되지 않게 한다).
+     - 무인증 우회(`APP_ENV=local/test/e2e`)는 기존 동작 유지(스코프 검사도 우회).
+  3. 발급 API(`POST /admin/public-api-keys`)에 `scope` 파라미터 추가(기본 `read`), 목록 응답에 scope 노출. `SettingsPanel`의 발급 UI에 read/admin select(기본 read)와 목록 scope 배지 추가. admin 키 발급 시 HelpTip으로 위험 고지.
+  4. 감사 로그에 scope 포함.
+- **테스트**: read 키로 `GET /features/snapshot` 200 / `GET /destinations` 200 / `POST /harvest` 403 / `DELETE /destinations/{id}` 403 / `GET /settings` 403 / **`GET /destinations/unmatched` 403 / `GET /destinations/candidates/{id}/detail` 403**(화이트리스트 경계 부정 테스트). admin 키로 전부 200. e2e env 우회 회귀 확인.
+- **완료 기준**: 공급 문서에 "외부 소비자에게는 read 키만 발급" 명시. 기존 소비자(krtour-map) pull 경로 무중단.
+
+#### PR-02. 검수 저장 후 자동 다음 후보 + 타임스탬프 링크 `[UX P0]` `[S]`
+
+- **해결**: U1, U7(a). **가장 높은 ROI — 최우선.**
+- **변경 파일**: `frontend/src/app/review/page.tsx`, `frontend/src/lib/format.ts`(유틸), `frontend/src/lib/__tests__/`(vitest), `frontend/src/components/CandidateDetailView.tsx`.
+- **작업 절차**:
+  1. `resolveMutation`(저장·제외)과 개별 삭제 mutation의 `onSuccess`에서: 처리 직전의 `visibleCandidates`(해외 숨김 필터 적용 목록, `review/page.tsx:216-222`) 기준 현재 인덱스를 기억해 두고, 낙관적 제거 후 **같은 인덱스(=다음 후보)** 를 `pickCandidate()`로 선택한다. 마지막 항목이었다면 이전 항목, 목록이 비면 선택 해제 + "검수 큐를 모두 처리했습니다" 빈 상태 표시.
+  2. 현재의 `setSelectedId(null)` → `candidates[0]` fallback(`:298,541-548`) 동작을 제거한다. `pickCandidate`가 폼 리셋·카테고리 프리필·자동 검색을 이미 수행하므로 재사용만 하면 된다. **최초 진입 시 동작을 명시**: 첫 후보를 자동 선택하되 자동 검색은 발동시키지 않는 소극적 프리셀렉트(헤더 반쪽 상태 방지) — 현행 `pickCandidate`는 항상 120ms 후 자동 검색을 발동하므로(`:428-434`) **검색 억제 옵션(예: `pickCandidate(c, { autoSearch: false })`) 신설이 필요하다.** `?candidate=` 딥링크 effect(`:284-294`)가 최초 프리셀렉트보다 우선한다. 모바일 경로(`router.push('/review/'+id)`)는 자동 진행 대상이 아니다.
+  3. `lib/format.ts`에 `timestampToSeconds("HH:MM:SS"|"MM:SS") → number|null` 유틸 추가(vitest 포함). 검수 행/상세의 "영상 보기" 링크(`review/page.tsx:815-822`, `CandidateDetailView`)에 `timestamp_start`가 있으면 `&t=<초>s`를 부여.
+- **테스트**: vitest(유틸). 수동 시나리오: 후보 3건 연속 저장 시 클릭이 "hit 선택→저장"만으로 진행되는지, 마지막 후보 처리 후 빈 상태. `tests/e2e` 검수 스펙 실행·필요 시 갱신.
+- **완료 기준**: 후보 1건 처리 = 2인터랙션(hit 선택→저장), 행 재클릭 불필요.
+
+#### PR-03. 실패 작업 재시작 배선 `[UX P0]` `[S]`
+
+- **해결**: U4. `restartRun`(`api.ts:688`)과 mutation은 기존재 — 배선만 한다.
+- **변경 파일**: `frontend/src/components/StatusDashboard.tsx`, `frontend/src/app/jobs/[jobId]/page.tsx`.
+- **작업 절차**:
+  1. `/status` 작업 이력 테이블 행(`StatusDashboard.tsx:413-418` 인근)에 terminal 상태(`failed`/`cancelled`/`done`) 대상 "다시 시작" 버튼 추가 — `restartRun` 호출 후 `["runs"]`·`["run-queue"]` invalidate. running 행에는 "중지"(`stopRun`) 버튼.
+  2. `/jobs/[jobId]` 헤더에 같은 조건의 작업 단위 재시작 버튼 추가(현재는 영상 단위 재처리만 존재).
+  3. 버튼은 pending 상태 표시(`disabled` + 스피너), 실패 토스트. 파괴적 액션이 아니므로 확인 다이얼로그는 두지 않는다.
+- **완료 기준**: 실패 작업 복구가 어느 job 표면에서든 1클릭.
+
+#### PR-04. 워커 레인 분리 (대화형/배치) `[속도 P0]` `[S]`
+
+- **해결**: S1. claim은 이미 `FOR UPDATE SKIP LOCKED`(`crawl_run_service.py:147-152`) — 컨슈머 레인만 늘린다.
+- **변경 파일**: `backend/ktc/models/crawl_run.py`, `backend/alembic/versions/`(신규), `backend/ktc/services/crawl_run_service.py`, `scheduler/worker.py`, enqueue 호출부(`backend/ktc/api/routes.py`의 harvest/reprocess/deep-research/transcript 생성 지점, `backend/ktc/services/source_scan_service.py`), `backend/tests/test_crawl_run_service.py`.
+- **작업 절차**:
+  1. `crawl_runs.lane VARCHAR(16) NOT NULL DEFAULT 'batch'` 컬럼 + `(lane, state, id)` 인덱스 추가(migration). job_type 목록 하드코딩 대신 lane 컬럼을 쓰는 이유: 재처리는 `poi_batch` job_type이면서 대화형이므로 유형만으론 구분 불가.
+  2. lane은 **job_type이 아니라 enqueue 지점 기준**으로 지정한다(같은 job_type이라도 발원에 따라 다르다): **interactive** = 사용자 버튼/API가 직접 만든 작업 — `/destinations/reprocess`의 재처리, `/destinations/{id}/deep-research`, 수동 `transcript` 후처리, 수동 등록 video 대상 분석 트리거; **batch** = 스케줄러 발원 전부 — `source_scan`, `harvest`, harvest가 낳는 `poi_batch`, 백로그 재투입, **source_scan이 자동 enqueue하는 `video_analysis`**(이를 interactive로 두면 스캔 발원 작업이 대화형 레인을 점유해 목적이 훼손된다). whisper 재전사(PR-18)는 CPU 점유가 크므로 batch. 누락하기 쉬운 enqueue 지점 3곳: **`POST /runs/{job_id}/restart`(routes.py:813-839)는 기존 run을 복제해 새 run을 만들므로 원본 run의 lane을 복사**해야 한다(기본값 batch로 두면 interactive 작업 재시작이 배치 레인으로 떨어진다 — PR-03이 이 경로를 상시 사용). `POST /jobs/poi-batch`(수동 백로그 등록, :354-390)는 대량 배치 성격이므로 batch. `POST /source-targets/{id}/run-now` → `run_target_now`(source_scan_service.py:370-446, harvest/video_analysis 생성)는 수집 성격이므로 전부 batch.
+  3. `claim_next_pending(lane: str)`에 `WHERE lane = :lane` 추가. `scheduler/worker.py`의 interval job을 레인당 1개씩 2개 등록(`run_once(lane="interactive")` / `run_once(lane="batch")`, job id는 `crawl-run-worker-interactive`/`-batch`로 분리), 각 `max_instances=1` 유지. persistent jobstore 분기(`worker.py:827-831`)는 현재 kwargs가 빈 dict이므로 **양쪽 분기 모두에 lane kwarg를 추가**한다(직렬화 가능 값). **prod의 persistent SQLAlchemyJobStore에는 구 job id `crawl-run-worker` 행이 잔존해 lane 미지정 `run_once`를 계속 실행할 수 있다 — 기동 시 구 id를 `scheduler.remove_job`(부재 시 무시)으로 제거**한다. **배치 레인 2개 이상 금지** — 둘 다 DB 단일 행 rate limiter에서 직렬화돼 처리량이 늘지 않고 stale/heartbeat 상호작용 변수만 는다(단 이 논거는 무료 티어 가정이다 — PR-05로 유료 티어가 반영되고 단계별 로그에서 LLM 구간이 지배적이면 §8의 'LLM 구간 병렬화' 재론 조건을 따른다).
+  4. stale 재투입·heartbeat 로직은 lane 무관 공통 유지.
+  5. **poi_batch handler에 단계별 소요 구조화 로그 추가**: 자막 fetch/교정/LLM 추출/지오코딩 각 구간의 시작·종료와 소요 초를 작업 상태 로그에 기록한다. 이 로그는 §7 "poi_batch 단계별 소요" 지표와 **PR-24 게이트의 유일한 판단 근거**다 — 누락하면 게이트가 작동 불능이 된다.
+- **테스트**: lane별 claim 격리(대화형 pending이 배치 running과 무관하게 claim되는지), 기존 claim 테스트 회귀.
+- **완료 기준**: 배치 실행 중 사용자 재처리 대기시간이 "배치 완주"에서 "수 초"로.
+
+#### PR-05. Gemini rate limiter 티어 현실화 + 토큰 실측 로깅 `[속도 P0]` `[S]`
+
+- **해결**: S3.
+- **변경 파일**: `.env.example`, `backend/ktc/etl/gemini_client.py`, `docs/dev-environment.md`(또는 운영 문서).
+- **작업 절차**:
+  1. `.env.example`에 `GEMINI_RATE_RPM`/`GEMINI_RATE_TPM`/`GEMINI_RATE_RPD` 항목을 주석과 함께 추가: 무료 티어(10/250k/1,500 — 현 기본값)와 유료 Tier1(gemini-2.5-flash 기준 1,000/1,000k/10,000) 값 표기. **실제 결제 티어 확인 전에는 기본값을 올리지 말 것**을 명시(429 폭주 = T-101/T-105 재발). 사용자(운영자)가 티어를 확인해 `.env.production`에 반영하는 절차를 문서화 — 이 항목만은 코드가 아니라 운영 액션이다.
+  2. `gemini_client`의 응답 처리에서 `usage_metadata`(prompt/candidates token count)를 작업 상태 로그 또는 구조화 로거로 기록한다. 목적: 추정식 `chars//2+2048`(`gemini_rate_limiter.py:41`)의 한국어 실측 계수 보정 근거 수집. **추정식 자체는 이번에 바꾸지 않는다**(실측 없이 추정으로 추정을 고치지 않는다 — 한국어는 문자당 ~1토큰이라 현행이 과소일 가능성도 있음).
+  3. 양자화 대기·`_ensure_row` 구조는 변경하지 않는다(§2.3 기각 사유 참조).
+- **완료 기준**: env만으로 티어 반영 가능함이 문서화되고, 2주 뒤 실측 토큰 분포를 뽑을 수 있는 로그가 쌓인다.
+
+#### PR-06. run-queue 폴링 통합 + 실패 배지 `[속도 P0]` `[S/M]`
+
+- **해결**: S4, U9. 의존: PR-03.
+- **변경 파일**: `backend/ktc/api/routes.py`(신규 엔드포인트), `backend/ktc/services/crawl_run_service.py`, `frontend/src/lib/api.ts`, `frontend/src/components/JobStatusLink.tsx`, `CollectWorkspace.tsx`, `StatusDashboard.tsx`, `frontend/src/app/review/page.tsx`.
+- **작업 절차**:
+  1. backend에 `GET /api/v1/runs/queue` 신설: `state IN ('running','pending')`을 **1쿼리**로 반환 + `failed_recent`(최근 24시간 failed 수) 필드 동봉. 기존 2회 호출(`api.ts:547-558`) 대체. **라우트 등록 순서 주의**: FastAPI 경로 매칭상 `GET /runs/{job_id}`(routes.py:1943)보다 먼저 등록해야 한다.
+  2. frontend `listRunQueue`를 신규 엔드포인트 1회 호출로 교체. 쿼리키를 `["run-queue"]` **하나로 통일**해 `JobStatusLink`(shell)/`CollectWorkspace`(user)/`StatusDashboard`(status)가 캐시를 공유. `refetchInterval`은 10초로 완화.
+  3. 반영 지연은 invalidate로 상쇄: 수집 시작·중지·재시작·재처리(`review/page.tsx:202-207`의 `reprocessMutation` 포함) 등 run을 만들거나 바꾸는 모든 mutation `onSuccess`에 `["run-queue"]`(및 해당 시 `["runs"]`) invalidate를 추가.
+  4. `JobStatusLink` 배지: running+pending 수 옆에 `failed_recent > 0`이면 destructive 색 보조 배지(클릭 시 `/status` 이력 탭, PR-28 이후 `/jobs?state=failed`). "최근 24h" 윈도우라 자연 해제된다(영구 빨간 배지 방지).
+  5. **staleTime 정비(S9)**: 정적 카탈로그성 쿼리(categories는 기존 1h — facets, 8자리 코드 목록 등 변경 빈도가 낮은 것)에 `staleTime` 10분~1h를 명시 지정한다. 전역 기본(5s)은 유지.
+- **테스트**: backend 신규 엔드포인트 단위 테스트(상태 혼합 fixture). 수동: 유휴 상태 네트워크 탭에서 요청 빈도 확인(기존 화면당 2req/3s → 1req/10s).
+- **완료 기준**: 유휴 폴링 요청 ~1/6, 재처리 후 큐 반영 즉시.
+
+---
+
+### Phase 1 — 검수 큐 서버화
+
+#### PR-07. 검수 목록 payload 확장 (제목·채널·신뢰도·사유) `[UX P0]` `[S]`
+
+- **해결**: U2, D3(표시 측).
+- **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`(`_candidate_list_payload`), `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
+- **작업 절차**:
+  1. `list_unmatched_candidates`(`place_service.py:903-937`)의 `YoutubeVideo` 조인을 상시(outer join)로 바꾼다 — 현재는 channel/keyword 필터 시에만 조건부 조인(`:919-923`). 채널 제목은 `youtube_channels` outer join으로 확보.
+  2. `_candidate_list_payload`(`routes.py:2304-2318`)에 **짧은 스칼라만** 추가: `video_title`, `channel_title`, `confidence_score`, `created_at`, `queue_reason`. `queue_reason`은 서버에서 `provider_evidence_json.geocoding.decision`·`is_domestic`·`source_kind`로부터 파생하는 단일 문자열 코드(`no_result | ambiguous | vworld_unrefined_single | name_mismatch | region_mismatch | foreign | provider_missing | extraction_only`) — evidence JSON 원본은 절대 목록에 싣지 않는다(T-152 경량화 원칙). 자막 발췌 등 긴 텍스트도 금지(상세 API 소관).
+  3. frontend `UnmatchedCandidate` 타입 확장. 행 표시 재구성: 1행차 = 후보명 + 신뢰도 배지 + 사유 배지, 2행차 = 영상 제목·채널명(말줄임), 위치 힌트. raw `video_id`는 툴팁/상세로 강등. `confidence_score`가 null인 후보(지오코딩 미도달)는 배지 생략.
+- **테스트**: payload 필드 회귀 테스트(무필터 조회에서도 제목이 채워지는지), 응답 크기 측정 기록(300건 기준 증가분이 스칼라 수준인지).
+- **완료 기준**: 상세 모달 없이 행에서 영상 식별·우선순위 판단 가능.
+
+#### PR-08. 검수 큐 서버 검색·정렬·커서 + URL 상태화 `[UX P0]` `[M]`
+
+- **해결**: U3, U11, S8의 데이터 측면. 의존: PR-07.
+- **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
+- **작업 절차**:
+  1. `GET /destinations/unmatched` 파라미터 확장:
+     - `q`: `ai_place_name`/`location_hint` ILIKE(양측 `%`). trigram 인덱스는 두지 않는다(수천 행 규모, §2.3).
+     - `sort`: `newest`(기본, 현행 유지) | `oldest`. keyset 커서: `cursor_id`(마지막 행 id) — newest면 `id < :cursor_id`, oldest면 `id > :cursor_id`. 기존 `(match_status,id)` 인덱스를 그대로 사용. `confidence` 정렬은 넣지 않는다(null 다수 + 커서 복잡 — grounding·사유 배지가 우선순위 요구를 대체).
+     - `is_domestic`: true|false|전체 — 해외 필터를 서버로 내려 limit 예산 낭비(U8) 제거.
+     - `status`: `needs_review`(기본)|`ignored` — PR-09의 제외 목록 조회 준비.
+  2. frontend를 `useInfiniteQuery`로 전환: 300건 페이지 append(현재의 "limit 재조회" 폐기). **자동 refetch(60초) 제거** — 대신 첫 페이지 신규 후보 감지용 경량 쿼리(같은 엔드포인트 `limit=1`+최신 id 비교, 60초)로 "새 후보 N건 — 불러오기" 배너를 띄운다. 큐가 조작 중 흔들리는 문제(U3)가 구조적으로 사라진다.
+  3. 필터·정렬(`group`, `q`, `sort`, `is_domestic`)을 `useSearchParams` 기반으로 이관(`router.replace`, 선택 후보 id는 URL 제외). sessionStorage는 최초 진입 기본값으로만. `?candidate=` 딥링크는 필터 강제 해제 대신 "현재 필터 밖 후보입니다 — [필터 해제]" 배너로 완화(`review/page.tsx:284-294` 대체).
+  4. 검색 입력(디바운스 300ms)과 정렬 select를 목록 헤더에 추가. oldest 선택 상태는 URL로 보존.
+  5. **PR-02 자동 진행 로직의 기준 목록 교체**: 해외 필터가 서버로 내려가므로 클라이언트 `visibleCandidates`(구 `review/page.tsx:216-222`) 파생을 제거하고, 자동 다음 후보 선택은 useInfiniteQuery의 평탄화된 페이지 목록 기준으로 바꾼다.
+  - 크기 조절 옵션: backend(파라미터·커서)와 frontend(useInfiniteQuery·URL·배너)를 2개 PR로 분할해도 된다(M 상한이므로).
+- **테스트**: backend — q/sort/cursor/is_domestic/status 파라미터 조합 단위 테스트(경계: 커서 마지막 페이지, 빈 결과). frontend — 타입·빌드, 수동으로 append·배너·URL 복원 시나리오. `tests/e2e` 검수 스펙 실행·갱신(자동 refetch 제거·배너 도입으로 기존 흐름이 바뀐다).
+- **완료 기준**: 2,000건 백로그에서 특정 후보를 텍스트 검색으로 3초 내 도달, oldest로 FIFO 소진 가능, 새 후보가 조작 중 행 위치를 흔들지 않음.
+
+#### PR-09. 검수 되돌리기(reopen) + 마지막 1건 undo + 제외 목록 `[UX P1]` `[M]`
+
+- **해결**: U6. 의존: PR-08(`status=ignored` 조회).
+- **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
+- **작업 절차**:
+  1. backend `POST /destinations/unmatched/{candidate_id}/reopen`:
+     - `IGNORED` → `NEEDS_REVIEW`, `feature_export_status='pending'` 복귀.
+     - `USER_CORRECTED` → `NEEDS_REVIEW`. 후보가 만든/연결한 장소 처리는 기존 `delete_place`의 역전이 로직(`place_service.py:860-900` — 다른 매핑이 없는 고아 장소면 함께 정리, 후보를 NEEDS_REVIEW로 되돌림)을 함수로 추출해 재사용. 다른 영상 매핑이 남아 있으면 장소는 보존하고 해당 후보 매핑만 제거.
+     - `MATCHED`(시스템 자동확정)도 동일 규칙 허용 — 자동확정 오류를 사람이 되돌리는 경로.
+     - ledger 정합: 상태 복귀 후 다음 `sync_feature_exports`가 tombstone/재발행을 자동 처리함을 테스트로 확인(수동 ledger 조작 금지).
+     - 감사 로그 기록.
+  2. frontend: 저장/제외/삭제 성공 토스트에 "되돌리기" 버튼(마지막 처리 1건만 유지, 다음 처리 시 대체). 클릭 시 reopen 호출 + 해당 후보 재선택. 최근 5건 스택·U 단축키는 여기서 하지 않는다(단축키는 PR-16).
+  3. 목록 헤더에 상태 select(검수 대기/제외됨). `ignored` 뷰의 행 액션은 "복구"(reopen) 단일.
+- **테스트**: 상태 전이 3종(ignore→reopen, create_place→reopen 고아 정리, match_existing→reopen 장소 보존) + ledger 동기화 회귀 + 멱등(이미 NEEDS_REVIEW인 후보 reopen 시 409 또는 no-op 명시). `tests/e2e` 검수 스펙 실행(상태 select 추가분 갱신).
+- **완료 기준**: 어떤 검수 실수도 1클릭 내 복구, 제외 후보 열람 가능.
+
+#### PR-10. 검수 일괄 처리 배치 API `[UX P1]` `[S/M]`
+
+- **해결**: U8. 의존: PR-08(is_domestic 서버 필터), PR-09(가역성).
+- **변경 파일**: `backend/ktc/api/routes.py`, `backend/ktc/services/place_service.py`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
+- **작업 절차**:
+  1. backend `POST /destinations/unmatched/bulk` `{action: "ignore"|"delete"|"reopen", candidate_ids: [...]}`(상한 500, 단일 트랜잭션, 감사 로그 1건에 건수·id 목록 기록). 부분 실패 시 전체 롤백 + 실패 id 반환.
+  2. frontend 선택 툴바에 "선택 제외" 추가, 기존 다중 삭제(`Promise.all` 개별 DELETE, `review/page.tsx:250-254`)를 bulk 1콜로 교체.
+  3. "해외 후보 모두 제외" 버튼: `is_domestic=false` 서버 조회로 대상 id 수집 → **건수 명시 확인 다이얼로그**("해외 판정 후보 N건을 제외합니다. 제외 목록에서 복구할 수 있습니다.") → bulk ignore. `is_domestic`은 LLM 판정이므로 실행 전 고지 문구에 명시.
+- **테스트**: bulk 3액션 + 상한 초과 400 + 트랜잭션 롤백. `tests/e2e` 검수 스펙 실행(선택 툴바 변경분 갱신).
+- **완료 기준**: 노이즈 후보 수백 건 정리가 1분 내.
+
+---
+
+### Phase 2 — 데이터 신뢰성 코어
+
+#### PR-11. 자막 실패 사유 코드 + provider 관측 `[신뢰성 P0]` `[S/M]`
+
+- **해결**: D1, D7(언어 오기록). **PR-17/18/19의 대상 선별과 §7 지표의 데이터 기반.**
+- **변경 파일**: `backend/ktc/etl/transcript.py`, `backend/ktc/etl/batch_poi_service.py`, `backend/ktc/etl/postprocess_service.py`(`_default_transcript_fetcher` 배선), `scheduler/worker.py`(fetcher 주입 확인), `backend/ktc/models/youtube_video.py`, `backend/alembic/versions/`(신규), `backend/ktc/core/config.py`(연결만), `backend/tests/`.
+- **작업 절차**:
+  1. `transcript.py`의 반환 구조를 `TranscriptOutcome`(dataclass)로 재설계: **성공 시 기존 `TranscriptResult` 객체를 그대로 내장(wrap)하고**(segments·`to_timestamped_text()`가 후보 `timestamp_start`의 원천이므로 평문으로 바꾸면 타임스탬프 근거가 유실된다), 실패 시 provider별 `TranscriptFailure(provider, code, detail)` 목록을 담는다. 실패 코드 enum: `no_captions | blocked | rate_limited | download_error | parse_error | disabled | not_configured`. 각 provider의 `except Exception: return None`을 예외 유형별 코드 매핑으로 교체(알 수 없는 예외는 `parse_error`+detail 보존). **예외를 삼키되 분류해서 삼킨다.** 소비처(`batch_poi_service`의 `transcript.segments` 판정, `postprocess_service._default_transcript_fetcher`, `worker.py`의 fetcher 배선)를 새 구조에 맞춰 갱신.
+  2. `youtube_videos`에 `transcript_source VARCHAR(32)`(성공 provider), `transcript_failure_code VARCHAR(32)`(최종 실패 시 대표 코드) nullable 컬럼 추가(migration). 컬럼을 두는 이유: PR-17/18/19가 "자막 비활성 확정 영상"을 SQL로 선별해야 하고, §7 수율 지표를 집계해야 한다 — 로그만으로는 불가.
+  3. `batch_poi_service`의 자막 실패 처리(`:134-139`)에서 작업 상태 로그에 provider별 코드를 남기고 위 컬럼을 기록. 상세 실패 목록은 crawl_run status log로 충분(별도 JSON 컬럼 불요).
+  4. `TRANSCRIPT_PROVIDER_ORDER`(`config.py:165`, 파서 `:278-280`)를 실제 체인 구성(`DEFAULT_PROVIDERS` 하드코딩, `transcript.py:265-269`)에 연결 — 사문화 해소.
+  5. yt-dlp 임의 vtt 폴백 시 실제 트랙 언어를 기록(D7, `transcript.py:186-196`).
+  6. 350k자 절단(`batch_poi_service.py:44,158`)·토큰 예산 sub-batch 절단(`:204-208`) 발생 시 작업 상태 로그에 절단 사실(원 길이→절단 길이)을 1줄 남긴다(D7 미통지 해소).
+- **테스트**: provider 실패 코드 매핑(mock으로 차단/비활성/파손 3케이스), provider order 설정 반영, 언어 기록, 성공 경로 segments 보존 회귀.
+- **완료 기준**: "자막 없음"과 "차단"이 구분돼 작업 로그·DB에서 조회 가능. `SELECT transcript_failure_code, count(*) FROM youtube_videos GROUP BY 1`이 곧 개선 우선순위 표가 된다.
+
+#### PR-12. 지오코딩 자동확정 2중 게이트 (이름·행정구역) `[신뢰성 P0]` `[S/M]`
+
+- **해결**: D2, D4. **FP가 downstream까지 전파되는 것을 막는 신뢰성 최우선 수리.**
+- **변경 파일**: `backend/ktc/etl/geocoding.py`, `backend/ktc/etl/geocode_service.py`, `backend/tests/`.
+- **작업 절차**:
+  1. **이름 게이트**: `apply_geocode_to_candidate`의 신규 장소 생성 경로(`geocode_service.py:139-163`)에서 확정 전에 `_names_compatible(candidate.ai_place_name, selected.place_name)`을 강제한다(기존 함수 재사용, `:181-203`). 불일치 시 `needs_review`, decision 코드 `name_mismatch`, `confidence_score` 0.4. 지오코더가 place_name을 안 주는 경우(주소 지오코딩 결과)는 게이트를 통과시키되 decision에 `name_unverified`를 남긴다.
+  2. **행정구역 게이트**: 선택된 결과의 주소 문자열(road/parcel address — provider 응답에 이미 포함)에서 시도·시군구 토큰을 뽑아 `location_hint`의 지역 토큰과 대조한다. **토큰 정규화 규칙을 고정한다**(구현자마다 다른 게이트가 나오지 않도록): 시도명은 접미사(`광역시|특별시|특별자치시|특별자치도|남도|북도|도|시`) 제거 후 전방일치("대구"↔"대구광역시", "전북"↔"전라북도"의 축약 별칭 표는 기존 `admin_region_service.py`의 파싱 인프라를 재사용 또는 참조). hint에 지역 토큰이 없으면 게이트 통과(검증 신호 부재), 있는데 불일치하면 `needs_review` + `region_mismatch`. 별도 역지오코딩 API 추가 호출은 하지 않는다(주소 문자열로 충분).
+  3. **ambiguous 개선(검수량 감소 측)**: 다건 결과에서 이름 게이트+행정구역 게이트를 모두 통과하는 후보가 **정확히 1개**면 `matched(0.7)`로 자동확정한다 — 지금은 다건이면 좌표 근접 외엔 전부 검수행이라, 이 변경이 needs_review 유입을 줄이면서 정밀도는 게이트가 지킨다. **이 항목은 ADR-16("매칭 실패는 자동 확정하지 않는다")의 적용 경계를 좁히는 결정 변경이므로, 이 PR에서 ADR-16 보강 ADR(§9의 (a))을 반드시 함께 작성한다** — 기록 없이는 후속 에이전트가 위반으로 오판해 되돌릴 수 있다.
+  4. 가중 합성 점수는 도입하지 않는다(§2.2 ④). decision 코드는 `provider_evidence_json.geocoding`에 기존 형식으로 누적하고 PR-07의 `queue_reason` 파생에 연결.
+- **테스트**: T-113 패턴 fixture(부분일치 오매칭, 동명 타지역)로 게이트 차단 확인, 게이트 통과 자동확정 회귀, ambiguous→단일 통과 자동확정 케이스.
+- **완료 기준**: "검색 이름과 다른 장소가 1.0으로 자동확정"이 불가능해지고, 지역 불일치가 사유 코드로 검수 큐에 표시된다.
+
+#### PR-13. POI 추출 grounding (`evidence_quote`) `[신뢰성 P1]` `[S]`
+
+- **해결**: D3(추출 단계 신호 0). 의존: PR-07(배지 표시).
+- **변경 파일**: `backend/ktc/etl/batch_poi.py`, `backend/ktc/etl/batch_poi_service.py`, `backend/ktc/api/routes.py`(queue_reason 파생 확장), `frontend/src/app/review/page.tsx`(배지), `backend/tests/`.
+- **작업 절차**:
+  1. `BATCH_RESPONSE_SCHEMA`(`batch_poi.py:47-70`)에 `evidence_quote`(string — 해당 장소가 언급된 자막 원문 인용, 20자 이상)와 `confidence`(number 0~1) 추가. system instruction에 인용 규칙 1항 추가(원문 그대로, 창작 금지).
+  2. `parse_batch`에서 quote가 입력 자막(교정본, 공백 정규화 후)에 부분 문자열로 존재하는지 검증 → `grounded: bool`. 결과를 `provider_evidence_json.transcript`에 `evidence_quote`/`grounded`/`llm_confidence`로 기록. **grounding 실패 후보는 폐기하지 않는다** — 저신뢰 마킹만(사유 표시).
+  3. `queue_reason` 파생에 `ungrounded` 우선순위 추가(지오코딩 사유보다 앞). 검수 행에 "인용 확인됨/인용 불일치" 배지.
+  4. `llm_confidence`는 기록·표시만 하고 어떤 자동확정 게이트에도 사용 금지(주석으로 명문화).
+- **테스트**: grounding 판정(정확 인용/변형 인용/창작 인용), 스키마 하위 호환(quote 없는 응답 허용 — 구 응답 재처리 대비).
+- **완료 기준**: hallucination 후보가 검수 큐에서 기계 판별 배지로 식별된다.
+
+#### PR-14. 이름 정규화·중복 병합 개선 `[신뢰성 P1]` `[S]`
+
+- **해결**: D6.
+- **변경 파일**: `backend/ktc/etl/geocode_service.py`, `backend/ktc/etl/batch_poi_service.py`, `backend/tests/`.
+- **작업 절차**:
+  1. `_normalize_name`(`geocode_service.py:202-203` 인근)에 지점 접미 처리 추가: 정규식 `\s*(본점|본관|직영점|[0-9]+호점)$` 제거(보수적 목록 — 광범위한 `…점$` 제거는 오병합 위험으로 금지). 공백·특수문자 제거는 현행 유지.
+  2. 배치 dedup 키(`batch_poi_service.py:244-262`)를 `(video_id, official_name 완전일치)`에서 `(video_id, 정규화 이름)`으로 완화.
+  3. 병합 반경을 100m→300m로 상향하되 **이름 게이트(PR-12) 적용 후에만** — 이름 검증 없는 반경 확대는 오병합을 늘린다(의존 명시). 반경은 config 상수화.
+  4. pg_trgm·유사도 병합 제안 UI는 도입하지 않는다(§2.3 — 중복 실측치가 남을 때 재론).
+- **테스트**: 정규화 케이스(본점/1호점/공백 변형), dedup 완화 멱등성, 300m 병합 + 이름 불일치 시 needs_review 회귀.
+- **완료 기준**: "성심당/성심당 본점"이 같은 장소로 병합되고 언급 수가 합산된다.
+
+---
+
+### Phase 3 — 검수 재설계 본체
+
+#### PR-15. review 페이지 구조 분해 + 120ms 해킹 제거 `[속도 P1·위생]` `[M]`
+
+- **해결**: S8, PR-16의 기반. 의존: PR-08(useInfiniteQuery 전환 후의 코드 기준).
+- **변경 파일**: `frontend/src/app/review/page.tsx` → 분해: `frontend/src/components/review/`(신규 디렉터리) `useReviewQueue.ts`, `useCandidateSearch.ts`, `CandidateTable.tsx`, `SearchResultsPanel.tsx`, `ConfirmForm.tsx`(+ 기존 지도·다이얼로그 배선 정리).
+- **작업 절차**:
+  1. **1단계(선행 커밋)**: 분해 전에 `setActiveQuery` 호출을 `startTransition`으로 감싸고 120ms setTimeout+nonce(`review/page.tsx:414,428-434`)를 제거해 본다. React 19 기준 선택 하이라이트 페인트가 검색 쿼리 발동과 분리되는지 수동 확인 — 이 ~10줄로 해결되면 그대로 확정.
+  2. **2단계**: 상태 소유를 분리한다 — `useReviewQueue`(목록 쿼리·필터·선택·mutation·undo), `useCandidateSearch`(activeQuery·provider 결과·abort), `ConfirmForm`(폼 로컬 상태). page.tsx는 조립만(목표 300줄 이하). 낙관적 업데이트·자동 다음 후보(PR-02) 동작을 그대로 보존한다.
+  3. `PlaceDetailView`/`CandidateDetailView`에 중복된 `cleanTranscript`/타임스탬프 스크롤 로직을 공용 유틸로 추출(기존 중복 확인됨). 추출하면서 현행 "문자 비율 근사 스크롤"(U7b)의 정확도를 판단한다 — 타임스탬프 문자열 위치 기반 앵커로 개선이 싸면 이 PR에서, 아니면 현행 유지를 명시하고 종료.
+- **테스트**: frontend 4종 + 기존 E2E 검수 스펙 통과(동작 보존 리팩터링 — E2E가 회귀 가드). 수동: 클릭→하이라이트 즉시, 검색 후행.
+- **완료 기준**: 타이머/nonce 제거, 후속 검수 작업의 수정 단가 하락.
+
+#### PR-16. 키보드 단축키 + 처리 모드(triage) `[UX P0]` `[M~L, 측정 게이트]`
+
+- **해결**: U5, U1의 완성형. 의존: PR-02, 08, 09, 15.
+- **게이트(필수 절차)**: PR-02~10 배포 후 실사용 1주 기준으로 §7의 "건당 인터랙션 수·체감 소요"를 측정한다. **건당 평균 인터랙션 > 2 또는 마우스 왕복이 여전히 지배적이면 본안(처리 모드), 명백히 충분히 빠르면 축소안(단축키만). 판단이 모호하면 본안이 기본값이다(§2.2 ①).** 어느 쪽이든 아래 1은 수행한다.
+- **작업 절차**:
+  1. **단축키(공통)**: 전역 keydown 핸들러(포커스 가드 — `document.activeElement`가 input/textarea/select/contenteditable이면 무시): `J`/`K` 다음/이전 후보(`pickCandidate`), `1~9` 검색 hit 선택 — **서수는 평탄 목록 `allHits`(렌더 순서와 동일) 기준으로 정의하고, 각 hit 행에 번호 배지를 표시**해 사용자가 "5번"을 알 수 있게 한다(`selectHit` 재사용), `Enter` 저장(폼 유효 시), `X` 제외, `U` 마지막 처리 undo(PR-09), `/` 검색 입력 포커스. 단축키 안내는 `HelpTip` 또는 `?` 오버레이.
+  2. **처리 모드(본안 채택 시)**: `/review`에 모드 토글(URL `?mode=triage|table`, 기본 triage). triage 모드 = 좌측 얇은 진행 레일(현재 위치 n/m, 남은 수, 최근 처리 1건+undo) + 중앙 현재 후보 카드(영상 제목·채널·`&t=` 링크·근거 자막 발췌 지연 로드·신뢰도/사유/grounding 배지·provider 검색 결과·확정 폼) + 우측 지도. **기존 중앙 패널 컴포넌트(PR-15 분해 산출물)를 재사용**하고 신규는 진행 레일과 레이아웃뿐. table 모드 = 기존 테이블(관리·일괄 작업 담당). 저장/제외 시 자동 다음+자동 검색은 PR-02 동작 그대로.
+  3. E2E: 검수 스펙에 모드 전환·단축키 시나리오 추가, heading 어서션 갱신.
+- **완료 기준**: 마우스 없이 후보 1건 처리 가능. 본안 시 건당 처리 시간 50% 단축 목표.
+
+---
+
+### Phase 4 — 원료 확장 (자막 너머)
+
+#### PR-17. 자막 없는 영상 description 단독 경로 `[신뢰성 P1]` `[M]`
+
+- **해결**: D1의 수율 측면(자막 실패 = 영상 폐기 문제). 의존: PR-11.
+- **변경 파일**: `backend/ktc/etl/batch_poi_service.py`, `backend/ktc/etl/batch_poi.py`(프롬프트 소폭), `backend/ktc/api/routes.py`(queue_reason), `backend/tests/`.
+- **작업 절차**:
+  1. 자막 전 provider 최종 실패 시 영상을 FAILED로 버리는 대신, `description_raw`(+제목·태그)가 임계 길이(기본 200자, config) 이상이면 해당 텍스트를 단일 아이템으로 batch POI 추출에 투입한다. 미달이면 기존대로 실패(사유 코드 `description_too_short` 추가).
+  2. 생성 후보는 `source_kind='description'`으로 표기하고 evidence에 원문 출처를 기록. **지오코딩은 수행하되 자동확정은 금지** — `apply_geocode_to_candidate`에서 `source_kind='description'`이면 게이트 통과 여부와 무관하게 `needs_review` 유지, `queue_reason='description_only'`. 검수 행 배지로 구분.
+  3. grounding(PR-13)은 description 텍스트 기준으로 동일 적용.
+- **테스트**: 자막 실패→description 경로 전환, 임계 미달 스킵, 자동확정 차단 회귀.
+- **완료 기준**: 자막 수율에 묶여 있던 영상들이 "0건 폐기" 대신 검수 가능한 후보를 생산한다.
+
+#### PR-18. whisper 수동 재전사 액션 `[신뢰성 P1]` `[M]`
+
+- **해결**: D1의 STT 측면 — 기본화 아닌 선별 실행(§2.2 ③). 의존: PR-11, PR-04.
+- **변경 파일**: `backend/ktc/api/routes.py`, `scheduler/worker.py`(transcript handler 파라미터), `backend/ktc/etl/transcript.py`, `frontend/src/app/jobs/[jobId]/page.tsx`, `frontend/src/components/CandidateDetailView.tsx`(또는 검수 상세), `backend/tests/`.
+- **작업 절차**:
+  1. backend: 명시 요청 시 `TRANSCRIPT_WHISPER_ENABLED`와 무관하게 whisper를 실행할 수 있는 파라미터 경로를 추가한다. **주의: env 게이트가 `transcribe_via_whisper` 함수 내부에 있어(off면 무조건 None 반환, `transcript.py:210-215`) provider 지정만으로는 작동하지 않는다** — 게이트를 체인 구성 레벨로 옮기거나(PR-11 절차 4와 함께) `force` 인자를 추가한다. model 크기도 현재 env(`WHISPER_MODEL_SIZE`)뿐이므로 함수 시그니처에 인자를 추가한다. 흐름 주의: 현행 `transcript` job은 poi_batch로 분할하는 splitter(`worker.py:241-` 인근)이므로, whisper 강제는 결국 **poi_batch의 `transcript_fetcher` 주입 파라미터**(예: `params.transcript_providers=["whisper"]`)로 흘러야 한다. 안전 상한: `youtube_videos.duration_seconds ≤ 1200`(초과 시 400 + 안내), model `small` 고정, **batch 레인**으로 enqueue(CPU 점유가 대화형 레인을 막지 않도록).
+  2. frontend: `/jobs/[jobId]` 영상 행과 검수 상세에서 `transcript_failure_code`가 있는 영상에 "whisper로 재전사" 버튼 노출(수 분 소요 고지). 성공 시 poi_batch 재처리로 이어지는 기존 재처리 흐름 재사용.
+  3. whisper 결과에는 `transcript_source='whisper'` 기록(PR-11 컬럼) — 품질 추적 근거.
+- **테스트**: 파라미터 게이트(길이 초과 400), enqueue lane, opt-in env와의 독립성.
+- **완료 기준**: 운영자가 실패 사유를 보고 선별적으로 STT를 태울 수 있다. 파이프라인 기본 경로는 불변.
+
+#### PR-19. 프레임 비전(OCR) 실험 경로 `[신뢰성 P1]` `[L, 게이트]`
+
+- **해결**: D5. 의존: PR-11(게이트 지표), PR-17(검수 전용 후보 격리 규약 재사용).
+- **게이트(필수 절차)**: PR-11~14·17·18 적용 후 2주 지표에서 **"유효 원료 전무 영상 비율"(자막·whisper·description 모든 경로가 원료 확보에 실패한 영상 — description이 후보를 냈다면 품질과 무관하게 원료 확보로 집계해 게이트 왜곡을 막는다)이 20%를 상회**하면 착수. 미만이면 백로그 유지. **착수 결정 시 §2.2 ②의 제3안(Gemini URL 분석 승격)과 비용·구현량·품질을 표로 비교해 택일하고 결과를 journal에 남긴다.**
+- **작업 절차**:
+  1. 신규 모듈 `backend/ktc/etl/visual_extraction.py`: 대상 = 자막 최종 실패 영상(사유 코드로 선별). 기존 `frame_extraction.py`의 스트림 URL 확보·FFmpeg input seeking 인프라를 재사용해 **균등 간격 프레임 N장(기본 8장, duration 기반)** 을 추출(다운로드 없이 seek). RustFS에 저장(`media_assets`).
+  2. Gemini flash 멀티이미지 **1콜/영상**: "각 프레임의 화면 내 텍스트(간판·자막·오버레이·지도 라벨)를 추출하고 장소명 후보를 JSON으로" — responseSchema 강제, rate limiter 통과. 로컬 PaddleOCR은 2순위(N150 CPU 부담 + 한국어 튜닝 비용)로 백로그에만 기록.
+  3. 추출 텍스트를 description 경로(PR-17)와 동일 규약으로 batch POI에 투입: `source_kind='visual'`, 자동확정 금지, `queue_reason='visual_only'`, evidence에 프레임 asset id·프레임 타임스탬프 기록. 검수 상세에서 해당 프레임 썸네일 표시(이 경로의 후보는 프레임이 실존하므로 표시 가능 — BFF 경유 서명 URL 또는 프록시).
+  4. 전체를 `VISUAL_EXTRACTION_ENABLED`(기본 false) 실험 플래그로 격리. 영상당 비용 상한(vision 1콜)을 코드로 강제.
+- **테스트**: 프레임 샘플링(길이별 개수), 후보 격리(자동확정 차단), 플래그 off 시 완전 무개입.
+- **완료 기준**: 자막 없는 영상에서 간판·하드섭 기반 후보가 검수 큐에 도달한다. 상시 비용 0(플래그·대상 한정).
+
+---
+
+### Phase 5 — 속도 심화
+
+#### PR-20. `/destinations` SQL 푸시다운 `[속도 P0]` `[M]`
+
+- **해결**: S5(101번째 미표시 기능 버그 포함). themes API 자동 수혜.
+- **변경 파일**: `backend/ktc/services/place_service.py`(`list_place_summaries`, `_list_mentions_by_place`), `backend/ktc/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/components/DestinationWorkspace.tsx`, `backend/tests/test_place_service.py`.
+- **작업 절차**:
+  0. **최소 수리 선행분 "PR-20a"(별도 미니 PR, S — Phase 1 시점에 병행 가능, 브랜치 `codex/destinations-limit-hotfix`, 별도 T-NNN 채번)**: frontend가 `limit`을 명시(100)하고 "더 보기"(limit 확장)를 추가해 **101번째 이후 장소가 보이지 않는 기능 버그**를 즉시 수리한다. 서버 최적화 없이도 버그는 사라지므로 Phase 5를 기다리지 않는다. 본 PR-20은 PR-20a 머지를 전제로 한다.
+  1. `list_place_summaries`(`place_service.py:153-201`)를 SQL로 재작성: `category`/`q`/`district` 필터를 `WHERE`(ILIKE)로, `mention_count`·`source_channel_count`를 `video_place_mappings`/`youtube_videos` 기반 count 서브쿼리(LEFT JOIN LATERAL 또는 group-by 서브쿼리)로, 정렬 4종(언급/최신/이름/카테고리)과 `LIMIT`/`OFFSET`(또는 keyset)을 SQL로. **가장 큰 비용인 `_list_mentions_by_place`의 limit 적용 전 전량 join 로드(`:204-232`)를 limit 적용 후 대상 장소만 조회하도록 이동.** **기존 함수 시그니처와 호출부 호환을 유지한다**: `limit: int | None = 100`(`limit=None` 전량 경로 포함 — `theme_service`가 3곳에서 `limit=None`으로 호출), `place_ids`, `video_id` 파라미터 의미 불변. `theme_service`·`place_export_service` 호출부 회귀 확인 필수.
+  2. 목록 응답에서 `source_videos` 배열을 제거하고 상세 엔드포인트로 이관(T-152에서 검증된 수술 패턴). `DestinationWorkspace`가 목록에서 실제 사용하는 필드(마커·행 표시·언급 수)를 사전 확인해 유지.
+  3. frontend: `limit`을 명시(기본 100)하고 "더 보기" 버튼으로 확장. 101번째 이후 장소가 보이는지 확인(버그 수리 검증). 10초 자동 refetch는 60초로 완화(폴링 다이어트 연장).
+  4. ILIKE용 신규 인덱스는 두지 않는다(현 규모, §2.3). 정렬 회귀 테스트 필수(기존 vitest·pytest의 정렬 semantics — T-152에서 한 번 깨진 전력).
+- **테스트**: 필터·정렬·limit 조합 회귀(특히 `mention_count` 고유 영상 수 semantics), 응답에서 source_videos 부재, facets 무회귀.
+- **완료 기준**: 요청 비용 O(전체)→O(limit), 장소 수와 무관한 결과 화면 응답 속도, 101번째 장소 표시.
+
+#### PR-21. 지오코딩 캐시 테이블 `[속도 P1]` `[S]`
+
+- **해결**: S7.
+- **변경 파일**: `backend/ktc/models/`(신규 `geocode_cache.py`), `backend/alembic/versions/`(신규), `backend/ktc/etl/geocoding.py`, `backend/tests/`.
+- **작업 절차**:
+  1. 테이블 `geocode_cache(query_hash TEXT PK, provider VARCHAR(16), results_json JSONB, created_at TIMESTAMPTZ)` — key는 `sha256(provider + normalized_query)`. DB 테이블인 이유: API/scheduler 2프로세스가 공유.
+  2. `geocoding.py`의 각 provider 호출 앞단에서 조회, 성공 응답(0건 포함)을 적재. TTL 60일 — **만료 정리는 lazy**(조회 시 오래된 행 무시·덮어쓰기), 정리 스케줄러는 두지 않는다.
+  3. 캐시 히트도 evidence JSONB에는 동일 형식으로 기록(계약 불변). 재처리 시 `force_refresh` 옵션 훅만 남긴다.
+- **테스트**: 히트/미스/만료, evidence 형식 불변.
+- **완료 기준**: 시리즈물 채널 재처리에서 반복 장소의 외부 API 호출 0회.
+
+#### PR-22. feature export sync 스로틀 + 더티 필터 `[속도 P1]` `[S/M]`
+
+- **해결**: S6/A2 — 응답 형식 불변(§2.2 ⑤의 수정안).
+- **변경 파일**: `backend/ktc/services/feature_export_service.py`, `backend/ktc/models/extracted_place_candidate.py`, `backend/alembic/versions/`(신규), `scheduler/worker.py`(주기 sync job), `backend/tests/`(기존 `test_feature_export_api.py` 확장 + 필요 시 서비스 테스트 신규 생성).
+- **작업 절차**:
+  1. **스로틀**: GET 진입 시 마지막 sync 완료 시각(모듈 상태)이 30초 이내면 sync를 건너뛰고 `_read_page`만 수행.
+  2. **더티 필터의 전제 컬럼부터 만든다**: `extracted_place_candidates`에는 현재 `updated_at`이 **없다**(`TimestampMixin`은 `created_at`만 제공, `backend/ktc/models/base.py:24-29` — `reviewed_at`만 별도 존재). `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()` + `onupdate=func.now()` 컬럼과 migration(기존 행은 `created_at`으로 백필)을 이 PR에 포함한다. **함정 주의**: SQLAlchemy `onupdate`는 ORM UPDATE에서만 발화한다 — 후보를 갱신하는 경로 중 raw/bulk `update()` 구문이 있는지 grep으로 전수 확인하고, 있으면 해당 지점에서 `updated_at`을 명시 세팅한다.
+  3. **더티 필터**: sync 대상을 전 후보에서 "`updated_at` > 마지막 sync 워터마크"인 후보로 축소하고, ledger 로드도 해당 후보 id의 행만(`WHERE candidate_id IN`). 워터마크는 sync 시작 시각 기준으로 갱신(경계 중복 허용 — 멱등이므로 안전). **hard delete 예외 처리**: 삭제는 행 자체가 사라져 `updated_at` 필터에 잡히지 않는다 — hard delete 경로는 **3곳**이다: 후보 삭제(`DELETE /destinations/candidates/{id}` — `routes.py:1414-1444` **인라인**, ledger 행까지 함께 삭제), 장소 삭제(`place_service.delete_place`, `:860-900`), 영상 제외(`exclude_video`, `place_service.py:950-1022` — 후보·고아 장소 raw DELETE). 세 경로 모두에서 feature_export_service의 "전량 sync 필요" 플래그(모듈 상태)를 세워 **다음 GET의 sync 1회를 전량으로 승격**한다(순환 import 없음 확인됨). 플래그 세팅을 놓쳐도 시간당 전량 sync가 최대 1시간 내 보정한다(자가 치유 유지).
+  4. **안전망**: 프로세스 시작 시 1회 + 스케줄러 시간당 1회 전량 sync(자가 치유 성질 보존). `sync_one` 분산은 하지 않는다(§2.2 ⑤ 기각 사유).
+  5. `_read_page`의 `last_exported_at` 갱신+commit(`:453-458`): 코드베이스 내 소비처를 grep으로 확인하고, 진단 외 용도가 없으면 갱신을 제거해 GET을 순수 읽기로 만든다(컬럼은 유지).
+- **테스트**: 스로틀 동작, 더티 필터가 상태 전이(resolve/reopen)를 다음 GET에서 반영하는지, **삭제(tombstone)가 전량 승격 플래그로 다음 GET에서 반영되는지**, 전량 sync 대비 결과 동일성(golden 비교), 응답 스키마 불변.
+- **완료 기준**: 소비자 폴링 비용이 후보 수와 무관해지고, GET에서 상시 쓰기 커밋이 사라진다.
+
+#### PR-23. LLM 호출 async 게이트웨이 일원화 `[신뢰성·속도 P1]` `[M]`
+
+- **해결**: 문서 이력이 확인한 반복 사고 패턴(T-101/105/111/121-E — 동기 LLM 호출이 이벤트 루프/워커를 막아 매번 호출부 격리로 땜질).
+- **변경 파일**: `backend/ktc/etl/llm_client.py`, 호출부 정리(`transcript_correction.py`, `batch_poi_service.py`, `keyword_expansion.py`, `place_search.py`(opinion), `deep_research_service.py`, `video_analysis_service.py`, `category_suggestion.py`), `backend/tests/`.
+- **작업 절차**:
+  1. `llm_client`에 단일 진입점(`complete_json`/`complete_text`)을 확정하고, 내부에서 `asyncio.to_thread` 격리 + 타임아웃 + 재시도 + rate limiter 통과를 **한 곳에서** 처리한다. 호출부에 흩어진 개별 `to_thread`/timeout/재시도 wrapper를 제거하고 게이트웨이 호출로 통일.
+  2. 회귀 방지 가드 테스트: `backend/ktc/etl` 내에서 `genai`/OpenAI SDK를 게이트웨이 밖에서 직접 호출하는 코드를 grep으로 검출해 실패시키는 테스트를 추가(허용 목록: `gemini_client.py`, `deepseek_client.py`, `llm_client.py`).
+  3. 동작 보존 리팩터링임을 전제로 기존 파이프라인 테스트 전체 통과가 회귀 가드.
+- **완료 기준**: "새 LLM 호출부가 이벤트 루프를 막는" 사고 계열이 구조적으로 재발 불가.
+
+#### PR-24. 자막 fetch 병렬화 `[속도 P1]` `[M, 게이트]`
+
+- **게이트(필수 절차)**: PR-04/05 배포 후 poi_batch 단계별 소요 로그(§7)에서 자막 fetch가 여전히 배치 시간의 30% 이상일 때만 착수.
+- **작업 절차**: `batch_poi_service`의 1단계 루프에서 **자막 fetch만** `asyncio.gather` + Semaphore로 선행 prefetch(교정·LLM은 순차 유지 — 리미터 소관). 동시성 값은 사문화 설정 `CRAWL_MAX_CONCURRENT_VIDEOS`(`config.py:210`)를 소생시켜 사용하되 기본값을 4→3으로 하향(yt-dlp 동시 다연발의 YouTube IP 스로틀 위험). 나머지 사문화 설정 `HTTP_MAX_CONCURRENT_REQUESTS`(`:211`)는 지오코딩 병렬화 기각(PR-21이 대체)에 따라 **이 PR에서 삭제**해 죽은 설정을 정리한다. DB 세션은 병렬 구간에서 공유 금지 — fetch는 순수 I/O만, 결과 적재는 순차.
+- **완료 기준**: 배치 벽시계에서 자막 단계 2~3배 단축, 수집 실패율 무회귀(前後 사유 코드 분포 비교 — PR-11 데이터 활용).
+
+---
+
+### Phase 6 — 공급 API·IA 마감
+
+#### PR-25. features 계약 마감 `[공급 P2]` `[S]`
+
+- **해결**: A5의 features 측.
+- **변경 파일**: `backend/ktc/services/feature_export_service.py`, `backend/ktc/api/routes.py`, `docs/feature-export-api.md`, `backend/tests/test_feature_export_api.py`.
+- **작업 절차**:
+  1. `_build_payload`의 address에 `sigungu_code`/`legal_dong_code`/`sido_code`를 place 실데이터에서 주입(`feature_export_service.py:170-173`의 하드코딩 None 제거). **주의: payload_hash가 전부 바뀌어 전 item이 재발급(sequence 전진)된다** — `docs/feature-export-api.md`와 PR 본문에 소비자 고지(krtour-map은 재수신하면 됨, 계약상 정상 동작).
+  2. item에 `schema_version: 1` 필드 추가(additive). snapshot 페이징 중 갱신 item 재등장(중복 가능·유실 없음) 규칙을 문서에 명기.
+  3. features/themes/export 목록 엔드포인트에 Pydantic `response_model` 부여 — OpenAPI 응답 스키마 공백 해소. 에러는 기존 `detail`(한국어)을 유지하면서 `code` 필드를 additive로 추가(`invalid_cursor`, `invalid_params` 등 최소 셋).
+  4. export 쿼리에 `geocoded_only=true` 기본 파라미터 추가(미검증 좌표의 GPX 유출 방지, false로 opt-out 가능).
+- **테스트**: 스냅샷 회귀(행정코드 포함), schema_version 존재, 재발급 동작, geocoded_only 필터.
+
+#### PR-26. themes API 보강 `[공급 P1]` `[S]`
+
+- **해결**: A3의 최소 안전판. bbox/updated_since/keyset은 백로그(소비자 등장 시 additive).
+- **변경 파일**: `backend/ktc/services/theme_service.py`, `backend/ktc/api/routes.py`, `docs/feature-export-api.md`(테마 섹션 추가 또는 `docs/themes-api.md` 신설), `backend/tests/test_theme_service.py`.
+- **작업 절차**:
+  1. `/themes/places`·`/themes/video/{id}/places`에 `limit`(기본 200, 상한 500)과 `offset`을 추가 — `limit=None` 전량 반환(`theme_service.py:101-124`) 제거.
+  2. `source_videos`를 기본 제외하고 `include=sources` opt-in으로 전환(T-152 경량화 철학). **이 변경은 기존 응답을 줄이는 파괴적 변경이므로** 문서에 마이그레이션 노트를 남기고, `/api-test` 페이지 기본값도 갱신한다(테마 API는 출시 직후·외부 소비자 0이라 지금이 마지막 기회다).
+  3. 소비자용 계약 문서 작성: 엔드포인트 3종, 파라미터, `sufficient` 게이트 규칙, 예시 응답.
+- **테스트**: limit/offset/include 조합, 기존 `test_theme_service.py`(5케이스) 갱신.
+
+#### PR-27. MCP 검수 목록 도구 `[공급 P2]` `[S]`
+
+- **해결**: A6.
+- **변경 파일**: `ktc.mcp_server/tools.py`(리포 레이아웃 기준 `backend/ktc/mcp_server/tools.py`), `backend/tests/`.
+- **작업 절차**:
+  1. READ_TOOLS에 `list_review_candidates(limit≤100, status=needs_review|ignored, sort=oldest|newest, channel_id?, playlist_id?, q?)` 추가 — `place_service.list_unmatched_candidates`(PR-08 확장판) 재사용. 반환은 PR-07 경량 payload와 동일 필드.
+  2. 자동 승인 워크플로는 만들지 않는다 — 도구 docstring에 "확정은 반드시 사람 판단을 거친 `resolve_place_candidate` 호출로" 명시(ADR-16).
+- **완료 기준**: MCP 단독으로 "목록 조회 → 근거 확인 → resolve" 워크플로가 완결된다.
+
+#### PR-28. 작업 IA 정리 (`/jobs` 인덱스·nav 재편·홈 행동 배너) `[UX P1]` `[M~L]`
+
+- **해결**: U10, U12, U13. 의존: PR-03, 06.
+- **변경 파일**: `frontend/src/app/jobs/page.tsx`(신규), `frontend/src/components/AppShell.tsx`, `StatusDashboard.tsx`, `CollectWorkspace.tsx`, `frontend/src/app/page.tsx`(배너), `tests/e2e/`(heading 어서션 갱신), `backend/ktc/api/routes.py`(`/runs` 필터 파라미터 확장 필요 시).
+- **작업 절차**:
+  1. `/jobs` 인덱스 신설: 상단 = 진행 중/대기 큐(통합 run-queue 재사용), 하단 = 이력 테이블(상태·유형 select 필터 + "더 보기" 페이지네이션 — backend `/runs`에 `state`/`job_type` 파라미터가 없으면 추가). 행 액션: 상세 링크·중지·재시작(PR-03 컴포넌트 재사용).
+  2. nav 재편(`AppShell.tsx:20-27`): 주 그룹 = 결과·수집·검수·**작업**·설정, 하단 보조 그룹 = 상태·API 테스트. `/jobs/*` 하이라이트를 "작업"으로 수정(`:33-35`).
+  3. `/status` 축소: 작업 테이블 탭 제거(→ `/jobs`), 시스템 메트릭·RustFS·감사/로그인 로그만 유지. "검수 후보" MetricCard에 `/review` 링크 부여(U12).
+  4. `/collect`의 진행 중 패널을 "현재 작업 요약 1줄 + `/jobs` 링크"로 축소(죽은 `detailRun` 상태 제거 포함).
+  5. `/` 상단 행동 배너 1줄: "검수 대기 N건 → [검수 시작]" + `failed_recent > 0`이면 "실패 작업 K건 → [보기]". 대시보드 전면 개편·`/`→`/places` 이동은 하지 않는다(§2.2 ⑦).
+  6. E2E: nav·heading 어서션 전수 갱신(E2E는 heading을 어서트하므로 필수 체크리스트로 PR 본문에 명시).
+- **완료 기준**: job 관련 표면이 `/jobs`(목록·이력·액션)와 `/jobs/[id]`(상세)로 수렴, 아침 첫 화면에서 다음 행동이 1클릭.
+
+---
+
+## 6. 하지 말아야 할 것 (전 검토 종합)
+
+1. **2,000행 클라이언트 전체 로드로의 회귀** — T-146이 시도했고 T-154가 되돌렸다. 필터는 서버로 내린다.
+2. **신뢰도 임계값 완화식 자동 확정 / MCP 자동 승인** — ADR-16 위반. 자동화는 게이트 정밀도 향상·정렬·프리필·일괄 도구까지만.
+3. **WebSocket/SSE, 버전 카운터, Celery/Redis/PgQueuer** — 이 규모에서 폴링 통합과 asyncio 레인으로 충분. ADR-20 수치 트리거 원칙.
+4. **RPM/재시도 상수를 실측 없이 공격적으로 조정** — T-101/T-105 429 폭주 재발 경로. 순서는 반드시 "레인 분리 → 티어 확인 → 실측 반영".
+5. **features 계약의 형식·cursor 의미 변경** — 실소비자가 pull 중인 정본. 변경은 additive만(행정코드 주입의 hash 재발급은 계약상 정상 동작이므로 예외적 허용 + 고지).
+6. **전 영상 whisper / 전 프레임 OCR 상시 가동** — N150 CPU·비용·레인 점유. 게이트와 플래그 뒤에서만.
+7. **rate limiter 슬라이딩 윈도우 전환·부분 슬롯 회수** — Google 측 계산과 어긋나 과승인→429 위험.
+8. **화면 추가로 문제 풀기(검수 통계 페이지·필터 빌더·프리셋 CRUD·다인 협업)** — 사용자 1명. IA는 축소·행동 중심 재배치 방향.
+9. **가중 합성 신뢰도 점수** — 보정 데이터 없는 가중치는 가짜 정밀도. 불리언 게이트 + 검수 이력 사후 검증.
+10. **`sync_one` 쓰기 지점 분산·seq 카운터 심기** — 한 곳 놓치면 조용한 드리프트/갱신 정지. 자가 치유(전량 sync 안전망·멍청한 폴링) 성질을 지킨다.
+11. **Google Places 파이프라인 승격** — 403은 Cloud Console 키 제한(코드 외부). 검수 참고용 유지.
+12. **확인 다이얼로그 증설로 안전 확보** — 반복 노동에서 다이얼로그는 무의식 클릭으로 무력화된다. 안전은 undo(PR-09)로.
+
+---
+
+## 7. 측정 지표와 검증 루프
+
+각 Phase 완료 시점에 아래를 기록해 다음 게이트 판단(PR-16/19/24)에 쓴다. 측정 인프라가 없는 항목은 해당 PR에 로깅 추가가 포함돼 있다.
+
+| 지표 | 측정 방법 | 현재(추정) | 목표 |
+|---|---|---|---|
+| 검수 후보 1건 처리 인터랙션 수·체감 소요 | 수동 계수(행 재클릭 포함) + 연속 10건 처리 소요 시간 | 4~5 인터랙션 | 2 (PR-02), 키보드 단독 (PR-16) — PR-16 게이트 판정 근거 |
+| 검수 백로그 소진 가능성 | oldest 정렬 존재 여부 + 잔량 추이 | 불가(최신순 고정) | FIFO 소진 가능 |
+| 사용자 트리거 작업 대기시간(배치 실행 중) | 작업 로그 timestamp(enqueue→claim) | 배치 완주까지(수십 분) | 수 초 (PR-04) |
+| poi_batch 단계별 소요 | handler에 단계 로그(PR-04에서 자막/교정/추출/지오코딩 구간 로그 추가) | 미측정 | PR-24 게이트 데이터 |
+| 자막 수율·실패 사유 분포 | `youtube_videos.transcript_source/failure_code` 집계 (PR-11) | 11~30%(E2E 실측) | 사유별 개선 후 재측정 |
+| 유효 원료 전무 영상 비율 | 자막·whisper·description 전 경로 실패 영상 / 전체 (PR-11+17 데이터) | 미측정 | PR-19 게이트 판정 근거(20% 기준) |
+| 자동확정 정밀도 | 검수 이력에서 MATCHED가 사람에 의해 뒤집힌 비율(reopen 데이터, PR-09) | 미측정(T-113 사고 전력) | 게이트 후 뒤집힘 비율 하락 추이 |
+| needs_review 유입 비율 | 후보 생성 대비 needs_review 비율 | 사실상 100%(자동확정 제외 전부) | ambiguous 단일 통과 자동확정(PR-12)으로 하락 |
+| 유휴 폴링 요청 수 | 브라우저 네트워크 탭 1분 계수 | 화면당 ~2req/3s | ~1req/10s (PR-06) |
+| `/features/snapshot` GET 비용 | 응답 시간 + DB 쓰기 유무 | O(후보 수)+쓰기 | 스로틀 내 O(limit)·무쓰기 (PR-22) |
+| 결과 화면 101번째 장소 | 수동 확인 | 미표시(버그) | 표시 (PR-20) |
+
+**검증 루프**: 데이터 품질 계열(PR-12/13/14/17/19)은 머지 후 실데이터 라이브 점검(T-113 방법론 — 특정 키워드 전수 수집 후 후보 품질 검사)을 1회 수행하고 결과를 journal에 기록한다. 자동화된 품질 게이트가 없는 현 상태에서 라이브 점검이 유일하게 실질 버그를 잡아 온 수단이다.
+
+---
+
+## 8. 백로그 (이번 로드맵 범위 밖, 조건 명시)
+
+| 항목 | 재론 조건 |
+|---|---|
+| poi_batch LLM 구간 병렬화(sub-batch 동시 실행 또는 배치 레인 증설) | PR-04/05 후 단계별 소요 로그에서 LLM 구간이 지배적이고 리미터 대기가 ~0으로 실측될 때 — 직렬 3중 구조의 마지막 축 |
+| LLM provider 이원 라우팅(교정=DeepSeek) | PR-04/05 후에도 Gemini 쿼터가 실측 구속 조건일 때 |
+| 공급 API bbox·`updated_since`·keyset 커서 표준화 | themes/공간 질의의 실소비자 등장 시(additive라 늦게 붙여도 비용 동일) |
+| 키별 rate limit·last_used 통계 | 외부 소비자 2곳 이상 또는 남용 징후 |
+| 검수 큐 가상화(react-virtual) | append로 1,000행+ 축적 사용 패턴 + 버벅임 보고 |
+| pg_trgm 유사도 병합 제안 | PR-14 후에도 중복 장소 실측치가 유의미할 때 |
+| 추출 단계 해외 후보 자동 보류(is_domestic=false → IGNORED 적재) | PR-10 운용 후 해외 노이즈가 여전히 반복될 때 |
+| 영상 간 교차 언급(corroboration) 신뢰 신호화 | PR-14 병합 정확화 이후 |
+| Gemini URL 분석(video_analysis) 실 키 smoke + 자막 실패 영상 원료 경로 승격 | T-064 잔여 — 쿼터 여유 확보(PR-05) 후. **PR-19 게이트 시점에 vision 경로와 의무 비교(§2.2 ③)** |
+| 확정 매핑 대표 프레임의 검수/상세 UI 표시 | "프레임이 있었으면 판정이 달라졌을" 운영 사례 수집 후 (RustFS 객체 브라우저 노출 경로 필요) |
+| 지오코딩 질의 구성 재검토(주소 지오코더 vs 키워드 검색 질의 분리) | PR-12 게이트 운용 후에도 `name_unverified`·오매칭 잔존 시 — VWorld `get_coord`(주소 전용)에 장소명 질의를 넣는 현행 설계 부정합의 근본 수리 |
+| E2E n150 컨테이너 하니스(Ubuntu 26.04 Playwright 미지원 우회) | 운영 부채 — 별도 태스크로 |
+| 세션·공개 키 캐시의 프로세스 메모리 탈피(DB화) | 멀티 replica 필요 시(ADR 자인 한계) |
+| 대시보드 전면 개편(`/`→`/places`) | PR-28 배너 운용 후에도 필요가 증명될 때 |
+
+---
+
+## 9. 기존 문서 반영 포인트 (사용자 리뷰 후)
+
+이 문서가 승인되면 아래를 반영한다 (리뷰 전 선반영 금지):
+
+- `docs/tasks.md`: 채택된 PR-01~28을 T-158부터 대기 작업으로 등재(Phase 순서 = 우선순위).
+- `docs/decisions.md`: ADR 신규 3건 후보 — (a) 검수 큐 서버 소유·처리 흐름 모델과 **자동확정 게이트에 의한 ADR-16 경계 재정의**(ambiguous 단일 통과 자동확정 포함 — PR-12에서 작성 의무), (b) 워커 레인 분리와 LLM 게이트웨이(ADR-13 보강), (c) API 키 스코프 모델(ADR-24 보강). 기각 결정(§2.3)도 해당 ADR에 "고려 후 기각"으로 남기면 재론 비용을 줄인다.
+- `CLAUDE.md`: "현재 작업"과 "다음 착수 대상"에 Phase 0 반영.
+- `docs/feature-export-api.md`: PR-01(read 키)·PR-25(schema_version·재등장 규칙)·PR-26(테마 섹션) 시점에 각각 갱신.
