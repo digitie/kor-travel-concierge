@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-158**: Phase -1 외부 provider 정책·데이터 권리 게이트 — provider별 표시/지도/영구 저장/cache/attribution/export/TTL/약관 확인일 matrix(`docs/provider-policy.md`), production kill switch(미디어 다운로드·Google 표시·cache), RustFS asset·prod 키·Whisper runtime 인벤토리, ADR-15 재검토 초안. T-169·T-173과 제한 provider 영구 저장의 release gate. (로드맵 PR-29, §10 B4, G10)
 - [ ] **T-160**: candidate soft delete 상태 모델 — `deleted_at/deletion_reason/deleted_by`+partial index, 삭제 트랜잭션에서 매핑 해제+export tombstone 전이(ledger 선삭제 코드 제거), undo/reopen 백엔드, `exclude_video` 통합, CHECK 제약. (PR-09 백엔드 선행+PR-22 선행, §10 B1, G1)
 - [ ] **T-161**: LLM async/multimodal 게이트웨이 — 전 LLM 호출 수렴(quota reservation 포함: deep research·키워드 확장·검수 의견·카테고리·video analysis의 리미터 우회 해소), timeout/retry/usage 실측/provider·model 기록, direct SDK guard, 실제 결제 티어 확인·`.env.example` 숫자는 예시 표기. (PR-23+PR-05 통합, §10 B6)
 - [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
@@ -26,11 +25,15 @@
 - [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
 - [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
 - [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
-- [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판)
-- [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판)
+- [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판) — **사용자 결정(2026-07-13)**: prod 자동 전사는 의도된 현행(ON) 유지, auto 기본값 결정 완료 — 수동 force·model 인자·상한만 구현
+- [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판) — **사용자 결정(2026-07-13)**: NCP Maps 결과는 캐시·저장 대상 제외 확정(`docs/provider-policy.md`)
 - [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
 - [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
 - [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9)
+- [ ] **T-193**: [조건부] 자막 품질 개선 — 사용자 결정(2026-07-13)으로 신설: prod whisper 자동 전사는
+  의도된 현행 유지이며, 품질 개선 필요성이 확인되면 착수한다. whisper 모델 크기 상향 평가(base→small
+  등), 전사 품질 스코어링, 재전사 정책 개선. T-164의 transcript_attempts 데이터로 필요성 판단.
+  (T-158 결정 ⑧ 파생)
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
 
@@ -58,6 +61,15 @@
 
 ## 완료
 
+- [x] **T-158**: Phase -1 외부 provider 정책·데이터 권리 게이트 — `docs/provider-policy.md` 신설:
+  provider 6열(YouTube/Google Places/NCP Maps/Naver Local Search/Kakao/VWorld)×8열 정책 matrix(전부
+  공식 원문 확인·확인일 기재), 현행 코드 충돌 지점 C-1~C-7, ADR-15 재검토 초안(옵션 4), release
+  gate 선언, dev RustFS·env 플래그 인벤토리(비밀 미기록), prod 확인 필요 표. kill switch 2종
+  (`RAW_MEDIA_STORE_ENABLED`·`GOOGLE_PLACE_SEARCH_ENABLED`, 기본 true=현행 유지 — 사용자 승인) 배선
+  +테스트 4건. 적대적 리뷰 3렌즈(정책 원문 대조·비밀 스캔·명세 완결성)로 BLOCKER 1(prod IP 기록)·
+  MAJOR 5·MINOR 6을 머지 전 수정. 사용자 결정 3건 반영: Google 표시 현행 유지(의도적), prod whisper
+  현행 유지(자막 품질 개선은 T-193 분리), NCP Maps는 캐시·저장 제외(T-170). (2026-07-13, 로드맵
+  PR-29·G10)
 - [x] **T-159**: `exclude_video` 컬럼 버그 hotfix — 고아 장소 판정 루프의 존재하지 않는
   `ExtractedPlaceCandidate.place_id` 참조를 `matched_place_id`로 수정(1줄). 수정 전 코드에서
   AttributeError 재현을 실제 확인한 회귀 테스트(고아 장소 삭제, 타 영상 매핑·matched 후보 참조

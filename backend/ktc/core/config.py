@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     RUSTFS_REGION: str = "us-east-1"
     RUSTFS_HEALTH_PATH: str = "/health/live"
     MEDIA_RETENTION_POLICY: str = "infinite"
+    # --- Phase -1 provider 정책 kill switch (T-158, docs/provider-policy.md) ---
+    # 원본 동영상/오디오(YouTube audiovisual content)의 RustFS "저장" 게이트.
+    # 다운로드 자체는 이 플래그가 막지 않는다 — whisper 오디오는
+    # TRANSCRIPT_WHISPER_ENABLED가 게이트, 프레임 스트림 취득(yt-dlp)은 현재 별도
+    # 게이트 없음. YouTube API Developer Policies III.E.1(사전 서면 승인 없는
+    # 다운로드·저장 제한)과 긴장 관계라 ADR-15 재검토 결정 전 prod에서는 false를
+    # 권고한다. 기본값은 현행 동작 유지(true) — 끄면 store_raw_media가 저장을 스킵한다.
+    RAW_MEDIA_STORE_ENABLED: bool = True
 
     # --- Geocoding / Reverse Geocoding ---
     GEOLOCATION_PROVIDER: str = "vworld"
@@ -196,6 +204,13 @@ class Settings(BaseSettings):
     GOOGLE_PLACES_API_KEY: str = ""
     NAVER_SEARCH_CLIENT_ID: str = ""
     NAVER_SEARCH_CLIENT_SECRET: str = ""
+    # --- Phase -1 provider 정책 kill switch (T-158, docs/provider-policy.md) ---
+    # 검수 장소 검색의 Google Places provider 호출 게이트. Google Maps Platform
+    # Service Specific Terms §14.2는 Places 결과의 비-Google 지도(VWorld) 표시를
+    # 금지하지만, 사용자 결정(2026-07-13)으로 현행 유지(true)가 승인됐다(인지된
+    # 정책 리스크 — docs/provider-policy.md §7). 필요 시 끄는 수단으로 유지하며,
+    # false면 /place-search가 google 결과를 빈 목록 + disabled 사유로 준다.
+    GOOGLE_PLACE_SEARCH_ENABLED: bool = True
 
     # --- 3. MCP 서버 ---
     MCP_WRITE_ENABLED: bool = False

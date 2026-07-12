@@ -16,10 +16,15 @@ from typing import Any
 
 import httpx
 
+from ktc.core.config import get_settings
 from ktc.etl import llm_client
 
 # Naver local 검색 title의 <b>...</b> 강조 태그 제거용.
 _BOLD_TAG_RE = re.compile(r"</?b>")
+
+
+class PlaceSearchProviderDisabled(RuntimeError):
+    """Phase -1 provider 정책 kill switch로 비활성화된 provider 호출 (T-158)."""
 
 GOOGLE_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
@@ -83,7 +88,17 @@ def _to_float(value: Any) -> float | None:
 async def search_google_places(
     client: httpx.AsyncClient, *, query: str, api_key: str, max_results: int = 5
 ) -> list[dict[str, Any]]:
-    """Google Places API(New) text search 결과를 후보로 변환한다."""
+    """Google Places API(New) text search 결과를 후보로 변환한다.
+
+    `GOOGLE_PLACE_SEARCH_ENABLED=false`(Phase -1 정책 게이트)면 호출 없이
+    `PlaceSearchProviderDisabled`를 던진다. `/place-search` 호출부는 이 예외를
+    빈 목록 + `errors.google`의 disabled 사유로 격리한다.
+    """
+    if not get_settings().GOOGLE_PLACE_SEARCH_ENABLED:
+        raise PlaceSearchProviderDisabled(
+            "disabled: GOOGLE_PLACE_SEARCH_ENABLED=false — "
+            "Phase -1 provider 정책 게이트(docs/provider-policy.md)"
+        )
     resp = await client.post(
         GOOGLE_SEARCH_URL,
         headers={
