@@ -13,6 +13,9 @@
   인덱스를 두 벌 유지할 이유가 없다. T-154의 복합 인덱스 3종을 같은 이름의
   `WHERE deleted_at IS NULL` partial index로 **대체**한다(기존 행은 전부
   `deleted_at IS NULL`이라 커버리지 동일, 쓰기 비용은 동일 이하).
+- **downgrade 경고**: 컬럼 drop으로 삭제 표시·사유가 영구 손실되고, soft delete된
+  후보가 live로 부활한다(검수 큐 재등장 가능). export ledger tombstone은 남지만
+  후보 상태와 어긋난다.
 
 Revision ID: 20260713_0016
 Revises: 20260710_0015

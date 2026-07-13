@@ -431,6 +431,17 @@ async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) ->
             changed += 1
             continue
 
+        # tombstone → tombstone 재분류는 갱신하지 않는다(freeze, T-160 리뷰).
+        # tombstone은 제거 마커라 payload/state/reason 갱신이 consumer에 의미가
+        # 없고, reopen 직후(`needs_review`+`pending`, has_row) 후보가 스캔에 다시
+        # 들어올 때 sync가 tombstone을 재sequence하는 소음을 막는다. 삭제 시 기록한
+        # 사유와 마지막 payload는 그대로 보존되며, upsert/reject로의 전이는 여전히
+        # 새 sequence로 발행된다.
+        if (
+            operation == FeatureExportOperation.TOMBSTONE.value
+            and row.operation == FeatureExportOperation.TOMBSTONE.value
+        ):
+            continue
         if (
             row.operation == operation
             and row.payload_hash == payload_hash

@@ -5,16 +5,19 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 from ktc.models import (
     ExtractedPlaceCandidate,
+    FeatureExport,
     FeatureExportStatus,
     MatchStatus,
     MediaAsset,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeVideo,
+    utcnow,
 )
 from ktc.services import place_service as svc
 
@@ -776,6 +779,10 @@ async def test_soft_delete_conflict_without_force_and_cleanup_with_force(session
 async def test_reopen_candidate_transitions(session):
     # soft deleted → needs_review 복귀 + 삭제 필드 clear + export pending.
     deleted = await _seed_candidate(session, name="삭제 후보")
+    deleted.reviewed_by = "reviewer-a"
+    deleted.reviewed_at = utcnow()
+    deleted.review_note = "직전 판정 사유"
+    await session.commit()
     await svc.soft_delete_candidates(session, [deleted.id], reason="실수 삭제")
     await session.commit()
     reopened, source = await svc.reopen_candidate(session, candidate_id=deleted.id)
@@ -786,6 +793,10 @@ async def test_reopen_candidate_transitions(session):
     assert reopened.deleted_by is None
     assert reopened.match_status == MatchStatus.NEEDS_REVIEW.value
     assert reopened.feature_export_status == FeatureExportStatus.PENDING.value
+    # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 보존.
+    assert reopened.reviewed_by is None
+    assert reopened.reviewed_at is None
+    assert reopened.review_note == "직전 판정 사유"
 
     # ignored → needs_review 복귀.
     ignored = await _seed_candidate(
@@ -832,3 +843,72 @@ async def test_list_unmatched_excludes_soft_deleted(session):
         await svc.review_candidate(
             session, candidate_id=drop.id, reviewed_by="web"
         )
+
+
+async def test_check_constraint_requires_deletion_reason(session):
+    # B1 절차 5 회귀: helper를 우회해 사유 없이 deleted_at만 세팅하면
+    # DB CHECK(ck_epc_deleted_requires_reason)가 flush에서 막는다.
+    candidate = await _seed_candidate(session, name="사유 없는 삭제")
+    candidate.deleted_at = utcnow()  # deletion_reason 없이
+    with pytest.raises(IntegrityError):
+        await session.flush()
+    await session.rollback()
+
+
+async def test_review_queue_partial_indexes_exclude_deleted(session):
+    # B1 절차 5 회귀(모델·migration 드리프트 가드): 검수 큐 인덱스 3종은
+    # `WHERE (deleted_at IS NULL)` partial index여야 한다.
+    rows = (
+        await session.execute(
+            text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE tablename = 'extracted_place_candidates' "
+                "AND indexname LIKE 'ix_epc_review_queue%'"
+            )
+        )
+    ).all()
+    defs = {name: definition for name, definition in rows}
+    assert set(defs) == {
+        "ix_epc_review_queue_status_id",
+        "ix_epc_review_queue_channel_status_id",
+        "ix_epc_review_queue_playlist_status_id",
+    }
+    for definition in defs.values():
+        assert "WHERE (deleted_at IS NULL)" in definition
+
+
+async def test_soft_delete_never_exported_candidate_creates_no_tombstone(session):
+    # export된 적 없는 후보 삭제: 의미 없는 tombstone을 만들지 않는다(B1 절차 3).
+    candidate = await _seed_candidate(session, name="미노출 후보")
+    summary = await svc.soft_delete_candidates(
+        session, [candidate.id], reason="노출 전 삭제"
+    )
+    await session.commit()
+    assert summary.tombstoned_exports == 0
+    ledger_rows = (
+        (
+            await session.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ledger_rows == []
+
+
+async def test_exclude_video_blank_reason_uses_default(session):
+    # 공백 reason이 helper 사유 검증(ValueError→500)으로 흐르지 않고 기본 사유를 쓴다.
+    candidate = await _seed_candidate(session, video_id="v-blank", name="공백 사유")
+    summary = await svc.exclude_video(session, "v-blank", reason="   ")
+    assert summary is not None
+    assert summary["deleted_candidates"] == 1
+    await session.refresh(candidate)
+    assert candidate.deleted_at is not None
+    assert candidate.deletion_reason == "동영상 제외"
+    video = await session.get(YoutubeVideo, "v-blank")
+    assert video is not None
+    assert video.is_excluded is True
+    assert video.exclusion_reason is None  # 공백은 저장하지 않는다

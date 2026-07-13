@@ -763,13 +763,17 @@ def latest_candidate_resolution(
 async def _provider_identities_for_places(
     session: AsyncSession, place_ids: list[int]
 ) -> dict[int, set[tuple[str, str]]]:
-    """기존 후보 검수 이력에서 장소별 `(provider, native_id)`를 보수적으로 읽는다."""
+    """기존 후보 검수 이력에서 장소별 `(provider, native_id)`를 보수적으로 읽는다.
+
+    soft delete는 `matched_place_id`를 해제하므로(invariant) 조건은 방어적 명시다(T-160).
+    """
     if not place_ids:
         return {}
     rows = (
         await session.execute(
             select(ExtractedPlaceCandidate).where(
-                ExtractedPlaceCandidate.matched_place_id.in_(place_ids)
+                ExtractedPlaceCandidate.matched_place_id.in_(place_ids),
+                ExtractedPlaceCandidate.deleted_at.is_(None),
             )
         )
     ).scalars()
@@ -1296,13 +1300,17 @@ async def soft_delete_candidates(
     ids = [int(cid) for cid in candidate_ids]
     if not ids:
         return _EMPTY_SOFT_DELETE
+    # 행 락으로 동시 resolve(`resolve_candidate`도 FOR UPDATE)와 직렬화한다 —
+    # 락 없이면 409 판정(매핑 유무)이 구버전 스냅샷을 읽는 race가 생긴다.
     candidates = list(
         (
             await session.execute(
-                select(ExtractedPlaceCandidate).where(
+                select(ExtractedPlaceCandidate)
+                .where(
                     ExtractedPlaceCandidate.id.in_(ids),
                     ExtractedPlaceCandidate.deleted_at.is_(None),
                 )
+                .with_for_update()
             )
         )
         .scalars()
@@ -1377,8 +1385,12 @@ async def reopen_candidate(
       재확정(ready + 장소 매칭) 시 새 sequence의 upsert를 재발행한다.
     - `ignored`: `needs_review` + `pending` 복귀.
     - 이미 `needs_review`: `CandidateReopenConflictError`(409 — 복귀할 것이 없다).
-    - `matched`/`user_corrected`: 범위 밖 — `CandidateReopenUnsupportedError`(400).
-      확정 장소 정리 정책은 T-184에서 다룬다.
+    - `matched`/`user_corrected`: **의도적 이연** — `CandidateReopenUnsupportedError`(400).
+      확정 해제는 reference count 기반 장소 정리(공유 장소 보호)와 함께 T-184에서
+      구현한다.
+    - 영상 제외(`exclude_video`)로 삭제된 후보를 reopen 해도
+      `youtube_videos.is_excluded`는 별개 상태로 남는다(영상 제외 undo는 T-184
+      정책 소관) — 후보만 검수 큐로 돌아오고 영상은 여전히 수집에서 스킵된다.
 
     반환: (후보, 복귀 출처 라벨 `deleted`|`ignored`) — 감사 로그용. flush까지만
     수행하고 commit은 호출자 책임이다.
@@ -1392,11 +1404,18 @@ async def reopen_candidate(
         candidate.deleted_by = None
         candidate.match_status = MatchStatus.NEEDS_REVIEW
         candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 직전 판정
+        # 사유 참고 가치가 있어 보존한다.
+        candidate.reviewed_by = None
+        candidate.reviewed_at = None
         await session.flush()
         return candidate, "deleted"
     if candidate.match_status == MatchStatus.IGNORED.value:
         candidate.match_status = MatchStatus.NEEDS_REVIEW
         candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 보존.
+        candidate.reviewed_by = None
+        candidate.reviewed_at = None
         await session.flush()
         return candidate, "ignored"
     if candidate.match_status == MatchStatus.NEEDS_REVIEW.value:
@@ -1428,8 +1447,11 @@ async def exclude_video(
     if video is None:
         return None
     video.is_excluded = True
-    if reason:
-        video.exclusion_reason = reason[:255]
+    # 공백 reason이 helper의 사유 필수 검증(ValueError→500)으로 흐르지 않게
+    # delete 라우트와 같은 정규화 패턴을 쓴다.
+    reason_text = (reason or "").strip()
+    if reason_text:
+        video.exclusion_reason = reason_text[:255]
 
     # 고아 판정 대상: 이 영상이 매핑한 place_id 집합(매핑 삭제 전에 수집).
     place_ids = {
@@ -1456,7 +1478,7 @@ async def exclude_video(
     soft_summary = await soft_delete_candidates(
         session,
         candidate_ids,
-        reason=reason or "동영상 제외",
+        reason=reason_text or "동영상 제외",
         deleted_by=excluded_by,
         force=True,
     )

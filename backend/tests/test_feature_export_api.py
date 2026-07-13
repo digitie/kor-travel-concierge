@@ -527,18 +527,13 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     )
     assert again.status_code == 409
 
-    # 재확정 전에는 upsert가 재발행되지 않는다(ledger는 tombstone 유지 — 상태·payload
-    # 변화로 tombstone 갱신 이벤트는 있을 수 있으나 upsert는 없어야 한다).
+    # 재확정 전에는 아무 것도 재발행되지 않는다 — sync의 tombstone freeze 덕에
+    # reopen 직후(`needs_review`+`pending`) 재스캔도 tombstone을 재sequence하지
+    # 않는다(cursor 불변, upsert 없음).
     interim = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     interim_body = interim.json()
-    assert all(
-        item["operation"] == "tombstone" for item in interim_body["items"]
-    )
-    cursor = interim_body["next_cursor"]
-    cursor_seqs.append(_decode_cursor(cursor))
-    consumed_ops.extend(
-        item["operation"] for item in interim_body["items"]
-    )
+    assert interim_body["items"] == []
+    assert interim_body["next_cursor"] == cursor
     snapshot_after_reopen = await client.get("/api/v1/features/snapshot")
     assert snapshot_after_reopen.json()["items"] == []
 
