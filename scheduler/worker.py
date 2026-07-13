@@ -51,6 +51,7 @@ from ktc.models import (
 
 from ktc.services import (
     crawl_run_service,
+    feature_export_service,
     place_service,
     settings_service,
     source_scan_service,
@@ -1011,6 +1012,23 @@ def register_worker_jobs(
             coalesce=True,
             replace_existing=True,
         )
+    if settings.FEATURE_EXPORT_RECONCILE_ENABLED:
+        # feature export 안전망(T-171): 시작 시 1회(next_run_time=now) + 주기 전량 sync로
+        # dirty 마킹을 놓친 mutation을 자가 치유한다.
+        reconcile_kwargs = (
+            {} if use_persistent_jobstore else {"session_factory": session_factory}
+        )
+        scheduler.add_job(
+            reconcile_feature_exports_once,
+            "interval",
+            seconds=settings.FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS,
+            next_run_time=datetime.now(timezone.utc),
+            kwargs=reconcile_kwargs,
+            id="feature-export-reconcile",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
 
 
 async def amain() -> None:
@@ -1027,6 +1045,26 @@ async def amain() -> None:
         f"max_retries={settings.SCHEDULER_MAX_RETRIES})"
     )
     await worker_loop()
+
+
+async def reconcile_feature_exports_once(
+    session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
+) -> int:
+    """feature export ledger를 전량 sync로 자가 치유하는 안전망 job(T-171).
+
+    공급 GET은 durable dirty outbox에 실린 후보만 동기화(`sync_dirty`)하므로, dirty 마킹을
+    놓친 mutation은 이 주기 전량 sync가 최대 interval 내에 보정한다. 스케줄러 시작 시 1회
+    (`next_run_time=now`) + 주기 실행한다. 변경 건수를 반환한다.
+    """
+    async with session_factory() as session:
+        try:
+            changed = await feature_export_service.sync_feature_exports(session)
+        except Exception as exc:  # noqa: BLE001 - 안전망은 다음 tick에서 재시도한다
+            logger.warning("feature export 안전망 sync 실패: %s", exc)
+            return 0
+    if changed:
+        logger.info("feature export 안전망 sync가 %s건을 보정했다.", changed)
+    return changed
 
 
 async def enqueue_source_scan_once(
