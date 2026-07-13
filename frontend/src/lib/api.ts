@@ -518,13 +518,6 @@ export type DestinationFacets = {
   districts: { value: string; label: string; place_count: number }[];
 };
 
-export async function listDestinations(
-  sort: DestinationSort = "latest",
-  filter?: DestinationFilter,
-): Promise<DestinationSummary[]> {
-  return (await listDestinationsPage(sort, filter)).items;
-}
-
 export async function listDestinationsPage(
   sort: DestinationSort = "latest",
   filter?: DestinationFilter,
