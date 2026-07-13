@@ -50,7 +50,28 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
   test('수집 화면에서 수집 시작 시 job_id·pending을 표시한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
+    const queueRequests: string[] = [];
+    let harvestResponseSeen = false;
+    let queueRequestsAfterHarvestResponse = 0;
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname !== '/api/v1/runs/queue') return;
+      queueRequests.push(url.toString());
+      if (harvestResponseSeen) {
+        queueRequestsAfterHarvestResponse += 1;
+      }
+    });
+    page.on('response', (response) => {
+      const url = new URL(response.url());
+      if (
+        url.pathname === '/api/v1/harvest' &&
+        response.request().method() === 'POST'
+      ) {
+        harvestResponseSeen = true;
+      }
+    });
     await loginAsAdmin(page, '/collect');
+    await expect.poll(() => queueRequests.length).toBe(1);
 
     await page.locator('#harvest-target').fill('제주 카페');
     await page.locator('#harvest-max-videos').fill('3');
@@ -65,6 +86,10 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     expect(response.ok()).toBeTruthy();
     const job = (await response.json()) as { job_id: string; state: string };
     expect(job.state).toBe('pending');
+    // 10초 interval을 기다리지 않고 mutation onSuccess가 공용 queue를 즉시 갱신한다.
+    await expect
+      .poll(() => queueRequestsAfterHarvestResponse, { timeout: 3_000 })
+      .toBe(1);
 
     // 수집 폼 성공 안내(작업 링크 포함)와 진행 중 작업 패널 표시를 확인한다.
     await expect(page.getByText('수집 작업을 등록했습니다')).toBeVisible();
@@ -73,6 +98,266 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     ).toHaveAttribute('href', `/jobs/${job.job_id}`);
 
     expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('작업 상태는 단일 큐 요청으로 실행·대기·확인 필요 수를 공유한다', async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+    const errors = collectConsoleErrors(page);
+    const queueRequests: string[] = [];
+    const queueRequestTimes: number[] = [];
+    const queueResponseTimes: number[] = [];
+    const legacyQueueRequests: string[] = [];
+    const historyRequests: URL[] = [];
+    let attentionFirstPage:
+      | {
+          items: Array<Record<string, unknown>>;
+          [key: string]: unknown;
+        }
+      | undefined;
+    await page.route('**/api/v1/runs/queue', async (route) => {
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as Record<string, unknown>;
+      await route.fulfill({
+        status: response.status(),
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...snapshot,
+          running_count: 101,
+          pending_count: 17,
+          open_attention_count: 81,
+          has_more: true,
+        }),
+      });
+    });
+    await page.route('**/api/v1/runs?**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('attention') !== 'open') {
+        await route.continue();
+        return;
+      }
+      if (url.searchParams.get('cursor') === 'mock-attention-next') {
+        const source = attentionFirstPage?.items[0];
+        if (!source) throw new Error('attention 첫 page가 먼저 필요합니다');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            items: [
+              {
+                ...source,
+                job_id: '81000',
+                target_id: 'oldest-open-attention',
+                target_label: '가장 오래된 확인 필요 작업',
+              },
+            ],
+            next_cursor: null,
+            has_more: false,
+            total: 81,
+            newest_id: 81000,
+            newer_than: 0,
+          }),
+        });
+        return;
+      }
+      const response = await route.fetch();
+      const firstPage = (await response.json()) as typeof attentionFirstPage;
+      if (!firstPage) throw new Error('attention 응답이 비어 있습니다');
+      attentionFirstPage = firstPage;
+      await route.fulfill({
+        status: response.status(),
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...firstPage,
+          next_cursor: 'mock-attention-next',
+          has_more: true,
+          total: 81,
+        }),
+      });
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/v1/runs/queue') {
+        queueRequests.push(url.toString());
+        queueRequestTimes.push(Date.now());
+      }
+      if (
+        url.pathname === '/api/v1/runs' &&
+        ['running', 'pending'].includes(url.searchParams.get('state') ?? '')
+      ) {
+        legacyQueueRequests.push(url.toString());
+      }
+      if (url.pathname === '/api/v1/runs') historyRequests.push(url);
+    });
+    page.on('response', (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === '/api/v1/runs/queue') {
+        queueResponseTimes.push(Date.now());
+      }
+    });
+
+    await loginAsAdmin(page, '/status');
+
+    const statusLink = page.getByRole('link', {
+      name: /작업 상태: 실행 101, 대기 17, 확인 필요 81\./,
+    });
+    await expect(statusLink).toBeVisible();
+    await expect(statusLink.getByText('118', { exact: true })).toBeVisible();
+    await expect(statusLink.getByText('확인 81', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('실행 101 · 대기 17 · 확인 필요 81', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText('활성 작업 총 118건 중 1건 표시', { exact: true }),
+    ).toBeVisible();
+    await expect.poll(() => queueRequests.length).toBe(1);
+    await page.waitForTimeout(250);
+    expect(queueRequests).toHaveLength(1);
+    expect(legacyQueueRequests).toEqual([]);
+
+    // status와 collect observer가 같은 fresh cache를 쓰므로 client navigation 직후에는
+    // queue를 다시 요청하지 않고, 10초 interval에서만 다음 1회가 나간다.
+    await page
+      .getByRole('navigation')
+      .getByRole('link', { name: '수집', exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/collect$/);
+    await page.waitForTimeout(250);
+    expect(queueRequests).toHaveLength(1);
+    await expect
+      .poll(() => queueRequests.length, {
+        timeout: 12_500,
+        intervals: [250],
+      })
+      .toBe(2);
+    expect(queueRequestTimes[1] - queueResponseTimes[0]).toBeGreaterThanOrEqual(
+      9_000,
+    );
+    expect(queueRequestTimes[1] - queueResponseTimes[0]).toBeLessThanOrEqual(
+      10_750,
+    );
+    await page.waitForTimeout(500);
+    expect(queueRequests).toHaveLength(2);
+    expect(legacyQueueRequests).toEqual([]);
+    expect(historyRequests.length).toBeGreaterThan(0);
+    expect(
+      historyRequests.every(
+        (url) => url.searchParams.get('terminal') === 'true',
+      ),
+    ).toBe(true);
+    expect(
+      historyRequests.every(
+        (url) => url.searchParams.get('user_jobs_only') === 'true',
+      ),
+    ).toBe(true);
+
+    // attention 배지는 단순 상태 페이지가 아니라 확인할 실패 이력으로 바로 이동한다.
+    const attentionLink = page.getByRole('link', {
+      name: /작업 상태: 실행 101, 대기 17, 확인 필요 81\./,
+    });
+    await attentionLink.click();
+    await expect(page).toHaveURL(
+      /\/status\?tab=history&attention=open$/,
+    );
+    await expect
+      .poll(() =>
+        historyRequests.some(
+          (url) => url.searchParams.get('attention') === 'open',
+        ),
+      )
+      .toBe(true);
+    const historyTab = page.getByRole('tab', { name: /확인 필요/ });
+    await expect(historyTab).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      page.getByRole('row', { name: /실패 재시작 E2E/ }),
+    ).toBeVisible();
+    await page
+      .getByRole('button', { name: '다음 작업 이력 불러오기 (1/81)' })
+      .click();
+    await expect(
+      page.getByRole('row', { name: /가장 오래된 확인 필요 작업/ }),
+    ).toBeVisible();
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('큐 오류 중 화면을 이동해도 재시도 주기가 폭주하지 않는다', async ({
+    page,
+  }) => {
+    test.setTimeout(30_000);
+    let queueRequestCount = 0;
+    let historyRequestCount = 0;
+    await page.route('**/api/v1/runs/queue', async (route) => {
+      queueRequestCount += 1;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: '일시적인 큐 장애' }),
+      });
+    });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        url.pathname === '/api/v1/runs' &&
+        url.searchParams.get('terminal') === 'true' &&
+        url.searchParams.get('user_jobs_only') === 'true'
+      ) {
+        historyRequestCount += 1;
+      }
+    });
+
+    await loginAsAdmin(page, '/status');
+    const statusLink = page.getByRole('link', {
+      name: /작업 상태: 실행 0, 대기 0, 확인 필요 0\. 작업 상태 오류/,
+    });
+    await expect(statusLink.getByText('오류', { exact: true })).toBeVisible();
+    expect(historyRequestCount).toBeGreaterThanOrEqual(1);
+    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    await expect(
+      page.getByRole('row', { name: /실패 재시작 E2E/ }),
+    ).toBeVisible();
+    const requestsAfterInitialRetry = queueRequestCount;
+    expect(requestsAfterInitialRetry).toBeGreaterThanOrEqual(2);
+
+    await page
+      .getByRole('navigation')
+      .getByRole('link', { name: '수집', exact: true })
+      .click();
+    await page
+      .getByRole('navigation')
+      .getByRole('link', { name: '검수', exact: true })
+      .click();
+    await page.waitForTimeout(500);
+    expect(queueRequestCount).toBe(requestsAfterInitialRetry);
+
+    await expect
+      .poll(() => queueRequestCount, {
+        timeout: 10_750,
+        intervals: [100],
+      })
+      .toBe(requestsAfterInitialRetry + 1);
+  });
+
+  test('종료 작업 이력은 60초 safety 주기로 갱신한다', async ({ page }) => {
+    test.setTimeout(80_000);
+    let historyRequestCount = 0;
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (
+        url.pathname === '/api/v1/runs' &&
+        url.searchParams.get('terminal') === 'true' &&
+        url.searchParams.get('user_jobs_only') === 'true'
+      ) {
+        historyRequestCount += 1;
+      }
+    });
+
+    await loginAsAdmin(page, '/status');
+    await expect.poll(() => historyRequestCount).toBe(1);
+
+    await page.waitForTimeout(61_500);
+
+    await expect.poll(() => historyRequestCount).toBe(2);
   });
 
   test('실패·쿼터 보류 작업을 멱등 재시작하고 lineage·attention을 표시한다', async ({
@@ -184,32 +469,51 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
 
   test('실행 중 작업을 확인 후 중지 요청하고 즉시 상태를 갱신한다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
+    const facetRequests: string[] = [];
     let hideRunningQueue = false;
-    await page.route('**/api/v1/runs?**', async (route) => {
-      const url = new URL(route.request().url());
-      if (hideRunningQueue && url.searchParams.get('state') === 'running') {
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            items: [],
-            next_cursor: null,
-            has_more: false,
-            total: 0,
-            newest_id: null,
-            newer_than: 0,
-          }),
-        });
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/v1/destinations/facets') {
+        facetRequests.push(url.toString());
+      }
+    });
+    await page.route('**/api/v1/runs/queue', async (route) => {
+      if (!hideRunningQueue) {
+        await route.continue();
         return;
       }
-      await route.continue();
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as {
+        items: Array<{ state: string }>;
+        open_attention_count: number;
+        running_count: number;
+        pending_count: number;
+        has_more: boolean;
+        user_job_types: string[];
+      };
+      await route.fulfill({
+        status: response.status(),
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...snapshot,
+          items: snapshot.items.filter((run) => run.state !== 'running'),
+          running_count: 0,
+        }),
+      });
     });
     await page.route('**/api/v1/runs/*/stop', async (route) => {
       const response = await route.fetch();
       hideRunningQueue = true;
       await route.fulfill({ response });
     });
-    await loginAsAdmin(page, '/status');
+    // 결과 화면에서 facet cache를 먼저 만든 뒤 상태 화면으로 이동한다.
+    await loginAsAdmin(page, '/');
+    await expect.poll(() => facetRequests.length).toBe(1);
+    await page
+      .getByRole('navigation')
+      .getByRole('link', { name: '상태', exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/status$/);
 
     const runningRow = page.getByRole('row', { name: /부산 맛집/ });
     await expect(runningRow).toBeVisible();
@@ -231,6 +535,17 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     expect(stopResult.state).toBe('running');
     await expect(runningRow).toHaveCount(0);
     await expect(page.getByRole('status')).toContainText('중지를 요청했습니다.');
+
+    // queue poll에서 활성 ID가 사라지면 10분 stale cache에 묶이지 않고
+    // 결과 화면 복귀 즉시 facet을 다시 읽는다.
+    await page
+      .getByRole('navigation')
+      .getByRole('link', { name: '결과', exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect
+      .poll(() => facetRequests.length, { timeout: 3_000 })
+      .toBe(2);
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 

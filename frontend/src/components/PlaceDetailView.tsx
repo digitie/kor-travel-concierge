@@ -13,6 +13,7 @@ import {
   deletePlace,
   getPlaceDetail,
   getVideoTranscript,
+  RUN_QUEUE_QUERY_KEY,
   triggerDeepResearch,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -92,6 +93,7 @@ export function PlaceDetailView({
     mutationFn: () => deletePlace(placeId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
+      queryClient.invalidateQueries({ queryKey: ["destination-facets"] });
       queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
       queryClient.removeQueries({ queryKey: ["place-detail", placeId] });
       onDeleted?.();
@@ -99,6 +101,9 @@ export function PlaceDetailView({
   });
   const deepResearchMutation = useMutation({
     mutationFn: () => triggerDeepResearch(placeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
+    },
   });
 
   useEffect(() => {
@@ -412,4 +417,3 @@ export function PlaceDetailView({
     </div>
   );
 }
-

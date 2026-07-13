@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2Icon, PlayIcon } from "lucide-react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import {
   listCategories,
+  RUN_QUEUE_QUERY_KEY,
   startHarvest,
   type CategoryOption,
   type HarvestContentFilter,
@@ -124,6 +125,7 @@ const harvestFormSchema = z
 type HarvestFormValues = z.infer<typeof harvestFormSchema>;
 
 export function HarvestConsole() {
+  const queryClient = useQueryClient();
   const form = useForm<HarvestFormValues>({
     resolver: zodResolver(harvestFormSchema),
     defaultValues: {
@@ -171,7 +173,10 @@ export function HarvestConsole() {
 
   const mutation = useMutation({
     mutationFn: startHarvest,
-    onSuccess: () => form.reset(form.getValues()),
+    onSuccess: () => {
+      form.reset(form.getValues());
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
+    },
   });
 
   return (

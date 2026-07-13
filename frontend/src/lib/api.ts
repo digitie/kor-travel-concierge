@@ -227,13 +227,50 @@ export type CrawlRunSummary = {
   finished_at: string | null;
 };
 
-// 사용자에게 노출하는 작업 유형(내부 source_scan 등은 기본 제외).
-export const USER_JOB_TYPES = [
-  "harvest",
-  "poi_batch",
-  "deep_research",
-  "video_analysis",
-] as const;
+export type RunQueueSnapshot = {
+  items: CrawlRunSummary[];
+  open_attention_count: number;
+  running_count: number;
+  pending_count: number;
+  has_more: boolean;
+  user_job_types: string[];
+};
+
+export const RUN_QUEUE_QUERY_KEY = ["run-queue"] as const;
+export const RUN_QUEUE_STALE_TIME_MS = 10_000;
+export const RUN_QUEUE_REFETCH_INTERVAL_MS = 10_000;
+export const RUN_HISTORY_REFETCH_INTERVAL_MS = 60_000;
+export const RUN_QUEUE_OBSERVER_OPTIONS = {
+  staleTime: RUN_QUEUE_STALE_TIME_MS,
+  refetchOnMount: false,
+  retryOnMount: false,
+} as const;
+
+export function runQueueRefetchDelay(
+  lastUpdatedAt: number,
+  now = Date.now(),
+): number {
+  if (lastUpdatedAt <= 0) return RUN_QUEUE_REFETCH_INTERVAL_MS;
+  return Math.max(
+    1,
+    RUN_QUEUE_REFETCH_INTERVAL_MS - Math.max(0, now - lastUpdatedAt),
+  );
+}
+
+export function runQueueRefetchInterval(
+  state: {
+    fetchStatus: "fetching" | "paused" | "idle";
+    dataUpdatedAt: number;
+    errorUpdatedAt: number;
+  },
+  now = Date.now(),
+): number | false {
+  if (state.fetchStatus !== "idle") return false;
+  return runQueueRefetchDelay(
+    Math.max(state.dataUpdatedAt, state.errorUpdatedAt),
+    now,
+  );
+}
 
 export type AuditLogSummary = {
   id: number;
@@ -692,24 +729,45 @@ export async function excludeVideo(
 
 export async function listRuns({
   state,
+  terminal,
+  attention,
+  userJobsOnly,
   limit = 12,
   jobTypes,
 }: {
   state?: "pending" | "running" | "done" | "failed" | string;
+  terminal?: boolean;
+  attention?: RunAttention;
+  userJobsOnly?: boolean;
   limit?: number;
   jobTypes?: readonly string[];
 } = {}): Promise<CrawlRunSummary[]> {
-  return (await listRunsPage({ state, limit, jobTypes })).items;
+  return (
+    await listRunsPage({
+      state,
+      terminal,
+      attention,
+      userJobsOnly,
+      limit,
+      jobTypes,
+    })
+  ).items;
 }
 
 export async function listRunsPage({
   state,
+  terminal,
+  attention,
+  userJobsOnly,
   limit = 12,
   jobTypes,
   cursor,
   newerThanId,
 }: {
   state?: "pending" | "running" | "done" | "failed" | string;
+  terminal?: boolean;
+  attention?: RunAttention;
+  userJobsOnly?: boolean;
   limit?: number;
   jobTypes?: readonly string[];
   cursor?: string | null;
@@ -719,6 +777,9 @@ export async function listRunsPage({
   if (state) {
     params.set("state", state);
   }
+  if (terminal) params.set("terminal", "true");
+  if (attention) params.set("attention", attention);
+  if (userJobsOnly) params.set("user_jobs_only", "true");
   if (jobTypes && jobTypes.length > 0) {
     params.set("job_types", jobTypes.join(","));
   }
@@ -731,17 +792,8 @@ export async function listRunsPage({
   );
 }
 
-export async function listRunQueue(
-  jobTypes?: readonly string[],
-): Promise<CrawlRunSummary[]> {
-  const [running, pending] = await Promise.all([
-    listRuns({ state: "running", limit: 50, jobTypes }),
-    listRuns({ state: "pending", limit: 50, jobTypes }),
-  ]);
-  return [
-    ...running.sort(compareRunIdAsc),
-    ...pending.sort(compareRunIdAsc),
-  ];
+export async function listRunQueue(): Promise<RunQueueSnapshot> {
+  return requestJson<RunQueueSnapshot>("/api/v1/runs/queue");
 }
 
 export async function runSourceTargetNow(
@@ -752,10 +804,6 @@ export async function runSourceTargetNow(
   return requestJson<HarvestJob>(`/api/v1/source-targets/${id}/run-now${qs}`, {
     method: "POST",
   });
-}
-
-function compareRunIdAsc(a: CrawlRunSummary, b: CrawlRunSummary) {
-  return Number(a.job_id) - Number(b.job_id);
 }
 
 export async function listAuditLogs(): Promise<AuditLogSummary[]> {

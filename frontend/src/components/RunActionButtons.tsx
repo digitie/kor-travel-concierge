@@ -7,6 +7,7 @@ import { Loader2Icon, RotateCcwIcon, SquareIcon } from "lucide-react";
 
 import {
   restartRun,
+  RUN_QUEUE_QUERY_KEY,
   stopRun,
   type CrawlRunSummary,
   type RestartRunResult,
@@ -43,7 +44,7 @@ export function RunActionButtons({
   async function invalidateRunQueries(jobIds: string[]) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["runs"] }),
-      queryClient.invalidateQueries({ queryKey: ["run-queue"] }),
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY }),
       ...jobIds.map((jobId) =>
         queryClient.invalidateQueries({ queryKey: ["run", jobId] }),
       ),

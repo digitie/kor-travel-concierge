@@ -23,6 +23,7 @@ import {
   InfoIcon,
   Loader2Icon,
   MapPinIcon,
+  RefreshCwIcon,
   SearchIcon,
   SparklesIcon,
   SquareIcon,
@@ -38,6 +39,7 @@ import {
   listUnmatchedCandidatesPage,
   reprocessVideos,
   resolveCandidate,
+  RUN_QUEUE_QUERY_KEY,
   searchPlaces,
   type DestinationFacets,
   type DestinationFilter,
@@ -243,7 +245,8 @@ export default function ReviewPage() {
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
-    refetchInterval: 60_000,
+    staleTime: 10 * 60 * 1000,
+    refetchInterval: 10 * 60 * 1000,
   });
   // 카테고리 강제 드롭다운 목록(정적 카탈로그 — 오래 캐시).
   const categoriesQuery = useQuery({
@@ -298,6 +301,7 @@ export default function ReviewPage() {
     mutationFn: () => reprocessVideos(cart, reprocessStage),
     onSuccess: () => {
       setCart([]);
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
     },
   });
   const candidates = useMemo(
@@ -1143,6 +1147,9 @@ export default function ReviewPage() {
         refetchType: "none",
       });
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
+      if (command.action === "create_place") {
+        queryClient.invalidateQueries({ queryKey: ["destination-facets"] });
+      }
       setNearbyConflict(null);
       setCandidateActionError(null);
       clearProcessedCandidateParam(command.candidateId);
@@ -1288,7 +1295,22 @@ export default function ReviewPage() {
             <p className="px-1 text-xs font-medium text-muted-foreground">
               검수 대기 후보
             </p>
-            <Badge variant="secondary">{visibleCandidates.length}</Badge>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="검수 그룹 기준 새로고침"
+                title="유튜버·재생목록·검색어 그룹 기준 새로고침"
+                disabled={facetsQuery.isFetching}
+                onClick={() => void facetsQuery.refetch()}
+              >
+                <RefreshCwIcon
+                  className={facetsQuery.isFetching ? "animate-spin" : undefined}
+                />
+              </Button>
+              <Badge variant="secondary">{visibleCandidates.length}</Badge>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-1.5 pb-1">
             <Select
@@ -1338,6 +1360,11 @@ export default function ReviewPage() {
               <div />
             )}
           </div>
+          {facetsQuery.isError ? (
+            <p role="alert" className="px-1 text-xs text-destructive">
+              그룹 기준을 불러오지 못했습니다. 새로고침 버튼으로 다시 시도해 주세요.
+            </p>
+          ) : null}
           {selectedCandidateIds.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
               <span className="text-xs font-medium text-destructive">

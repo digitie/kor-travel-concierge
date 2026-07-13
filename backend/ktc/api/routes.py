@@ -45,6 +45,7 @@ from ktc.models import (
     FeatureExport,
     MatchStatus,
     MediaAsset,
+    RunAttention,
     RunSource,
     SourceTarget,
     TravelPlace,
@@ -681,6 +682,9 @@ def _target_label(
 @router.get("/runs")
 async def list_runs(
     state: str | None = Query(default=None, max_length=32),
+    terminal: bool = Query(default=False),
+    attention: RunAttention | None = Query(default=None),
+    user_jobs_only: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=100),
     job_types: str | None = Query(default=None, max_length=649),
     cursor: str | None = Query(
@@ -693,11 +697,23 @@ async def list_runs(
 ) -> dict[str, Any]:
     """최근 작업 목록을 반환한다.
 
-    `job_types`(쉼표 구분)를 주면 해당 job_type만 본다(예: 내부 `source_scan`을
-    숨기고 `harvest,deep_research,video_analysis`만 노출).
+    `user_jobs_only=true`는 서버 정본 사용자 작업 유형만, `job_types`(쉼표 구분)는
+    지정 유형만 본다. `terminal=true`는 종료 상태만, `attention`은 해당 주의
+    상태만 반환해 활성 큐와 이력 조회를 분리한다.
     """
+    if user_jobs_only and job_types:
+        raise HTTPException(
+            status_code=400,
+            detail="user_jobs_only와 job_types는 함께 사용할 수 없습니다",
+        )
     types = (
-        [t.strip() for t in job_types.split(",") if t.strip()] if job_types else None
+        list(crawl_run_service.USER_JOB_TYPES)
+        if user_jobs_only
+        else (
+            [t.strip() for t in job_types.split(",") if t.strip()]
+            if job_types
+            else None
+        )
     )
     if types and (len(types) > 10 or any(len(job_type) > 64 for job_type in types)):
         raise HTTPException(
@@ -708,6 +724,8 @@ async def list_runs(
         page = await crawl_run_service.list_runs_page(
             session,
             state=state,
+            terminal_only=terminal,
+            attention=attention,
             limit=limit,
             job_types=types,
             cursor=cursor,
@@ -728,6 +746,28 @@ async def list_runs(
             newer_than=page.newer_than,
         )
     )
+
+
+@router.get("/runs/queue")
+async def list_run_queue(
+    session: AsyncSession = Depends(get_repeatable_read_session),
+) -> dict[str, Any]:
+    """사용자 활성 작업 대기열과 미확인 종료 작업 수를 반환한다."""
+    snapshot = await crawl_run_service.list_run_queue(session)
+    titles = await _resolve_title_map(
+        session, [(run.target_type, run.target_id) for run in snapshot.items]
+    )
+    return {
+        "items": [
+            _run_summary_dict(run, titles, include_details=False)
+            for run in snapshot.items
+        ],
+        "running_count": snapshot.running_count,
+        "pending_count": snapshot.pending_count,
+        "open_attention_count": snapshot.open_attention_count,
+        "has_more": snapshot.has_more,
+        "user_job_types": list(crawl_run_service.USER_JOB_TYPES),
+    }
 
 
 @router.get("/place-search")
@@ -2030,7 +2070,12 @@ def _run_default_category_code(run: CrawlRun) -> str | None:
     return category_catalog.normalize_code(str(value)) if value is not None else None
 
 
-def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
+def _run_summary_dict(
+    run: CrawlRun,
+    titles: dict[Any, Any],
+    *,
+    include_details: bool = True,
+) -> dict[str, Any]:
     """crawl_run을 작업 목록/상세 공통 요약 dict로 직렬화한다."""
     return {
         "job_id": str(run.id),
@@ -2051,7 +2096,9 @@ def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
         "default_category_label": category_catalog.label_for(
             _run_default_category_code(run)
         ),
-        "status_logs": crawl_run_service.load_status_logs(run),
+        "status_logs": (
+            crawl_run_service.load_status_logs(run) if include_details else []
+        ),
         "retry_count": run.retry_count,
         "last_error": run.last_error,
         # T-162: 재시작 lineage·실패 attention(additive — T-180/T-181이 소비).
@@ -2059,7 +2106,11 @@ def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
             str(run.restart_of_run_id) if run.restart_of_run_id is not None else None
         ),
         "attention": run.attention,
-        "result": json.loads(run.result_json) if run.result_json else None,
+        "result": (
+            json.loads(run.result_json)
+            if include_details and run.result_json
+            else None
+        ),
         "created_at": run.created_at.isoformat(),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,

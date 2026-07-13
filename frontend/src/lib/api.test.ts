@@ -2,9 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   groupThemeItems,
+  listRunQueue,
   listUnmatchedCandidatesPage,
   restartRun,
+  RUN_HISTORY_REFETCH_INTERVAL_MS,
+  RUN_QUEUE_OBSERVER_OPTIONS,
+  RUN_QUEUE_QUERY_KEY,
+  RUN_QUEUE_REFETCH_INTERVAL_MS,
+  RUN_QUEUE_STALE_TIME_MS,
+  runQueueRefetchDelay,
+  runQueueRefetchInterval,
   stopRun,
+  type RunQueueSnapshot,
   type RestartRunResult,
   type StopRunResult,
   type ThemeSummaryItem,
@@ -85,6 +94,81 @@ describe("listUnmatchedCandidatesPage", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
+  });
+});
+
+describe("listRunQueue", () => {
+  it("통합 queue endpoint를 한 번 호출해 attention 포함 snapshot을 반환한다", async () => {
+    const responseBody: RunQueueSnapshot = {
+      items: [],
+      open_attention_count: 2,
+      running_count: 3,
+      pending_count: 4,
+      has_more: true,
+      user_job_types: ["harvest", "poi_batch"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await listRunQueue();
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/runs/queue",
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+
+  it("모든 observer가 공유할 query key와 10초 정책을 고정한다", () => {
+    expect(RUN_QUEUE_QUERY_KEY).toEqual(["run-queue"]);
+    expect(RUN_QUEUE_STALE_TIME_MS).toBe(10_000);
+    expect(RUN_QUEUE_REFETCH_INTERVAL_MS).toBe(10_000);
+    expect(RUN_HISTORY_REFETCH_INTERVAL_MS).toBe(60_000);
+    expect(RUN_QUEUE_OBSERVER_OPTIONS).toEqual({
+      staleTime: 10_000,
+      refetchOnMount: false,
+      retryOnMount: false,
+    });
+    expect(runQueueRefetchDelay(5_000, 7_000)).toBe(8_000);
+    expect(runQueueRefetchDelay(5_000, 16_000)).toBe(1);
+    expect(
+      runQueueRefetchInterval(
+        {
+          fetchStatus: "fetching",
+          dataUpdatedAt: 5_000,
+          errorUpdatedAt: 0,
+        },
+        16_000,
+      ),
+    ).toBe(false);
+    expect(
+      runQueueRefetchInterval(
+        {
+          fetchStatus: "paused",
+          dataUpdatedAt: 5_000,
+          errorUpdatedAt: 15_000,
+        },
+        16_000,
+      ),
+    ).toBe(false);
+    expect(
+      runQueueRefetchInterval(
+        {
+          fetchStatus: "idle",
+          dataUpdatedAt: 5_000,
+          errorUpdatedAt: 15_000,
+        },
+        16_000,
+      ),
+    ).toBe(9_000);
   });
 });
 

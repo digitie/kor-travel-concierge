@@ -131,7 +131,8 @@ export function DestinationWorkspace() {
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
-    refetchInterval: 30_000,
+    staleTime: 10 * 60 * 1000,
+    refetchInterval: 10 * 60 * 1000,
   });
   const filter = useMemo(() => {
     const common = {
@@ -357,7 +358,10 @@ export function DestinationWorkspace() {
             }}
             onRefresh={() => {
               if (destinationsQuery.isFetching) return;
-              void destinationsQuery.refetch();
+              void Promise.all([
+                destinationsQuery.refetch(),
+                facetsQuery.refetch(),
+              ]);
             }}
             onSelect={focusPlace}
             sort={destinationSort}

@@ -443,17 +443,19 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 #### PR-06. run-queue 폴링 통합 + 실패 배지 `[속도 P0]` `[S/M]`
 
-> **개정(2026-07-13, §10 반영)**: queue 통합 endpoint는 기존 `USER_JOB_TYPES` filter semantics를 유지(내부 source_scan 숨김). `failed_recent`(24h)는 임시 — PR-34의 attention 모델이 머지되면 그것으로 교체. PR-28 후 `JobStatusLink` 클릭 대상도 `/jobs`로 변경.
+> **개정(2026-07-13, §10 반영)**: queue 통합 endpoint는 기존 `USER_JOB_TYPES` filter semantics를 유지(내부 source_scan 숨김). T-162 attention 모델이 이미 머지됐으므로 `failed_recent` 대신 종료 상태의 open attention을 사용한다. PR-28 후 `JobStatusLink` 클릭 대상도 `/jobs`로 변경.
+
+> **구현 완료(2026-07-13, T-181)**: 활성 항목 100건 상한과 정확한 running/pending/open-attention 집계, 단일 query key·단일 10초 poll 소유자, 전 mutation invalidate, remount/오류/paused cadence, terminal+attention cursor 이력과 서버 소유 사용자 작업 filter를 적용했다. 81건 attention·queue 부분 장애·대형 detail 비조회·facet 신선도를 포함해 3렌즈 반복 적대 검토 최종 P0/P1/P2 0건으로 마감했다.
 
 - **해결**: S4, U9. 의존: PR-03.
 - **변경 파일**: `backend/ktc/api/routes.py`(신규 엔드포인트), `backend/ktc/services/crawl_run_service.py`, `frontend/src/lib/api.ts`, `frontend/src/components/JobStatusLink.tsx`, `CollectWorkspace.tsx`, `StatusDashboard.tsx`, `frontend/src/app/review/page.tsx`.
 - **작업 절차**:
-  1. backend에 `GET /api/v1/runs/queue` 신설: `state IN ('running','pending')`을 **1쿼리**로 반환 + `failed_recent`(최근 24시간 failed 수) 필드 동봉. 기존 2회 호출(`api.ts:547-558`) 대체. **라우트 등록 순서 주의**: FastAPI 경로 매칭상 `GET /runs/{job_id}`(routes.py:1943)보다 먼저 등록해야 한다.
-  2. frontend `listRunQueue`를 신규 엔드포인트 1회 호출로 교체. 쿼리키를 `["run-queue"]` **하나로 통일**해 `JobStatusLink`(shell)/`CollectWorkspace`(user)/`StatusDashboard`(status)가 캐시를 공유. `refetchInterval`은 10초로 완화.
+  1. backend에 `GET /api/v1/runs/queue` 신설: `state IN ('running','pending')` 항목은 100건으로 제한하고 running/pending 전체 수와 open attention 수를 정확히 동봉한다. 대형 상세 컬럼은 조회하지 않는다. 기존 2회 호출을 대체하며 **라우트 등록 순서 주의**: FastAPI 경로 매칭상 `GET /runs/{job_id}`보다 먼저 등록한다.
+  2. frontend `listRunQueue`를 신규 엔드포인트 1회 호출로 교체. 쿼리키를 `["run-queue"]` **하나로 통일**해 `JobStatusLink`(shell)/`CollectWorkspace`(user)/`StatusDashboard`(status)가 캐시를 공유한다. shell만 10초 polling을 소유하고 나머지는 cache observer로 둔다.
   3. 반영 지연은 invalidate로 상쇄: 수집 시작·중지·재시작·재처리(`review/page.tsx:202-207`의 `reprocessMutation` 포함) 등 run을 만들거나 바꾸는 모든 mutation `onSuccess`에 `["run-queue"]`(및 해당 시 `["runs"]`) invalidate를 추가.
-  4. `JobStatusLink` 배지: running+pending 수 옆에 `failed_recent > 0`이면 destructive 색 보조 배지(클릭 시 `/status` 이력 탭, PR-28 이후 `/jobs?state=failed`). "최근 24h" 윈도우라 자연 해제된다(영구 빨간 배지 방지).
-  5. **staleTime 정비(S9)**: 정적 카탈로그성 쿼리(categories는 기존 1h — facets, 8자리 코드 목록 등 변경 빈도가 낮은 것)에 `staleTime` 10분~1h를 명시 지정한다. 전역 기본(5s)은 유지.
-- **테스트**: backend 신규 엔드포인트 단위 테스트(상태 혼합 fixture). 수동: 유휴 상태 네트워크 탭에서 요청 빈도 확인(기존 화면당 2req/3s → 1req/10s).
+  4. `JobStatusLink` 배지: running+pending 정확한 수 옆에 open attention이 있으면 destructive 보조 배지로 표시하고 filtered cursor 이력에 바로 연결한다(PR-28 이후 `/jobs?attention=open`).
+  5. **staleTime 정비(S9)**: categories는 1시간, destination facets는 10분 safety poll로 지정한다. 작업 완료 감지와 생성·병합·삭제 mutation은 facets를 즉시 invalidate하고 검수 화면에도 수동 갱신을 둔다. 전역 기본(5s)은 유지한다.
+- **테스트**: backend 상태 혼합·100/101건·동일 snapshot·대형 detail 비조회·terminal/attention cursor, frontend shared key/cadence, Playwright 단일 요청·즉시 invalidate·81건 attention·오류 remount·60초 이력 safety를 검증한다.
 - **완료 기준**: 유휴 폴링 요청 ~1/6, 재처리 후 큐 반영 즉시.
 
 ---
@@ -774,16 +776,16 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 #### PR-28. 작업 IA 정리 (`/jobs` 인덱스·nav 재편·홈 행동 배너) `[UX P1]` `[M~L]`
 
-> **개정(2026-07-13, §10 반영)**: `/runs`의 state·job_types 필터는 기존재(C10 검증) — 재추가 금지. 실제 작업: 안정 pagination·`total`(PR-32), attention 필터(PR-34), `JobStatusLink` 이동, 모바일 job action. PR-03/06의 임시 `failed_recent` 전제를 복제하지 않는다.
+> **개정(2026-07-13, §10 반영)**: `/runs`의 state·job_types와 T-181의 terminal·attention·`user_jobs_only` 필터, 안정 pagination·`total`은 기존재 — 재추가 금지. 실제 작업은 이 계약의 직접 소비, `JobStatusLink` 이동, 모바일 job action이다. `failed_recent` 전제를 복제하지 않는다.
 
 - **해결**: U10, U12, U13. 의존: PR-03, 06.
 - **변경 파일**: `frontend/src/app/jobs/page.tsx`(신규), `frontend/src/components/AppShell.tsx`, `StatusDashboard.tsx`, `CollectWorkspace.tsx`, `frontend/src/app/page.tsx`(배너), `tests/e2e/`(heading 어서션 갱신), `backend/ktc/api/routes.py`(`/runs` 필터 파라미터 확장 필요 시).
 - **작업 절차**:
-  1. `/jobs` 인덱스 신설: 상단 = 진행 중/대기 큐(통합 run-queue 재사용), 하단 = 이력 테이블(상태·유형 select 필터 + "더 보기" 페이지네이션 — backend `/runs`에 `state`/`job_type` 파라미터가 없으면 추가). 행 액션: 상세 링크·중지·재시작(PR-03 컴포넌트 재사용).
+  1. `/jobs` 인덱스 신설: 상단 = 진행 중/대기 큐(통합 run-queue 재사용), 하단 = `listRunsPage` 이력 테이블(상태·유형·attention 필터 + "더 보기" cursor pagination). 행 액션은 상세 링크·중지·재시작(PR-03 컴포넌트)을 재사용한다.
   2. nav 재편(`AppShell.tsx:20-27`): 주 그룹 = 결과·수집·검수·**작업**·설정, 하단 보조 그룹 = 상태·API 테스트. `/jobs/*` 하이라이트를 "작업"으로 수정(`:33-35`).
   3. `/status` 축소: 작업 테이블 탭 제거(→ `/jobs`), 시스템 메트릭·RustFS·감사/로그인 로그만 유지. "검수 후보" MetricCard에 `/review` 링크 부여(U12).
   4. `/collect`의 진행 중 패널을 "현재 작업 요약 1줄 + `/jobs` 링크"로 축소(죽은 `detailRun` 상태 제거 포함).
-  5. `/` 상단 행동 배너 1줄: "검수 대기 N건 → [검수 시작]" + `failed_recent > 0`이면 "실패 작업 K건 → [보기]". 대시보드 전면 개편·`/`→`/places` 이동은 하지 않는다(§2.2 ⑦).
+  5. `/` 상단 행동 배너 1줄: "검수 대기 N건 → [검수 시작]" + `open_attention_count > 0`이면 "확인 필요 작업 K건 → [보기]". 대시보드 전면 개편·`/`→`/places` 이동은 하지 않는다(§2.2 ⑦).
   6. E2E: nav·heading 어서션 전수 갱신(E2E는 heading을 어서트하므로 필수 체크리스트로 PR 본문에 명시).
 - **완료 기준**: job 관련 표면이 `/jobs`(목록·이력·액션)와 `/jobs/[id]`(상세)로 수렴, 아침 첫 화면에서 다음 행동이 1클릭.
 
