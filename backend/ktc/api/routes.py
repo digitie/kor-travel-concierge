@@ -890,29 +890,68 @@ async def stop_run(
 async def restart_run(
     job_id: int, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
-    """작업을 같은 입력으로 다시 enqueue한다(새 crawl_run 생성)."""
-    source = await crawl_run_service.get_run(session, job_id)
-    if source is None:
+    """terminal 작업을 같은 입력으로 다시 enqueue한다(T-162, 로드맵 PR-34).
+
+    - terminal(done/failed/cancelled) 상태만 재시작할 수 있다(그 외 400).
+    - **멱등**: 같은 원본의 pending/running 재시작 run이 이미 있으면 새로 만들지
+      않고 그 run을 반환한다(중복 클릭 UX — 409 아님, `created=false`).
+    - 새 run에 `restart_of_run_id` lineage를 남기고, 원본의 open/acknowledged
+      attention은 superseded로 전이한다.
+    """
+    try:
+        run, created = await crawl_run_service.create_restart_run(
+            session, job_id, source=RunSource.WEB.value
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
         raise HTTPException(status_code=404, detail="job not found")
-    payload = json.loads(source.payload_json) if source.payload_json else None
-    run = await crawl_run_service.create_run(
-        session,
-        job_type=source.job_type,
-        source=RunSource.WEB,
-        target_type=source.target_type,
-        target_id=source.target_id,
-        payload=payload,
-        commit=False,
-    )
-    await audit_service.record(
-        session,
-        actor_type="web",
-        action="run.restart",
-        target_type="crawl_run",
-        target_id=str(run.id),
-        payload={"source_job_id": job_id},
-    )
-    return {"job_id": str(run.id), "state": run.state}
+    if created:
+        await audit_service.record(
+            session,
+            actor_type="web",
+            action="run.restart",
+            target_type="crawl_run",
+            target_id=str(run.id),
+            payload={"source_job_id": job_id, "restart_of_run_id": job_id},
+        )
+    return {
+        "job_id": str(run.id),
+        "state": run.state,
+        "restart_of_run_id": str(job_id),
+        "created": created,
+    }
+
+
+@router.post("/runs/{job_id}/acknowledge")
+async def acknowledge_run(
+    job_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """실패 작업의 attention을 open→acknowledged로 전이한다(T-162).
+
+    이미 acknowledged면 그대로 반환(멱등). attention이 없거나 superseded/resolved면
+    확인할 대상이 없으므로 400.
+    """
+    run = await crawl_run_service.get_run(session, job_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    prev_attention = run.attention
+    try:
+        run = await crawl_run_service.acknowledge_attention(session, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:  # pragma: no cover - 위 get_run과 같은 트랜잭션 내 삭제 경합
+        raise HTTPException(status_code=404, detail="job not found")
+    if prev_attention != run.attention:
+        await audit_service.record(
+            session,
+            actor_type="web",
+            action="run.acknowledge",
+            target_type="crawl_run",
+            target_id=str(job_id),
+            payload={"prev_attention": prev_attention, "attention": run.attention},
+        )
+    return {"job_id": str(job_id), "attention": run.attention}
 
 
 def _source_target_dict(
@@ -2004,6 +2043,11 @@ def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
         "status_logs": crawl_run_service.load_status_logs(run),
         "retry_count": run.retry_count,
         "last_error": run.last_error,
+        # T-162: 재시작 lineage·실패 attention(additive — T-180/T-181이 소비).
+        "restart_of_run_id": (
+            str(run.restart_of_run_id) if run.restart_of_run_id is not None else None
+        ),
+        "attention": run.attention,
         "result": json.loads(run.result_json) if run.result_json else None,
         "created_at": run.created_at.isoformat(),
         "started_at": run.started_at.isoformat() if run.started_at else None,

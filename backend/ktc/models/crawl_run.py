@@ -10,7 +10,18 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ktc.models.base import Base, TimestampMixin
@@ -27,6 +38,29 @@ class RunState(str, Enum):
     CANCELLED = "cancelled"
 
 
+# 재시작 허용·attention 판단 기준이 되는 종료 상태 집합(T-162).
+TERMINAL_RUN_STATES: tuple[RunState, ...] = (
+    RunState.DONE,
+    RunState.FAILED,
+    RunState.CANCELLED,
+)
+
+
+class RunAttention(str, Enum):
+    """실패 작업 주의(attention) 상태 (T-162, 로드맵 B6). NULL이면 해당 없음(none).
+
+    - open: 실패 직후, 사용자 확인 전.
+    - acknowledged: 사용자가 확인(acknowledge API).
+    - superseded: 재시작 run이 생성되어 최신 attempt가 아니게 됨.
+    - resolved: 재시작 run이 done으로 완료되어 해소됨(superseded에서도 승격).
+    """
+
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    SUPERSEDED = "superseded"
+    RESOLVED = "resolved"
+
+
 class RunSource(str, Enum):
     """작업 생성 주체."""
 
@@ -39,6 +73,16 @@ class CrawlRun(TimestampMixin, Base):
     __tablename__ = "crawl_runs"
     __table_args__ = (
         Index("ix_crawl_runs_claim_pending", "state", "id"),
+        # attention 배지/필터 조회용(T-181). 대부분의 행은 NULL이므로 partial index.
+        Index(
+            "ix_crawl_runs_attention",
+            "attention",
+            postgresql_where=text("attention IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "attention IN ('open', 'acknowledged', 'superseded', 'resolved')",
+            name="ck_crawl_runs_attention_valid",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -71,6 +115,18 @@ class CrawlRun(TimestampMixin, Base):
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # 재시작 lineage: 이 run이 어느 run의 재시작인지(self FK, T-162). 같은 원본의
+    # active(pending/running) 재시작은 1개만 허용한다(중복 클릭 멱등).
+    # 원본 lane 복사는 T-163 소관(lane 컬럼 도입 시 create_restart_run에서 처리).
+    restart_of_run_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("crawl_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # 실패 attention 상태(RunAttention). NULL=해당 없음. 전이는 crawl_run_service가
+    # 단독 소유한다(mark_failed→open, 재시작 생성→superseded, 재시작 done→resolved).
+    attention: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
         return f"<CrawlRun id={self.id} job={self.job_type} state={self.state}>"

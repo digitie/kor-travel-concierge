@@ -255,13 +255,82 @@ async def test_stop_terminal_run_400(client, session):
     assert stop.status_code == 400
 
 
-async def test_restart_run_creates_new_run(client):
+async def test_restart_rejects_non_terminal_run(client):
+    """T-162: terminal(done/failed/cancelled) 상태만 재시작할 수 있다."""
     resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
     job_id = resp.json()["job_id"]
     restart = await client.post(f"/api/v1/runs/{job_id}/restart")
+    assert restart.status_code == 400
+    assert "terminal" in restart.json()["detail"]
+
+
+async def test_restart_run_lineage_attention_and_idempotency(client, session):
+    """T-162: 재시작 lineage 기록 + 같은 원본 중복 클릭 멱등(409 아님)."""
+    from ktc.services import crawl_run_service
+
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = int(resp.json()["job_id"])
+    await crawl_run_service.mark_failed(session, job_id, error="boom")
+
+    restart = await client.post(f"/api/v1/runs/{job_id}/restart")
     assert restart.status_code == 200
-    assert restart.json()["job_id"] != job_id
-    assert restart.json()["state"] == "pending"
+    body = restart.json()
+    assert body["created"] is True
+    assert body["state"] == "pending"
+    assert body["restart_of_run_id"] == str(job_id)
+    new_job_id = body["job_id"]
+    assert new_job_id != str(job_id)
+
+    # 중복 클릭: 새 run을 만들지 않고 같은 run을 돌려준다.
+    again = await client.post(f"/api/v1/runs/{job_id}/restart")
+    assert again.status_code == 200
+    assert again.json()["job_id"] == new_job_id
+    assert again.json()["created"] is False
+
+    # 단건 응답에 lineage·attention이 additive로 노출된다.
+    origin_view = (await client.get(f"/api/v1/runs/{job_id}")).json()
+    assert origin_view["attention"] == "superseded"
+    restart_view = (await client.get(f"/api/v1/runs/{new_job_id}")).json()
+    assert restart_view["restart_of_run_id"] == str(job_id)
+    assert restart_view["attention"] is None
+
+    # #185 envelope items에서도 attention·restart_of_run_id가 살아남는다.
+    listing = (await client.get("/api/v1/runs?limit=50")).json()
+    by_id = {r["job_id"]: r for r in listing["items"]}
+    assert by_id[str(job_id)]["attention"] == "superseded"
+    assert by_id[new_job_id]["restart_of_run_id"] == str(job_id)
+    assert by_id[new_job_id]["attention"] is None
+
+    missing = await client.post("/api/v1/runs/999999/restart")
+    assert missing.status_code == 404
+
+
+async def test_acknowledge_run_api(client, session):
+    """T-162: open→acknowledged 전이 + 멱등 재호출 + 대상 없음 400/404."""
+    from ktc.services import crawl_run_service
+
+    resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
+    job_id = int(resp.json()["job_id"])
+
+    # 아직 실패하지 않은 run은 확인할 attention이 없다.
+    early = await client.post(f"/api/v1/runs/{job_id}/acknowledge")
+    assert early.status_code == 400
+
+    await crawl_run_service.mark_failed(session, job_id, error="boom")
+    acked = await client.post(f"/api/v1/runs/{job_id}/acknowledge")
+    assert acked.status_code == 200
+    assert acked.json()["attention"] == "acknowledged"
+
+    # 멱등 재호출.
+    again = await client.post(f"/api/v1/runs/{job_id}/acknowledge")
+    assert again.status_code == 200
+    assert again.json()["attention"] == "acknowledged"
+
+    run_view = (await client.get(f"/api/v1/runs/{job_id}")).json()
+    assert run_view["attention"] == "acknowledged"
+
+    missing = await client.post("/api/v1/runs/999999/acknowledge")
+    assert missing.status_code == 404
 
 
 async def test_settings_roundtrip(client):

@@ -8,21 +8,32 @@ REST/MCP는 작업 생성만 하고, scheduler 단일 실행자가 claim·heartb
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+import logging
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ktc.models import CrawlRun, RunState, utcnow
+from ktc.models import (
+    TERMINAL_RUN_STATES,
+    CrawlRun,
+    CrawlRunStageEvent,
+    RunAttention,
+    RunState,
+    utcnow,
+)
 from ktc.services.list_pagination import (
-    ListPage,
     MAX_DB_INTEGER_ID,
+    ListPage,
     decode_cursor,
     encode_cursor,
     ensure_repeatable_read,
     filter_fingerprint,
 )
+
+logger = logging.getLogger(__name__)
 
 # stale 판단 기본 임계값(초). heartbeat가 이 시간 이상 갱신되지 않으면 재투입 대상.
 DEFAULT_STALE_THRESHOLD_SECONDS = 300
@@ -30,6 +41,13 @@ DEFAULT_STALE_THRESHOLD_SECONDS = 300
 DEFAULT_MAX_RETRIES = 3
 # 작업별 상세 로그는 UI 표시용이므로 최근 항목만 보존한다.
 MAX_STATUS_LOGS = 80
+# stage event detail 상한(비대 방지 — 상세 로그가 아니라 측정치 주석이다).
+_MAX_STAGE_DETAIL_CHARS = 2_000
+
+# handler/ETL 서비스에 주입하는 단계 이벤트 콜백 계약(키워드 인자):
+# (stage, *, outcome, provider=None, attempt=None, item_ref=None,
+#  started_at=None, finished_at=None, elapsed_ms=None, detail=None)
+StageReporter = Callable[..., Awaitable[None]]
 
 
 def _clamp_progress(progress: float) -> float:
@@ -91,6 +109,96 @@ def _append_log_to_run(
     run.status_log_json = json.dumps(logs[-MAX_STATUS_LOGS:], ensure_ascii=False)
 
 
+def _clip(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    return value[:limit]
+
+
+async def record_stage_event(
+    session: AsyncSession,
+    run_id: int,
+    *,
+    stage: str,
+    outcome: str,
+    provider: str | None = None,
+    attempt: int | None = None,
+    item_ref: str | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    elapsed_ms: int | None = None,
+    detail: str | None = None,
+) -> None:
+    """durable 단계 이벤트 1건을 best-effort로 기록한다(T-162, PR-34).
+
+    호출자 세션이 아니라 같은 엔진의 **짧은 독립 세션**에서 즉시 commit한다. 근거:
+    (a) 실패 경로가 가장 중요한 측정 대상인데, 호출자 세션에 얹으면 handler 예외 시
+        rollback으로 이벤트가 함께 유실된다.
+    (b) 호출자 세션에서 임의 시점 commit하면 handler의 미완 도메인 변경이 부분
+        커밋된다(트랜잭션 경계 오염).
+    기록 실패는 경고 로그만 남기고 삼킨다 — 관측 실패가 본 작업을 죽여서는 안 된다.
+    """
+    try:
+        now = utcnow()
+        if finished_at is None:
+            finished_at = now
+        if started_at is None:
+            # elapsed_ms가 있으면 역산해 시작 시각을 보존한다.
+            started_at = (
+                finished_at - timedelta(milliseconds=elapsed_ms)
+                if elapsed_ms is not None
+                else finished_at
+            )
+        if elapsed_ms is None:
+            elapsed_ms = max(
+                0, int((finished_at - started_at).total_seconds() * 1000)
+            )
+        event = CrawlRunStageEvent(
+            run_id=run_id,
+            stage=_clip(stage, 32) or "unknown",
+            provider=_clip(provider, 32),
+            attempt=attempt,
+            item_ref=_clip(item_ref, 64),
+            started_at=started_at,
+            finished_at=finished_at,
+            elapsed_ms=elapsed_ms,
+            outcome=_clip(outcome, 16) or "unknown",
+            detail=_clip(detail, _MAX_STAGE_DETAIL_CHARS),
+        )
+        factory = async_sessionmaker(session.bind, expire_on_commit=False)
+        async with factory() as event_session:
+            event_session.add(event)
+            await event_session.commit()
+    except Exception as exc:  # noqa: BLE001 - best-effort 관측 기록
+        logger.warning(
+            "crawl_run stage event 기록 실패(run_id=%s, stage=%s): %s",
+            run_id,
+            stage,
+            exc,
+        )
+
+
+def make_stage_reporter(session: AsyncSession, run_id: int) -> StageReporter:
+    """run에 바인딩된 단계 이벤트 콜백을 만든다(ETL 서비스 주입용)."""
+
+    async def _report_stage(stage: str, **kwargs: Any) -> None:
+        await record_stage_event(session, run_id, stage=stage, **kwargs)
+
+    return _report_stage
+
+
+async def list_stage_events(
+    session: AsyncSession, run_id: int
+) -> list[CrawlRunStageEvent]:
+    """작업의 단계 이벤트를 발생 순서로 조회한다."""
+    result = await session.execute(
+        select(CrawlRunStageEvent)
+        .where(CrawlRunStageEvent.run_id == run_id)
+        .order_by(CrawlRunStageEvent.id.asc())
+    )
+    return list(result.scalars().all())
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -99,6 +207,7 @@ async def create_run(
     target_type: str | None = None,
     target_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    restart_of_run_id: int | None = None,
     commit: bool = True,
 ) -> CrawlRun:
     """새 작업을 `pending` 상태로 생성한다."""
@@ -111,6 +220,7 @@ async def create_run(
         state=RunState.PENDING,
         progress=0.0,
         payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
+        restart_of_run_id=restart_of_run_id,
     )
     _append_log_to_run(run, initial_message, progress=0.0, touch_heartbeat=False)
     session.add(run)
@@ -323,19 +433,109 @@ async def mark_done(
     run.finished_at = utcnow()
     run.result_json = json.dumps(result, ensure_ascii=False) if result else None
     _append_log_to_run(run, final_message, progress=1.0, level=final_level)
+    # 재시작 run이 done으로 완료되면 원본의 attention을 resolved로 승격한다
+    # (superseded여도 승격 — lineage 추적, T-162). 원본에 attention이 없던
+    # 경우(성공 run의 단순 재실행)는 해소할 실패가 없으므로 그대로 둔다.
+    # 직속 부모(restart_of_run_id)만 resolve한다 — 재시작 체인의 심층 원본은
+    # 이미 superseded(배지 비표시)라 무해하며, leaf attempt 기준(B6) 최신 상태만
+    # 관리하면 충분하다.
+    if run.restart_of_run_id is not None:
+        origin = await session.get(CrawlRun, run.restart_of_run_id)
+        if origin is not None and origin.attention is not None:
+            origin.attention = RunAttention.RESOLVED
     await session.commit()
 
 
 async def mark_failed(session: AsyncSession, run_id: int, *, error: str) -> None:
-    """작업을 실패 처리하고 `last_error`를 기록한다."""
+    """작업을 실패 처리하고 `last_error`를 기록한다. attention은 open으로 전이한다."""
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return
     run.state = RunState.FAILED
     run.finished_at = utcnow()
     run.last_error = error
+    run.attention = RunAttention.OPEN
     _append_log_to_run(run, f"작업이 실패했습니다: {error}", level="error")
     await session.commit()
+
+
+async def create_restart_run(
+    session: AsyncSession,
+    origin_id: int,
+    *,
+    source: str,
+) -> tuple[CrawlRun | None, bool]:
+    """terminal 상태 원본 run을 같은 입력으로 재시작한다(T-162, G6).
+
+    반환은 `(run, created)`. 원본이 없으면 `(None, False)`, 원본이 terminal이 아니면
+    `ValueError`. **멱등**: 같은 원본에 대해 pending/running 재시작 run이 이미 있으면
+    새로 만들지 않고 그 run을 `(run, False)`로 반환한다(중복 클릭 UX — 409 아님).
+    원본 행을 `FOR UPDATE`로 잠가 동시 중복 클릭도 직렬화한다.
+    원본의 open/acknowledged attention은 superseded로 전이한다(최신 attempt 이관).
+
+    "원본당 active 재시작 1"은 앱 로직으로 보장한다(단일 실행자 + 이 함수가 유일한
+    재시작 생성 경로 + 원본 행 FOR UPDATE 직렬화). DB partial-unique index는 두지
+    않는다 — 위 보장으로 충분하고, 인덱스는 과잉이다.
+    """
+    # 멱등성 판정을 직렬화하기 위해 원본 행을 잠근다(identity map 무시하고 재조회).
+    origin = await session.get(CrawlRun, origin_id, with_for_update=True)
+    if origin is None:
+        return None, False
+    if origin.state not in TERMINAL_RUN_STATES:
+        raise ValueError("terminal 상태(done/failed/cancelled)의 작업만 재시작할 수 있습니다")
+
+    existing = (
+        await session.execute(
+            select(CrawlRun)
+            .where(
+                CrawlRun.restart_of_run_id == origin.id,
+                CrawlRun.state.in_([RunState.PENDING, RunState.RUNNING]),
+            )
+            .order_by(CrawlRun.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if existing is not None:
+        # 잠금만 잡고 변경 없이 반환한다(조용한 멱등).
+        await session.commit()
+        return existing, False
+
+    payload = json.loads(origin.payload_json) if origin.payload_json else None
+    run = await create_run(
+        session,
+        job_type=origin.job_type,
+        source=source,
+        target_type=origin.target_type,
+        target_id=origin.target_id,
+        payload=payload,
+        restart_of_run_id=origin.id,
+        commit=False,
+    )
+    # T-163: lane 컬럼 도입 시 여기서 원본 lane을 복사한다(현재 lane 컬럼 없음 —
+    # 기본값으로 두면 대화형 재시작이 배치 레인으로 떨어지는 문제, 로드맵 PR-04).
+    if origin.attention in (RunAttention.OPEN, RunAttention.ACKNOWLEDGED):
+        origin.attention = RunAttention.SUPERSEDED
+    await session.commit()
+    await session.refresh(run)
+    return run, True
+
+
+async def acknowledge_attention(session: AsyncSession, run_id: int) -> CrawlRun | None:
+    """open attention을 acknowledged로 전이한다(T-162 acknowledge API).
+
+    run이 없으면 None. 이미 acknowledged면 그대로 반환(멱등). attention이 없거나
+    superseded/resolved면 확인할 대상이 없으므로 `ValueError`.
+    """
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return None
+    if run.attention == RunAttention.ACKNOWLEDGED:
+        return run
+    if run.attention != RunAttention.OPEN:
+        raise ValueError("확인할 실패 알림(open attention)이 없습니다")
+    run.attention = RunAttention.ACKNOWLEDGED
+    await session.commit()
+    return run
 
 
 async def cancel_pending(session: AsyncSession, run_id: int) -> CrawlRun | None:
@@ -416,6 +616,8 @@ async def requeue_stale(
             run.state = RunState.FAILED
             run.finished_at = utcnow()
             run.last_error = "max retries exceeded (stale)"
+            # mark_failed와 동일한 실패 경로 — attention도 open으로 전이한다(T-162).
+            run.attention = RunAttention.OPEN
             _append_log_to_run(
                 run,
                 "heartbeat가 만료되어 최대 재시도 횟수를 초과했습니다.",
