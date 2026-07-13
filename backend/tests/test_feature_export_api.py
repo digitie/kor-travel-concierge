@@ -6,11 +6,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from uuid import uuid4
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from ktc.core.database import get_repeatable_read_session, get_session
 from main import app
+
+
+def _client_operation_id() -> str:
+    return str(uuid4())
 
 
 @pytest_asyncio.fixture
@@ -303,6 +310,66 @@ async def test_snapshot_excludes_pending_candidate(client, session_factory):
     assert resp.json()["items"] == []
 
 
+async def test_snapshot_excludes_ready_needs_review_drift(client, session_factory):
+    """READY/place가 남은 legacy drift여도 미확정 후보를 신규 공급하지 않는다."""
+    from sqlalchemy import select
+
+    from ktc.models import FeatureExport, MatchStatus
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory,
+        video_id="ready-needs-review-drift",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    async with session_factory() as s:
+        assert (
+            await s.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one_or_none() is None
+
+
+async def test_ready_needs_review_drift_tombstones_existing_export(
+    client, session_factory
+):
+    """이미 공급한 후보가 미확정 상태로 drift하면 READY가 남아도 회수한다."""
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus
+    from ktc.services import feature_export_service
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory,
+        video_id="ready-needs-review-existing",
+    )
+    first = await client.get("/api/v1/features/changes")
+    assert [item["operation"] for item in first.json()["items"]] == ["upsert"]
+
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        candidate.match_status = MatchStatus.NEEDS_REVIEW.value
+        await feature_export_service.mark_candidates_dirty(
+            s,
+            [candidate_id],
+            reason="test_ready_needs_review_drift",
+        )
+        await s.commit()
+
+    changed = await client.get(
+        "/api/v1/features/changes",
+        params={"cursor": first.json()["next_cursor"]},
+    )
+    assert [item["operation"] for item in changed.json()["items"]] == [
+        "tombstone"
+    ]
+    assert (await client.get("/api/v1/features/snapshot")).json()["items"] == []
+
+
 async def test_snapshot_excludes_ungrounded_auto_matched_transcript(client, session_factory):
     # T-165 G4 defense-in-depth: 자동확정됐으나 raw grounding 미확인 transcript 후보는
     # export(snapshot)에서 제외한다.
@@ -424,6 +491,66 @@ async def test_changes_emits_reject_after_export(client, session_factory):
     # reject된 후보는 더 이상 snapshot(활성)에 나타나지 않는다.
     snapshot = await client.get("/api/v1/features/snapshot")
     assert snapshot.json()["items"] == []
+
+
+async def test_empty_snapshot_commits_hidden_reject_transition(
+    client, session_factory
+):
+    """활성 row가 0건이어도 snapshot 내부 sync 결과는 rollback되지 않는다."""
+    from sqlalchemy import select
+
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        FeatureExportStatus,
+        MatchStatus,
+    )
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory,
+        video_id="snapshot-hidden-reject-commit",
+    )
+    first = await client.get("/api/v1/features/snapshot")
+    assert first.status_code == 200
+    assert [item["operation"] for item in first.json()["items"]] == ["upsert"]
+    first_cursor = first.json()["next_cursor"]
+    assert first_cursor is not None
+
+    async with session_factory() as session:
+        candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        candidate.match_status = MatchStatus.IGNORED.value
+        candidate.feature_export_status = FeatureExportStatus.REJECTED.value
+        candidate.review_note = "snapshot에서 숨겨지는 제외"
+        await session.commit()
+    # 직접 DB 전이는 production writer의 durable outbox 배선을 우회하므로 동일하게 표시한다.
+    await _mark_dirty(session_factory, candidate_id)
+
+    hidden = await client.get("/api/v1/features/snapshot")
+    assert hidden.status_code == 200
+    assert hidden.json()["items"] == []
+
+    # 새 session에서도 reject가 남아 있어야 한다. 빈 page에서 commit하지 않으면
+    # dependency session close 시 upsert로 rollback되어 이 검증이 실패한다.
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.operation == "reject"
+        assert row.rejection_reason == "snapshot에서 숨겨지는 제외"
+        committed_sequence = row.sequence
+
+    changes = await client.get(
+        "/api/v1/features/changes",
+        params={"cursor": first_cursor},
+    )
+    assert changes.status_code == 200
+    assert [item["operation"] for item in changes.json()["items"]] == ["reject"]
+    assert _decode_cursor(changes.json()["next_cursor"]) == committed_sequence
 
 
 async def test_snapshot_pagination_with_limit(client, session_factory):
@@ -569,17 +696,270 @@ def _decode_cursor(cursor: str | None) -> int | None:
     return decode(cursor)
 
 
-async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory):
-    """G1 시나리오: export(snapshot 노출) → 삭제 → changes tombstone(새 sequence) →
-    reopen → 재확정 후 다음 sync가 upsert 재발행 → cursor 소비 일관성(유실·중복 없음)."""
-    from sqlalchemy import delete, select
+async def test_export_sync_and_reopen_share_writer_lock_without_late_upsert(
+    session_factory,
+    monkeypatch,
+):
+    """sync의 미커밋 upsert 뒤 reopen이 와도 최종 ledger는 tombstone이어야 한다."""
+    from sqlalchemy import select
 
     from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExport,
-        FeatureExportStatus,
+        FeatureExportOperation,
         MatchStatus,
+        TravelPlace,
         VideoPlaceMapping,
+    )
+    from ktc.services import feature_export_service, place_service
+
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory,
+        video_id="export-reopen-lock-race",
+    )
+    async with session_factory() as seed_session:
+        candidate = await seed_session.get(ExtractedPlaceCandidate, candidate_id)
+        place = await seed_session.get(TravelPlace, place_id)
+        assert candidate is not None
+        assert place is not None
+        mapping = VideoPlaceMapping(
+            video_id=candidate.video_id,
+            place_id=place_id,
+            place_candidate_id=candidate_id,
+            ai_summary="동시성 검증 매핑",
+        )
+        seed_session.add(mapping)
+        await seed_session.commit()
+        undo_token = place_service.encode_candidate_undo_token(
+            candidate,
+            matched_place_revision=place.state_revision,
+        )
+
+    original_lock = feature_export_service.acquire_feature_export_lock
+    reopen_reached_export_lock = asyncio.Event()
+    reopen_acquired_export_lock = asyncio.Event()
+    reopen_session = None
+
+    async def observed_lock(session):
+        if session is reopen_session:
+            reopen_reached_export_lock.set()
+        await original_lock(session)
+        if session is reopen_session:
+            reopen_acquired_export_lock.set()
+
+    monkeypatch.setattr(
+        feature_export_service,
+        "acquire_feature_export_lock",
+        observed_lock,
+    )
+
+    async def run_reopen():
+        nonlocal reopen_session
+        async with session_factory() as candidate_session:
+            reopen_session = candidate_session
+            result = await place_service.reopen_candidate(
+                candidate_session,
+                candidate_id=candidate_id,
+                undo_token=undo_token,
+            )
+            await candidate_session.commit()
+            return result
+
+    reopen_task = None
+    try:
+        async with session_factory() as sync_session:
+            # sync가 export writer lock 아래서 과거 READY snapshot의 upsert를 준비한다.
+            await original_lock(sync_session)
+            assert (
+                await feature_export_service.sync_feature_exports(
+                    sync_session,
+                    commit=False,
+                )
+                == 1
+            )
+            reopen_task = asyncio.create_task(run_reopen())
+            await asyncio.wait_for(reopen_reached_export_lock.wait(), timeout=5)
+            assert reopen_acquired_export_lock.is_set() is False
+            assert reopen_task.done() is False
+            # 늦은 upsert를 먼저 commit해도 대기하던 reopen이 그 row를 보고 tombstone한다.
+            await sync_session.commit()
+
+        result = await asyncio.wait_for(reopen_task, timeout=5)
+    finally:
+        if reopen_task is not None and not reopen_task.done():
+            reopen_task.cancel()
+            await asyncio.gather(reopen_task, return_exceptions=True)
+    assert result.tombstoned_exports == 1
+    async with session_factory() as check_session:
+        candidate = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.match_status == MatchStatus.NEEDS_REVIEW.value
+        row = (
+            await check_session.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.operation == FeatureExportOperation.TOMBSTONE.value
+        mappings = (
+            await check_session.execute(
+                select(VideoPlaceMapping).where(
+                    VideoPlaceMapping.place_candidate_id == candidate_id
+                )
+            )
+        ).scalars().all()
+        assert mappings == []
+
+
+async def test_export_sync_and_merge_publish_only_complete_place_snapshots(
+    session_factory,
+    monkeypatch,
+):
+    """source snapshot을 읽은 sync가 끝난 뒤 merge가 진행되어 fallback payload를 막는다."""
+    from sqlalchemy import select
+
+    from ktc.models import ExtractedPlaceCandidate, FeatureExport, TravelPlace
+    from ktc.services import feature_export_service, place_service
+
+    candidate_id, source_place_id = await _seed_ready_candidate(
+        session_factory,
+        video_id="export-merge-lock-race",
+        place_name="병합 전 원본 장소",
+    )
+    async with session_factory() as seed_session:
+        target = TravelPlace(
+            name="병합 후 정본 장소",
+            official_address="부산광역시 정본구 정본동 1",
+            latitude=35.1234,
+            longitude=129.1234,
+            is_geocoded=True,
+        )
+        seed_session.add(target)
+        await seed_session.commit()
+        target_place_id = target.place_id
+
+    original_lock = feature_export_service.acquire_feature_export_lock
+    original_load_related = feature_export_service._load_related
+    sync_snapshot_loaded = asyncio.Event()
+    release_sync = asyncio.Event()
+    merge_reached_export_lock = asyncio.Event()
+    merge_acquired_export_lock = asyncio.Event()
+    sync_session_ref = None
+    merge_session_ref = None
+
+    async def observed_lock(session):
+        if session is merge_session_ref:
+            merge_reached_export_lock.set()
+        await original_lock(session)
+        if session is merge_session_ref:
+            merge_acquired_export_lock.set()
+
+    async def pause_after_related_snapshot(session, candidates):
+        related = await original_load_related(session, candidates)
+        if session is sync_session_ref:
+            sync_snapshot_loaded.set()
+            await release_sync.wait()
+        return related
+
+    monkeypatch.setattr(
+        feature_export_service,
+        "acquire_feature_export_lock",
+        observed_lock,
+    )
+    monkeypatch.setattr(
+        feature_export_service,
+        "_load_related",
+        pause_after_related_snapshot,
+    )
+
+    async def run_sync() -> int:
+        nonlocal sync_session_ref
+        async with session_factory() as sync_session:
+            sync_session_ref = sync_session
+            return await feature_export_service.sync_feature_exports(sync_session)
+
+    async def run_merge() -> int:
+        nonlocal merge_session_ref
+        async with session_factory() as merge_session:
+            merge_session_ref = merge_session
+            merged = await place_service.merge_places(
+                merge_session,
+                source_place_id=source_place_id,
+                target_place_id=target_place_id,
+            )
+            return merged.place_id
+
+    sync_task = asyncio.create_task(run_sync())
+    merge_task = None
+    try:
+        await asyncio.wait_for(sync_snapshot_loaded.wait(), timeout=5)
+        merge_task = asyncio.create_task(run_merge())
+        await asyncio.wait_for(merge_reached_export_lock.wait(), timeout=5)
+        assert merge_acquired_export_lock.is_set() is False
+        assert merge_task.done() is False
+        release_sync.set()
+        sync_changed, merged_place_id = await asyncio.wait_for(
+            asyncio.gather(sync_task, merge_task),
+            timeout=5,
+        )
+    finally:
+        release_sync.set()
+        pending = [sync_task]
+        if merge_task is not None:
+            pending.append(merge_task)
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    assert sync_changed == 1
+    assert merged_place_id == target_place_id
+    async with session_factory() as check_session:
+        candidate = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        row = (
+            await check_session.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert candidate is not None
+        assert candidate.matched_place_id == target_place_id
+        # merge가 기다리는 동안 commit된 ledger는 완전한 pre-merge source snapshot이다.
+        assert row.payload_json["place"]["name"] == "병합 전 원본 장소"
+        assert row.payload_json["place"]["latitude"] is not None
+        assert row.payload_json["place"]["longitude"] is not None
+        pre_merge_sequence = row.sequence
+
+    async with session_factory() as sync_session:
+        assert await feature_export_service.sync_feature_exports(sync_session) == 1
+    async with session_factory() as check_session:
+        row = (
+            await check_session.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.sequence > pre_merge_sequence
+        assert row.payload_json["place"]["name"] == "병합 후 정본 장소"
+        assert row.payload_json["place"]["address"]["official_address"] == (
+            "부산광역시 정본구 정본동 1"
+        )
+        assert row.payload_json["place"]["latitude"] == 35.1234
+        assert row.payload_json["place"]["longitude"] == 129.1234
+
+
+async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory):
+    """G1 시나리오: export(snapshot 노출) → 삭제 → changes tombstone(새 sequence) →
+    reopen → 재확정 후 다음 sync가 upsert 재발행 → cursor 소비 일관성(유실·중복 없음)."""
+    from sqlalchemy import select
+
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        MatchStatus,
     )
 
     candidate_id, place_id = await _seed_ready_candidate(
@@ -598,23 +978,21 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     cursor_seqs = [_decode_cursor(cursor)]
     consumed_ops = ["upsert"]
 
-    # 2) stale 확정/제외 UI는 바로 삭제하지 않고 reopen으로 needs_review를
-    # 선행한다. T-184의 matched reopen이 아직 이연된 현재 계약에서는 ignored
-    # 복귀 경로로 동일한 삭제 선행 조건을 만든다.
+    # 2) 이 테스트는 삭제 이후 ledger 전이만 다룬다. 먼저 정상 MATCHED upsert를
+    # 소비한 뒤, 과거 direct writer가 검수 복귀 상태만 남기고 outbox 기록 전 중단된
+    # legacy drift를 재현한다. 제품 reopen을 쓰면 그 동작 자체의 tombstone이 먼저
+    # 발행되어 삭제의 최초 tombstone을 검증할 수 없다.
     async with session_factory() as s:
         candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
         assert candidate is not None
-        candidate.match_status = MatchStatus.IGNORED.value
+        candidate.match_status = MatchStatus.NEEDS_REVIEW.value
         candidate.matched_place_id = None
-        candidate.feature_export_status = FeatureExportStatus.REJECTED.value
-        await s.execute(
-            delete(VideoPlaceMapping).where(
-                VideoPlaceMapping.place_candidate_id == candidate_id
-            )
-        )
+        candidate.feature_export_status = "pending"
         await s.commit()
-    delete_prerequisite = await client.post(
-        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+
+    # DB trigger가 소유하는 최신 revision을 읽어 삭제 선행 조건으로 사용한다.
+    delete_prerequisite = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
     )
     assert delete_prerequisite.status_code == 200
     assert delete_prerequisite.json()["candidate"]["match_status"] == "needs_review"
@@ -622,16 +1000,23 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     # 3) 검수 큐 개별 삭제(soft delete) — 행·ledger 보존 + 같은 트랜잭션 tombstone.
     deleted = await client.delete(
         f"/api/v1/destinations/candidates/{candidate_id}",
-        params={"reason": "G1 삭제"},
+        params={
+            "client_operation_id": _client_operation_id(),
+            "reason": "G1 삭제",
+            "expected_revision": delete_prerequisite.json()["candidate"][
+                "state_revision"
+            ],
+        },
     )
     assert deleted.status_code == 200
+    deleted_undo = deleted.json()["undo"]
 
     async with session_factory() as s:
         candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
         assert candidate is not None
         assert candidate.deleted_at is not None
         assert candidate.deletion_reason == "G1 삭제"
-        assert candidate.deleted_by == "web"
+        assert candidate.deleted_by == "unverified-web"
         row = (
             await s.execute(
                 select(FeatureExport).where(
@@ -642,13 +1027,14 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
         assert row.operation == "tombstone"
         assert row.rejection_reason == "G1 삭제"
 
-    # 검수 큐·상세에서 유령으로 남지 않는다.
+    # 기본 검수 큐에서는 사라지지만 removed 상세/undo 이력으로는 조회된다.
     unmatched = await client.get("/api/v1/destinations/unmatched")
     assert all(item["id"] != candidate_id for item in unmatched.json()["items"])
     detail = await client.get(
         f"/api/v1/destinations/candidates/{candidate_id}/detail"
     )
-    assert detail.status_code == 404
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["review_state"] == "deleted"
 
     # 4) changes: cursor 이후 tombstone 1건(새 sequence).
     second = await client.get(f"/api/v1/features/changes?cursor={cursor}")
@@ -667,7 +1053,8 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
 
     # 6) reopen: 삭제 필드 clear + needs_review + export pending.
     reopened = await client.post(
-        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen",
+        json={"undo_token": deleted_undo["token"]},
     )
     assert reopened.status_code == 200
     reopened_body = reopened.json()
@@ -677,9 +1064,11 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
 
     # 이미 needs_review인 후보의 재reopen은 409.
     again = await client.post(
-        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen",
+        json={"undo_token": deleted_undo["token"]},
     )
     assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "candidate_already_needs_review"
 
     # 재확정 전에는 아무 것도 재발행되지 않는다 — sync의 tombstone freeze 덕에
     # reopen 직후(`needs_review`+`pending`) 재스캔도 tombstone을 재sequence하지
@@ -694,7 +1083,12 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     # 7) 재확정(기존 장소 매칭) → 다음 sync에서 같은 export_id의 upsert 재발행.
     resolved = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
-        json={"action": "match_existing", "place_id": place_id},
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": reopened_body["candidate"]["state_revision"],
+            "action": "match_existing",
+            "place_id": place_id,
+        },
     )
     assert resolved.status_code == 200
 
@@ -731,6 +1125,7 @@ async def test_g1_exclude_video_bulk_tombstones_exported_candidates(
     from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExport,
+        MatchStatus,
         TravelPlace,
         VideoPlaceMapping,
     )
@@ -754,17 +1149,37 @@ async def test_g1_exclude_video_bulk_tombstones_exported_candidates(
     assert [item["operation"] for item in first.json()["items"]] == ["upsert"]
     cursor = first.json()["next_cursor"]
 
+    # 기존 export와 매핑을 유지한 채 legacy 검수 복귀 상태를 재현한다. 개별 삭제는
+    # needs_review gate를 통과한 뒤 매핑 fence에서 409여야 하고, 이어지는 영상 제외가
+    # 기존 ledger를 tombstone한다.
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        candidate.match_status = MatchStatus.NEEDS_REVIEW.value
+        candidate.feature_export_status = "pending"
+        await s.commit()
+
     # 확정 연결(매핑 보유) 후보의 개별 삭제는 여전히 409(부분 변경 없음).
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
+    )
+    assert detail.status_code == 200
     conflict = await client.delete(
-        f"/api/v1/destinations/candidates/{candidate_id}"
+        f"/api/v1/destinations/candidates/{candidate_id}",
+        params={
+            "expected_revision": detail.json()["candidate"]["state_revision"],
+            "client_operation_id": _client_operation_id(),
+        },
     )
     assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "candidate_place_changed"
     async with session_factory() as s:
         candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
         assert candidate.deleted_at is None
         assert candidate.matched_place_id == place_id
 
-    # 영상 제외(force): 후보 soft delete + 매핑 삭제 + 고아 장소 삭제 + tombstone.
+    # 영상 제외(force): 후보 soft delete + 매핑 삭제 + tombstone. legacy/persistent
+    # 장소는 reference가 0이어도 origin 정책상 보존한다.
     excluded = await client.post(
         "/api/v1/destinations/videos/vid-ex-bulk/exclude",
         json={"reason": "관련 없는 영상"},
@@ -773,7 +1188,8 @@ async def test_g1_exclude_video_bulk_tombstones_exported_candidates(
     summary = excluded.json()
     assert summary["deleted_candidates"] == 1
     assert summary["deleted_mappings"] == 1
-    assert summary["deleted_places"] == 1
+    assert summary["deleted_places"] == 0
+    assert summary["preserved_places"] == 1
     assert summary["tombstoned_exports"] == 1
 
     async with session_factory() as s:
@@ -782,7 +1198,7 @@ async def test_g1_exclude_video_bulk_tombstones_exported_candidates(
         assert candidate.deleted_at is not None
         assert candidate.deletion_reason == "관련 없는 영상"
         assert candidate.matched_place_id is None
-        assert await s.get(TravelPlace, place_id) is None
+        assert await s.get(TravelPlace, place_id) is not None
         row = (
             await s.execute(
                 select(FeatureExport).where(
@@ -897,6 +1313,303 @@ async def test_get_is_pure_read_when_no_dirty(client, session_factory):
         rows = (await s.execute(select(FeatureExport))).scalars().all()
         # GET은 더 이상 last_exported_at을 쓰지 않는다(순수 읽기).
         assert all(r.last_exported_at is None for r in rows)
+
+
+async def test_empty_changes_page_releases_export_lock_before_later_tombstone(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    """빈 GET page commit까지 writer가 기다리고, 다음 cursor에는 tombstone이 남는다."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from ktc.services import feature_export_service
+
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory,
+        video_id="empty-page-lock-order",
+    )
+    first = await client.get("/api/v1/features/changes")
+    cursor = first.json()["next_cursor"]
+    assert cursor is not None
+    assert await _outbox_ids(session_factory) == set()
+
+    page_before_commit = asyncio.Event()
+    release_page_commit = asyncio.Event()
+    writer_waiting_for_export = asyncio.Event()
+    writer_acquired_export = asyncio.Event()
+    original_commit = AsyncSession.commit
+    original_acquire = feature_export_service.acquire_feature_export_lock
+
+    async def paused_page_commit(session):
+        task = asyncio.current_task()
+        if (
+            task is not None
+            and task.get_name() == "empty-feature-page"
+            and not page_before_commit.is_set()
+        ):
+            page_before_commit.set()
+            await release_page_commit.wait()
+        return await original_commit(session)
+
+    async def observed_export_lock(session):
+        task = asyncio.current_task()
+        if task is not None and task.get_name() == "place-delete-writer":
+            writer_waiting_for_export.set()
+        result = await original_acquire(session)
+        if task is not None and task.get_name() == "place-delete-writer":
+            writer_acquired_export.set()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "commit", paused_page_commit)
+    monkeypatch.setattr(
+        feature_export_service,
+        "acquire_feature_export_lock",
+        observed_export_lock,
+    )
+
+    empty_page_task = asyncio.create_task(
+        client.get("/api/v1/features/changes", params={"cursor": cursor}),
+        name="empty-feature-page",
+    )
+    delete_task = None
+    try:
+        await asyncio.wait_for(page_before_commit.wait(), timeout=5)
+        delete_task = asyncio.create_task(
+            client.delete(f"/api/v1/destinations/{place_id}"),
+            name="place-delete-writer",
+        )
+        await asyncio.wait_for(writer_waiting_for_export.wait(), timeout=5)
+        # writer는 GET transaction이 export lock을 놓기 전에는 완료될 수 없다.
+        try:
+            await asyncio.wait_for(writer_acquired_export.wait(), timeout=0.2)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            raise AssertionError("빈 feature page commit 전에 writer가 export lock을 획득함")
+        assert delete_task.done() is False
+
+        release_page_commit.set()
+        empty_page = await asyncio.wait_for(empty_page_task, timeout=5)
+        deleted = await asyncio.wait_for(delete_task, timeout=5)
+    finally:
+        release_page_commit.set()
+        for task in (empty_page_task, delete_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (empty_page_task, delete_task) if task is not None),
+            return_exceptions=True,
+        )
+
+    assert empty_page.status_code == 200
+    assert empty_page.json()["items"] == []
+    assert deleted.status_code == 200
+    later = await client.get(
+        "/api/v1/features/changes",
+        params={"cursor": cursor},
+    )
+    assert later.status_code == 200
+    assert [item["candidate_id"] for item in later.json()["items"]] == [
+        candidate_id
+    ]
+    assert later.json()["items"][0]["operation"] == "tombstone"
+
+
+async def test_isolated_reverse_requeues_dirty_after_core_dirty_was_consumed(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    """core dirty를 공급자가 먼저 소비해도 늦은 reverse 주소가 즉시 다시 발행된다.
+
+    자동확정 core commit과 post-core reverse 사이의 실제 경합을 재현한다. 주소 UPDATE만
+    commit하고 dirty를 다시 넣지 않으면 두 번째 changes는 비고, 전량 sync가 뒤늦게
+    변경 1건을 찾아 golden 불변식이 깨진다.
+    """
+    from ktc.etl import geocode_service
+    from ktc.models import TravelPlace
+    from ktc.services import feature_export_service
+
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory,
+        video_id="reverse-dirty-race",
+    )
+    # core 자동확정 시점에는 주소를 얻지 못했지만 해당 변경의 dirty는 이미 있다.
+    async with session_factory() as s:
+        place = await s.get(TravelPlace, place_id)
+        place.road_address = None
+        place.official_address = None
+        await s.commit()
+
+    first = await client.get("/api/v1/features/changes")
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["items"][0]["place"]["address"] == {
+        "official_address": None,
+        "road_address": None,
+        "legal_dong_code": None,
+        "sido_code": None,
+        "sigungu_code": None,
+    }
+    cursor = first_body["next_cursor"]
+    assert await _outbox_ids(session_factory) == set()
+
+    async def fake_reverse(_client, lat, lng):
+        assert (lat, lng) == (33.5563, 126.7958)
+        return {
+            "road_address": "제주특별자치도 제주시 구좌읍 새도로",
+            "parcel_address": "제주특별자치도 제주시 구좌읍 새지번",
+        }
+
+    monkeypatch.setattr(geocode_service, "reverse_with_vworld", fake_reverse)
+    applied = await geocode_service._enrich_missing_addresses_isolated(
+        session_factory,
+        place_id,
+        object(),
+    )
+    assert applied == {
+        "road_address": "제주특별자치도 제주시 구좌읍 새도로",
+        "parcel_address": "제주특별자치도 제주시 구좌읍 새지번",
+    }
+    assert await _outbox_ids(session_factory) == {candidate_id}
+
+    second = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    assert second.status_code == 200
+    items = second.json()["items"]
+    assert len(items) == 1
+    assert items[0]["candidate_id"] == candidate_id
+    assert items[0]["place"]["address"]["road_address"].endswith("새도로")
+    assert items[0]["place"]["address"]["official_address"].endswith("새지번")
+    assert await _outbox_ids(session_factory) == set()
+
+    # dirty 경로가 이미 최신 fixpoint를 만들었으므로 전량 안전망은 무변경이어야 한다.
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 0
+
+
+async def test_reconcile_requeues_conflict_and_all_video_summary_exports(
+    client,
+    session_factory,
+):
+    """reconcile은 참조 후보 tombstone과 같은 영상의 새 summary를 한 dirty fixpoint로 만든다."""
+    import json
+
+    from ktc.etl import video_analysis_service
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExportStatus,
+        GroundingStatus,
+        MatchStatus,
+        TravelPlace,
+        VideoAnalysisRunState,
+        VideoAnalysisRunType,
+        YoutubeVideo,
+        YoutubeVideoAnalysisRun,
+    )
+    from ktc.services import feature_export_service
+
+    conflict_id, _ = await _seed_ready_candidate(
+        session_factory,
+        video_id="reconcile-dirty-race",
+        place_name="충돌 장소",
+    )
+    async with session_factory() as s:
+        video = await s.get(YoutubeVideo, "reconcile-dirty-race")
+        video.gemini_url_summary_json = {
+            "summary": "URL 분석 원본",
+            "places": [{"name": "충돌 장소"}],
+        }
+        other_place = TravelPlace(
+            name="같은 영상의 다른 장소",
+            latitude=37.51,
+            longitude=127.02,
+            is_geocoded=True,
+        )
+        s.add(other_place)
+        await s.flush()
+        other = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="같은 영상의 독립 후보",
+            ai_place_name="같은 영상의 다른 장소",
+            match_status=MatchStatus.MATCHED.value,
+            grounding_status=GroundingStatus.VERIFIED_RAW.value,
+            matched_place_id=other_place.place_id,
+            feature_export_status=FeatureExportStatus.READY.value,
+        )
+        run = YoutubeVideoAnalysisRun(
+            video_id=video.video_id,
+            run_type=VideoAnalysisRunType.RECONCILE.value,
+            state=VideoAnalysisRunState.PENDING.value,
+        )
+        s.add_all([other, run])
+        await s.flush()
+        await feature_export_service.mark_candidates_dirty(
+            s,
+            [other.id],
+            reason="seed_second_video_candidate",
+        )
+        await s.commit()
+        other_id = other.id
+        run_id = run.id
+
+    first = await client.get("/api/v1/features/changes")
+    assert first.status_code == 200
+    assert {item["candidate_id"] for item in first.json()["items"]} == {
+        conflict_id,
+        other_id,
+    }
+    cursor = first.json()["next_cursor"]
+    assert await _outbox_ids(session_factory) == set()
+
+    def fake_llm(_prompt: str) -> str:
+        return json.dumps(
+            {
+                "summary": "검수 후 확정한 새로운 영상 요약",
+                "places": [
+                    {
+                        "name": "충돌 장소",
+                        "decision": "conflict",
+                        "transcript_candidate_ids": [conflict_id],
+                        "needs_review_reason": "URL 근거와 자막 근거가 충돌한다.",
+                    }
+                ],
+                "conflicts": ["장소 근거 충돌"],
+            },
+            ensure_ascii=False,
+        )
+
+    async with session_factory() as s:
+        video = await s.get(YoutubeVideo, "reconcile-dirty-race")
+        run = await s.get(YoutubeVideoAnalysisRun, run_id)
+        result = await video_analysis_service.run_reconcile_analysis(
+            s,
+            video,
+            run,
+            llm=fake_llm,
+            model="gemini-test",
+        )
+    assert result["state"] == VideoAnalysisRunState.DONE.value
+    assert result["stale_input"] is False
+    assert result["updated_review_candidates"] == 1
+    # conflict 후보뿐 아니라 새 summary를 공유하는 미참조 후보도 재발행 대상이다.
+    assert await _outbox_ids(session_factory) == {conflict_id, other_id}
+
+    second = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    assert second.status_code == 200
+    by_candidate = {item["candidate_id"]: item for item in second.json()["items"]}
+    assert by_candidate[conflict_id]["operation"] == "tombstone"
+    assert by_candidate[other_id]["operation"] == "upsert"
+    assert (
+        by_candidate[other_id]["youtube"]["video_summary"]
+        == "검수 후 확정한 새로운 영상 요약"
+    )
+    assert await _outbox_ids(session_factory) == set()
+
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 0
 
 
 async def test_wired_place_correction_marks_dirty_and_reissues(client, session_factory):
@@ -1134,7 +1847,12 @@ async def test_golden_resolve_reuse_dirties_co_matched_candidate(
     # 4) C2를 P에 match_existing 확정 → P.category 채워짐 → C1(co-매칭)도 dirty.
     resolved = await client.post(
         f"/api/v1/destinations/unmatched/{c2_id}/resolve",
-        json={"action": "match_existing", "place_id": p_place},
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
+            "action": "match_existing",
+            "place_id": p_place,
+        },
     )
     assert resolved.status_code == 200
     assert await _outbox_ids(session_factory) == {c1_id, c2_id}

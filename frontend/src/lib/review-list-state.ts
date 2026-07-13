@@ -56,7 +56,7 @@ export type ReviewListState = {
   queueReason: ReviewQueueReason | null;
   sourceKind: ReviewSourceKind | null;
   groundingStatus: ReviewGroundingStatus | null;
-  status: ReviewCandidateStatus;
+  status: Extract<ReviewCandidateStatus, "needs_review" | "removed">;
 };
 
 export const DEFAULT_REVIEW_LIST_STATE: ReviewListState = {
@@ -163,7 +163,12 @@ export function parseReviewListState(params: SearchParamsReader): ReviewListStat
     queueReason: isQueueReason(reasonParam) ? reasonParam : null,
     sourceKind: isSourceKind(sourceKindParam) ? sourceKindParam : null,
     groundingStatus: isGroundingStatus(groundingParam) ? groundingParam : null,
-    status: statusParam === "ignored" ? "ignored" : "needs_review",
+    // `ignored`는 T-183 링크 호환 입력으로만 받고, 삭제 후보까지 포함하는
+    // `removed`를 URL 정본으로 쓴다.
+    status:
+      statusParam === "removed" || statusParam === "ignored"
+        ? "removed"
+        : "needs_review",
   };
 }
 
@@ -280,7 +285,20 @@ export function reviewListStateHasFilters(state: ReviewListState): boolean {
 export function isReviewCandidateActionable(
   candidate: UnmatchedCandidate,
 ): boolean {
-  return candidate.match_status.trim().toLowerCase() === "needs_review";
+  return candidate.review_state === "needs_review";
+}
+
+export function reviewCandidateMatchesStatus(
+  candidate: UnmatchedCandidate,
+  status: ReviewListState["status"],
+): boolean {
+  if (status === "removed") {
+    return (
+      candidate.review_state === "ignored" ||
+      candidate.review_state === "deleted"
+    );
+  }
+  return candidate.review_state === "needs_review";
 }
 
 // 서버 PostgreSQL ILIKE의 locale별 모든 동작을 JS에서 복제할 수는 없지만,
@@ -295,8 +313,7 @@ export function candidateMatchesReviewListState(
   state: ReviewListState,
 ): boolean {
   const item = detail.list_item;
-  const normalizedStatus = item.match_status.trim().toLowerCase();
-  if (normalizedStatus !== state.status) return false;
+  if (!reviewCandidateMatchesStatus(item, state.status)) return false;
   if (state.isDomestic != null && item.is_domestic !== state.isDomestic) {
     return false;
   }

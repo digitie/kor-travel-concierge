@@ -11,6 +11,7 @@ import {
   parseReviewListState,
   reconcileReviewSearchDraft,
   REVIEW_GROUNDING_STATUSES,
+  reviewCandidateMatchesStatus,
   reviewListStateHasFilters,
   reviewListStateScopeKey,
   reviewListStateToFilter,
@@ -27,6 +28,11 @@ const LIST_ITEM: UnmatchedCandidate = {
   candidate_category: "자연",
   candidate_category_code: "01010000",
   match_status: "needs_review",
+  review_state: "needs_review",
+  state_revision: 7,
+  last_client_operation_id: null,
+  video_is_excluded: false,
+  undo: null,
   confidence_score: 0.8,
   source_kind: "transcript",
   grounding_status: "verified_raw",
@@ -50,6 +56,11 @@ function detail(overrides: Partial<UnmatchedCandidate> = {}): CandidateDetail {
       candidate_category: listItem.candidate_category,
       candidate_category_code: listItem.candidate_category_code,
       match_status: listItem.match_status,
+      review_state: listItem.review_state,
+      state_revision: listItem.state_revision,
+      last_client_operation_id: listItem.last_client_operation_id,
+      video_is_excluded: listItem.video_is_excluded,
+      undo: listItem.undo,
       confidence_score: listItem.confidence_score,
       grounding_status: listItem.grounding_status,
       is_domestic: listItem.is_domestic,
@@ -135,6 +146,24 @@ describe("검수 목록 URL 상태", () => {
     expect(canonical.toString()).toBe(
       "candidate=42&sort=oldest&q=%EC%A0%9C%EC%A3%BC",
     );
+  });
+
+  it("removed를 URL 정본으로 왕복하고 legacy ignored 링크를 removed로 정규화한다", () => {
+    const removed = parseReviewListState(
+      new URLSearchParams("sort=newest&status=removed"),
+    );
+    const legacy = parseReviewListState(
+      new URLSearchParams("sort=oldest&status=ignored"),
+    );
+
+    expect(removed.status).toBe("removed");
+    expect(
+      writeReviewListState(new URLSearchParams(), removed).toString(),
+    ).toBe("sort=newest&status=removed");
+    expect(legacy.status).toBe("removed");
+    expect(
+      writeReviewListState(new URLSearchParams(), legacy).toString(),
+    ).toBe("sort=oldest&status=removed");
   });
 
   it.each(["abc", "1.0", "0", "01", "2147483648", "9007199254740992"])(
@@ -357,11 +386,42 @@ describe("page 밖 검수 후보 분류", () => {
   });
 
   it("상태가 바뀐 direct detail은 처리 불가로 판정한다", () => {
-    const processed = detail({ match_status: "ignored" });
+    const processed = detail({
+      match_status: "ignored",
+      review_state: "ignored",
+    });
 
     expect(isReviewCandidateActionable(processed.list_item)).toBe(false);
     expect(
       candidateMatchesReviewListState(processed, DEFAULT_REVIEW_LIST_STATE),
+    ).toBe(false);
+  });
+
+  it("removed는 ignored와 deleted를 함께 포함하고 underlying needs_review 삭제 후보를 처리 불가로 본다", () => {
+    const ignored = detail({
+      match_status: "ignored",
+      review_state: "ignored",
+    });
+    const deleted = detail({
+      match_status: "needs_review",
+      review_state: "deleted",
+    });
+    const removedState = {
+      ...DEFAULT_REVIEW_LIST_STATE,
+      status: "removed" as const,
+    };
+
+    expect(reviewCandidateMatchesStatus(ignored.list_item, "removed")).toBe(
+      true,
+    );
+    expect(reviewCandidateMatchesStatus(deleted.list_item, "removed")).toBe(
+      true,
+    );
+    expect(candidateMatchesReviewListState(ignored, removedState)).toBe(true);
+    expect(candidateMatchesReviewListState(deleted, removedState)).toBe(true);
+    expect(isReviewCandidateActionable(deleted.list_item)).toBe(false);
+    expect(
+      candidateMatchesReviewListState(deleted, DEFAULT_REVIEW_LIST_STATE),
     ).toBe(false);
   });
 

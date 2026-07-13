@@ -12,6 +12,7 @@ import json
 import math
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -199,6 +200,8 @@ class SelectedPlaceHitRequest(BaseModel):
 class ResolveCandidateRequest(BaseModel):
     """매칭 실패 후보 해결 요청."""
 
+    client_operation_id: UUID
+    expected_revision: int = Field(ge=1, strict=True)
     action: str = Field(pattern="^(match_existing|create_place|ignore)$")
     place_id: int | None = None
     corrected_name: str | None = None
@@ -217,6 +220,23 @@ class ResolveCandidateRequest(BaseModel):
     duplicate_place_id: int | None = Field(default=None, gt=0)
     reviewed_by: str = "web"
     review_note: str | None = None
+
+
+class ReopenCandidateRequest(BaseModel):
+    """서버가 직전 처리 응답에 발급한 opaque undo descriptor."""
+
+    undo_token: str = Field(min_length=1, max_length=4096)
+
+
+def _candidate_conflict(
+    code: str,
+    message: str,
+    **context: Any,
+) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": code, "message": message, **context},
+    )
 
 
 class DeepResearchRequest(BaseModel):
@@ -1562,6 +1582,8 @@ async def resolve_unmatched_candidate(
             ),
             duplicate_resolution=payload.duplicate_resolution,
             duplicate_place_id=payload.duplicate_place_id,
+            expected_revision=payload.expected_revision,
+            client_operation_id=payload.client_operation_id,
             commit=False,
         )
     except place_service.ProviderPersistenceDisabled as exc:
@@ -1577,10 +1599,38 @@ async def resolve_unmatched_candidate(
                 "nearby_places": exc.nearby_places,
             },
         ) from exc
+    except place_service.CandidateRevisionConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+            expected_revision=exc.expected_revision,
+            actual_revision=exc.actual_revision,
+        ) from exc
     except place_service.CandidateResolveConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # core row lock을 보유한 상태에서 trigger가 만든 revision과 사용자 관점 상태를
+    # 고정한다. commit 뒤 다시 읽으면 그 짧은 사이에 끼어든 후속 mutation을 이번
+    # 브라우저 작업 결과로 오인할 수 있다.
+    await session.flush()
+    await session.refresh(
+        candidate,
+        attribute_names=[
+            "state_revision",
+            "match_status",
+            "matched_place_id",
+            "deleted_at",
+            "provider_evidence_json",
+        ],
+    )
+    core_candidate_revision = candidate.state_revision
+    core_review_state = place_service.candidate_review_state(candidate)
+    core_matched_place_id = candidate.matched_place_id
     resolution = place_service.latest_candidate_resolution(candidate)
     await audit_service.record(
         session,
@@ -1589,58 +1639,151 @@ async def resolve_unmatched_candidate(
         target_type="extracted_place_candidate",
         target_id=str(candidate_id),
         payload={
+            "client_operation_id": str(payload.client_operation_id),
             "request": payload.model_dump(mode="json", exclude_none=True),
             "resolution": resolution,
         },
+        commit=False,
     )
-    if place is not None:
-        await place_service.enrich_place_admin_codes_postcommit(
-            session, place_id=place.place_id
+    # 후보 mutation과 감사 로그는 한 commit으로 확정한다. 이후 행정구역 보강은
+    # 기존 best-effort post-core 경계다.
+    await session.commit()
+    enriched_place_revision: int | None = None
+    if core_matched_place_id is not None:
+        enriched_place = await place_service.enrich_place_admin_codes_postcommit(
+            session, place_id=core_matched_place_id
         )
+        if enriched_place is None:
+            raise _candidate_conflict(
+                "candidate_place_changed",
+                "resolve 이후 연결 장소가 삭제되었습니다.",
+            )
+        enriched_place_revision = enriched_place.state_revision
+
+    # response-loss 복구 표식은 느린 보강 뒤의 장소 revision까지 고정한 별도 최종
+    # snapshot이다. core commit 뒤 후보/reopen 또는 장소 보정이 끼면 표식을 남기지 않는다.
+    try:
+        await place_service.finalize_candidate_client_operation(
+            session,
+            candidate_id=candidate_id,
+            client_operation_id=payload.client_operation_id,
+            action=payload.action,
+            expected_candidate_revision=core_candidate_revision,
+            expected_review_state=core_review_state,
+            expected_matched_place_id=core_matched_place_id,
+            expected_matched_place_revision=enriched_place_revision,
+        )
+    except place_service.CandidateRevisionConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+            expected_revision=exc.expected_revision,
+            actual_revision=exc.actual_revision,
+        ) from exc
+    except place_service.CandidateResolveConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+        ) from exc
+    except place_service.CandidatePlaceChangedError as exc:
+        raise _candidate_conflict(
+            "candidate_place_changed",
+            str(exc),
+        ) from exc
     candidate, place, mapping = await place_service.authoritative_candidate_resolution(
         session, candidate_id=candidate_id
     )
+    video_is_excluded = bool(
+        await session.scalar(
+            select(YoutubeVideo.is_excluded).where(
+                YoutubeVideo.video_id == candidate.video_id
+            )
+        )
+        or False
+    )
+    undo = place_service.candidate_undo_descriptor(
+        candidate,
+        matched_place_revision=(place.state_revision if place is not None else None),
+    )
     return {
         "status": "resolved",
-        "candidate": _candidate_payload(candidate),
+        "client_operation_id": str(payload.client_operation_id),
+        "candidate": _candidate_payload(
+            candidate,
+            video_is_excluded=video_is_excluded,
+            matched_place_revision=(
+                place.state_revision if place is not None else None
+            ),
+        ),
         "place": _place_payload(place) if place else None,
         "mapping_id": mapping.id if mapping else None,
+        "undo": undo,
     }
 
 
 @router.post("/destinations/unmatched/{candidate_id}/reopen")
 async def reopen_unmatched_candidate(
-    candidate_id: CandidateId, session: AsyncSession = Depends(get_session)
+    candidate_id: CandidateId,
+    payload: ReopenCandidateRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """soft delete/제외(`ignored`)된 후보를 검수 대기로 복귀한다(T-160, PR-09 백엔드).
-
-    - soft deleted → 삭제 필드 clear + `needs_review` + export `pending`.
-    - `ignored` → `needs_review` + `pending`.
-    - 이미 `needs_review` → 409(복귀할 것이 없음).
-    - `matched`/`user_corrected` → 400(범위 밖 — 장소 정리 정책은 T-184).
-    """
+    """서버 발급 token이 고정한 삭제·제외·확정 후보를 검수 대기로 복귀한다."""
     try:
-        candidate, reopened_from = await place_service.reopen_candidate(
-            session, candidate_id=candidate_id
+        result = await place_service.reopen_candidate(
+            session,
+            candidate_id=candidate_id,
+            undo_token=payload.undo_token,
         )
-    except place_service.CandidateReopenConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except place_service.CandidateReopenUnsupportedError as exc:
+    except place_service.InvalidCandidateUndoToken as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except place_service.CandidateRevisionConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+            expected_revision=exc.expected_revision,
+            actual_revision=exc.actual_revision,
+        ) from exc
+    except place_service.CandidateReopenConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_already_needs_review",
+            str(exc),
+        ) from exc
+    except place_service.CandidatePlaceChangedError as exc:
+        raise _candidate_conflict(
+            "candidate_place_changed",
+            str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    actor = resolve_admin_proxy_actor(request, get_settings()) or "unverified-web"
     await audit_service.record(
         session,
         actor_type="web",
         action="candidate.reopen",
         target_type="extracted_place_candidate",
         target_id=str(candidate_id),
-        payload={"reopened_from": reopened_from},
+        payload={
+            "reopened_from": result.reopened_from,
+            "tombstoned_exports": result.tombstoned_exports,
+            "deleted_place_id": result.deleted_place_id,
+            "video_is_excluded": result.video_is_excluded,
+            "actor": actor,
+        },
+        commit=False,
     )
+    # targeted tombstone·candidate transition·감사 로그를 같은 transaction으로 확정한다.
+    await session.commit()
     return {
         "status": "reopened",
-        "reopened_from": reopened_from,
-        "candidate": _candidate_payload(candidate),
+        "reopened_from": result.reopened_from,
+        "candidate": _candidate_payload(
+            result.candidate,
+            video_is_excluded=result.video_is_excluded,
+        ),
+        "deleted_place_id": result.deleted_place_id,
+        "tombstoned_exports": result.tombstoned_exports,
+        "video_is_excluded": result.video_is_excluded,
     }
 
 
@@ -1678,6 +1821,7 @@ async def _video_detail_dict(
         else None,
         "duration_seconds": video.duration_seconds,
         "description": video.description_gemini_corrected or video.description_raw,
+        "is_excluded": bool(video.is_excluded),
     }
 
 
@@ -1690,7 +1834,7 @@ async def get_candidate_transcript(
     RustFS에 저장된 최신 `transcript_corrected` 자산을 우선 읽고, 없으면 원본
     `transcript`로 폴백한다. 둘 다 없으면 `text`/`kind`는 null."""
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None or candidate.deleted_at is not None:
+    if candidate is None:
         raise HTTPException(status_code=404, detail="candidate not found")
     store = postprocess_service._make_media_store(get_settings())
     text = await media_store.load_latest_asset_text(
@@ -1717,7 +1861,7 @@ async def get_candidate_detail(
 ) -> dict[str, Any]:
     """검수 후보 1건의 상세 정보(영상·근거·동일 영상의 다른 후보)를 반환한다.
 
-    soft delete된 후보는 404다(T-160 — 삭제 후보 열람 UI는 T-184에서 다룬다).
+    soft delete된 후보도 `removed` 이력과 undo 근거를 확인할 수 있도록 직접 조회한다.
     """
     list_item = await place_service.get_candidate_list_item(session, candidate_id)
     if list_item is None:
@@ -1741,22 +1885,25 @@ async def get_candidate_detail(
                 "created_at": run.created_at.isoformat() if run.created_at else None,
             }
 
+    latest_mapping_place_id = (
+        select(VideoPlaceMapping.place_id)
+        .where(
+            VideoPlaceMapping.place_candidate_id
+            == ExtractedPlaceCandidate.id
+        )
+        .order_by(VideoPlaceMapping.id.desc())
+        .limit(1)
+        .correlate(ExtractedPlaceCandidate)
+        .scalar_subquery()
+    )
     sibling_rows = (
         await session.execute(
             select(
-                ExtractedPlaceCandidate.id,
-                ExtractedPlaceCandidate.ai_place_name,
-                ExtractedPlaceCandidate.match_status,
-                ExtractedPlaceCandidate.candidate_category,
+                ExtractedPlaceCandidate,
                 func.coalesce(
-                    VideoPlaceMapping.place_id,
                     ExtractedPlaceCandidate.matched_place_id,
-                ),
-            )
-            .join(
-                VideoPlaceMapping,
-                VideoPlaceMapping.place_candidate_id == ExtractedPlaceCandidate.id,
-                isouter=True,
+                    latest_mapping_place_id,
+                ).label("place_id"),
             )
             .where(
                 ExtractedPlaceCandidate.video_id == candidate.video_id,
@@ -1769,38 +1916,24 @@ async def get_candidate_detail(
 
     return {
         "list_item": _candidate_list_payload(list_item),
-        "candidate": {
-            "id": candidate.id,
-            "video_id": candidate.video_id,
-            "source_channel_id": candidate.source_channel_id,
-            "source_playlist_id": candidate.source_playlist_id,
-            "ai_place_name": candidate.ai_place_name,
-            "location_hint": candidate.location_hint,
-            "candidate_category": candidate.candidate_category,
-            "candidate_category_code": place_service.candidate_category_code(candidate),
-            "match_status": candidate.match_status,
-            "confidence_score": _safe_confidence_score(candidate.confidence_score),
-            "grounding_status": candidate.grounding_status,
-            "is_domestic": candidate.is_domestic,
-            "speaker_note": candidate.speaker_note,
-            "source_kind": candidate.source_kind,
-            "feature_export_status": candidate.feature_export_status,
-            "timestamp_start": candidate.timestamp_start,
-            "timestamp_end": candidate.timestamp_end,
-            "source_text": candidate.source_text,
-        },
+        "candidate": _candidate_payload(
+            candidate,
+            video_is_excluded=list_item.video_is_excluded,
+            matched_place_revision=list_item.matched_place_revision,
+        ),
         "video": video,
         "source_run": source_run,
         "provider_evidence": candidate.provider_evidence_json,
         "sibling_candidates": [
             {
-                "id": sid,
-                "ai_place_name": name,
-                "match_status": status,
-                "candidate_category": category,
+                "id": sibling.id,
+                "ai_place_name": sibling.ai_place_name,
+                "match_status": sibling.match_status,
+                "review_state": place_service.candidate_review_state(sibling),
+                "candidate_category": sibling.candidate_category,
                 "place_id": place_id,
             }
-            for sid, name, status, category, place_id in sibling_rows
+            for sibling, place_id in sibling_rows
         ],
     }
 
@@ -1960,6 +2093,9 @@ async def get_place_merge_suggestions(
 @router.delete("/destinations/candidates/{candidate_id}")
 async def delete_candidate(
     candidate_id: CandidateId,
+    request: Request,
+    expected_revision: int = Query(ge=1),
+    client_operation_id: UUID = Query(),
     reason: str | None = Query(None, max_length=255),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -1972,24 +2108,42 @@ async def delete_candidate(
     downstream consumer가 `changes`로 제거를 전달받는다.
     """
     delete_reason = (reason or "").strip() or "검수 큐에서 삭제"
+    actor = resolve_admin_proxy_actor(request, get_settings()) or "unverified-web"
     try:
         summary = await place_service.soft_delete_candidates(
             session,
             [candidate_id],
             reason=delete_reason,
-            deleted_by="web",
+            deleted_by=actor,
             force=False,
             expected_status=MatchStatus.NEEDS_REVIEW,
+            expected_revisions={candidate_id: expected_revision},
+            client_operation_id=client_operation_id,
+            client_operation_action="delete",
         )
+    except place_service.CandidateRevisionConflictError as exc:
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+            expected_revision=exc.expected_revision,
+            actual_revision=exc.actual_revision,
+        ) from exc
     except place_service.CandidateStatusConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _candidate_conflict(
+            "candidate_revision_conflict",
+            str(exc),
+        ) from exc
     except place_service.CandidateMappingConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="확정 장소와 연결된 후보는 삭제할 수 없습니다.",
+        raise _candidate_conflict(
+            "candidate_place_changed",
+            "확정 장소와 연결된 후보는 삭제할 수 없습니다.",
         ) from exc
     if summary.deleted_candidates == 0:
         raise HTTPException(status_code=404, detail="candidate not found")
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="candidate not found")
+    undo = place_service.candidate_undo_descriptor(candidate)
     await audit_service.record(
         session,
         actor_type="web",
@@ -1997,12 +2151,23 @@ async def delete_candidate(
         target_type="extracted_place_candidate",
         target_id=str(candidate_id),
         payload={
+            "client_operation_id": str(client_operation_id),
             "soft_delete": True,
             "reason": delete_reason,
             "tombstoned_exports": summary.tombstoned_exports,
+            "actor": actor,
         },
+        commit=False,
     )
-    return {"deleted": True, "id": candidate_id}
+    await session.commit()
+    return {
+        "deleted": True,
+        "id": candidate_id,
+        "client_operation_id": str(client_operation_id),
+        "state_revision": candidate.state_revision,
+        "review_state": place_service.candidate_review_state(candidate),
+        "undo": undo,
+    }
 
 
 @router.delete("/destinations/{place_id}")
@@ -2052,11 +2217,16 @@ async def exclude_video(
     """관련 없거나 질 낮은 동영상을 제외(블록리스트)하고 관련 POI를 삭제한다.
 
     영상을 `is_excluded`로 표시해 이후 수집에서 다시 받지 않고 스킵하며, 이 영상의
-    추출 후보·언급 매핑을 삭제하고 고아가 된 장소만 함께 삭제한다(다른 영상이
-    언급하는 장소는 보존). 영상을 찾지 못하면 404.
+    추출 후보·언급 매핑을 삭제하고 후보가 만든 고아 장소만 함께 삭제한다. 다른
+    영상이 언급하거나 persistent/legacy인 장소는 보존한다. 영상을 찾지 못하면 404.
     """
     reason = payload.reason if payload else None
-    result = await place_service.exclude_video(session, video_id, reason=reason)
+    result = await place_service.exclude_video(
+        session,
+        video_id,
+        reason=reason,
+        commit=False,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="video not found")
     await audit_service.record(
@@ -2066,7 +2236,9 @@ async def exclude_video(
         target_type="youtube_video",
         target_id=video_id,
         payload=result,
+        commit=False,
     )
+    await session.commit()
     return result
 
 
@@ -2926,6 +3098,15 @@ def _candidate_list_payload(item: place_service.CandidateListItem) -> dict[str, 
     (provider_evidence_json·source_text·review_note 등)를 제외하고, 파생값인
     8자리 카테고리 코드는 서버에서 계산해 넣는다(원본 evidence는 보내지 않음)."""
     candidate = item.candidate
+    review_state = place_service.candidate_review_state(candidate)
+    undo = (
+        place_service.candidate_undo_descriptor(
+            candidate,
+            matched_place_revision=item.matched_place_revision,
+        )
+        if review_state != MatchStatus.NEEDS_REVIEW.value
+        else None
+    )
     return {
         "id": candidate.id,
         "video_id": candidate.video_id,
@@ -2937,16 +3118,45 @@ def _candidate_list_payload(item: place_service.CandidateListItem) -> dict[str, 
         "candidate_category": candidate.candidate_category,
         "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
+        "review_state": review_state,
+        "state_revision": candidate.state_revision,
+        "last_client_operation_id": (
+            place_service.last_candidate_client_operation_id(
+                candidate,
+                matched_place_revision=item.matched_place_revision,
+            )
+        ),
         "confidence_score": _safe_confidence_score(candidate.confidence_score),
         "source_kind": candidate.source_kind,
         "grounding_status": candidate.grounding_status,
         "created_at": candidate.created_at.isoformat(),
         "queue_reason": item.queue_reason.value,
         "is_domestic": candidate.is_domestic,
+        "deleted_at": (
+            candidate.deleted_at.isoformat() if candidate.deleted_at else None
+        ),
+        "deletion_reason": candidate.deletion_reason,
+        "deleted_by": candidate.deleted_by,
+        "video_is_excluded": item.video_is_excluded,
+        "undo": undo,
     }
 
 
-def _candidate_payload(candidate) -> dict[str, Any]:
+def _candidate_payload(
+    candidate,
+    *,
+    video_is_excluded: bool = False,
+    matched_place_revision: int | None = None,
+) -> dict[str, Any]:
+    review_state = place_service.candidate_review_state(candidate)
+    undo = (
+        place_service.candidate_undo_descriptor(
+            candidate,
+            matched_place_revision=matched_place_revision,
+        )
+        if review_state != MatchStatus.NEEDS_REVIEW.value
+        else None
+    )
     return {
         "id": candidate.id,
         "video_id": candidate.video_id,
@@ -2963,6 +3173,14 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "candidate_category": candidate.candidate_category,
         "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
+        "review_state": review_state,
+        "state_revision": candidate.state_revision,
+        "last_client_operation_id": (
+            place_service.last_candidate_client_operation_id(
+                candidate,
+                matched_place_revision=matched_place_revision,
+            )
+        ),
         "matched_place_id": candidate.matched_place_id,
         "confidence_score": _safe_confidence_score(candidate.confidence_score),
         "grounding_status": candidate.grounding_status,
@@ -2974,6 +3192,13 @@ def _candidate_payload(candidate) -> dict[str, Any]:
             candidate.reviewed_at.isoformat() if candidate.reviewed_at else None
         ),
         "review_note": candidate.review_note,
+        "deleted_at": (
+            candidate.deleted_at.isoformat() if candidate.deleted_at else None
+        ),
+        "deletion_reason": candidate.deletion_reason,
+        "deleted_by": candidate.deleted_by,
+        "video_is_excluded": video_is_excluded,
+        "undo": undo,
     }
 
 

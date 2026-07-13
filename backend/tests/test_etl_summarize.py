@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -14,8 +15,9 @@ from ktc.etl.transcript import TranscriptResult, TranscriptSegment
 from ktc.models import (
     AssetType,
     CrawlStatus,
-    FeatureExportStatus,
+    ExportDirtyOutbox,
     ExtractedPlaceCandidate,
+    FeatureExportStatus,
     MatchStatus,
     MediaAsset,
     YoutubeVideo,
@@ -121,9 +123,22 @@ async def test_summarize_video_full_flow(session):
     video = await _make_video(session)
     store = InMemoryMediaStore()
     reported: list[str] = []
+    dirty_when_description_reported: set[int] | None = None
 
     async def reporter(message: str, progress: float | None = None) -> None:
+        nonlocal dirty_when_description_reported
         reported.append(message)
+        # production reporter처럼 같은 session을 commit해도 core summary+candidate+dirty가
+        # 중간 commit되지 않아야 한다. 설명 보정 알림은 final commit 뒤에만 도착한다.
+        if "영상 설명을 보정했습니다" in message:
+            dirty_when_description_reported = set(
+                (
+                    await session.execute(
+                        select(ExportDirtyOutbox.candidate_id)
+                    )
+                ).scalars()
+            )
+        await session.commit()
 
     transcript = TranscriptResult(
         video_id="v1",
@@ -158,6 +173,11 @@ async def test_summarize_video_full_flow(session):
     assert all(c.feature_export_status == FeatureExportStatus.PENDING for c in cands)
     assert cands[0].provider_evidence_json["transcript"]["source"] == "transcript_api"
     assert cands[0].provider_evidence_json["transcript"]["asset_id"] is not None
+    dirty_ids = set(
+        (await session.execute(select(ExportDirtyOutbox.candidate_id))).scalars()
+    )
+    assert dirty_ids == {candidate.id for candidate in cands}
+    assert dirty_when_description_reported == dirty_ids
 
     # 전사 결과가 RustFS+media_assets에 기록
     assets = (await session.execute(select(MediaAsset))).scalars().all()
@@ -165,6 +185,97 @@ async def test_summarize_video_full_flow(session):
     assert assets[0].asset_type == AssetType.TRANSCRIPT
     assert any("자막을 RustFS에 저장했습니다" in message for message in reported)
     assert any("Gemini에서 영상 설명을 보정했습니다" in message for message in reported)
+
+
+async def test_summarize_does_not_resurrect_candidate_after_video_exclusion(
+    session_factory,
+):
+    """LLM 대기 중 영상 제외가 먼저 확정되면 늦은 후보·summary를 적용하지 않는다."""
+    from ktc.services import place_service
+
+    async with session_factory() as seed_session:
+        video = YoutubeVideo(
+            video_id="summarize-exclude-race",
+            title="제외 경합 영상",
+            url="https://youtu.be/summarize-exclude-race",
+            channel_id="race-channel",
+            description_raw="분석 전 설명",
+        )
+        seed_session.add(video)
+        await seed_session.commit()
+
+    llm_started = asyncio.Event()
+    release_llm = asyncio.Event()
+
+    async def paused_llm(_prompt: str) -> str:
+        llm_started.set()
+        await release_llm.wait()
+        return _LLM_JSON
+
+    transcript = TranscriptResult(
+        video_id="summarize-exclude-race",
+        source="transcript_api",
+        segments=[TranscriptSegment(30.0, "월정리 카페 소개")],
+    )
+
+    async def summarize():
+        async with session_factory() as worker_session:
+            video = await worker_session.get(
+                YoutubeVideo,
+                "summarize-exclude-race",
+            )
+            assert video is not None
+            return await summarize_service.summarize_video(
+                worker_session,
+                InMemoryMediaStore(),
+                video=video,
+                transcript=transcript,
+                llm=paused_llm,
+            )
+
+    task = asyncio.create_task(summarize())
+    try:
+        await asyncio.wait_for(llm_started.wait(), timeout=5)
+        async with session_factory() as reviewer_session:
+            excluded = await place_service.exclude_video(
+                reviewer_session,
+                "summarize-exclude-race",
+                reason="사용자가 분석 중 영상을 제외함",
+                excluded_by="reviewer",
+            )
+            assert excluded is not None
+        release_llm.set()
+        result = await asyncio.wait_for(task, timeout=5)
+    finally:
+        release_llm.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert result["status"] == "excluded"
+    assert result["candidates"] == 0
+    async with session_factory() as check_session:
+        video = await check_session.get(YoutubeVideo, "summarize-exclude-race")
+        assert video is not None
+        assert video.is_excluded is True
+        assert video.transcript_summary is None
+        assert video.description_gemini_corrected is None
+        candidates = (
+            await check_session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.video_id == "summarize-exclude-race"
+                )
+            )
+        ).scalars().all()
+        assert candidates == []
+        assets = (
+            await check_session.execute(
+                select(MediaAsset).where(
+                    MediaAsset.video_id == "summarize-exclude-race"
+                )
+            )
+        ).scalars().all()
+        assert len(assets) == 1
 
 
 async def test_summarize_video_no_transcript(session):

@@ -26,6 +26,7 @@ import {
   Loader2Icon,
   MapPinIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   SearchIcon,
   SparklesIcon,
   SquareIcon,
@@ -33,6 +34,7 @@ import {
 } from "lucide-react";
 
 import {
+  ApiRequestError,
   deleteCandidate,
   getCandidateDetail,
   getPlaceOpinion,
@@ -41,9 +43,13 @@ import {
   listDestinationFacets,
   listUnmatchedCandidatesPage,
   reprocessVideos,
+  reopenCandidate,
   resolveCandidate,
   RUN_QUEUE_QUERY_KEY,
   searchPlaces,
+  type CandidateReviewState,
+  type CandidateUndoDescriptor,
+  type DeleteCandidateResult,
   type DestinationFacets,
   type DestinationGroupDim,
   type DestinationSummary,
@@ -51,13 +57,13 @@ import {
   type PlaceSearchHit,
   type PlaceSearchProvider,
   type ReprocessStage,
+  type ResolveCandidateInput,
   type ReviewGroundingStatus,
   type ReviewQueueReason,
   type ReviewSourceKind,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import {
-  candidateStatusLabel,
   categoryDisplayLabel,
   groundingStatusBadgeVariant,
   groundingStatusLabel,
@@ -80,6 +86,8 @@ import {
   candidateActionFailureDecision,
   candidateFailureSelectionDecision,
   getCandidateFromReviewPageCache,
+  prepareCandidateReopenCaches,
+  reconcileCandidateReopenCaches,
   reconcileProcessedCandidateCaches,
   revalidateCandidateActionFailure,
   reviewCandidatePaginationContractError,
@@ -100,12 +108,29 @@ import {
   REVIEW_GROUNDING_STATUSES,
   REVIEW_QUEUE_REASONS,
   REVIEW_SOURCE_KINDS,
+  reviewCandidateMatchesStatus,
   reviewListStateHasFilters,
   reviewListStateScopeKey,
   reviewListStateToFilter,
   writeReviewListState,
   type ReviewListState,
 } from "@/lib/review-list-state";
+import {
+  applyReviewActionSuccess,
+  captureReviewUndoAttempt,
+  classifyReviewUndoOutcome,
+  confirmCandidateDeleteDetail,
+  deleteResponseMatchesConfirmedDetail,
+  dismissReviewUndo,
+  INITIAL_REVIEW_UNDO_STATE,
+  isCurrentReviewUndoAttempt,
+  parseReviewUndoHandoff,
+  reconcileReviewUndoAfterActionFailure,
+  REVIEW_UNDO_HANDOFF_STORAGE_KEY,
+  waitForCandidateOperationMarker,
+  type ReviewUndoAttempt,
+  type ReviewUndoState,
+} from "@/lib/review-undo";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
@@ -146,6 +171,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { ReviewUndoSnackbar } from "@/components/ReviewUndoSnackbar";
 import { VWorldMap } from "@/components/VWorldMap";
 
 const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
@@ -155,6 +181,7 @@ const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
 };
 const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
 const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
+const AUTO_SEARCH_DEBOUNCE_MS = 300;
 const REVIEW_URL_CHANGE_EVENT = "ktc:review-url-change";
 
 function subscribeReviewUrl(onStoreChange: () => void): () => void {
@@ -181,11 +208,13 @@ type ReviewCandidatesKey = readonly [
   ReviewQueueReason | null,
   ReviewSourceKind | null,
   ReviewGroundingStatus | null,
-  "needs_review" | "ignored",
+  "needs_review" | "removed",
 ];
 
 type ResolveCommand = {
   candidateId: number;
+  expectedRevision: number;
+  clientOperationId: string;
   candidateName: string;
   visibleIndex: number;
   orderedCandidateIds: number[];
@@ -200,6 +229,105 @@ type ResolveCommand = {
     resolution: "merge_existing" | "create_new";
     placeId?: number;
   };
+};
+
+type ResolveCommandDraft = Omit<ResolveCommand, "clientOperationId">;
+
+type DeleteCandidateTarget = Pick<
+  UnmatchedCandidate,
+  "id" | "ai_place_name" | "state_revision"
+>;
+
+type DeleteCandidatesResult = Awaited<
+  ReturnType<typeof settleCandidateDeletes>
+> & {
+  responses: ReadonlyMap<number, DeleteCandidateResult>;
+};
+
+class CandidateForwardAttemptError extends Error {
+  readonly clientOperationId: string;
+  readonly requestStatus: number | null;
+  readonly expectedRevision: number;
+  readonly responseReceived: boolean;
+  readonly response: DeleteCandidateResult | null;
+
+  constructor(
+    cause: unknown,
+    clientOperationId: string,
+    expectedRevision: number,
+    responseReceived: boolean,
+    response: DeleteCandidateResult | null,
+  ) {
+    super(cause instanceof Error ? cause.message : "후보 처리 요청에 실패했습니다.");
+    this.name = "CandidateForwardAttemptError";
+    this.clientOperationId = clientOperationId;
+    this.requestStatus =
+      !responseReceived && cause instanceof ApiRequestError ? cause.status : null;
+    this.expectedRevision = expectedRevision;
+    this.responseReceived = responseReceived;
+    this.response = response;
+  }
+}
+
+class CandidateResolveAttemptError extends Error {
+  readonly requestStatus: number | null;
+  readonly originalError: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "후보 처리 요청에 실패했습니다.");
+    this.name = "CandidateResolveAttemptError";
+    this.requestStatus = cause instanceof ApiRequestError ? cause.status : null;
+    this.originalError = cause;
+  }
+}
+
+function candidateDeleteReconciliationRequestStatus(
+  error: unknown,
+  authoritative: CandidateDetailRevalidation | undefined,
+  candidateId: number,
+): number | null {
+  if (!(error instanceof CandidateForwardAttemptError)) {
+    return error instanceof ApiRequestError ? error.status : null;
+  }
+  const requestStatus = error.requestStatus;
+  if (requestStatus != null && requestStatus < 500) return requestStatus;
+  if (authoritative?.status !== "success") return requestStatus;
+  const confirmed = confirmCandidateDeleteDetail({
+    detail: authoritative.detail,
+    candidateId,
+    expectedRevision: error.expectedRevision,
+    clientOperationId: error.clientOperationId,
+  });
+  if (!confirmed) return 200;
+  if (!error.responseReceived) return requestStatus;
+  return deleteResponseMatchesConfirmedDetail({
+    response: error.response,
+    confirmed,
+    candidateId,
+    clientOperationId: error.clientOperationId,
+  })
+    ? requestStatus
+    : 200;
+}
+
+type ReopenCommand = {
+  descriptor: CandidateUndoDescriptor;
+  candidateName: string;
+  expectedReviewState: CandidateReviewState;
+  source: "snackbar" | "removed_list" | "detail";
+  undoAttempt: ReviewUndoAttempt | null;
+  queueScope: string;
+  workflowEpoch: number;
+  selectedCandidateId: number | null;
+  detailCandidateId: number | null;
+  detailGeneration: number;
+};
+
+type ReopenRequestResult = {
+  request:
+    | { kind: "success" }
+    | { kind: "error"; status: number | null };
+  error: unknown | null;
 };
 
 type PendingCandidateAdvance = {
@@ -335,6 +463,11 @@ function ReviewPageContent() {
     groundingStatus,
     status: reviewStatus,
   } = reviewListState;
+  const isRemovedView = reviewStatus === "removed";
+  const hasReviewFilters = reviewListStateHasFilters({
+    ...reviewListState,
+    status: "needs_review",
+  });
   const initialUrlNormalizationRef = useRef(false);
   const commitReviewUrl = useCallback((params: URLSearchParams) => {
     const url = new URL(window.location.href);
@@ -603,12 +736,14 @@ function ReviewPageContent() {
   const deepLinkItem = deepLinkDetail?.list_item ?? null;
   const actionableLoadedCandidates = useMemo(
     () =>
-      candidates.filter((candidate) =>
-        isReviewCandidateActionable(
-          deepLinkItem?.id === candidate.id ? deepLinkItem : candidate,
-        ),
-      ),
-    [candidates, deepLinkItem],
+      isRemovedView
+        ? []
+        : candidates.filter((candidate) =>
+            isReviewCandidateActionable(
+              deepLinkItem?.id === candidate.id ? deepLinkItem : candidate,
+            ),
+          ),
+    [candidates, deepLinkItem, isRemovedView],
   );
   const actionableLoadedCandidateIds = useMemo(
     () => new Set(actionableLoadedCandidates.map((candidate) => candidate.id)),
@@ -706,6 +841,34 @@ function ReviewPageContent() {
   const [candidateActionError, setCandidateActionError] = useState<string | null>(
     null,
   );
+  const [reviewUndoState, setReviewUndoState] = useState<ReviewUndoState>(
+    INITIAL_REVIEW_UNDO_STATE,
+  );
+  const reviewUndoStateRef = useRef(reviewUndoState);
+  const [reviewUndoError, setReviewUndoError] = useState<string | null>(null);
+  const updateReviewUndoState = useCallback(
+    (update: (current: ReviewUndoState) => ReviewUndoState) => {
+      const next = update(reviewUndoStateRef.current);
+      reviewUndoStateRef.current = next;
+      setReviewUndoState(next);
+    },
+    [],
+  );
+  useEffect(() => {
+    try {
+      const serialized = window.sessionStorage.getItem(
+        REVIEW_UNDO_HANDOFF_STORAGE_KEY,
+      );
+      window.sessionStorage.removeItem(REVIEW_UNDO_HANDOFF_STORAGE_KEY);
+      const handoff = parseReviewUndoHandoff(serialized);
+      if (!handoff) return;
+      updateReviewUndoState((current) =>
+        applyReviewActionSuccess(current, handoff),
+      );
+    } catch {
+      // sessionStorage 비활성/오염은 현재 검수 큐 동작을 막지 않는다.
+    }
+  }, [updateReviewUndoState]);
   const [candidateCacheRefreshError, setCandidateCacheRefreshError] = useState<
     string | null
   >(null);
@@ -768,9 +931,42 @@ function ReviewPageContent() {
       selectedId,
     ],
   );
+  const recoveryDetailQuery = useQuery({
+    queryKey: ["candidate-detail", selected?.id ?? null],
+    queryFn: () => getCandidateDetail(selected?.id as number),
+    enabled: Boolean(selected && selected.review_state !== "needs_review"),
+  });
+  const authoritativeRecoveryCandidate = useMemo(() => {
+    const detail = recoveryDetailQuery.data;
+    const listItem = detail?.list_item;
+    const candidate = detail?.candidate;
+    if (
+      !selected ||
+      recoveryDetailQuery.isError ||
+      recoveryDetailQuery.isRefetchError ||
+      !listItem ||
+      !candidate ||
+      listItem.id !== selected.id ||
+      candidate.id !== selected.id ||
+      listItem.review_state === "needs_review" ||
+      candidate.review_state !== listItem.review_state ||
+      candidate.state_revision !== listItem.state_revision ||
+      !listItem.undo ||
+      listItem.undo.candidate_id !== listItem.id ||
+      listItem.undo.token.length === 0
+    ) {
+      return null;
+    }
+    return listItem;
+  }, [
+    recoveryDetailQuery.data,
+    recoveryDetailQuery.isError,
+    recoveryDetailQuery.isRefetchError,
+    selected,
+  ]);
 
   const deepLinkStatusOut = Boolean(
-    deepLinkItem && !isReviewCandidateActionable(deepLinkItem),
+    deepLinkItem && !reviewCandidateMatchesStatus(deepLinkItem, reviewStatus),
   );
   const deepLinkFilterOut = Boolean(
     deepLinkDetail &&
@@ -784,7 +980,8 @@ function ReviewPageContent() {
       !loadedCandidateIds.has(deepLinkItem.id),
   );
   const selectedActionable = Boolean(
-    selected &&
+    !isRemovedView &&
+      selected &&
       isReviewCandidateActionable(selected) &&
       (deepLinkedCandidateId == null
         ? !(
@@ -798,15 +995,17 @@ function ReviewPageContent() {
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
   const autoSearchTimerRef = useRef<number | null>(null);
+  const autoSearchIntentSequenceRef = useRef(0);
   // 검색 버튼은 검색어가 그대로여도 항상 재요청해야 한다. queryKey에 nonce를 넣어
   // runSearch/pickCandidate마다 증가시키면 동일 검색어로도 강제 refetch된다(무반응 방지).
   const [searchNonce, setSearchNonce] = useState(0);
   const query = queryEdit ?? (selected ? buildHintedQuery(selected) : "");
 
+  const externalResolutionEnabled = !isRemovedView && selectedActionable;
   const searchQuery = useQuery({
     queryKey: ["place-search", activeQuery, searchNonce],
     queryFn: ({ signal }) => searchPlaces(activeQuery, signal),
-    enabled: activeQuery.trim().length > 0,
+    enabled: externalResolutionEnabled && activeQuery.trim().length > 0,
   });
   const result = searchQuery.data;
 
@@ -821,12 +1020,15 @@ function ReviewPageContent() {
 
   // provider hits를 모아 Gemini 의견을 별도(비동기)로 호출 → 검색 자체는 빠르게.
   const allHits = useMemo(
-    () => [
-      ...(result?.google ?? []),
-      ...(result?.kakao ?? []),
-      ...(result?.naver ?? []),
-    ].filter(isPlaceHitStorageAllowed),
-    [result],
+    () =>
+      !externalResolutionEnabled
+        ? []
+        : [
+            ...(result?.google ?? []),
+            ...(result?.kakao ?? []),
+            ...(result?.naver ?? []),
+          ].filter(isPlaceHitStorageAllowed),
+    [externalResolutionEnabled, result],
   );
   // AI(Gemini) 의견은 자동이 아니라 사용자가 버튼으로 수동 요청한다(쿼터 절약).
   const [opinionRequested, setOpinionRequested] = useState(false);
@@ -834,12 +1036,33 @@ function ReviewPageContent() {
     queryKey: ["place-opinion", activeQuery, searchNonce],
     queryFn: ({ signal }) => getPlaceOpinion(activeQuery, allHits, signal),
     enabled:
-      opinionRequested && activeQuery.trim().length > 0 && allHits.length > 0,
+      externalResolutionEnabled &&
+      opinionRequested &&
+      activeQuery.trim().length > 0 &&
+      allHits.length > 0,
   });
   const gemini = opinionQuery.data?.gemini ?? null;
 
   const isMobile = useIsMobile();
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailId, setDetailIdState] = useState<number | null>(null);
+  const detailIdRef = useRef<number | null>(null);
+  const detailGenerationRef = useRef(0);
+  const setDetailId = useCallback(
+    (
+      next:
+        | number
+        | null
+        | ((current: number | null) => number | null),
+    ) => {
+      const resolved =
+        typeof next === "function" ? next(detailIdRef.current) : next;
+      if (resolved === detailIdRef.current) return;
+      detailIdRef.current = resolved;
+      detailGenerationRef.current += 1;
+      setDetailIdState(resolved);
+    },
+    [],
+  );
   const [detailDeletePending, setDetailDeletePending] = useState(false);
   const detailDeleteSnapshotRef = useRef<{
     candidateId: number;
@@ -900,10 +1123,12 @@ function ReviewPageContent() {
     detailDeletePending,
     invalidateCandidateWorkflow,
     queueScope,
+    setDetailId,
     updatePendingCandidateAdvance,
   ]);
 
-  const clearAutoSearchTimer = useCallback(() => {
+  const cancelAutoSearchIntent = useCallback(() => {
+    autoSearchIntentSequenceRef.current += 1;
     if (autoSearchTimerRef.current != null) {
       window.clearTimeout(autoSearchTimerRef.current);
       autoSearchTimerRef.current = null;
@@ -916,12 +1141,33 @@ function ReviewPageContent() {
     categoryMatchAbortRef.current = null;
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (externalResolutionEnabled) return;
+    cancelAutoSearchIntent();
+    cancelCategoryMatch();
+    void queryClient.cancelQueries({ queryKey: ["place-search"] });
+    void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
+    queryClient.removeQueries({ queryKey: ["place-search"] });
+    queryClient.removeQueries({ queryKey: ["place-opinion"] });
+    setActiveQuery("");
+    setQueryEdit(null);
+    setOpinionRequested(false);
+    setSelectedHit(null);
+  }, [
+    cancelAutoSearchIntent,
+    cancelCategoryMatch,
+    externalResolutionEnabled,
+    queryClient,
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   useEffect(
     () => () => {
-      clearAutoSearchTimer();
+      cancelAutoSearchIntent();
       cancelCategoryMatch();
     },
-    [cancelCategoryMatch, clearAutoSearchTimer],
+    [cancelAutoSearchIntent, cancelCategoryMatch],
   );
   useEffect(() => {
     if (selected?.id != null) {
@@ -935,7 +1181,6 @@ function ReviewPageContent() {
   useEffect(() => {
     const candidateId = selected?.id ?? null;
     if (candidateId === formCandidateId) return;
-    clearAutoSearchTimer();
     cancelCategoryMatch();
     setActiveQuery("");
     setQueryEdit(null);
@@ -960,12 +1205,12 @@ function ReviewPageContent() {
             categoryCode: "",
           },
     );
-  }, [cancelCategoryMatch, clearAutoSearchTimer, formCandidateId, selected]);
+  }, [cancelCategoryMatch, formCandidateId, selected]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   function runSearch() {
-    if (query.trim()) {
-      clearAutoSearchTimer();
+    cancelAutoSearchIntent();
+    if (externalResolutionEnabled && query.trim()) {
       setOpinionRequested(false);
       setSearchNonce((n) => n + 1);
       setActiveQuery(query.trim());
@@ -978,7 +1223,7 @@ function ReviewPageContent() {
     void queryClient.cancelQueries({ queryKey: ["place-opinion", activeQuery] });
     queryClient.removeQueries({ queryKey: ["place-search", activeQuery] });
     queryClient.removeQueries({ queryKey: ["place-opinion", activeQuery] });
-    clearAutoSearchTimer();
+    cancelAutoSearchIntent();
     setOpinionRequested(false);
     setActiveQuery("");
   }
@@ -992,7 +1237,7 @@ function ReviewPageContent() {
         setDetailId(candidateId);
       }
     },
-    [isMobile, router],
+    [isMobile, router, setDetailId],
   );
   const clearCandidateParam = useCallback((preserveSelection = false) => {
     invalidateCandidateWorkflow();
@@ -1032,10 +1277,8 @@ function ReviewPageContent() {
         preserveWorkflow = false,
       }: { autoSearch?: boolean; preserveWorkflow?: boolean } = {},
     ) => {
+      cancelAutoSearchIntent();
       invalidateCandidateWorkflow();
-      // 검색 취소와 새 자동 검색을 함께 조금 늦춰 후보 선택/폼 반영이 먼저 그려지게 한다.
-      // 이전 검색 결과는 새 검색을 시작하기 직전에 취소해 새 후보에 매달리지 않도록 한다.
-      clearAutoSearchTimer();
       if (!preserveWorkflow) {
         updatePendingCandidateAdvance(null);
         clearCandidateParam(true);
@@ -1054,24 +1297,45 @@ function ReviewPageContent() {
       setNearbyConflict(null);
       setFormCandidateId(candidate.id);
       setActiveQuery("");
+      void queryClient.cancelQueries({ queryKey: ["place-search"] });
+      void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
       setForm({
         name: "",
         latitude: "",
         longitude: "",
         ...candidateCategoryForm(candidate),
       });
-      if (!autoSearch) return;
+      if (
+        !autoSearch ||
+        reviewListStateRef.current.status !== "needs_review" ||
+        candidate.review_state !== "needs_review"
+      ) {
+        return;
+      }
+      // page append·cache reconcile·form sync는 이 intent를 취소하지 않는다.
+      // 콜백이 선택 후보·scope·상태가 계속 같은지 직접 확인해
+      // 느린 타이머가 다음 후보의 검색을 덮어쓰지 못하게 한다.
+      const intentCandidateId = candidate.id;
+      const intentWorkflowEpoch = selectionScopeEpochRef.current;
+      const intentSequence = autoSearchIntentSequenceRef.current + 1;
+      autoSearchIntentSequenceRef.current = intentSequence;
       autoSearchTimerRef.current = window.setTimeout(() => {
+        if (autoSearchIntentSequenceRef.current !== intentSequence) return;
         autoSearchTimerRef.current = null;
-        void queryClient.cancelQueries({ queryKey: ["place-search"] });
-        void queryClient.cancelQueries({ queryKey: ["place-opinion"] });
-        setSearchNonce((n) => n + 1);
+        if (
+          selectedCandidateIdRef.current !== intentCandidateId ||
+          selectionScopeEpochRef.current !== intentWorkflowEpoch ||
+          reviewListStateRef.current.status !== "needs_review"
+        ) {
+          return;
+        }
+        setSearchNonce((current) => current + 1);
         setActiveQuery(nextQuery);
-      }, 120);
+      }, AUTO_SEARCH_DEBOUNCE_MS);
     },
     [
+      cancelAutoSearchIntent,
       cancelCategoryMatch,
-      clearAutoSearchTimer,
       clearCandidateParam,
       invalidateCandidateWorkflow,
       queryClient,
@@ -1143,7 +1407,6 @@ function ReviewPageContent() {
         pickCandidate(firstRemaining, { preserveWorkflow: true });
         return;
       }
-      clearAutoSearchTimer();
       setSelectedCandidateSnapshot(null);
       setSelectedId(null);
       setQueueCompleted(true);
@@ -1153,7 +1416,6 @@ function ReviewPageContent() {
       candidates,
       candidatePaginationContractError,
       candidatePages,
-      clearAutoSearchTimer,
       pickCandidate,
       updatePendingCandidateAdvance,
     ],
@@ -1261,7 +1523,6 @@ function ReviewPageContent() {
         // page 밖이거나 A→B→A로 workflow epoch가 바뀌었다면 과거 순서 anchor를
         // 재사용하지 않고 A만 비운다. 초기 선택 effect가 최신 큐의 첫 후보로 복귀한다.
         clearProcessedCandidateParam(candidateId, false);
-        clearAutoSearchTimer();
         cancelCategoryMatch();
         initialSelectionDoneRef.current = false;
         selectedCandidateIdRef.current = null;
@@ -1283,7 +1544,6 @@ function ReviewPageContent() {
     [
       advanceAfterProcessing,
       cancelCategoryMatch,
-      clearAutoSearchTimer,
       clearProcessedCandidateParam,
       queryClient,
       removeCandidateSelections,
@@ -1390,8 +1650,72 @@ function ReviewPageContent() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const deleteCandidatesMutation = useMutation({
-    mutationFn: (ids: number[]) => settleCandidateDeletes(ids, deleteCandidate),
-    onMutate: async () => {
+    mutationFn: async (
+      targets: DeleteCandidateTarget[],
+    ): Promise<DeleteCandidatesResult> => {
+      const targetById = new Map(targets.map((target) => [target.id, target]));
+      const responses = new Map<number, DeleteCandidateResult>();
+      const batch = await settleCandidateDeletes(
+        targets.map((target) => target.id),
+        async (candidateId) => {
+          const target = targetById.get(candidateId);
+          if (!target) throw new Error(`삭제 후보 #${candidateId} 정보가 없습니다.`);
+          const clientOperationId = crypto.randomUUID();
+          let responseReceived = false;
+          let response: DeleteCandidateResult | null = null;
+          try {
+            response = await deleteCandidate(
+              candidateId,
+              target.state_revision,
+              clientOperationId,
+            );
+            responseReceived = true;
+            const firstDetail = await getCandidateDetail(candidateId);
+            const authoritative = await waitForCandidateOperationMarker({
+              initial: { status: "success", detail: firstDetail },
+              candidateId,
+              expectedReviewState: "deleted",
+              fetchCandidateDetail: getCandidateDetail,
+            });
+            const confirmed =
+              authoritative?.status === "success"
+                ? confirmCandidateDeleteDetail({
+                    detail: authoritative.detail,
+                    candidateId,
+                    expectedRevision: target.state_revision,
+                    clientOperationId,
+                  })
+                : null;
+            if (
+              !confirmed ||
+              !deleteResponseMatchesConfirmedDetail({
+                response,
+                confirmed,
+                candidateId,
+                clientOperationId,
+              })
+            ) {
+              throw new Error("삭제 응답이 요청 후보의 완료 상태와 일치하지 않습니다.");
+            }
+            responses.set(candidateId, response);
+          } catch (error) {
+            throw new CandidateForwardAttemptError(
+              error,
+              clientOperationId,
+              target.state_revision,
+              responseReceived,
+              response,
+            );
+          }
+        },
+      );
+      return { ...batch, responses };
+    },
+    onMutate: async (targets) => {
+      if (targets.length > 1) {
+        updateReviewUndoState(dismissReviewUndo);
+        setReviewUndoError(null);
+      }
       const mutationCandidatesKey = candidatesKeyRef.current;
       await queryClient.cancelQueries({
         queryKey: mutationCandidatesKey,
@@ -1412,7 +1736,7 @@ function ReviewPageContent() {
         workflowEpoch: selectionScopeEpochRef.current,
       };
     },
-    onSuccess: async (result, _variables, context) => {
+    onSuccess: async (result, targets, context) => {
       const activeCandidatesKey = candidatesKeyRef.current;
       const activeQueueScope = queueScopeRef.current;
       const pageOut =
@@ -1433,6 +1757,22 @@ function ReviewPageContent() {
         markCandidateCacheRefreshError();
       }
       removeCandidateSelections(result.succeededIds);
+      if (result.succeededIds.length > 0) {
+        const candidateId = result.succeededIds[0];
+        const target = targets.find((candidate) => candidate.id === candidateId);
+        const response = result.responses.get(candidateId);
+        updateReviewUndoState((current) =>
+          applyReviewActionSuccess(current, {
+            candidateId,
+            candidateName: target?.ai_place_name ?? `후보 #${candidateId}`,
+            action: "delete",
+            reviewState: "deleted",
+            undo: response?.undo,
+            processedCount: result.attemptedIds.length,
+          }),
+        );
+        setReviewUndoError(null);
+      }
       if (result.failures.length > 0) {
         const details = result.failures
           .map(({ id, reason }) =>
@@ -1450,12 +1790,90 @@ function ReviewPageContent() {
             fetchCandidateDetail: getCandidateDetail,
           },
         );
+        let retriedFailedId: number | undefined;
+        let retriedAuthoritative: CandidateDetailRevalidation | undefined;
+        if (result.attemptedIds.length === 1) {
+          const failedId = result.failures[0]?.id;
+          retriedFailedId = failedId;
+          const target = targets.find((candidate) => candidate.id === failedId);
+          const initialAuthoritative =
+            failedId == null
+              ? undefined
+              : failureRefresh.candidateDetails.get(failedId);
+          const failureReason = result.failures[0]?.reason;
+          const requestAttempted =
+            failureReason instanceof CandidateForwardAttemptError;
+          const requestStatus =
+            failureReason instanceof CandidateForwardAttemptError
+              ? failureReason.requestStatus
+              : failureReason instanceof ApiRequestError
+                ? failureReason.status
+                : null;
+          const clientOperationId =
+            failureReason instanceof CandidateForwardAttemptError
+              ? failureReason.clientOperationId
+              : null;
+          const authoritative =
+            failedId == null ||
+            !requestAttempted ||
+            (requestStatus != null && requestStatus < 500)
+              ? initialAuthoritative
+              : await waitForCandidateOperationMarker({
+                  initial: initialAuthoritative,
+                  candidateId: failedId,
+                  expectedReviewState: "deleted",
+                  fetchCandidateDetail: getCandidateDetail,
+                });
+          retriedAuthoritative = authoritative;
+          if (failedId != null && authoritative?.status === "success") {
+            queryClient.setQueryData(
+              ["candidate-detail", failedId],
+              authoritative.detail,
+            );
+          }
+          const undoReconciliation = reconcileReviewUndoAfterActionFailure(
+            reviewUndoStateRef.current,
+            {
+              authoritative,
+              requestAttempted,
+              requestStatus: candidateDeleteReconciliationRequestStatus(
+                failureReason,
+                authoritative,
+                failedId ?? result.attemptedIds[0],
+              ),
+              clientOperationId,
+              candidateId: failedId ?? result.attemptedIds[0],
+              candidateName:
+                target?.ai_place_name ?? `후보 #${failedId ?? result.attemptedIds[0]}`,
+              action: "delete",
+              expectedReviewState: "deleted",
+            },
+          );
+          updateReviewUndoState(() => undoReconciliation.state);
+          if (undoReconciliation.outcome === "confirmed_committed") {
+            setCandidateActionError(
+              `${target?.ai_place_name ?? `후보 #${failedId}`} 후보의 응답은 끊겼지만 최신 상태에서 삭제 완료를 확인했습니다.`,
+            );
+          } else if (undoReconciliation.outcome === "foreign_or_stale") {
+            setCandidateActionError(
+              `${target?.ai_place_name ?? `후보 #${failedId}`} 후보는 다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다.`,
+            );
+          }
+          if (
+            authoritative?.status !== "success" ||
+            authoritative.detail.list_item.review_state !== "needs_review"
+          ) {
+            setReviewUndoError(null);
+          }
+        }
         removeCandidateSelections(
           result.failures
             .map(({ id }) => id)
             .filter((candidateId) =>
               candidateFailureShouldAdvance(
-                failureRefresh.candidateDetails.get(candidateId),
+                candidateId === retriedFailedId
+                  ? retriedAuthoritative
+                  : failureRefresh.candidateDetails.get(candidateId),
                 reviewListStateRef.current,
               ),
             ),
@@ -1480,7 +1898,9 @@ function ReviewPageContent() {
               workflowEpoch: context.workflowEpoch,
               activePageKey: activeCandidatesKey,
             },
-            failureRefresh.candidateDetails.get(context.focusedId),
+            context.focusedId === retriedFailedId
+              ? retriedAuthoritative
+              : failureRefresh.candidateDetails.get(context.focusedId),
           );
         }
       }
@@ -1507,7 +1927,6 @@ function ReviewPageContent() {
           result.succeededIds.forEach((id) =>
             clearProcessedCandidateParam(id, false),
           );
-          clearAutoSearchTimer();
           initialSelectionDoneRef.current = false;
           selectedCandidateIdRef.current = null;
           setQueueCompleted(false);
@@ -1520,7 +1939,8 @@ function ReviewPageContent() {
         );
       }
     },
-    onError: async (error, candidateIds, context) => {
+    onError: async (error, targets, context) => {
+      const candidateIds = targets.map((candidate) => candidate.id);
       setCandidateActionError(`후보 삭제 결과를 확인하지 못했습니다: ${error.message}`);
       const activeCandidatesKey = candidatesKeyRef.current;
       const activeQueueScope = queueScopeRef.current;
@@ -1529,10 +1949,78 @@ function ReviewPageContent() {
         activePageKey: activeCandidatesKey,
         fetchCandidateDetail: getCandidateDetail,
       });
+      let singleAuthoritative: CandidateDetailRevalidation | undefined;
+      if (candidateIds.length === 1) {
+        const target = targets[0];
+        const requestAttempted = error instanceof CandidateForwardAttemptError;
+        const requestStatus =
+          error instanceof CandidateForwardAttemptError
+            ? error.requestStatus
+            : error instanceof ApiRequestError
+              ? error.status
+              : null;
+        const initialAuthoritative = failureRefresh.candidateDetails.get(
+          candidateIds[0],
+        );
+        const authoritative =
+          requestAttempted && (requestStatus == null || requestStatus >= 500)
+            ? await waitForCandidateOperationMarker({
+                initial: initialAuthoritative,
+                candidateId: candidateIds[0],
+                expectedReviewState: "deleted",
+                fetchCandidateDetail: getCandidateDetail,
+              })
+            : initialAuthoritative;
+        singleAuthoritative = authoritative;
+        if (authoritative?.status === "success") {
+          queryClient.setQueryData(
+            ["candidate-detail", candidateIds[0]],
+            authoritative.detail,
+          );
+        }
+        const undoReconciliation = reconcileReviewUndoAfterActionFailure(
+          reviewUndoStateRef.current,
+          {
+            authoritative,
+            requestAttempted,
+            requestStatus: candidateDeleteReconciliationRequestStatus(
+              error,
+              authoritative,
+              candidateIds[0],
+            ),
+            clientOperationId:
+              error instanceof CandidateForwardAttemptError
+                ? error.clientOperationId
+                : null,
+            candidateId: candidateIds[0],
+            candidateName: target?.ai_place_name ?? `후보 #${candidateIds[0]}`,
+            action: "delete",
+            expectedReviewState: "deleted",
+          },
+        );
+        updateReviewUndoState(() => undoReconciliation.state);
+        if (undoReconciliation.outcome === "confirmed_committed") {
+          setCandidateActionError(
+            `${target?.ai_place_name ?? `후보 #${candidateIds[0]}`} 후보의 응답은 끊겼지만 최신 상태에서 삭제 완료를 확인했습니다.`,
+          );
+        } else if (undoReconciliation.outcome === "foreign_or_stale") {
+          setCandidateActionError(
+            `${target?.ai_place_name ?? `후보 #${candidateIds[0]}`} 후보는 다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다.`,
+          );
+        }
+        if (
+          authoritative?.status !== "success" ||
+          authoritative.detail.list_item.review_state !== "needs_review"
+        ) {
+          setReviewUndoError(null);
+        }
+      }
       removeCandidateSelections(
         candidateIds.filter((candidateId) =>
           candidateFailureShouldAdvance(
-            failureRefresh.candidateDetails.get(candidateId),
+            candidateId === candidateIds[0] && singleAuthoritative
+              ? singleAuthoritative
+              : failureRefresh.candidateDetails.get(candidateId),
             reviewListStateRef.current,
           ),
         ),
@@ -1557,7 +2045,9 @@ function ReviewPageContent() {
             workflowEpoch: context.workflowEpoch,
             activePageKey: activeCandidatesKey,
           },
-          failureRefresh.candidateDetails.get(context.focusedId),
+          context.focusedId === candidateIds[0] && singleAuthoritative
+            ? singleAuthoritative
+            : failureRefresh.candidateDetails.get(context.focusedId),
         );
       }
     },
@@ -1644,6 +2134,7 @@ function ReviewPageContent() {
     [allHits],
   );
   const mapPlaces = useMemo<DestinationSummary[]>(() => {
+    if (!externalResolutionEnabled) return [];
     const hits = mapHitEntries.map(({ hit, placeId }) => hitPlace(hit, placeId));
     const lat = Number(form.latitude);
     const lng = Number(form.longitude);
@@ -1665,9 +2156,9 @@ function ReviewPageContent() {
       });
     }
     return hits;
-  }, [activeSelectedHit, form, mapHitEntries]);
+  }, [activeSelectedHit, externalResolutionEnabled, form, mapHitEntries]);
 
-  function isCurrentResolveCommand(command: ResolveCommand): boolean {
+  function isCurrentResolveCommand(command: ResolveCommandDraft): boolean {
     return isCurrentReviewWorkflow({
       commandCandidateId: command.candidateId,
       commandQueueScope: command.queueScope,
@@ -1679,24 +2170,53 @@ function ReviewPageContent() {
   }
 
   const resolveMutation = useMutation({
-    mutationFn: (command: ResolveCommand) => {
-      if (command.action === "ignore") {
-        return resolveCandidate(command.candidateId, {
-          action: "ignore",
-          reviewNote: "검수 페이지 제외",
-        });
+    mutationFn: async (command: ResolveCommand) => {
+      const input: ResolveCandidateInput =
+        command.action === "ignore"
+          ? {
+              action: "ignore",
+              expectedRevision: command.expectedRevision,
+              clientOperationId: command.clientOperationId,
+              reviewNote: "검수 페이지 제외",
+            }
+          : {
+            ...buildCreatePlaceResolution(
+              command.form,
+              command.selectedHit,
+              command.duplicate,
+            ),
+            expectedRevision: command.expectedRevision,
+            clientOperationId: command.clientOperationId,
+          };
+      try {
+        const response = await resolveCandidate(command.candidateId, input);
+        const expectedReviewState =
+          command.action === "ignore" ? "ignored" : "user_corrected";
+        if (
+          response.status !== "resolved" ||
+          response.client_operation_id !== command.clientOperationId ||
+          response.candidate.id !== command.candidateId ||
+          response.candidate.review_state !== expectedReviewState ||
+          response.candidate.state_revision <= command.expectedRevision ||
+          response.candidate.last_client_operation_id !==
+            command.clientOperationId ||
+          response.candidate.undo?.candidate_id !== command.candidateId ||
+          response.candidate.undo?.token !== response.undo.token ||
+          response.undo.candidate_id !== command.candidateId ||
+          response.undo.token.length === 0
+        ) {
+          throw new Error("후보 처리 응답이 요청 후보의 완료 상태와 일치하지 않습니다.");
+        }
+        return response;
+      } catch (error) {
+        throw new CandidateResolveAttemptError(error);
       }
-      return resolveCandidate(
-        command.candidateId,
-        buildCreatePlaceResolution(
-          command.form,
-          command.selectedHit,
-          command.duplicate,
-        ),
-      );
     },
     onError: async (error, command) => {
-      const conflict = parseNearbyPlaceConflict(error);
+      const requestAttempted = error instanceof CandidateResolveAttemptError;
+      const requestStatus = requestAttempted ? error.requestStatus : null;
+      const originalError = requestAttempted ? error.originalError : error;
+      const conflict = parseNearbyPlaceConflict(originalError);
       const isCurrentCommand = isCurrentResolveCommand(command);
       if (conflict) {
         if (isCurrentCommand) {
@@ -1722,6 +2242,58 @@ function ReviewPageContent() {
       ) {
         markCandidateCacheRefreshError();
       }
+      const initialAuthoritative = failureRefresh.candidateDetails.get(
+        command.candidateId,
+      );
+      const authoritative =
+        requestAttempted && (requestStatus == null || requestStatus >= 500)
+          ? await waitForCandidateOperationMarker({
+              initial: initialAuthoritative,
+              candidateId: command.candidateId,
+              expectedReviewState:
+                command.action === "ignore" ? "ignored" : "user_corrected",
+              fetchCandidateDetail: getCandidateDetail,
+            })
+          : initialAuthoritative;
+      if (authoritative?.status === "success") {
+        queryClient.setQueryData(
+          ["candidate-detail", command.candidateId],
+          authoritative.detail,
+        );
+      }
+      const undoReconciliation = reconcileReviewUndoAfterActionFailure(
+        reviewUndoStateRef.current,
+        {
+          authoritative,
+          requestAttempted,
+          requestStatus,
+          clientOperationId: command.clientOperationId,
+          candidateId: command.candidateId,
+          candidateName: command.candidateName,
+          action: command.action,
+          expectedReviewState:
+            command.action === "ignore" ? "ignored" : "user_corrected",
+        },
+      );
+      updateReviewUndoState(() => undoReconciliation.state);
+      if (isCurrentCommand && undoReconciliation.outcome === "confirmed_committed") {
+        setCandidateActionError(
+          `${command.candidateName} 후보의 응답은 끊겼지만 최신 상태에서 처리 완료를 확인했습니다.`,
+        );
+      } else if (
+        isCurrentCommand &&
+        undoReconciliation.outcome === "foreign_or_stale"
+      ) {
+        setCandidateActionError(
+          `${command.candidateName} 후보는 다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다.`,
+        );
+      }
+      if (
+        authoritative?.status !== "success" ||
+        authoritative.detail.list_item.review_state !== "needs_review"
+      ) {
+        setReviewUndoError(null);
+      }
       reconcileFailedCandidateSelection(
         command.candidateId,
         {
@@ -1732,10 +2304,10 @@ function ReviewPageContent() {
           workflowEpoch: command.workflowEpoch,
           activePageKey: activeCandidatesKey,
         },
-        failureRefresh.candidateDetails.get(command.candidateId),
+        authoritative,
       );
     },
-    onSuccess: async (_data, command) => {
+    onSuccess: async (data, command) => {
       // 409 중복 확인 응답은 성공이 아니므로 여기까지 오지 않는다. 실제 확정 뒤에만
       // 큐에서 제거해 확인 다이얼로그가 뜰 때 후보가 사라졌다 복원되는 깜빡임을 막는다.
       const activeCandidatesKey = candidatesKeyRef.current;
@@ -1759,6 +2331,16 @@ function ReviewPageContent() {
       if (command.action === "create_place") {
         queryClient.invalidateQueries({ queryKey: ["destination-facets"] });
       }
+      updateReviewUndoState((current) =>
+        applyReviewActionSuccess(current, {
+          candidateId: command.candidateId,
+          candidateName: command.candidateName,
+          action: command.action,
+          reviewState: data.candidate.review_state,
+          undo: data.undo,
+        }),
+      );
+      setReviewUndoError(null);
       const isCurrentCommand = isCurrentResolveCommand(command);
       if (isCurrentCommand) {
         setNearbyConflict(null);
@@ -1766,7 +2348,6 @@ function ReviewPageContent() {
       }
       if (isCurrentCommand && command.visibleIndex >= 0) {
         cancelCategoryMatch();
-        clearAutoSearchTimer();
         advanceAfterProcessing(
           command.candidateId,
           [command.candidateId],
@@ -1779,7 +2360,6 @@ function ReviewPageContent() {
         clearProcessedCandidateParam(command.candidateId, false);
         if (selectedCandidateIdRef.current === command.candidateId) {
           cancelCategoryMatch();
-          clearAutoSearchTimer();
           initialSelectionDoneRef.current = false;
           selectedCandidateIdRef.current = null;
           setQueueCompleted(false);
@@ -1799,7 +2379,7 @@ function ReviewPageContent() {
     },
   });
 
-  function submitResolveCommand(command: ResolveCommand) {
+  function submitResolveCommand(command: ResolveCommandDraft) {
     if (deepLinkValidationPending || resolveMutation.isPending) return;
     if (!isCurrentResolveCommand(command)) {
       setNearbyConflict(null);
@@ -1808,8 +2388,13 @@ function ReviewPageContent() {
       );
       return;
     }
+    const attempt = () =>
+      resolveMutation.mutate({
+        ...command,
+        clientOperationId: crypto.randomUUID(),
+      });
     if (deepLinkedCandidateId !== command.candidateId) {
-      resolveMutation.mutate(command);
+      attempt();
       return;
     }
 
@@ -1843,11 +2428,11 @@ function ReviewPageContent() {
         setSelectedCandidateSnapshot(latest);
         if (!isReviewCandidateActionable(latest)) {
           setCandidateActionError(
-            `후보 상태가 ${candidateStatusLabel(latest.match_status)}(으)로 변경되어 처리하지 않았습니다.`,
+            `후보 상태가 ${candidateReviewStateLabel(latest.review_state)}(으)로 변경되어 처리하지 않았습니다.`,
           );
           return;
         }
-        resolveMutation.mutate(command);
+        attempt();
       })
       .finally(() => {
         if (validationGenerationRef.current === validationGeneration) {
@@ -1866,6 +2451,7 @@ function ReviewPageContent() {
     setCandidateActionError(null);
     submitResolveCommand({
       candidateId: selected.id,
+      expectedRevision: selected.state_revision,
       candidateName: selected.ai_place_name,
       visibleIndex: candidates.findIndex(
         (candidate) => candidate.id === selected.id,
@@ -1882,11 +2468,222 @@ function ReviewPageContent() {
     });
   }
 
+  const navigateToReopenedCandidate = useCallback(
+    (candidate: UnmatchedCandidate) => {
+      const current = new URL(window.location.href);
+      const nextState: ReviewListState = {
+        ...parseReviewListState(current.searchParams),
+        status: "needs_review",
+      };
+      const params = writeReviewListState(current.searchParams, nextState);
+      params.set("candidate", String(candidate.id));
+      initialSelectionDoneRef.current = false;
+      setDeepLinkNotFound(null);
+      commitReviewUrl(params);
+    },
+    [commitReviewUrl],
+  );
+
+  const reopenMutation = useMutation({
+    mutationFn: async (command: ReopenCommand): Promise<ReopenRequestResult> => {
+      try {
+        await prepareCandidateReopenCaches(
+          queryClient,
+          command.descriptor.candidate_id,
+        );
+        await reopenCandidate(command.descriptor);
+        return { request: { kind: "success" }, error: null };
+      } catch (error) {
+        return {
+          request: {
+            kind: "error",
+            status: error instanceof ApiRequestError ? error.status : null,
+          },
+          error,
+        };
+      }
+    },
+    onMutate: () => {
+      setCandidateActionError(null);
+      setReviewUndoError(null);
+    },
+    onSuccess: async (requestResult, command) => {
+      const workflowIsCurrent = () =>
+        command.queueScope === queueScopeRef.current &&
+        command.workflowEpoch === selectionScopeEpochRef.current &&
+        command.selectedCandidateId === selectedCandidateIdRef.current;
+      const detailIsCurrent = () =>
+        workflowIsCurrent() &&
+        command.detailCandidateId === detailIdRef.current &&
+        command.detailGeneration === detailGenerationRef.current;
+      const completionIsCurrent = () =>
+        command.source === "snackbar"
+          ? Boolean(
+              command.undoAttempt &&
+                isCurrentReviewUndoAttempt(
+                  reviewUndoStateRef.current,
+                  command.undoAttempt,
+                  queueScopeRef.current,
+                  selectionScopeEpochRef.current,
+                ),
+            )
+          : command.source === "detail"
+            ? detailIsCurrent()
+            : workflowIsCurrent();
+
+      let reconciliation: Awaited<
+        ReturnType<typeof reconcileCandidateReopenCaches>
+      >;
+      try {
+        reconciliation = await reconcileCandidateReopenCaches(queryClient, {
+          candidateId: command.descriptor.candidate_id,
+          // UI completion 소유권과 cache healing은 별개다. 사용자가 선택/필터를
+          // 바꿨어도 현재 active page는 commit 이후 exact snapshot으로 복구한다.
+          activePageKey: candidatesKeyRef.current,
+          fetchCandidateDetail: getCandidateDetail,
+        });
+      } catch (error) {
+        reconciliation = {
+          detail: { status: "error", error },
+          canReselect: false,
+          activePageRefreshed: false,
+          refreshFailed: true,
+        };
+      }
+      if (
+        workflowIsCurrent() &&
+        reconciliation.detail.status === "success" &&
+        selectedCandidateIdRef.current === command.descriptor.candidate_id
+      ) {
+        setSelectedCandidateSnapshot(reconciliation.detail.detail.list_item);
+      }
+      if (reconciliation.refreshFailed && completionIsCurrent()) {
+        markCandidateCacheRefreshError();
+      }
+
+      const classification = classifyReviewUndoOutcome({
+        request: requestResult.request,
+        authoritative: reconciliation.detail,
+        expectedReviewState: command.expectedReviewState,
+      });
+      // snackbar state를 지우면 generation도 함께 바뀌므로, 완료 소유권은
+      // dismiss 전에 한 번만 고정한다. 그렇지 않으면 성공/409 후속 UI가
+      // 자기 자신을 stale 응답으로 오인한다.
+      const completionWasCurrent = completionIsCurrent();
+      const clearMatchingUndo = () => {
+        updateReviewUndoState((current) => {
+          const entry = current.current;
+          return entry &&
+            entry.descriptor.candidate_id === command.descriptor.candidate_id &&
+            entry.descriptor.token === command.descriptor.token
+            ? dismissReviewUndo(current)
+            : current;
+        });
+      };
+
+      if (classification === "restored" && reconciliation.canReselect) {
+        clearMatchingUndo();
+        setReviewUndoError(null);
+        if (completionWasCurrent && reconciliation.detail.status === "success") {
+          setCandidateActionError(null);
+          if (command.source === "detail") setDetailId(null);
+          navigateToReopenedCandidate(reconciliation.detail.detail.list_item);
+        }
+        return;
+      }
+
+      if (classification === "stale") {
+        clearMatchingUndo();
+        setReviewUndoError(null);
+        if (completionWasCurrent) {
+          setCandidateActionError(
+            `${command.candidateName} 후보는 다른 작업으로 상태가 바뀌어 이 복구 요청을 사용할 수 없습니다. 최신 목록에서 다시 확인해 주세요.`,
+          );
+        }
+        return;
+      }
+
+      const errorMessage =
+        classification === "retryable"
+          ? "복구 결과를 확인하지 못했습니다. 같은 되돌리기 버튼으로 다시 시도해 주세요."
+          : "복구 뒤 최신 후보 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+      if (!completionWasCurrent) return;
+      if (command.source === "snackbar") {
+        setReviewUndoError(errorMessage);
+      } else {
+        setCandidateActionError(`${command.candidateName}: ${errorMessage}`);
+      }
+    },
+  });
+
+  const requestCandidateReopen = useCallback(
+    (
+      candidate: Pick<
+        UnmatchedCandidate,
+        "id" | "ai_place_name" | "review_state" | "undo"
+      >,
+      source: ReopenCommand["source"],
+    ) => {
+      if (
+        reopenMutation.isPending ||
+        resolveMutation.isPending ||
+        deleteCandidatesMutation.isPending ||
+        detailDeletePending ||
+        deepLinkValidationPending
+      ) {
+        return;
+      }
+      const restorableState = candidate.review_state !== "needs_review";
+      if (
+        !restorableState ||
+        !candidate.undo ||
+        candidate.undo.candidate_id !== candidate.id
+      ) {
+        setCandidateActionError(
+          `${candidate.ai_place_name} 후보의 최신 복구 정보가 없습니다. 목록을 새로 불러와 주세요.`,
+        );
+        return;
+      }
+      const undoAttempt =
+        source === "snackbar"
+          ? captureReviewUndoAttempt(
+              reviewUndoStateRef.current,
+              queueScopeRef.current,
+              selectionScopeEpochRef.current,
+            )
+          : null;
+      if (source === "snackbar" && !undoAttempt) return;
+      reopenMutation.mutate({
+        descriptor: candidate.undo,
+        candidateName: candidate.ai_place_name,
+        expectedReviewState: candidate.review_state,
+        source,
+        undoAttempt,
+        queueScope: queueScopeRef.current,
+        workflowEpoch: selectionScopeEpochRef.current,
+        selectedCandidateId: selectedCandidateIdRef.current,
+        detailCandidateId: detailIdRef.current,
+        detailGeneration: detailGenerationRef.current,
+      });
+    },
+    [
+      deepLinkValidationPending,
+      deleteCandidatesMutation.isPending,
+      detailDeletePending,
+      reopenMutation,
+      resolveMutation.isPending,
+    ],
+  );
+  const restoreCandidateFromRemovedList = useCallback(
+    (candidate: UnmatchedCandidate) =>
+      requestCandidateReopen(candidate, "removed_list"),
+    [requestCandidateReopen],
+  );
+
   const resetReviewScope = useCallback(() => {
     initialSelectionDoneRef.current = false;
     updatePendingCandidateAdvance(null);
     selectedCandidateIdRef.current = null;
-    clearAutoSearchTimer();
     cancelCategoryMatch();
     clearCandidateParam();
     setQueueCompleted(false);
@@ -1894,7 +2691,6 @@ function ReviewPageContent() {
     setSelectedId(null);
   }, [
     cancelCategoryMatch,
-    clearAutoSearchTimer,
     clearCandidateParam,
     updatePendingCandidateAdvance,
   ]);
@@ -1982,6 +2778,8 @@ function ReviewPageContent() {
   const candidateActionPending =
     resolveMutation.isPending ||
     deleteCandidatesMutation.isPending ||
+    reopenMutation.isPending ||
+    detailDeletePending ||
     deepLinkValidationPending;
   const candidateInitialLoading =
     !hasListUrlState ||
@@ -2047,7 +2845,7 @@ function ReviewPageContent() {
         <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 border-b p-3 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between gap-2">
             <p className="px-1 text-xs font-medium text-muted-foreground">
-              검수 대기 후보
+              {isRemovedView ? "제외·삭제된 후보" : "검수 대기 후보"}
             </p>
             <div className="flex items-center gap-1">
               <Button
@@ -2076,6 +2874,26 @@ function ReviewPageContent() {
             onDebouncedChange={updateReviewQuery}
           />
           <div className="grid grid-cols-2 gap-1.5 pb-1">
+            <Select
+              value={reviewStatus}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  status: value === "removed" ? "removed" : "needs_review",
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="검수 후보 상태">
+                <SelectValue>
+                  {isRemovedView ? "제외·삭제됨" : "검수 대기"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="needs_review">검수 대기</SelectItem>
+                  <SelectItem value="removed">제외·삭제됨</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             <Select
               value={groupDim}
               onValueChange={(value) => {
@@ -2253,7 +3071,7 @@ function ReviewPageContent() {
               </SelectContent>
             </Select>
           </div>
-          {reviewListStateHasFilters(reviewListState) ? (
+          {hasReviewFilters ? (
             <Button
               type="button"
               size="xs"
@@ -2263,6 +3081,7 @@ function ReviewPageContent() {
                 updateReviewListState({
                   ...DEFAULT_REVIEW_LIST_STATE,
                   sort: reviewSort,
+                  status: reviewStatus,
                 })
               }
             >
@@ -2325,16 +3144,20 @@ function ReviewPageContent() {
               </Button>
             </div>
           ) : null}
-          {selectedActionableCandidateIds.length > 0 ? (
+          {!isRemovedView && selectedActionableCandidateIds.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
               <span className="text-xs font-medium text-destructive">
                 후보 {selectedActionableCandidateIds.length}개 선택됨
               </span>
               <ConfirmActionButton
                 title={`선택한 후보 ${selectedActionableCandidateIds.length}개를 삭제할까요?`}
-                description="되돌릴 수 없습니다."
+                description="삭제 후 제외·삭제 목록에서 개별 후보를 복구할 수 있습니다."
                 onConfirm={() =>
-                  deleteCandidatesMutation.mutate(selectedActionableCandidateIds)
+                  deleteCandidatesMutation.mutate(
+                    actionableLoadedCandidates.filter((candidate) =>
+                      selectedCandidateSet.has(candidate.id),
+                    ),
+                  )
                 }
                 trigger={
                   <Button
@@ -2368,13 +3191,13 @@ function ReviewPageContent() {
               {candidateActionError}
             </p>
           ) : null}
-          {reprocessMutation.isSuccess && reprocessMutation.data ? (
+          {!isRemovedView && reprocessMutation.isSuccess && reprocessMutation.data ? (
             <p className="rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">
               영상 {reprocessMutation.data.videos}개를{" "}
               {reprocessMutation.data.enqueued_jobs}개 작업으로 재처리 등록했습니다.
             </p>
           ) : null}
-          {cart.length > 0 ? (
+          {!isRemovedView && cart.length > 0 ? (
             <div className="flex flex-col gap-1.5 rounded-lg border border-primary/40 bg-primary/5 p-2">
               <p className="text-xs font-medium">
                 선택한 영상 {cart.length}개 재처리
@@ -2479,22 +3302,28 @@ function ReviewPageContent() {
                   className="rounded-lg border p-3 text-xs text-muted-foreground"
                 >
                   {queueCompleted
-                    ? "현재 표시 조건의 검수 후보를 모두 처리했습니다."
-                    : "검수할 후보가 없습니다."}
+                    ? isRemovedView
+                      ? "현재 표시 조건에 복구할 후보가 없습니다."
+                      : "현재 표시 조건의 검수 후보를 모두 처리했습니다."
+                    : isRemovedView
+                      ? "제외·삭제된 후보가 없습니다."
+                      : "검수할 후보가 없습니다."}
                 </p>
               )
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={allLoadedCandidatesSelected}
-                        onCheckedChange={toggleAllLoadedCandidates}
-                        disabled={actionableLoadedCandidates.length === 0}
-                        aria-label="불러온 후보 전체 선택"
-                      />
-                    </TableHead>
+                    {!isRemovedView ? (
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={allLoadedCandidatesSelected}
+                          onCheckedChange={toggleAllLoadedCandidates}
+                          disabled={actionableLoadedCandidates.length === 0}
+                          aria-label="불러온 후보 전체 선택"
+                        />
+                      </TableHead>
+                    ) : null}
                     <TableHead>후보</TableHead>
                     <TableHead>출처</TableHead>
                     <TableHead>상태</TableHead>
@@ -2513,6 +3342,10 @@ function ReviewPageContent() {
                             : candidate,
                         )
                       }
+                      removedMode={isRemovedView}
+                      restoreDisabled={
+                        candidateActionPending || candidate.undo == null
+                      }
                       isCurrent={candidate.id === selected?.id}
                       isChecked={selectedCandidateSet.has(candidate.id)}
                       inCart={cartSet.has(candidate.video_id)}
@@ -2521,6 +3354,7 @@ function ReviewPageContent() {
                       onToggleCart={toggleCart}
                       onOpenDetail={openDetail}
                       onRequestDelete={requestCandidateDelete}
+                      onRestore={restoreCandidateFromRemovedList}
                     />
                   ))}
                 </TableBody>
@@ -2578,7 +3412,7 @@ function ReviewPageContent() {
               {deepLinkStatusOut ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/5 p-3 text-sm">
                   <span role="status">
-                    이 후보는 현재 {candidateStatusLabel(selected.match_status)} 상태라 검수
+                    이 후보는 현재 {candidateReviewStateLabel(selected.review_state)} 상태라 검수
                     저장·제외·삭제를 할 수 없습니다.
                   </span>
                   <Button
@@ -2601,6 +3435,7 @@ function ReviewPageContent() {
                       updateReviewListState({
                         ...DEFAULT_REVIEW_LIST_STATE,
                         sort: reviewSort,
+                        status: reviewStatus,
                       })
                     }
                   >
@@ -2625,12 +3460,22 @@ function ReviewPageContent() {
                     {categoryDisplayLabel(selected.candidate_category)}
                   </Badge>
                   <Badge variant="secondary">
-                    {candidateStatusLabel(selected.match_status)}
+                    {candidateReviewStateLabel(selected.review_state)}
                   </Badge>
                 </div>
                 {selected.location_hint ? (
                   <p className="text-xs text-muted-foreground">
                     위치 힌트: {selected.location_hint}
+                  </p>
+                ) : null}
+                {selected.video_is_excluded &&
+                selected.review_state === "needs_review" ? (
+                  <p
+                    role="status"
+                    className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-xs text-warning"
+                  >
+                    출처 영상은 제외 상태입니다. 후보를 복구하거나 다시 확정해도
+                    영상 제외는 유지됩니다.
                   </p>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-3">
@@ -2657,6 +3502,42 @@ function ReviewPageContent() {
                 </div>
               </div>
 
+              {selected.review_state !== "needs_review" ? (
+                <RemovedCandidateRecoveryPanel
+                  candidate={selected}
+                  authoritativeCandidate={authoritativeRecoveryCandidate}
+                  verificationPending={recoveryDetailQuery.isFetching}
+                  verificationError={
+                    recoveryDetailQuery.isError ||
+                    recoveryDetailQuery.isRefetchError
+                      ? recoveryDetailQuery.error?.message ??
+                        "최신 후보 상세를 확인하지 못했습니다."
+                      : recoveryDetailQuery.data != null &&
+                          authoritativeRecoveryCandidate == null
+                        ? "후보 상태가 바뀌었거나 복구 정보가 최신 상세와 일치하지 않습니다."
+                        : null
+                  }
+                  pending={reopenMutation.isPending}
+                  onRestore={restoreCandidateFromRemovedList}
+                  onVerify={() => void recoveryDetailQuery.refetch()}
+                />
+              ) : !selectedActionable ? (
+                <div className="flex flex-col items-start gap-2 rounded-xl border border-warning/40 bg-warning/5 p-4 text-sm">
+                  <p role="status">
+                    최신 후보 상태를 확인하지 못해 외부 검색과 검수 액션을 잠시
+                    중지했습니다.
+                  </p>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void retryCandidateLoad()}
+                  >
+                    최신 상태 다시 확인
+                  </Button>
+                </div>
+              ) : (
+                <>
               <div className="flex gap-2">
                 <Input
                   aria-label="외부 장소 검색어"
@@ -2879,6 +3760,8 @@ function ReviewPageContent() {
                   </p>
                 ) : null}
               </div>
+                </>
+              )}
             </>
           ) : (
             <div className="flex flex-col gap-2 text-sm text-muted-foreground">
@@ -2901,8 +3784,12 @@ function ReviewPageContent() {
                     : candidateLoadError
                       ? candidateLoadError
                   : queueCompleted
-                    ? "현재 표시 조건의 검수 후보를 모두 처리했습니다."
-                    : "검수할 후보가 없습니다."}
+                    ? isRemovedView
+                      ? "현재 표시 조건에 복구할 후보가 없습니다."
+                      : "현재 표시 조건의 검수 후보를 모두 처리했습니다."
+                    : isRemovedView
+                      ? "제외·삭제된 후보가 없습니다."
+                      : "검수할 후보가 없습니다."}
               </p>
               {!candidateInitialLoading && candidateLoadError ? (
                 <div className="flex flex-wrap gap-2">
@@ -2939,14 +3826,20 @@ function ReviewPageContent() {
           )}
         </section>
         <section className="min-h-[28rem] overflow-hidden border-t lg:min-h-0 lg:border-t-0 lg:border-l">
-          <VWorldMap
-            places={mapPlaces}
-            selectedPlaceId={form.latitude ? 9999 : null}
-            onSelectPlace={(placeId) => {
-              const entry = mapHitEntries.find((item) => item.placeId === placeId);
-              if (entry) selectHit(entry.hit);
-            }}
-          />
+          {externalResolutionEnabled ? (
+            <VWorldMap
+              places={mapPlaces}
+              selectedPlaceId={form.latitude ? 9999 : null}
+              onSelectPlace={(placeId) => {
+                const entry = mapHitEntries.find((item) => item.placeId === placeId);
+                if (entry) selectHit(entry.hit);
+              }}
+            />
+          ) : (
+            <div className="flex h-full min-h-[28rem] items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+              복구 전용 화면에서는 외부 지도와 장소 검색을 호출하지 않습니다.
+            </div>
+          )}
         </section>
       </div>
 
@@ -2965,10 +3858,14 @@ function ReviewPageContent() {
               candidateId={detailId}
               cacheHandledByOnDeleted
               actionsDisabled={
-                candidateActionPending ||
-                detailDeletePending ||
-                (detailCandidate != null &&
-                  !isReviewCandidateActionable(detailCandidate))
+                candidateActionPending || detailDeletePending
+              }
+              restorePending={
+                reopenMutation.isPending &&
+                reopenMutation.variables?.descriptor.candidate_id === detailId
+              }
+              onRestoreRequested={(candidate) =>
+                requestCandidateReopen(candidate, "detail")
               }
               onDeleteStarted={(candidateId) => {
                 setDetailDeletePending(true);
@@ -2986,9 +3883,49 @@ function ReviewPageContent() {
                   candidatesKey,
                 };
               }}
-              onDeleteFailureRevalidated={(candidateId, detailRevalidation) => {
+              onDeleteFailureRevalidated={(
+                candidateId,
+                detailRevalidation,
+                requestStatus,
+                requestAttempted,
+                clientOperationId,
+              ) => {
                 const snapshot = detailDeleteSnapshotRef.current;
                 if (!snapshot || snapshot.candidateId !== candidateId) return;
+                const undoReconciliation =
+                  reconcileReviewUndoAfterActionFailure(
+                    reviewUndoStateRef.current,
+                    {
+                      authoritative: detailRevalidation,
+                      requestAttempted,
+                      requestStatus,
+                      clientOperationId,
+                      candidateId,
+                      candidateName:
+                        detailCandidate?.ai_place_name ?? `후보 #${candidateId}`,
+                      action: "delete",
+                      expectedReviewState: "deleted",
+                    },
+                  );
+                updateReviewUndoState(() => undoReconciliation.state);
+                if (undoReconciliation.outcome === "confirmed_committed") {
+                  setCandidateActionError(
+                    `${detailCandidate?.ai_place_name ?? `후보 #${candidateId}`} 후보의 응답은 끊겼지만 최신 상태에서 삭제 완료를 확인했습니다.`,
+                  );
+                } else if (
+                  undoReconciliation.outcome === "foreign_or_stale"
+                ) {
+                  setCandidateActionError(
+                    `${detailCandidate?.ai_place_name ?? `후보 #${candidateId}`} 후보는 다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다.`,
+                  );
+                }
+                if (
+                  detailRevalidation?.status !== "success" ||
+                  detailRevalidation.detail.list_item.review_state !==
+                    "needs_review"
+                ) {
+                  setReviewUndoError(null);
+                }
                 if (
                   candidateFailureShouldAdvance(
                     detailRevalidation,
@@ -3023,8 +3960,11 @@ function ReviewPageContent() {
                   markCandidateCacheRefreshError();
                 }
               }}
-              onDeleted={async (deletedId) => {
+              onDeleted={async (result) => {
+                const deletedId = result.id;
                 const snapshot = detailDeleteSnapshotRef.current;
+                const deletedCandidateName =
+                  detailCandidate?.ai_place_name ?? `후보 #${deletedId}`;
                 const activeCandidatesKey = candidatesKeyRef.current;
                 const activeQueueScope = queueScopeRef.current;
                 const cacheResult = await reconcileProcessedCandidateCaches(
@@ -3063,7 +4003,6 @@ function ReviewPageContent() {
                   removeCandidateSelections([deletedId]);
                   clearProcessedCandidateParam(deletedId, false);
                   if (deletedId === selectedCandidateIdRef.current) {
-                    clearAutoSearchTimer();
                     initialSelectionDoneRef.current = false;
                     selectedCandidateIdRef.current = null;
                     setQueueCompleted(false);
@@ -3071,6 +4010,18 @@ function ReviewPageContent() {
                     setSelectedId(null);
                   }
                 }
+                // active cache/selection 정리가 끝난 뒤에만 undo를 노출한다. 먼저
+                // 노출하면 즉시 reopen과 늦은 delete reconcile이 후보를 다시 지운다.
+                updateReviewUndoState((current) =>
+                  applyReviewActionSuccess(current, {
+                    candidateId: deletedId,
+                    candidateName: deletedCandidateName,
+                    action: "delete",
+                    reviewState: "deleted",
+                    undo: result.undo,
+                  }),
+                );
+                setReviewUndoError(null);
               }}
             />
           ) : null}
@@ -3188,7 +4139,9 @@ function ReviewPageContent() {
             <AlertDialogTitle>
               {deleteTarget?.ai_place_name} 후보를 삭제할까요?
             </AlertDialogTitle>
-            <AlertDialogDescription>되돌릴 수 없습니다.</AlertDialogDescription>
+            <AlertDialogDescription>
+              삭제 후 제외·삭제 목록에서 이 후보를 복구할 수 있습니다.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose
@@ -3209,7 +4162,7 @@ function ReviewPageContent() {
                   deleteTargetActionable &&
                   deleteTargetScopeRef.current === queueScopeRef.current
                 ) {
-                  deleteCandidatesMutation.mutate([deleteTarget.id]);
+                  deleteCandidatesMutation.mutate([deleteTarget]);
                 } else if (deleteTarget) {
                   setCandidateActionError(
                     `${deleteTarget.ai_place_name} 후보는 표시 조건이 바뀌어 삭제하지 않았습니다. 현재 목록에서 다시 선택해 주세요.`,
@@ -3224,7 +4177,126 @@ function ReviewPageContent() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {reviewUndoState.current ? (
+        <ReviewUndoSnackbar
+          candidateName={reviewUndoState.current.candidateName}
+          actionLabel={
+            reviewUndoState.current.action === "create_place" ||
+            reviewUndoState.current.action === "match_existing"
+              ? "저장"
+              : reviewUndoState.current.action === "ignore"
+                ? "제외"
+                : "삭제"
+          }
+          pending={
+            reopenMutation.isPending &&
+            reopenMutation.variables?.source === "snackbar" &&
+            reopenMutation.variables.descriptor.token ===
+              reviewUndoState.current.descriptor.token
+          }
+          disabled={candidateActionPending}
+          error={reviewUndoError}
+          onUndo={() => {
+            const entry = reviewUndoStateRef.current.current;
+            if (!entry) return;
+            requestCandidateReopen(
+              {
+                id: entry.descriptor.candidate_id,
+                ai_place_name: entry.candidateName,
+                review_state: entry.expectedReviewState,
+                undo: entry.descriptor,
+              },
+              "snackbar",
+            );
+          }}
+          onDismiss={() => {
+            updateReviewUndoState(dismissReviewUndo);
+            setReviewUndoError(null);
+          }}
+        />
+      ) : null}
     </AppShell>
+  );
+}
+
+function candidateReviewStateLabel(state: CandidateReviewState): string {
+  if (state === "ignored") return "제외됨";
+  if (state === "deleted") return "삭제됨";
+  if (state === "matched") return "자동 확정";
+  if (state === "user_corrected") return "검수 확정";
+  return "검수 대기";
+}
+
+function RemovedCandidateRecoveryPanel({
+  candidate,
+  authoritativeCandidate,
+  verificationPending,
+  verificationError,
+  pending,
+  onRestore,
+  onVerify,
+}: {
+  candidate: UnmatchedCandidate;
+  authoritativeCandidate: UnmatchedCandidate | null;
+  verificationPending: boolean;
+  verificationError: string | null;
+  pending: boolean;
+  onRestore: (candidate: UnmatchedCandidate) => void;
+  onVerify: () => void;
+}) {
+  const displayedCandidate = authoritativeCandidate ?? candidate;
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+      <div className="space-y-1">
+        <p className="text-sm font-medium">
+          {candidateReviewStateLabel(displayedCandidate.review_state)} 후보 복구
+        </p>
+        <p className="text-xs text-muted-foreground">
+          복구하면 검수 대기로 돌아갑니다. 기존 확정 장소가 공유 중이면 장소는
+          보존하고 이 후보의 연결만 해제합니다.
+        </p>
+      </div>
+      {displayedCandidate.video_is_excluded ? (
+        <p role="status" className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-xs text-warning">
+          이 후보의 출처 영상은 제외 상태입니다. 후보를 복구해도 영상 제외는 별도
+          정책이므로 그대로 유지됩니다.
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        disabled={
+          pending ||
+          verificationPending ||
+          authoritativeCandidate == null
+        }
+        onClick={() => {
+          if (authoritativeCandidate) onRestore(authoritativeCandidate);
+        }}
+      >
+        {pending ? (
+          <Loader2Icon data-icon="inline-start" className="animate-spin" />
+        ) : (
+          <RotateCcwIcon data-icon="inline-start" />
+        )}
+        검수 대기로 복구
+      </Button>
+      {verificationPending ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          최신 후보 상세와 복구 정보를 확인하는 중입니다.
+        </p>
+      ) : authoritativeCandidate == null ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-xs text-destructive">
+            {verificationError ??
+              "최신 복구 정보를 신뢰할 수 없어 복구를 중지했습니다."}
+          </p>
+          <Button type="button" size="xs" variant="outline" onClick={onVerify}>
+            최신 상세 다시 확인
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -3292,6 +4364,8 @@ function ReviewQueueSearch({
 const CandidateRow = memo(function CandidateRow({
   candidate,
   actionsDisabled,
+  removedMode,
+  restoreDisabled,
   isCurrent,
   isChecked,
   inCart,
@@ -3300,9 +4374,12 @@ const CandidateRow = memo(function CandidateRow({
   onToggleCart,
   onOpenDetail,
   onRequestDelete,
+  onRestore,
 }: {
   candidate: UnmatchedCandidate;
   actionsDisabled: boolean;
+  removedMode: boolean;
+  restoreDisabled: boolean;
   isCurrent: boolean;
   isChecked: boolean;
   inCart: boolean;
@@ -3311,6 +4388,7 @@ const CandidateRow = memo(function CandidateRow({
   onToggleCart: (videoId: string) => void;
   onOpenDetail: (candidateId: number) => void;
   onRequestDelete: (candidate: UnmatchedCandidate) => void;
+  onRestore: (candidate: UnmatchedCandidate) => void;
 }) {
   const confidencePercent =
     candidate.confidence_score != null &&
@@ -3343,15 +4421,17 @@ const CandidateRow = memo(function CandidateRow({
       onClick={handleRowClick}
       onKeyDown={handleRowKeyDown}
     >
-      <TableCell>
-        <Checkbox
-          checked={isChecked}
-          disabled={actionsDisabled}
-          data-row-action="true"
-          onCheckedChange={() => onToggleSelect(candidate.id)}
-          aria-label={`${candidate.ai_place_name} 후보 선택`}
-        />
-      </TableCell>
+      {!removedMode ? (
+        <TableCell>
+          <Checkbox
+            checked={isChecked}
+            disabled={actionsDisabled}
+            data-row-action="true"
+            onCheckedChange={() => onToggleSelect(candidate.id)}
+            aria-label={`${candidate.ai_place_name} 후보 선택`}
+          />
+        </TableCell>
+      ) : null}
       <TableCell>
         <div className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left">
           <span className="font-bold leading-snug">{candidate.ai_place_name}</span>
@@ -3385,22 +4465,27 @@ const CandidateRow = memo(function CandidateRow({
           <span className="text-left group-hover:text-primary">
             {candidate.location_hint ?? "위치 힌트 없음"}
           </span>
-          <button
-            type="button"
-            disabled={actionsDisabled}
-            data-row-action="true"
-            className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => onToggleCart(candidate.video_id)}
-            title="영상 재처리 선택"
-          >
-            {inCart ? "재처리 선택됨" : "재처리 선택"}
-          </button>
+          {!removedMode ? (
+            <button
+              type="button"
+              disabled={actionsDisabled}
+              data-row-action="true"
+              className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => onToggleCart(candidate.video_id)}
+              title="영상 재처리 선택"
+            >
+              {inCart ? "재처리 선택됨" : "재처리 선택"}
+            </button>
+          ) : null}
+          {candidate.video_is_excluded ? (
+            <span className="text-[11px] text-warning">출처 영상 제외 유지</span>
+          ) : null}
         </div>
       </TableCell>
       <TableCell>
         <div className="flex flex-col gap-1">
           <Badge variant="outline">
-            {candidateStatusLabel(candidate.match_status)}
+            {candidateReviewStateLabel(candidate.review_state)}
           </Badge>
           {candidate.is_domestic === false ? (
             <Badge variant="outline">해외</Badge>
@@ -3422,17 +4507,31 @@ const CandidateRow = memo(function CandidateRow({
           >
             <InfoIcon className="size-4" />
           </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="destructive"
-            disabled={actionsDisabled}
-            data-row-action="true"
-            aria-label={`${candidate.ai_place_name} 후보 삭제`}
-            onClick={() => onRequestDelete(candidate)}
-          >
-            <Trash2Icon className="size-4" />
-          </Button>
+          {removedMode ? (
+            <Button
+              type="button"
+              size="xs"
+              disabled={restoreDisabled}
+              data-row-action="true"
+              aria-label={`${candidate.ai_place_name} 후보 복구`}
+              onClick={() => onRestore(candidate)}
+            >
+              <RotateCcwIcon data-icon="inline-start" />
+              복구
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="destructive"
+              disabled={actionsDisabled}
+              data-row-action="true"
+              aria-label={`${candidate.ai_place_name} 후보 삭제`}
+              onClick={() => onRequestDelete(candidate)}
+            >
+              <Trash2Icon className="size-4" />
+            </Button>
+          )}
         </div>
       </TableCell>
     </TableRow>

@@ -254,6 +254,173 @@ export async function reconcileProcessedCandidateCaches(
   };
 }
 
+export type PrepareCandidateReopenCachesResult = {
+  cancelledQueryCount: number;
+};
+
+/**
+ * reopen POST보다 먼저 실행해 이전 page/probe/detail 응답이 복구 뒤 상태를 되감지
+ * 못하게 한다. 처리 대상은 모든 page cache에서 빼되 서버 결과가 불명확하면 후속 exact
+ * reset이 원 상태를 다시 가져오므로 optimistic snapshot을 판정 근거로 쓰지 않는다.
+ */
+export async function prepareCandidateReopenCaches(
+  queryClient: QueryClient,
+  candidateId: number,
+): Promise<PrepareCandidateReopenCachesResult> {
+  const detailKey = ["candidate-detail", candidateId] as const;
+  const queries = [
+    ...queryClient
+      .getQueryCache()
+      .findAll({ queryKey: REVIEW_CANDIDATE_PAGE_QUERY_PREFIX }),
+    ...queryClient
+      .getQueryCache()
+      .findAll({ queryKey: REVIEW_CANDIDATE_NEWER_QUERY_PREFIX }),
+    ...queryClient.getQueryCache().findAll({ queryKey: detailKey, exact: true }),
+  ];
+  const fetchingQueries = Array.from(
+    new Map(
+      queries
+        .filter((query) => query.state.fetchStatus === "fetching")
+        .map((query) => [query.queryHash, query]),
+    ).values(),
+  );
+  await Promise.all(
+    fetchingQueries.map((query) =>
+      queryClient.cancelQueries({ queryKey: query.queryKey, exact: true }),
+    ),
+  );
+  removeCandidatesFromReviewPageCaches(queryClient, [candidateId]);
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: REVIEW_CANDIDATE_PAGE_QUERY_PREFIX,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: REVIEW_CANDIDATE_NEWER_QUERY_PREFIX,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: detailKey,
+      exact: true,
+      refetchType: "none",
+    }),
+  ]);
+  return { cancelledQueryCount: fetchingQueries.length };
+}
+
+export type ReconcileCandidateReopenCachesResult = {
+  detail: CandidateDetailRevalidation;
+  canReselect: boolean;
+  activePageRefreshed: boolean;
+  refreshFailed: boolean;
+};
+
+/**
+ * reopen 응답 직후 active infinite snapshot을 첫 page부터 exact 재시작하고 상세도 실제
+ * HTTP로 확인한다. 반환된 최신 `review_state=needs_review`만 UI 재선택 근거가 된다.
+ */
+export async function reconcileCandidateReopenCaches(
+  queryClient: QueryClient,
+  {
+    candidateId,
+    activePageKey,
+    fetchCandidateDetail,
+  }: {
+    candidateId: number;
+    activePageKey?: QueryKey;
+    fetchCandidateDetail: (candidateId: number) => Promise<CandidateDetail>;
+  },
+): Promise<ReconcileCandidateReopenCachesResult> {
+  const detailKey = ["candidate-detail", candidateId] as const;
+  let activePageRefreshed = false;
+  let activePageRefreshRejected = false;
+  if (activePageKey) {
+    try {
+      const activePageQuery = queryClient
+        .getQueryCache()
+        .find({ queryKey: activePageKey, exact: true });
+      const wasActive = activePageQuery?.isActive() ?? false;
+      // resetQueries는 infinite pages/pageParams를 폐기하고 active observer를 첫 page부터
+      // 다시 조회한다. observer가 없는 retained query는 자동 fetch되지 않으므로 저장된
+      // queryFn을 명시적으로 exact refetch해야 서버 snapshot을 확인했다고 볼 수 있다.
+      await queryClient.resetQueries({ queryKey: activePageKey, exact: true });
+      if (
+        activePageQuery &&
+        (!wasActive ||
+          queryClient.getQueryState(activePageKey)?.status !== "success")
+      ) {
+        await activePageQuery.fetch();
+      } else if (queryClient.getQueryState(activePageKey)?.status !== "success") {
+        await queryClient.refetchQueries({
+          queryKey: activePageKey,
+          exact: true,
+          type: "all",
+        });
+      }
+      activePageRefreshed =
+        queryClient.getQueryState(activePageKey)?.status === "success";
+    } catch {
+      activePageRefreshRejected = true;
+    }
+  }
+
+  let detail: CandidateDetailRevalidation;
+  try {
+    // prepare 이후 사용자가 상세를 열어 POST commit 전 snapshot 요청이 다시 시작될 수
+    // 있다. fetchQuery가 그 promise에 합류하지 않도록 직후 경계에서도 exact 취소한다.
+    await queryClient.cancelQueries({ queryKey: detailKey, exact: true });
+    const latest = await queryClient.fetchQuery({
+      queryKey: detailKey,
+      staleTime: 0,
+      retry: false,
+      queryFn: async () => {
+        const response = await fetchCandidateDetail(candidateId);
+        if (response.list_item.id !== candidateId) {
+          throw new Error("후보 상세 응답의 ID가 요청과 일치하지 않습니다.");
+        }
+        return response;
+      },
+    });
+    detail = { status: "success", detail: latest };
+  } catch (error) {
+    detail =
+      error instanceof ApiRequestError && error.status === 404
+        ? { status: "not_found" }
+        : { status: "error", error };
+  }
+
+  // exact 성공을 보존하면서 다른 filter snapshot만 stale로 둔다. current page까지 다시
+  // invalidate하면 성공 직후 중복 refetch가 발생하고 복구한 후보의 선택 근거도 흔들린다.
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: REVIEW_CANDIDATE_PAGE_QUERY_PREFIX,
+      refetchType: "none",
+      predicate: (query) =>
+        !activePageKey || !sameQueryKey(query.queryKey, activePageKey),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: REVIEW_CANDIDATE_NEWER_QUERY_PREFIX,
+      refetchType: "none",
+    }),
+  ]);
+
+  const activePageErrored = Boolean(
+    activePageKey && queryClient.getQueryState(activePageKey)?.status === "error",
+  );
+  return {
+    detail,
+    canReselect:
+      detail.status === "success" &&
+      detail.detail.list_item.review_state === "needs_review",
+    activePageRefreshed,
+    refreshFailed:
+      activePageRefreshRejected ||
+      Boolean(activePageKey && !activePageRefreshed) ||
+      activePageErrored ||
+      detail.status === "error",
+  };
+}
+
 /**
  * 실패한 resolve/delete 뒤 Infinity cache의 active page와 후보 단건 상세를 서버에서
  * 다시 읽는다. 상세 cache가 없던 목록 후보도 반드시 실제 요청하고, page에서 사라졌다는

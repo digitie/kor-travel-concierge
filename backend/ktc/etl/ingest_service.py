@@ -10,10 +10,11 @@ from datetime import datetime, timezone
 import re
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.models import (
+    ExtractedPlaceCandidate,
     SearchKeyword,
     SourceTarget,
     YoutubeChannel,
@@ -25,6 +26,88 @@ from ktc.models import (
 _YOUTUBE_DURATION_RE = re.compile(
     r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
 )
+
+
+async def _acquire_feature_export_lock(session: AsyncSession) -> None:
+    """공급 payload 원천 metadata 변경을 dirty sync와 직렬화한다.
+
+    `ktc.etl`/`ktc.services` package 초기화 순환을 피하려고 runtime에 import한다.
+    """
+    from ktc.services import feature_export_service
+
+    await feature_export_service.acquire_feature_export_lock(session)
+
+
+async def _mark_channel_candidates_dirty(
+    session: AsyncSession, channel_id: str, *, reason: str
+) -> None:
+    """후보 자체 또는 연결 영상이 채널을 가리키는 활성 후보를 표시한다."""
+    from ktc.services import feature_export_service
+
+    video_ids = select(YoutubeVideo.video_id).where(
+        YoutubeVideo.channel_id == channel_id
+    )
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+                or_(
+                    ExtractedPlaceCandidate.source_channel_id == channel_id,
+                    (
+                        ExtractedPlaceCandidate.source_channel_id.is_(None)
+                        & ExtractedPlaceCandidate.video_id.in_(video_ids)
+                    ),
+                ),
+            )
+        )
+    ).scalars().all()
+    await feature_export_service.mark_candidates_dirty(session, list(ids), reason)
+
+
+async def _mark_playlist_candidates_dirty(
+    session: AsyncSession, playlist_id: str, *, reason: str
+) -> None:
+    """재생목록 title을 공유하는 활성 후보를 표시한다."""
+    from ktc.services import feature_export_service
+
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.source_playlist_id == playlist_id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    await feature_export_service.mark_candidates_dirty(session, list(ids), reason)
+
+
+async def _mark_video_candidates_dirty(
+    session: AsyncSession, video_id: str, *, reason: str
+) -> None:
+    """영상 공급 필드를 공유하는 활성 후보를 표시한다."""
+    from ktc.services import feature_export_service
+
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.video_id == video_id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    await feature_export_service.mark_candidates_dirty(session, list(ids), reason)
+
+
+def _apply_nonempty_fields(row: Any, fields: dict[str, Any]) -> set[str]:
+    """기존 upsert의 non-empty 정책을 유지하며 실제 변경 field만 반환한다."""
+    changed: set[str] = set()
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        if getattr(row, key) != value:
+            setattr(row, key, value)
+            changed.add(key)
+    return changed
 
 
 def parse_published_at(value: str | None) -> datetime | None:
@@ -246,10 +329,25 @@ async def ensure_channel_stub(
     """영상 FK를 위해 최소 채널 행을 보장한다."""
     if not channel_id:
         return None
-    channel = await session.get(YoutubeChannel, channel_id)
+    # channel title은 이미 export된 후보 payload에 복제된다. dirty sync의 snapshot과
+    # metadata mutation을 같은 export lock 임계구간에 둔다.
+    await _acquire_feature_export_lock(session)
+    channel = (
+        await session.execute(
+            select(YoutubeChannel)
+            .where(YoutubeChannel.channel_id == channel_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if channel is not None:
         if title and channel.title == channel.channel_id:
             channel.title = title
+            await _mark_channel_candidates_dirty(
+                session,
+                channel_id,
+                reason="youtube_channel_stub_title_changed",
+            )
         return channel
     channel = YoutubeChannel(
         channel_id=channel_id,
@@ -269,7 +367,15 @@ async def upsert_channel(
     channel_id = str(payload.get("channel_id") or "")
     if not channel_id:
         return None, False
-    existing = await session.get(YoutubeChannel, channel_id)
+    await _acquire_feature_export_lock(session)
+    existing = (
+        await session.execute(
+            select(YoutubeChannel)
+            .where(YoutubeChannel.channel_id == channel_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     fields = {
         "title": payload.get("title") or channel_id,
         "handle": payload.get("handle"),
@@ -288,9 +394,13 @@ async def upsert_channel(
         await session.refresh(channel)
         return channel, True
 
-    for key, value in fields.items():
-        if value is not None and value != "":
-            setattr(existing, key, value)
+    changed_fields = _apply_nonempty_fields(existing, fields)
+    if "title" in changed_fields:
+        await _mark_channel_candidates_dirty(
+            session,
+            channel_id,
+            reason="youtube_channel_export_metadata_changed",
+        )
     await session.commit()
     await session.refresh(existing)
     return existing, False
@@ -306,7 +416,14 @@ async def upsert_playlist(
     if not playlist_id or not channel_id:
         return None, False
     await ensure_channel_stub(session, channel_id=channel_id)
-    existing = await session.get(YoutubePlaylist, playlist_id)
+    existing = (
+        await session.execute(
+            select(YoutubePlaylist)
+            .where(YoutubePlaylist.playlist_id == playlist_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     fields = {
         "channel_id": channel_id,
         "title": payload.get("title") or playlist_id,
@@ -324,9 +441,13 @@ async def upsert_playlist(
         await session.refresh(playlist)
         return playlist, True
 
-    for key, value in fields.items():
-        if value is not None and value != "":
-            setattr(existing, key, value)
+    changed_fields = _apply_nonempty_fields(existing, fields)
+    if "title" in changed_fields:
+        await _mark_playlist_candidates_dirty(
+            session,
+            playlist_id,
+            reason="youtube_playlist_export_metadata_changed",
+        )
     await session.commit()
     await session.refresh(existing)
     return existing, False
@@ -337,12 +458,25 @@ async def upsert_video(
 ) -> tuple[YoutubeVideo, bool]:
     """`video_id` 기준 멱등 upsert. `(video, created)` 반환."""
     video_id = candidate["video_id"]
-    await ensure_channel_stub(
-        session,
-        channel_id=str(candidate.get("channel_id") or ""),
-        title=candidate.get("channel_name"),
-    )
-    existing = await session.get(YoutubeVideo, video_id)
+    channel_id = str(candidate.get("channel_id") or "")
+    if channel_id:
+        # stub 보장 함수가 export lock을 먼저 획득한다.
+        await ensure_channel_stub(
+            session,
+            channel_id=channel_id,
+            title=candidate.get("channel_name"),
+        )
+    else:
+        # 기존 영상의 partial metadata 갱신도 row read 전에 lock을 잡아야 한다.
+        await _acquire_feature_export_lock(session)
+    existing = (
+        await session.execute(
+            select(YoutubeVideo)
+            .where(YoutubeVideo.video_id == video_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     fields = dict(
         title=candidate.get("title", ""),
         url=candidate.get("url", f"https://youtu.be/{video_id}"),
@@ -370,9 +504,22 @@ async def upsert_video(
         return video, True
 
     # 멱등: 통계/메타데이터를 갱신하되 Gemini 보정 필드는 건드리지 않는다.
-    for key, value in fields.items():
-        if value is not None and value != "":
-            setattr(existing, key, value)
+    changed_fields = _apply_nonempty_fields(existing, fields)
+    export_fields = {
+        "title",
+        "url",
+        "canonical_url",
+        "channel_id",
+        "source_target_type",
+        "source_target_value",
+        "source_search_query",
+    }
+    if changed_fields & export_fields:
+        await _mark_video_candidates_dirty(
+            session,
+            video_id,
+            reason="youtube_video_export_metadata_changed",
+        )
     await session.commit()
     await session.refresh(existing)
     return existing, False

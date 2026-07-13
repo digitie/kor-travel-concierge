@@ -3,20 +3,33 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLinkIcon, Loader2Icon, Trash2Icon } from "lucide-react";
+import {
+  ExternalLinkIcon,
+  Loader2Icon,
+  RotateCcwIcon,
+  Trash2Icon,
+} from "lucide-react";
 
 import {
+  ApiRequestError,
   deleteCandidate,
   getCandidateDetail,
   getCandidateTranscript,
+  type DeleteCandidateResult,
+  type UnmatchedCandidate,
 } from "@/lib/api";
 import {
   reconcileProcessedCandidateCaches,
   revalidateCandidateActionFailure,
   type CandidateDetailRevalidation,
 } from "@/lib/review-candidate-cache";
-import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
+import { categoryDisplayLabel } from "@/lib/display-labels";
 import { timestampedVideoUrl } from "@/lib/format";
+import {
+  confirmCandidateDeleteDetail,
+  deleteResponseMatchesConfirmedDetail,
+  waitForCandidateOperationMarker,
+} from "@/lib/review-undo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -30,6 +43,14 @@ function durationLabel(seconds: number | null): string {
 }
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
+}
+
+function reviewStateLabel(state: UnmatchedCandidate["review_state"]): string {
+  if (state === "ignored") return "제외됨";
+  if (state === "deleted") return "삭제됨";
+  if (state === "matched") return "자동 확정";
+  if (state === "user_corrected") return "검수 확정";
+  return "검수 대기";
 }
 
 function cleanTranscript(text: string): string {
@@ -51,17 +72,43 @@ function timestampNeedle(value: string | null): string | null {
   return parts.join(":");
 }
 
+class CandidateDeleteAttemptError extends Error {
+  readonly requestAttempted: boolean;
+  readonly requestStatus: number | null;
+  readonly clientOperationId: string | null;
+  readonly expectedRevision: number | null;
+  readonly responseReceived: boolean;
+  readonly response: DeleteCandidateResult | null;
+
+  constructor(
+    cause: unknown,
+    requestAttempted: boolean,
+    clientOperationId: string | null = null,
+    expectedRevision: number | null = null,
+    responseReceived = false,
+    response: DeleteCandidateResult | null = null,
+  ) {
+    super(cause instanceof Error ? cause.message : "후보 삭제 요청에 실패했습니다.");
+    this.name = "CandidateDeleteAttemptError";
+    this.requestAttempted = requestAttempted;
+    this.requestStatus =
+      !responseReceived && cause instanceof ApiRequestError ? cause.status : null;
+    this.clientOperationId = clientOperationId;
+    this.expectedRevision = expectedRevision;
+    this.responseReceived = responseReceived;
+    this.response = response;
+  }
+}
+
 function siblingHref(sibling: {
   id: number;
-  match_status: string;
+  review_state: UnmatchedCandidate["review_state"];
   place_id: number | null;
 }) {
   if (
     sibling.place_id != null &&
-    (sibling.match_status === "matched" ||
-      sibling.match_status === "MATCHED" ||
-      sibling.match_status === "user_corrected" ||
-      sibling.match_status === "USER_CORRECTED")
+    (sibling.review_state === "matched" ||
+      sibling.review_state === "user_corrected")
   ) {
     return `/?place=${sibling.place_id}`;
   }
@@ -71,24 +118,31 @@ function siblingHref(sibling: {
 export function CandidateDetailView({
   candidateId,
   onDeleted,
+  onRestoreRequested,
   onDeleteStarted,
   onDeleteFailureRevalidated,
   onDeleteSettled,
   onCacheRefreshFailed,
   cacheHandledByOnDeleted = false,
   actionsDisabled = false,
+  restorePending = false,
 }: {
   candidateId: number;
-  onDeleted?: (candidateId: number) => void | Promise<void>;
+  onDeleted?: (result: DeleteCandidateResult) => void | Promise<void>;
+  onRestoreRequested?: (candidate: UnmatchedCandidate) => void;
   onDeleteStarted?: (candidateId: number) => void;
   onDeleteFailureRevalidated?: (
     candidateId: number,
     detailRevalidation: CandidateDetailRevalidation | undefined,
+    requestStatus: number | null,
+    requestAttempted: boolean,
+    clientOperationId: string | null,
   ) => void | Promise<void>;
   onDeleteSettled?: () => void;
   onCacheRefreshFailed?: () => void;
   cacheHandledByOnDeleted?: boolean;
   actionsDisabled?: boolean;
+  restorePending?: boolean;
 }) {
   const queryClient = useQueryClient();
   const detailQuery = useQuery({
@@ -127,20 +181,78 @@ export function CandidateDetailView({
   }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
     mutationFn: async (targetCandidateId: number) => {
-      const latest = await getCandidateDetail(targetCandidateId);
-      queryClient.setQueryData(["candidate-detail", targetCandidateId], latest);
-      if (
-        latest.candidate.match_status.trim().toLowerCase() !== "needs_review"
-      ) {
-        throw new Error("검수 대기 상태의 후보만 삭제할 수 있습니다.");
+      let latest: Awaited<ReturnType<typeof getCandidateDetail>>;
+      try {
+        latest = await getCandidateDetail(targetCandidateId);
+      } catch (error) {
+        throw new CandidateDeleteAttemptError(error, false);
       }
-      return deleteCandidate(targetCandidateId);
+      queryClient.setQueryData(["candidate-detail", targetCandidateId], latest);
+      if (latest.candidate.review_state !== "needs_review") {
+        throw new CandidateDeleteAttemptError(
+          new Error("검수 대기 상태의 후보만 삭제할 수 있습니다."),
+          false,
+        );
+      }
+      const clientOperationId = crypto.randomUUID();
+      let responseReceived = false;
+      let response: DeleteCandidateResult | null = null;
+      try {
+        response = await deleteCandidate(
+          targetCandidateId,
+          latest.candidate.state_revision,
+          clientOperationId,
+        );
+        responseReceived = true;
+        const firstDetail = await getCandidateDetail(targetCandidateId);
+        const authoritative = await waitForCandidateOperationMarker({
+          initial: { status: "success", detail: firstDetail },
+          candidateId: targetCandidateId,
+          expectedReviewState: "deleted",
+          fetchCandidateDetail: getCandidateDetail,
+        });
+        if (authoritative?.status !== "success") {
+          throw new Error("삭제 뒤 최신 후보 상세를 확인하지 못했습니다.");
+        }
+        const confirmed = confirmCandidateDeleteDetail({
+          detail: authoritative.detail,
+          candidateId: targetCandidateId,
+          expectedRevision: latest.candidate.state_revision,
+          clientOperationId,
+        });
+        if (
+          !confirmed ||
+          !deleteResponseMatchesConfirmedDetail({
+            response,
+            confirmed,
+            candidateId: targetCandidateId,
+            clientOperationId,
+          })
+        ) {
+          throw new Error("삭제 응답이 요청 후보의 완료 상태와 일치하지 않습니다.");
+        }
+        queryClient.setQueryData(
+          ["candidate-detail", targetCandidateId],
+          authoritative.detail,
+        );
+        return response;
+      } catch (error) {
+        throw new CandidateDeleteAttemptError(
+          error,
+          true,
+          clientOperationId,
+          latest.candidate.state_revision,
+          responseReceived,
+          response,
+        );
+      }
     },
     onMutate: (targetCandidateId) => {
       setCacheRefreshError(null);
       onDeleteStarted?.(targetCandidateId);
     },
-    onSuccess: async (_data, deletedCandidateId) => {
+    onSuccess: async (result) => {
+      const deletedCandidateId = result.id;
       if (!cacheHandledByOnDeleted) {
         const cacheResult = await reconcileProcessedCandidateCaches(queryClient, {
           ids: [deletedCandidateId],
@@ -153,7 +265,7 @@ export function CandidateDetailView({
           onCacheRefreshFailed?.();
         }
       }
-      await onDeleted?.(deletedCandidateId);
+      await onDeleted?.(result);
       queryClient.removeQueries({
         queryKey: ["candidate-detail", deletedCandidateId],
       });
@@ -161,7 +273,7 @@ export function CandidateDetailView({
         queryKey: ["candidate-transcript", deletedCandidateId],
       });
     },
-    onError: async (_error, targetCandidateId) => {
+    onError: async (error, targetCandidateId) => {
       const failureRefresh = await revalidateCandidateActionFailure(queryClient, {
         candidateIds: [targetCandidateId],
         fetchCandidateDetail: getCandidateDetail,
@@ -174,9 +286,111 @@ export function CandidateDetailView({
         });
         onCacheRefreshFailed?.();
       }
+      const requestAttempted =
+        error instanceof CandidateDeleteAttemptError && error.requestAttempted;
+      const requestStatus =
+        error instanceof CandidateDeleteAttemptError
+          ? error.requestStatus
+          : error instanceof ApiRequestError
+            ? error.status
+            : null;
+      const initialAuthoritative = failureRefresh.candidateDetails.get(
+        targetCandidateId,
+      );
+      const authoritative =
+        requestAttempted && (requestStatus == null || requestStatus >= 500)
+          ? await waitForCandidateOperationMarker({
+              initial: initialAuthoritative,
+              candidateId: targetCandidateId,
+              expectedReviewState: "deleted",
+              fetchCandidateDetail: getCandidateDetail,
+            })
+          : initialAuthoritative;
+      if (authoritative?.status === "success") {
+        queryClient.setQueryData(
+          ["candidate-detail", targetCandidateId],
+          authoritative.detail,
+        );
+      }
+      const clientOperationId =
+        error instanceof CandidateDeleteAttemptError
+          ? error.clientOperationId
+          : null;
+      const expectedRevision =
+        error instanceof CandidateDeleteAttemptError
+          ? error.expectedRevision
+          : null;
+      const responseReceived =
+        error instanceof CandidateDeleteAttemptError && error.responseReceived;
+      const response =
+        error instanceof CandidateDeleteAttemptError ? error.response : null;
+      const confirmed =
+        authoritative?.status === "success" &&
+        clientOperationId != null &&
+        expectedRevision != null
+          ? confirmCandidateDeleteDetail({
+              detail: authoritative.detail,
+              candidateId: targetCandidateId,
+              expectedRevision,
+              clientOperationId,
+            })
+          : null;
+      const responseMatches =
+        responseReceived &&
+        confirmed != null &&
+        clientOperationId != null &&
+        deleteResponseMatchesConfirmedDetail({
+          response,
+          confirmed,
+          candidateId: targetCandidateId,
+          clientOperationId,
+        });
+      const responseWasLost =
+        !responseReceived && (requestStatus == null || requestStatus >= 500);
+      if (
+        requestAttempted &&
+        clientOperationId != null &&
+        confirmed != null &&
+        (responseMatches || responseWasLost)
+      ) {
+        // DELETE 응답만 유실되고 commit은 끝난 경우 exact detail을 성공 정본으로
+        // 승격한다. 모바일 handoff와 데스크톱 snackbar 모두 같은 경로를 탄다.
+        if (!cacheHandledByOnDeleted) {
+          const cacheResult = await reconcileProcessedCandidateCaches(
+            queryClient,
+            { ids: [targetCandidateId] },
+          );
+          if (cacheResult.postCommitRefreshFailed) {
+            setCacheRefreshError({
+              candidateId: targetCandidateId,
+              message:
+                "후보는 삭제됐지만 최신 검수 목록을 다시 확인하지 못했습니다.",
+            });
+            onCacheRefreshFailed?.();
+          }
+        }
+        await onDeleted?.({
+          deleted: true,
+          id: targetCandidateId,
+          client_operation_id: clientOperationId,
+          state_revision: confirmed.stateRevision,
+          review_state: "deleted",
+          undo: confirmed.undo,
+        });
+        queryClient.removeQueries({
+          queryKey: ["candidate-detail", targetCandidateId],
+        });
+        queryClient.removeQueries({
+          queryKey: ["candidate-transcript", targetCandidateId],
+        });
+        return;
+      }
       await onDeleteFailureRevalidated?.(
         targetCandidateId,
-        failureRefresh.candidateDetails.get(targetCandidateId),
+        authoritative,
+        requestStatus,
+        requestAttempted,
+        clientOperationId,
       );
     },
     onSettled: () => {
@@ -221,7 +435,8 @@ export function CandidateDetailView({
   const destructiveActionsDisabled =
     actionsDisabled ||
     detailQuery.isError ||
-    c.match_status.trim().toLowerCase() !== "needs_review";
+    c.review_state !== "needs_review";
+  const restorable = c.review_state !== "needs_review";
   const cleanedTranscript = transcriptText ? cleanTranscript(transcriptText) : "";
 
   return (
@@ -249,7 +464,7 @@ export function CandidateDetailView({
             {categoryDisplayLabel(c.candidate_category)}
           </Badge>
           <Badge variant="secondary">
-            {candidateStatusLabel(c.match_status)}
+            {reviewStateLabel(c.review_state)}
           </Badge>
           {c.confidence_score != null ? (
             <Badge variant="outline">
@@ -263,6 +478,16 @@ export function CandidateDetailView({
           </p>
         ) : null}
       </div>
+
+      {c.video_is_excluded ? (
+        <p
+          role="status"
+          className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-xs text-warning"
+        >
+          출처 영상은 제외 상태입니다. 후보를 복구해도 영상 제외는 그대로
+          유지됩니다.
+        </p>
+      ) : null}
 
       {detail.source_run ? (
         <DetailSection title="추출 작업(어느 큐)">
@@ -388,7 +613,7 @@ export function CandidateDetailView({
               >
                 <span className="truncate">{sibling.ai_place_name}</span>
                 <Badge variant="outline">
-                  {candidateStatusLabel(sibling.match_status)}
+                  {reviewStateLabel(sibling.review_state)}
                 </Badge>
               </Link>
             ))}
@@ -397,10 +622,39 @@ export function CandidateDetailView({
       ) : null}
 
       <div className="border-t pt-3">
-        {confirmDelete ? (
+        {restorable ? (
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-xs text-muted-foreground">
+              {c.review_state === "deleted"
+                ? "삭제된 후보입니다. 복구하면 검수 대기로 돌아갑니다."
+                : c.review_state === "ignored"
+                  ? "제외된 후보입니다. 복구하면 검수 대기로 돌아갑니다."
+                  : "확정된 후보입니다. 복구하면 장소 연결을 해제하고 검수 대기로 돌아갑니다."}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              disabled={
+                actionsDisabled ||
+                restorePending ||
+                detailQuery.isError ||
+                detail.list_item.undo == null ||
+                onRestoreRequested == null
+              }
+              onClick={() => onRestoreRequested?.(detail.list_item)}
+            >
+              {restorePending ? (
+                <Loader2Icon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <RotateCcwIcon data-icon="inline-start" />
+              )}
+              복구
+            </Button>
+          </div>
+        ) : confirmDelete ? (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-destructive">
-              정말 삭제할까요? 되돌릴 수 없습니다.
+              정말 삭제할까요? 삭제 후 제외·삭제 목록에서 복구할 수 있습니다.
             </span>
             <Button
               type="button"

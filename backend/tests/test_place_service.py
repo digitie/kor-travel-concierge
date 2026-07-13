@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 
 import pytest
 from sqlalchemy import select, text
@@ -15,6 +17,7 @@ from ktc.models import (
     FeatureExportStatus,
     MatchStatus,
     MediaAsset,
+    PlaceLifecycleOrigin,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeVideo,
@@ -1055,15 +1058,34 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
     video_other = YoutubeVideo(
         video_id="v-ex-2", title="보존 영상", url="u2", channel_id="c"
     )
-    orphan = TravelPlace(name="고아 장소", latitude=35.0, longitude=129.0, is_geocoded=True)
     shared = TravelPlace(name="공유 장소", latitude=35.1, longitude=129.1, is_geocoded=True)
     kept_by_candidate = TravelPlace(
         name="후보 참조 장소", latitude=35.2, longitude=129.2, is_geocoded=True
     )
-    session.add_all([video_main, video_other, orphan, shared, kept_by_candidate])
+    session.add_all([video_main, video_other, shared, kept_by_candidate])
     await session.commit()
-    for place in (orphan, shared, kept_by_candidate):
+    for place in (shared, kept_by_candidate):
         await session.refresh(place)
+
+    origin_candidate = ExtractedPlaceCandidate(
+        video_id="v-ex-1",
+        source_text="s",
+        ai_place_name="고아 장소",
+        match_status=MatchStatus.MATCHED,
+    )
+    session.add(origin_candidate)
+    await session.flush()
+    orphan = TravelPlace(
+        lifecycle_origin=PlaceLifecycleOrigin.CANDIDATE_CREATED.value,
+        origin_candidate_id=origin_candidate.id,
+        name="고아 장소",
+        latitude=35.0,
+        longitude=129.0,
+        is_geocoded=True,
+    )
+    session.add(orphan)
+    await session.flush()
+    origin_candidate.matched_place_id = orphan.place_id
 
     session.add_all(
         [
@@ -1077,18 +1099,18 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
                 object_uri="u",
             ),
             # 제외 대상 영상의 언급 매핑: 세 장소 모두.
-            VideoPlaceMapping(video_id="v-ex-1", place_id=orphan.place_id, ai_summary="s"),
+            VideoPlaceMapping(
+                video_id="v-ex-1",
+                place_id=orphan.place_id,
+                place_candidate_id=origin_candidate.id,
+                ai_summary="s",
+            ),
             VideoPlaceMapping(video_id="v-ex-1", place_id=shared.place_id, ai_summary="s"),
             VideoPlaceMapping(
                 video_id="v-ex-1", place_id=kept_by_candidate.place_id, ai_summary="s"
             ),
             # 다른 영상이 '공유 장소'를 매핑으로 언급 → 보존 근거 (b).
             VideoPlaceMapping(video_id="v-ex-2", place_id=shared.place_id, ai_summary="s"),
-            # 제외 대상 영상의 matched 후보(영상 제외와 함께 삭제됨).
-            ExtractedPlaceCandidate(
-                video_id="v-ex-1", source_text="s", ai_place_name="고아 장소",
-                match_status=MatchStatus.MATCHED, matched_place_id=orphan.place_id,
-            ),
             # 다른 영상의 matched 후보가 '후보 참조 장소'를 참조 → 수정된 컬럼 경로로 보존.
             ExtractedPlaceCandidate(
                 video_id="v-ex-2", source_text="s", ai_place_name="후보 참조 장소",
@@ -1378,9 +1400,15 @@ async def test_reopen_candidate_transitions(session):
     await session.commit()
     await svc.soft_delete_candidates(session, [deleted.id], reason="실수 삭제")
     await session.commit()
-    reopened, source = await svc.reopen_candidate(session, candidate_id=deleted.id)
+    deleted_token = svc.encode_candidate_undo_token(deleted)
+    result = await svc.reopen_candidate(
+        session,
+        candidate_id=deleted.id,
+        undo_token=deleted_token,
+    )
     await session.commit()
-    assert source == "deleted"
+    reopened = result.candidate
+    assert result.reopened_from == "deleted"
     assert reopened.deleted_at is None
     assert reopened.deletion_reason is None
     assert reopened.deleted_by is None
@@ -1395,25 +1423,476 @@ async def test_reopen_candidate_transitions(session):
     ignored = await _seed_candidate(
         session, video_id="v-sd-2", name="제외 후보", status=MatchStatus.IGNORED
     )
-    reopened2, source2 = await svc.reopen_candidate(session, candidate_id=ignored.id)
+    ignored_token = svc.encode_candidate_undo_token(ignored)
+    result2 = await svc.reopen_candidate(
+        session,
+        candidate_id=ignored.id,
+        undo_token=ignored_token,
+    )
     await session.commit()
-    assert source2 == "ignored"
+    reopened2 = result2.candidate
+    assert result2.reopened_from == "ignored"
     assert reopened2.match_status == MatchStatus.NEEDS_REVIEW.value
 
     # 이미 needs_review → 409용 conflict.
     with pytest.raises(svc.CandidateReopenConflictError):
-        await svc.reopen_candidate(session, candidate_id=reopened2.id)
+        await svc.reopen_candidate(
+            session,
+            candidate_id=reopened2.id,
+            undo_token=ignored_token,
+        )
 
-    # matched/user_corrected → 범위 밖(400) — 장소 정리 정책은 T-184.
+    # 연결이 없는 legacy user_corrected도 needs_review로 복귀한다.
     corrected = await _seed_candidate(
         session, video_id="v-sd-3", name="확정 후보", status=MatchStatus.USER_CORRECTED
     )
-    with pytest.raises(svc.CandidateReopenUnsupportedError):
-        await svc.reopen_candidate(session, candidate_id=corrected.id)
+    corrected_token = svc.encode_candidate_undo_token(corrected)
+    corrected_result = await svc.reopen_candidate(
+        session,
+        candidate_id=corrected.id,
+        undo_token=corrected_token,
+    )
+    assert corrected_result.reopened_from == MatchStatus.USER_CORRECTED.value
+    assert corrected_result.candidate.match_status == MatchStatus.NEEDS_REVIEW.value
 
     # 존재하지 않는 후보 → 404용 ValueError.
     with pytest.raises(ValueError):
-        await svc.reopen_candidate(session, candidate_id=999_999)
+        await svc.reopen_candidate(
+            session,
+            candidate_id=999_999,
+            undo_token=corrected_token,
+        )
+
+
+async def test_candidate_undo_token_rejects_noncanonical_or_ambiguous_payloads(
+    session,
+):
+    candidate = await _seed_candidate(
+        session,
+        video_id="v-undo-token-strict",
+        name="엄격 토큰 후보",
+        status=MatchStatus.IGNORED,
+    )
+    token = svc.encode_candidate_undo_token(candidate)
+    decoded = svc.decode_candidate_undo_token(token)
+    assert decoded.candidate_id == candidate.id
+    assert decoded.candidate_revision == candidate.state_revision
+    assert decoded.prior_state == MatchStatus.IGNORED.value
+    assert decoded.effective_state == MatchStatus.IGNORED.value
+
+    padding = "=" * (-len(token) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((token + padding).encode("ascii")).decode("utf-8")
+    )
+
+    def encoded(value, *, canonical=True):
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=canonical,
+            separators=(",", ":") if canonical else None,
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    invalid_tokens = [
+        token + "=",  # padding 허용 안 함
+        encoded({**payload, "unexpected": True}),
+        encoded(payload, canonical=False),
+        encoded({**payload, "version": "candidate-undo-v2"}),
+        encoded({**payload, "candidate_id": True}),
+        encoded({**payload, "candidate_id": 2_147_483_648}),
+        encoded({**payload, "candidate_revision": 9_223_372_036_854_775_808}),
+        encoded({**payload, "prior_state": [MatchStatus.IGNORED.value]}),
+        encoded({**payload, "effective_state": {"state": "ignored"}}),
+        encoded({**payload, "matched_place_id": 1}),
+    ]
+    for invalid in invalid_tokens:
+        with pytest.raises(svc.InvalidCandidateUndoToken):
+            svc.decode_candidate_undo_token(invalid)
+
+
+async def test_reopen_created_place_removes_only_orphan_and_preserves_evidence_media(
+    session,
+):
+    candidate = await _seed_candidate(
+        session,
+        video_id="v-reopen-created-orphan",
+        name="되돌릴 신규 장소",
+    )
+    candidate.provider_evidence_json = {"transcript": {"segment": "원본 근거"}}
+    await session.commit()
+    await session.refresh(candidate, attribute_names=["state_revision"])
+    resolved, place, mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="reviewer-a",
+        review_note="확정 판단 근거",
+        place_data={
+            "name": "되돌릴 신규 장소",
+            "latitude": 35.0,
+            "longitude": 129.0,
+        },
+        expected_revision=candidate.state_revision,
+        commit=False,
+    )
+    assert place is not None
+    assert mapping is not None
+    await session.commit()
+    await session.refresh(resolved)
+    await session.refresh(place)
+    assert place.lifecycle_origin == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    assert place.origin_candidate_id == candidate.id
+
+    asset = MediaAsset(
+        video_id=candidate.video_id,
+        place_id=place.place_id,
+        asset_type="frame",
+        bucket="media",
+        object_key="reopen-created-orphan-frame",
+        object_uri="rustfs://media/reopen-created-orphan-frame",
+    )
+    video = await session.get(YoutubeVideo, candidate.video_id)
+    assert video is not None
+    video.is_excluded = True
+    session.add(asset)
+    await session.commit()
+    place_id = place.place_id
+    mapping_id = mapping.id
+    asset_id = asset.id
+    token = svc.encode_candidate_undo_token(
+        resolved,
+        matched_place_revision=place.state_revision,
+    )
+
+    result = await svc.reopen_candidate(
+        session,
+        candidate_id=candidate.id,
+        undo_token=token,
+    )
+    await session.commit()
+
+    assert result.reopened_from == MatchStatus.USER_CORRECTED.value
+    assert result.deleted_place_id == place_id
+    assert result.video_is_excluded is True
+    assert await session.get(TravelPlace, place_id) is None
+    assert await session.get(VideoPlaceMapping, mapping_id) is None
+    preserved_asset = await session.get(MediaAsset, asset_id)
+    assert preserved_asset is not None
+    assert preserved_asset.place_id is None
+    assert preserved_asset.object_uri == "rustfs://media/reopen-created-orphan-frame"
+    await session.refresh(result.candidate)
+    assert result.candidate.match_status == MatchStatus.NEEDS_REVIEW.value
+    assert result.candidate.matched_place_id is None
+    assert result.candidate.reviewed_by is None
+    assert result.candidate.reviewed_at is None
+    assert result.candidate.review_note == "확정 판단 근거"
+    assert result.candidate.provider_evidence_json["transcript"] == {
+        "segment": "원본 근거"
+    }
+    assert len(
+        result.candidate.provider_evidence_json["review"]["resolutions"]
+    ) == 1
+
+
+async def test_reopen_shared_candidate_place_preserves_place_and_other_mapping(session):
+    first = await _seed_candidate(
+        session,
+        video_id="v-reopen-shared-first",
+        name="공유 장소 첫 후보",
+    )
+    second = await _seed_candidate(
+        session,
+        video_id="v-reopen-shared-second",
+        name="공유 장소 둘째 후보",
+    )
+    place = TravelPlace(
+        lifecycle_origin=PlaceLifecycleOrigin.CANDIDATE_CREATED.value,
+        origin_candidate_id=first.id,
+        name="공유 후보 생성 장소",
+        latitude=35.0,
+        longitude=129.0,
+        is_geocoded=True,
+    )
+    session.add(place)
+    await session.flush()
+    for candidate in (first, second):
+        candidate.match_status = MatchStatus.USER_CORRECTED.value
+        candidate.matched_place_id = place.place_id
+        candidate.feature_export_status = FeatureExportStatus.READY.value
+    first_mapping = VideoPlaceMapping(
+        video_id=first.video_id,
+        place_id=place.place_id,
+        place_candidate_id=first.id,
+        ai_summary="첫 후보 매핑",
+    )
+    second_mapping = VideoPlaceMapping(
+        video_id=second.video_id,
+        place_id=place.place_id,
+        place_candidate_id=second.id,
+        ai_summary="둘째 후보 매핑",
+    )
+    session.add_all([first_mapping, second_mapping])
+    await session.commit()
+    await session.refresh(first, attribute_names=["state_revision"])
+    await session.refresh(place, attribute_names=["state_revision"])
+    token = svc.encode_candidate_undo_token(
+        first,
+        matched_place_revision=place.state_revision,
+    )
+
+    result = await svc.reopen_candidate(
+        session,
+        candidate_id=first.id,
+        undo_token=token,
+    )
+    await session.commit()
+
+    assert result.deleted_place_id is None
+    assert await session.get(TravelPlace, place.place_id) is not None
+    assert await session.get(VideoPlaceMapping, first_mapping.id) is None
+    assert await session.get(VideoPlaceMapping, second_mapping.id) is not None
+    await session.refresh(second)
+    assert second.matched_place_id == place.place_id
+
+
+async def test_reopen_last_shared_reference_collects_candidate_created_place(
+    session,
+):
+    """origin 후보가 먼저 빠져도 마지막 전역 참조가 빠질 때 후보 생성 장소를 정리한다."""
+    first = await _seed_candidate(
+        session,
+        video_id="v-reopen-gc-origin",
+        name="전역 GC 원본 후보",
+    )
+    second = await _seed_candidate(
+        session,
+        video_id="v-reopen-gc-last-ref",
+        name="전역 GC 공유 후보",
+    )
+
+    first, place, first_mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=first.id,
+        action="create_place",
+        reviewed_by="reviewer-a",
+        place_data={
+            "name": "전역 참조 후보 생성 장소",
+            "latitude": 35.0,
+            "longitude": 129.0,
+        },
+        expected_revision=first.state_revision,
+        commit=False,
+    )
+    assert place is not None and first_mapping is not None
+    await session.commit()
+
+    second, matched_place, second_mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=second.id,
+        action="match_existing",
+        reviewed_by="reviewer-b",
+        place_id=place.place_id,
+        expected_revision=second.state_revision,
+        commit=False,
+    )
+    assert matched_place is not None and second_mapping is not None
+    await session.commit()
+    await session.refresh(first)
+    await session.refresh(second)
+    await session.refresh(place)
+    assert place.lifecycle_origin == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    assert place.origin_candidate_id == first.id
+    place_id = place.place_id
+    first_token = svc.encode_candidate_undo_token(
+        first,
+        matched_place_revision=place.state_revision,
+    )
+    second_token = svc.encode_candidate_undo_token(
+        second,
+        matched_place_revision=place.state_revision,
+    )
+
+    first_reopen = await svc.reopen_candidate(
+        session,
+        candidate_id=first.id,
+        undo_token=first_token,
+    )
+    await session.commit()
+    assert first_reopen.deleted_place_id is None
+    assert await session.get(TravelPlace, place_id) is not None
+    assert await session.get(VideoPlaceMapping, first_mapping.id) is None
+    assert await session.get(VideoPlaceMapping, second_mapping.id) is not None
+
+    # 마지막 참조 후보는 origin_candidate_id와 달라도 전역 refcount가 0이 되므로
+    # candidate_created 장소를 정리해야 한다.
+    second_reopen = await svc.reopen_candidate(
+        session,
+        candidate_id=second.id,
+        undo_token=second_token,
+    )
+    await session.commit()
+    assert second_reopen.deleted_place_id == place_id
+    assert await session.get(TravelPlace, place_id) is None
+    assert await session.get(VideoPlaceMapping, second_mapping.id) is None
+
+
+async def test_reopen_match_existing_keeps_persistent_orphan_place(session):
+    candidate = await _seed_candidate(
+        session,
+        video_id="v-reopen-persistent-match",
+        name="영구 장소 매칭 후보",
+    )
+    place = TravelPlace(
+        lifecycle_origin=PlaceLifecycleOrigin.PERSISTENT.value,
+        name="사용자 영구 장소",
+        latitude=35.0,
+        longitude=129.0,
+        is_geocoded=True,
+    )
+    session.add(place)
+    await session.commit()
+    await session.refresh(place)
+
+    resolved, _, mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="match_existing",
+        reviewed_by="reviewer",
+        place_id=place.place_id,
+        expected_revision=candidate.state_revision,
+        commit=False,
+    )
+    assert mapping is not None
+    await session.commit()
+    await session.refresh(resolved)
+    await session.refresh(place)
+    token = svc.encode_candidate_undo_token(
+        resolved,
+        matched_place_revision=place.state_revision,
+    )
+
+    result = await svc.reopen_candidate(
+        session,
+        candidate_id=candidate.id,
+        undo_token=token,
+    )
+    await session.commit()
+    assert result.deleted_place_id is None
+    preserved = await session.get(TravelPlace, place.place_id)
+    assert preserved is not None
+    assert preserved.lifecycle_origin == PlaceLifecycleOrigin.PERSISTENT.value
+    assert await session.get(VideoPlaceMapping, mapping.id) is None
+
+
+async def test_reopen_rejects_stale_candidate_and_place_revisions_without_mutation(
+    session,
+):
+    ignored = await _seed_candidate(
+        session,
+        video_id="v-reopen-stale-candidate",
+        name="revision 변경 후보",
+        status=MatchStatus.IGNORED,
+    )
+    ignored_id = ignored.id
+    ignored_token = svc.encode_candidate_undo_token(ignored)
+    await session.execute(
+        text(
+            "UPDATE extracted_place_candidates "
+            "SET state_revision = state_revision + 1 WHERE id = :candidate_id"
+        ),
+        {"candidate_id": ignored_id},
+    )
+    await session.commit()
+
+    with pytest.raises(svc.CandidateRevisionConflictError):
+        await svc.reopen_candidate(
+            session,
+            candidate_id=ignored_id,
+            undo_token=ignored_token,
+        )
+    await session.rollback()
+    stale_candidate = await session.get(ExtractedPlaceCandidate, ignored_id)
+    assert stale_candidate is not None
+    assert stale_candidate.match_status == MatchStatus.IGNORED.value
+
+    place = await _add_place(session, "revision 변경 장소", 35.0, 129.0)
+    matched = await _seed_candidate(
+        session,
+        video_id="v-reopen-stale-place",
+        name="장소 revision 후보",
+        status=MatchStatus.USER_CORRECTED,
+        matched_place_id=place.place_id,
+    )
+    mapping = VideoPlaceMapping(
+        video_id=matched.video_id,
+        place_id=place.place_id,
+        place_candidate_id=matched.id,
+        ai_summary="장소 revision 매핑",
+    )
+    session.add(mapping)
+    await session.commit()
+    matched_id = matched.id
+    place_id = place.place_id
+    mapping_id = mapping.id
+    place_token = svc.encode_candidate_undo_token(
+        matched,
+        matched_place_revision=place.state_revision,
+    )
+    await session.execute(
+        text(
+            "UPDATE travel_places "
+            "SET state_revision = state_revision + 1 WHERE place_id = :place_id"
+        ),
+        {"place_id": place_id},
+    )
+    await session.commit()
+
+    with pytest.raises(svc.CandidatePlaceChangedError):
+        await svc.reopen_candidate(
+            session,
+            candidate_id=matched_id,
+            undo_token=place_token,
+        )
+    await session.rollback()
+    unchanged = await session.get(ExtractedPlaceCandidate, matched_id)
+    assert unchanged is not None
+    assert unchanged.match_status == MatchStatus.USER_CORRECTED.value
+    assert unchanged.matched_place_id == place_id
+    assert await session.get(VideoPlaceMapping, mapping_id) is not None
+
+
+def test_merge_place_lifecycle_origin_uses_strongest_and_keeps_target_provenance():
+    source = TravelPlace(
+        lifecycle_origin=PlaceLifecycleOrigin.PERSISTENT.value,
+        name="영구 원본",
+        latitude=35.0,
+        longitude=129.0,
+    )
+    target = TravelPlace(
+        lifecycle_origin=PlaceLifecycleOrigin.CANDIDATE_CREATED.value,
+        origin_candidate_id=22,
+        name="후보 통합본",
+        latitude=35.1,
+        longitude=129.1,
+    )
+    svc._merge_place_lifecycle_origin(source, target)
+    assert target.lifecycle_origin == PlaceLifecycleOrigin.PERSISTENT.value
+    assert target.origin_candidate_id is None
+
+    source.lifecycle_origin = PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    source.origin_candidate_id = 11
+    target.lifecycle_origin = PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    target.origin_candidate_id = 22
+    svc._merge_place_lifecycle_origin(source, target)
+    assert target.lifecycle_origin == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    assert target.origin_candidate_id == 22
+
+    source.lifecycle_origin = PlaceLifecycleOrigin.LEGACY_UNKNOWN.value
+    source.origin_candidate_id = None
+    svc._merge_place_lifecycle_origin(source, target)
+    assert target.lifecycle_origin == PlaceLifecycleOrigin.LEGACY_UNKNOWN.value
+    assert target.origin_candidate_id is None
 
 
 async def test_list_unmatched_excludes_soft_deleted(session):

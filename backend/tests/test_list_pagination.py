@@ -718,9 +718,36 @@ async def test_unmatched_search_normalization_wildcards_status_and_detail(
     assert ignored_detail.status_code == 200
     assert ignored_detail.json()["list_item"]["match_status"] == "ignored"
     assert ignored_detail.json()["list_item"]["video_title"] == "검색 검수 영상"
-    assert (
-        await client.get("/api/v1/destinations/candidates/6/detail")
-    ).status_code == 404
+
+    removed = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            "limit": 3,
+            "sort": "oldest",
+            "status": "removed",
+            "is_domestic": "false",
+        },
+    )
+    removed_body = removed.json()
+    assert removed.status_code == 200
+    assert removed_body["total"] == 3
+    assert [item["id"] for item in removed_body["items"]] == [4, 5, 6]
+    assert [item["review_state"] for item in removed_body["items"]] == [
+        "ignored",
+        "ignored",
+        "deleted",
+    ]
+    assert all(
+        item["undo"]["candidate_id"] == item["id"]
+        for item in removed_body["items"]
+    )
+
+    deleted_detail = await client.get(
+        "/api/v1/destinations/candidates/6/detail"
+    )
+    assert deleted_detail.status_code == 200
+    assert deleted_detail.json()["candidate"]["review_state"] == "deleted"
+    assert deleted_detail.json()["candidate"]["undo"]["candidate_id"] == 6
 
     assert (
         await client.get(

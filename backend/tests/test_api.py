@@ -10,14 +10,20 @@ import json
 import re
 import threading
 from io import BytesIO
+from uuid import uuid4
 from zipfile import ZipFile
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.services import audit_service, settings_service
 from main import app
+
+
+def _client_operation_id() -> str:
+    return str(uuid4())
 
 
 @pytest_asyncio.fixture
@@ -543,7 +549,101 @@ async def test_destinations_reflect_db(client, session_factory):
     )
 
 
-async def test_candidate_and_place_detail_and_delete(client, session_factory):
+async def test_candidate_detail_deduplicates_legacy_sibling_mappings(
+    client,
+    session_factory,
+):
+    """legacy 다중 mapping은 sibling을 복제하지 않고 candidate FK를 정본으로 쓴다."""
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        MatchStatus,
+        TravelPlace,
+        VideoPlaceMapping,
+        YoutubeVideo,
+    )
+
+    async with session_factory() as s:
+        video = YoutubeVideo(
+            video_id="candidate-sibling-legacy",
+            title="legacy sibling",
+            url="u",
+            channel_id="candidate-sibling",
+        )
+        authoritative = TravelPlace(
+            name="후보 FK 정본",
+            latitude=35.1,
+            longitude=129.1,
+        )
+        legacy_first = TravelPlace(
+            name="과거 매핑 1",
+            latitude=35.2,
+            longitude=129.2,
+        )
+        legacy_latest = TravelPlace(
+            name="과거 매핑 2",
+            latitude=35.3,
+            longitude=129.3,
+        )
+        s.add_all([video, authoritative, legacy_first, legacy_latest])
+        await s.flush()
+        requested = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="상세 조회 기준 후보",
+            ai_place_name="상세 조회 기준 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        sibling = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="legacy 다중 매핑 후보",
+            ai_place_name="legacy 다중 매핑 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+            matched_place_id=authoritative.place_id,
+        )
+        s.add_all([requested, sibling])
+        await s.flush()
+        s.add_all(
+            [
+                VideoPlaceMapping(
+                    video_id=video.video_id,
+                    place_id=legacy_first.place_id,
+                    place_candidate_id=sibling.id,
+                    ai_summary="과거 연결 1",
+                ),
+                VideoPlaceMapping(
+                    video_id=video.video_id,
+                    place_id=legacy_latest.place_id,
+                    place_candidate_id=sibling.id,
+                    ai_summary="과거 연결 2",
+                ),
+            ]
+        )
+        await s.commit()
+        requested_id = requested.id
+        sibling_id = sibling.id
+        authoritative_id = authoritative.place_id
+
+    response = await client.get(
+        f"/api/v1/destinations/candidates/{requested_id}/detail"
+    )
+    assert response.status_code == 200
+    siblings = response.json()["sibling_candidates"]
+    assert siblings == [
+        {
+            "id": sibling_id,
+            "ai_place_name": "legacy 다중 매핑 후보",
+            "match_status": "needs_review",
+            "review_state": "needs_review",
+            "candidate_category": None,
+            "place_id": authoritative_id,
+        }
+    ]
+
+
+async def test_candidate_and_place_detail_and_delete(
+    client,
+    session_factory,
+    monkeypatch,
+):
     from ktc.models import (
         ExtractedPlaceCandidate,
         MatchStatus,
@@ -630,7 +730,10 @@ async def test_candidate_and_place_detail_and_delete(client, session_factory):
     assert dj["video"]["channel_title"] == "여행 유튜버"
     assert dj["video"]["description"] == "부산 여행 설명"
     assert dj["source_run"]["run_type_label"] == "자막 추출"
-    assert any(c["ai_place_name"] == "자갈치시장" for c in dj["sibling_candidates"])
+    sibling = next(
+        c for c in dj["sibling_candidates"] if c["ai_place_name"] == "자갈치시장"
+    )
+    assert sibling["review_state"] == "needs_review"
 
     place_detail = await client.get(f"/api/v1/destinations/{place_id}/detail")
     assert place_detail.status_code == 200
@@ -646,11 +749,45 @@ async def test_candidate_and_place_detail_and_delete(client, session_factory):
     assert len(source_video["mentions"]) == 2
     assert source_video["mentions"][0]["source_text"] == "감천 첫 언급"
 
-    deleted = await client.delete(f"/api/v1/destinations/candidates/{cand_id}")
+    delete_operation_id = _client_operation_id()
+    deleted = await client.delete(
+        f"/api/v1/destinations/candidates/{cand_id}"
+        f"?expected_revision=1&client_operation_id={delete_operation_id}"
+    )
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
+    assert deleted.json()["client_operation_id"] == delete_operation_id
     gone = await client.get(f"/api/v1/destinations/candidates/{cand_id}/detail")
-    assert gone.status_code == 404
+    assert gone.status_code == 200
+    assert gone.json()["candidate"]["review_state"] == "deleted"
+    assert gone.json()["candidate"]["undo"]["candidate_id"] == cand_id
+
+    from ktc.api import routes
+
+    async def preserved_transcript(*_args, asset_type, **_kwargs):
+        if asset_type == "transcript_corrected":
+            return "삭제 뒤에도 보존된 보정 자막"
+        return None
+
+    monkeypatch.setattr(
+        routes.postprocess_service,
+        "_make_media_store",
+        lambda _settings: object(),
+    )
+    monkeypatch.setattr(
+        routes.media_store,
+        "load_latest_asset_text",
+        preserved_transcript,
+    )
+    transcript = await client.get(
+        f"/api/v1/destinations/candidates/{cand_id}/transcript"
+    )
+    assert transcript.status_code == 200
+    assert transcript.json() == {
+        "text": "삭제 뒤에도 보존된 보정 자막",
+        "kind": "corrected",
+        "video_id": "vd1",
+    }
 
 
 async def test_candidate_id_path_enforces_postgresql_integer_range(client):
@@ -662,7 +799,11 @@ async def test_candidate_id_path_enforces_postgresql_integer_range(client):
         (
             "POST",
             f"/api/v1/destinations/unmatched/{overflow_id}/resolve",
-            {"action": "ignore"},
+            {
+                "client_operation_id": _client_operation_id(),
+                "expected_revision": 1,
+                "action": "ignore",
+            },
         ),
         ("POST", f"/api/v1/destinations/unmatched/{overflow_id}/reopen", None),
         (
@@ -728,7 +869,11 @@ async def test_candidate_detail_and_resolve_null_unsafe_confidence_scores(
 
         resolved = await client.post(
             f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
-            json={"action": "ignore"},
+            json={
+                "client_operation_id": _client_operation_id(),
+                "expected_revision": 1,
+                "action": "ignore",
+            },
         )
         assert resolved.status_code == 200
         assert resolved.json()["candidate"]["confidence_score"] is None
@@ -760,21 +905,143 @@ async def test_resolve_candidate_returns_409_after_another_reviewer_resolved_it(
         await session.commit()
         candidate_id = candidate.id
 
+    missing_revision = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={"client_operation_id": _client_operation_id(), "action": "ignore"},
+    )
+    assert missing_revision.status_code == 422
+    missing_operation = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={"expected_revision": 1, "action": "ignore"},
+    )
+    assert missing_operation.status_code == 422
+    invalid_operation = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={
+            "client_operation_id": "not-a-uuid",
+            "expected_revision": 1,
+            "action": "ignore",
+        },
+    )
+    assert invalid_operation.status_code == 422
+    boolean_revision = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": True,
+            "action": "ignore",
+        },
+    )
+    assert boolean_revision.status_code == 422
+
+    operation_id = _client_operation_id()
     first = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
-        json={"action": "ignore"},
+        json={
+            "client_operation_id": operation_id,
+            "expected_revision": 1,
+            "action": "ignore",
+        },
     )
     assert first.status_code == 200
+    assert first.json()["client_operation_id"] == operation_id
+    assert first.json()["candidate"]["last_client_operation_id"] == operation_id
+    assert first.json()["undo"]["candidate_id"] == candidate_id
+    assert first.json()["candidate"]["state_revision"] >= 1
+    assert first.json()["candidate"]["review_state"] == "ignored"
 
     stale = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
-        json={"action": "ignore"},
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
+            "action": "ignore",
+        },
     )
     assert stale.status_code == 409
-    assert "이미 해결" in stale.json()["detail"]
+    assert stale.json()["detail"]["code"] == "candidate_revision_conflict"
 
 
-async def test_resolve_response_rereads_force_exclude_after_audit_commit(
+async def test_candidate_resolve_rolls_back_place_and_audit_together(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from ktc.api import routes
+    from ktc.models import (
+        AuditLog,
+        ExtractedPlaceCandidate,
+        MatchStatus,
+        TravelPlace,
+        VideoPlaceMapping,
+        YoutubeVideo,
+    )
+
+    async with session_factory() as s:
+        s.add(
+            YoutubeVideo(
+                video_id="candidate-resolve-audit-rollback",
+                title="확정 감사 실패",
+                url="u",
+                channel_id="candidate-resolve-audit-rollback",
+            )
+        )
+        await s.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="candidate-resolve-audit-rollback",
+            source_text="확정 감사 실패 근거",
+            ai_place_name="확정 감사 실패 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add(candidate)
+        await s.commit()
+        candidate_id = candidate.id
+
+    original_record = routes.audit_service.record
+
+    async def fail_after_flush(session, **kwargs):
+        assert kwargs.get("commit") is False
+        await original_record(session, **kwargs)
+        await session.flush()
+        raise RuntimeError("resolve audit unavailable after flush")
+
+    monkeypatch.setattr(routes.audit_service, "record", fail_after_flush)
+
+    with pytest.raises(RuntimeError, match="resolve audit unavailable"):
+        await client.post(
+            f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+            json={
+                "client_operation_id": _client_operation_id(),
+                "expected_revision": 1,
+                "action": "create_place",
+                "corrected_name": "rollback 장소",
+                "latitude": 35.0,
+                "longitude": 129.0,
+            },
+        )
+
+    async with session_factory() as s:
+        current = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        assert current.match_status == MatchStatus.NEEDS_REVIEW.value
+        assert current.matched_place_id is None
+        assert current.provider_evidence_json is None
+        assert (await s.execute(select(TravelPlace))).scalars().all() == []
+        assert (await s.execute(select(VideoPlaceMapping))).scalars().all() == []
+        logs = (
+            await s.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "candidate.resolve",
+                    AuditLog.target_id == str(candidate_id),
+                )
+            )
+        ).scalars().all()
+        assert logs == []
+
+
+async def test_resolve_finalizer_rejects_force_exclude_after_audit_commit(
     client,
     session_factory,
     monkeypatch,
@@ -825,6 +1092,8 @@ async def test_resolve_response_rereads_force_exclude_after_audit_commit(
     response = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
         json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
             "action": "create_place",
             "corrected_name": "응답 전 제외 API 장소",
             "latitude": 35.1587,
@@ -832,11 +1101,16 @@ async def test_resolve_response_rereads_force_exclude_after_audit_commit(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "candidate_place_changed"
     assert len(forced) == 1
-    assert response.json()["candidate"]["matched_place_id"] is None
-    assert response.json()["place"] is None
-    assert response.json()["mapping_id"] is None
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["review_state"] == "deleted"
+    assert detail.json()["candidate"]["matched_place_id"] is None
+    assert detail.json()["candidate"]["last_client_operation_id"] is None
 
 
 async def test_candidate_delete_requires_locked_needs_review_status(
@@ -878,25 +1152,56 @@ async def test_candidate_delete_requires_locked_needs_review_status(
         matched_id = matched.id
         needs_review_id = needs_review.id
 
+    missing_revision = await client.delete(
+        f"/api/v1/destinations/candidates/{needs_review_id}"
+        f"?client_operation_id={_client_operation_id()}"
+    )
+    assert missing_revision.status_code == 422
+    missing_operation = await client.delete(
+        f"/api/v1/destinations/candidates/{needs_review_id}?expected_revision=1"
+    )
+    assert missing_operation.status_code == 422
+    invalid_operation = await client.delete(
+        f"/api/v1/destinations/candidates/{needs_review_id}"
+        "?expected_revision=1&client_operation_id=not-a-uuid"
+    )
+    assert invalid_operation.status_code == 422
+
     for stale_id in (ignored_id, matched_id):
         conflict = await client.delete(
             f"/api/v1/destinations/candidates/{stale_id}"
+            f"?expected_revision=1&client_operation_id={_client_operation_id()}"
         )
         assert conflict.status_code == 409
-        assert (
-            conflict.json()["detail"]
-            == "needs_review 상태인 후보만 삭제할 수 있습니다."
-        )
+        assert conflict.json()["detail"]["code"] == "candidate_revision_conflict"
 
+    operation_id = _client_operation_id()
     deleted = await client.delete(
         f"/api/v1/destinations/candidates/{needs_review_id}"
+        f"?expected_revision=1&client_operation_id={operation_id}"
     )
     assert deleted.status_code == 200
+    assert deleted.json()["client_operation_id"] == operation_id
+    assert deleted.json()["review_state"] == "deleted"
+    assert deleted.json()["undo"]["candidate_id"] == needs_review_id
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{needs_review_id}/detail"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["last_client_operation_id"] == operation_id
+    assert detail.json()["list_item"]["last_client_operation_id"] == operation_id
     assert (
-        await client.delete(f"/api/v1/destinations/candidates/{needs_review_id}")
+        await client.delete(
+            f"/api/v1/destinations/candidates/{needs_review_id}"
+            f"?expected_revision={deleted.json()['state_revision']}"
+            f"&client_operation_id={_client_operation_id()}"
+        )
     ).status_code == 404
     assert (
-        await client.delete("/api/v1/destinations/candidates/999999")
+        await client.delete(
+            "/api/v1/destinations/candidates/999999?expected_revision=1"
+            f"&client_operation_id={_client_operation_id()}"
+        )
     ).status_code == 404
 
     async with session_factory() as s:
@@ -906,6 +1211,628 @@ async def test_candidate_delete_requires_locked_needs_review_status(
         assert current_ignored is not None and current_ignored.deleted_at is None
         assert current_matched is not None and current_matched.deleted_at is None
         assert current_deleted is not None and current_deleted.deleted_at is not None
+        last_operation = current_deleted.provider_evidence_json["review"][
+            "last_client_operation"
+        ]
+        assert last_operation["id"] == operation_id
+        assert last_operation["action"] == "delete"
+        assert isinstance(last_operation["timestamp"], str)
+        delete_logs = [
+            log
+            for log in await audit_service.list_recent(s)
+            if log.action == "candidate.delete"
+            and log.target_id == str(needs_review_id)
+        ]
+        assert len(delete_logs) == 1
+        assert json.loads(delete_logs[0].payload_json)["client_operation_id"] == (
+            operation_id
+        )
+
+
+async def test_candidate_delete_and_reopen_roll_back_when_audit_write_fails(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from ktc.api import routes
+    from ktc.models import (
+        AuditLog,
+        ExtractedPlaceCandidate,
+        MatchStatus,
+        YoutubeVideo,
+    )
+
+    async with session_factory() as s:
+        s.add_all(
+            [
+                YoutubeVideo(
+                    video_id="candidate-delete-audit-rollback",
+                    title="삭제 감사 실패",
+                    url="u",
+                    channel_id="candidate-audit-rollback",
+                ),
+                YoutubeVideo(
+                    video_id="candidate-reopen-audit-rollback",
+                    title="복귀 감사 실패",
+                    url="u",
+                    channel_id="candidate-audit-rollback",
+                ),
+            ]
+        )
+        await s.commit()
+        deleted_candidate = ExtractedPlaceCandidate(
+            video_id="candidate-delete-audit-rollback",
+            source_text="삭제 감사 실패 근거",
+            ai_place_name="삭제 감사 실패 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        ignored_candidate = ExtractedPlaceCandidate(
+            video_id="candidate-reopen-audit-rollback",
+            source_text="복귀 감사 실패 근거",
+            ai_place_name="복귀 감사 실패 후보",
+            match_status=MatchStatus.IGNORED,
+        )
+        s.add_all([deleted_candidate, ignored_candidate])
+        await s.commit()
+        deleted_candidate_id = deleted_candidate.id
+        ignored_candidate_id = ignored_candidate.id
+
+    ignored_detail = await client.get(
+        f"/api/v1/destinations/candidates/{ignored_candidate_id}/detail"
+    )
+    undo_token = ignored_detail.json()["candidate"]["undo"]["token"]
+    original_record = routes.audit_service.record
+
+    async def fail_after_flush(session, **kwargs):
+        assert kwargs.get("commit") is False
+        await original_record(session, **kwargs)
+        await session.flush()
+        raise RuntimeError("candidate audit unavailable after flush")
+
+    monkeypatch.setattr(routes.audit_service, "record", fail_after_flush)
+
+    with pytest.raises(RuntimeError, match="candidate audit unavailable"):
+        await client.delete(
+            f"/api/v1/destinations/candidates/{deleted_candidate_id}"
+            f"?expected_revision=1&client_operation_id={_client_operation_id()}"
+        )
+    with pytest.raises(RuntimeError, match="candidate audit unavailable"):
+        await client.post(
+            f"/api/v1/destinations/unmatched/{ignored_candidate_id}/reopen",
+            json={"undo_token": undo_token},
+        )
+
+    async with session_factory() as s:
+        current_delete = await s.get(
+            ExtractedPlaceCandidate, deleted_candidate_id
+        )
+        current_reopen = await s.get(
+            ExtractedPlaceCandidate, ignored_candidate_id
+        )
+        assert current_delete is not None
+        assert current_delete.deleted_at is None
+        assert current_delete.match_status == MatchStatus.NEEDS_REVIEW.value
+        assert current_delete.provider_evidence_json is None
+        assert current_reopen is not None
+        assert current_reopen.match_status == MatchStatus.IGNORED.value
+        logs = (
+            await s.execute(
+                select(AuditLog).where(
+                    AuditLog.target_id.in_(
+                        [str(deleted_candidate_id), str(ignored_candidate_id)]
+                    ),
+                    AuditLog.action.in_(
+                        ["candidate.delete", "candidate.reopen"]
+                    ),
+                )
+            )
+        ).scalars().all()
+        assert logs == []
+
+
+async def test_candidate_revision_trigger_fences_redelete_and_reopen_aba(
+    client,
+    session_factory,
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+
+    async with session_factory() as s:
+        s.add_all(
+            [
+                YoutubeVideo(
+                    video_id="candidate-trigger-delete",
+                    title="revision 삭제",
+                    url="u",
+                    channel_id="candidate-trigger",
+                ),
+                YoutubeVideo(
+                    video_id="candidate-trigger-aba",
+                    title="revision ABA",
+                    url="u",
+                    channel_id="candidate-trigger",
+                ),
+            ]
+        )
+        await s.commit()
+        delete_candidate = ExtractedPlaceCandidate(
+            video_id="candidate-trigger-delete",
+            source_text="revision 삭제 근거",
+            ai_place_name="revision 삭제 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        aba_candidate = ExtractedPlaceCandidate(
+            video_id="candidate-trigger-aba",
+            source_text="revision ABA 근거",
+            ai_place_name="revision ABA 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add_all([delete_candidate, aba_candidate])
+        await s.commit()
+        delete_candidate_id = delete_candidate.id
+        aba_candidate_id = aba_candidate.id
+
+    delete_operation_id = _client_operation_id()
+    deleted = await client.delete(
+        f"/api/v1/destinations/candidates/{delete_candidate_id}"
+        f"?expected_revision=1&client_operation_id={delete_operation_id}"
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["state_revision"] == 2
+    stale_delete = await client.delete(
+        f"/api/v1/destinations/candidates/{delete_candidate_id}"
+        f"?expected_revision=1&client_operation_id={_client_operation_id()}"
+    )
+    assert stale_delete.status_code == 409
+    assert stale_delete.json()["detail"] == {
+        "code": "candidate_revision_conflict",
+        "message": "후보가 다른 작업으로 변경되었습니다. 최신 상태를 다시 확인해 주세요.",
+        "expected_revision": 1,
+        "actual_revision": 2,
+    }
+    assert (
+        await client.delete(
+            f"/api/v1/destinations/candidates/{delete_candidate_id}"
+            f"?expected_revision=2&client_operation_id={_client_operation_id()}"
+        )
+    ).status_code == 404
+
+    ignored = await client.post(
+        f"/api/v1/destinations/unmatched/{aba_candidate_id}/resolve",
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
+            "action": "ignore",
+        },
+    )
+    assert ignored.status_code == 200
+    assert ignored.json()["candidate"]["state_revision"] == 3
+    reopened = await client.post(
+        f"/api/v1/destinations/unmatched/{aba_candidate_id}/reopen",
+        json={"undo_token": ignored.json()["undo"]["token"]},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["candidate"]["state_revision"] == 4
+
+    stale_aba = await client.post(
+        f"/api/v1/destinations/unmatched/{aba_candidate_id}/resolve",
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
+            "action": "ignore",
+        },
+    )
+    assert stale_aba.status_code == 409
+    assert stale_aba.json()["detail"]["code"] == "candidate_revision_conflict"
+    fresh = await client.post(
+        f"/api/v1/destinations/unmatched/{aba_candidate_id}/resolve",
+        json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 4,
+            "action": "ignore",
+        },
+    )
+    assert fresh.status_code == 200
+    assert fresh.json()["candidate"]["state_revision"] == 6
+
+
+async def test_last_client_operation_requires_exact_candidate_snapshot(
+    client,
+    session_factory,
+):
+    """과거 JSONB 표식은 남아도 reopen/내부 mutation 뒤 exact ID는 노출하지 않는다."""
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+    from ktc.services import place_service
+
+    async with session_factory() as s:
+        s.add_all(
+            [
+                YoutubeVideo(
+                    video_id="operation-fence-ignore",
+                    title="ignore operation fence",
+                    url="u",
+                    channel_id="operation-fence",
+                ),
+                YoutubeVideo(
+                    video_id="operation-fence-delete",
+                    title="delete operation fence",
+                    url="u",
+                    channel_id="operation-fence",
+                ),
+            ]
+        )
+        await s.flush()
+        ignored_candidate = ExtractedPlaceCandidate(
+            video_id="operation-fence-ignore",
+            source_text="ignore 근거",
+            ai_place_name="ignore 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        deleted_candidate = ExtractedPlaceCandidate(
+            video_id="operation-fence-delete",
+            source_text="delete 근거",
+            ai_place_name="delete 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add_all([ignored_candidate, deleted_candidate])
+        await s.commit()
+        ignored_candidate_id = ignored_candidate.id
+        deleted_candidate_id = deleted_candidate.id
+
+    ignored_operation_id = _client_operation_id()
+    ignored = await client.post(
+        f"/api/v1/destinations/unmatched/{ignored_candidate_id}/resolve",
+        json={
+            "client_operation_id": ignored_operation_id,
+            "expected_revision": 1,
+            "action": "ignore",
+        },
+    )
+    assert ignored.status_code == 200
+    assert (
+        ignored.json()["candidate"]["last_client_operation_id"]
+        == ignored_operation_id
+    )
+    reopened_ignore = await client.post(
+        f"/api/v1/destinations/unmatched/{ignored_candidate_id}/reopen",
+        json={"undo_token": ignored.json()["undo"]["token"]},
+    )
+    assert reopened_ignore.status_code == 200
+    assert reopened_ignore.json()["candidate"]["last_client_operation_id"] is None
+
+    # MCP/내부 호출은 client operation ID를 만들지 않는다. 과거 표식을 JSONB에서
+    # 지우지 않아도 revision fence 때문에 response-loss 복구 값은 계속 null이다.
+    async with session_factory() as s:
+        internal_candidate, _, _ = await place_service.resolve_candidate(
+            s,
+            candidate_id=ignored_candidate_id,
+            action="ignore",
+            reviewed_by="mcp-agent",
+            reviewer_type="mcp",
+            expected_revision=reopened_ignore.json()["candidate"][
+                "state_revision"
+            ],
+            client_operation_id=None,
+        )
+        assert internal_candidate.provider_evidence_json["review"][
+            "last_client_operation"
+        ]["id"] == ignored_operation_id
+    ignored_detail = await client.get(
+        f"/api/v1/destinations/candidates/{ignored_candidate_id}/detail"
+    )
+    assert ignored_detail.status_code == 200
+    assert ignored_detail.json()["candidate"]["last_client_operation_id"] is None
+    assert ignored_detail.json()["list_item"]["last_client_operation_id"] is None
+
+    delete_operation_id = _client_operation_id()
+    deleted = await client.delete(
+        f"/api/v1/destinations/candidates/{deleted_candidate_id}",
+        params={
+            "expected_revision": 1,
+            "client_operation_id": delete_operation_id,
+        },
+    )
+    assert deleted.status_code == 200
+    deleted_detail = await client.get(
+        f"/api/v1/destinations/candidates/{deleted_candidate_id}/detail"
+    )
+    assert (
+        deleted_detail.json()["candidate"]["last_client_operation_id"]
+        == delete_operation_id
+    )
+    reopened_delete = await client.post(
+        f"/api/v1/destinations/unmatched/{deleted_candidate_id}/reopen",
+        json={"undo_token": deleted.json()["undo"]["token"]},
+    )
+    assert reopened_delete.status_code == 200
+    assert reopened_delete.json()["candidate"]["last_client_operation_id"] is None
+    async with session_factory() as s:
+        current = await s.get(ExtractedPlaceCandidate, deleted_candidate_id)
+        assert current is not None
+        current.review_note = "reopen 뒤 내부 메모 갱신"
+        await s.commit()
+        assert current.provider_evidence_json["review"]["last_client_operation"][
+            "id"
+        ] == delete_operation_id
+    reopened_detail = await client.get(
+        f"/api/v1/destinations/candidates/{deleted_candidate_id}/detail"
+    )
+    assert reopened_detail.status_code == 200
+    assert reopened_detail.json()["candidate"]["last_client_operation_id"] is None
+    assert reopened_detail.json()["list_item"]["last_client_operation_id"] is None
+
+
+async def test_create_place_operation_marker_is_invalidated_by_place_only_update(
+    client,
+    session_factory,
+):
+    """후보가 그대로여도 연결 장소 revision이 바뀌면 marker와 undo는 stale이다."""
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+
+    async with session_factory() as s:
+        video = YoutubeVideo(
+            video_id="operation-place-revision",
+            title="place revision fence",
+            url="u",
+            channel_id="operation-place-revision",
+        )
+        s.add(video)
+        await s.flush()
+        candidate = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="새 장소 생성 근거",
+            ai_place_name="새 장소 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add(candidate)
+        await s.commit()
+        candidate_id = candidate.id
+
+    operation_id = _client_operation_id()
+    resolved = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={
+            "client_operation_id": operation_id,
+            "expected_revision": 1,
+            "action": "create_place",
+            "corrected_name": "operation revision 장소",
+            "latitude": 35.123,
+            "longitude": 129.123,
+            "duplicate_resolution": "create_new",
+        },
+    )
+    assert resolved.status_code == 200
+    body = resolved.json()
+    place_id = body["place"]["place_id"]
+    assert body["candidate"]["last_client_operation_id"] == operation_id
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        place = await s.get(TravelPlace, place_id)
+        assert candidate is not None and place is not None
+        marker = candidate.provider_evidence_json["review"][
+            "last_client_operation"
+        ]
+        assert marker["result_candidate_revision"] == candidate.state_revision
+        assert marker["matched_place_id"] == place_id
+        assert marker["matched_place_revision"] == place.state_revision
+
+    corrected = await client.post(
+        f"/api/v1/destinations/{place_id}/correct",
+        json={"description": "브라우저 작업 이후 장소 단독 보정"},
+    )
+    assert corrected.status_code == 200
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["last_client_operation_id"] is None
+    assert detail.json()["list_item"]["last_client_operation_id"] is None
+    stale_undo = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen",
+        json={"undo_token": body["undo"]["token"]},
+    )
+    assert stale_undo.status_code == 409
+    assert stale_undo.json()["detail"]["code"] == "candidate_place_changed"
+
+
+async def test_resolve_finalizer_rejects_place_change_after_enrichment_snapshot(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    """행정구역 보강 반환 뒤 place update가 끼면 old operation marker를 남기지 않는다."""
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, TravelPlace, YoutubeVideo
+    from ktc.services import place_service
+
+    async with session_factory() as s:
+        video = YoutubeVideo(
+            video_id="operation-finalizer-place-race",
+            title="finalizer place race",
+            url="u",
+            channel_id="operation-finalizer",
+        )
+        place = TravelPlace(
+            name="finalizer 대상 장소",
+            latitude=35.4,
+            longitude=129.4,
+        )
+        s.add_all([video, place])
+        await s.flush()
+        candidate = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="finalizer 경합 근거",
+            ai_place_name="finalizer 경합 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add(candidate)
+        await s.commit()
+        candidate_id = candidate.id
+        place_id = place.place_id
+
+    snapshot_ready = asyncio.Event()
+    release_finalizer = asyncio.Event()
+    original_enrich = place_service.enrich_place_admin_codes_postcommit
+
+    async def pause_after_enrichment_snapshot(*args, **kwargs):
+        enriched = await original_enrich(*args, **kwargs)
+        assert enriched is not None
+        snapshot_ready.set()
+        await release_finalizer.wait()
+        return enriched
+
+    monkeypatch.setattr(
+        place_service,
+        "enrich_place_admin_codes_postcommit",
+        pause_after_enrichment_snapshot,
+    )
+    operation_id = _client_operation_id()
+    resolve_task = asyncio.create_task(
+        client.post(
+            f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+            json={
+                "client_operation_id": operation_id,
+                "expected_revision": 1,
+                "action": "match_existing",
+                "place_id": place_id,
+            },
+        )
+    )
+    try:
+        await asyncio.wait_for(snapshot_ready.wait(), timeout=5)
+        async with session_factory() as writer_session:
+            current_place = await writer_session.get(TravelPlace, place_id)
+            assert current_place is not None
+            current_place.description = "enrichment snapshot 이후 동시 보정"
+            await writer_session.commit()
+        release_finalizer.set()
+        response = await asyncio.wait_for(resolve_task, timeout=5)
+    finally:
+        release_finalizer.set()
+        if not resolve_task.done():
+            resolve_task.cancel()
+        await asyncio.gather(resolve_task, return_exceptions=True)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "candidate_place_changed"
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.match_status == MatchStatus.USER_CORRECTED.value
+        review = candidate.provider_evidence_json["review"]
+        assert review["resolutions"][-1]["client_operation_id"] == operation_id
+        assert "last_client_operation" not in review
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["last_client_operation_id"] is None
+
+
+async def test_video_exclude_rolls_back_cleanup_and_tombstone_when_audit_fails(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from ktc.api import routes
+    from ktc.models import (
+        AuditLog,
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        FeatureExportOperation,
+        FeatureExportStatus,
+        GroundingStatus,
+        MatchStatus,
+        TravelPlace,
+        VideoPlaceMapping,
+        YoutubeVideo,
+    )
+    from ktc.services import feature_export_service
+
+    async with session_factory() as s:
+        video = YoutubeVideo(
+            video_id="video-exclude-audit-rollback",
+            title="영상 제외 감사 실패",
+            url="u",
+            channel_id="video-exclude-audit-rollback",
+        )
+        place = TravelPlace(
+            name="영상 제외 감사 실패 장소",
+            latitude=35.0,
+            longitude=129.0,
+            is_geocoded=True,
+        )
+        s.add_all([video, place])
+        await s.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_text="영상 제외 감사 실패 근거",
+            ai_place_name=place.name,
+            match_status=MatchStatus.MATCHED,
+            grounding_status=GroundingStatus.VERIFIED_RAW.value,
+            matched_place_id=place.place_id,
+            feature_export_status=FeatureExportStatus.READY.value,
+        )
+        s.add(candidate)
+        await s.flush()
+        mapping = VideoPlaceMapping(
+            video_id=video.video_id,
+            place_id=place.place_id,
+            place_candidate_id=candidate.id,
+            ai_summary="영상 제외 감사 실패 매핑",
+        )
+        s.add(mapping)
+        await s.commit()
+        candidate_id = candidate.id
+        place_id = place.place_id
+        mapping_id = mapping.id
+        assert await feature_export_service.sync_feature_exports(s) == 1
+
+    original_record = routes.audit_service.record
+
+    async def fail_after_flush(session, **kwargs):
+        assert kwargs.get("commit") is False
+        await original_record(session, **kwargs)
+        await session.flush()
+        raise RuntimeError("video exclude audit unavailable after flush")
+
+    monkeypatch.setattr(routes.audit_service, "record", fail_after_flush)
+    with pytest.raises(RuntimeError, match="video exclude audit unavailable"):
+        await client.post(
+            "/api/v1/destinations/videos/video-exclude-audit-rollback/exclude",
+            json={"reason": "rollback되어야 함"},
+        )
+
+    async with session_factory() as s:
+        current_video = await s.get(YoutubeVideo, video.video_id)
+        current_candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        ledger = (
+            await s.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert current_video is not None
+        assert current_video.is_excluded is False
+        assert current_candidate is not None
+        assert current_candidate.deleted_at is None
+        assert current_candidate.match_status == MatchStatus.MATCHED.value
+        assert current_candidate.matched_place_id == place_id
+        assert await s.get(TravelPlace, place_id) is not None
+        assert await s.get(VideoPlaceMapping, mapping_id) is not None
+        assert ledger.operation == FeatureExportOperation.UPSERT.value
+        logs = (
+            await s.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "video.exclude",
+                    AuditLog.target_id == video.video_id,
+                )
+            )
+        ).scalars().all()
+        assert logs == []
 
 
 async def test_candidate_delete_serializes_with_concurrent_ignore_api(
@@ -935,10 +1862,17 @@ async def test_candidate_delete_serializes_with_concurrent_ignore_api(
 
     delete_response, ignore_response = await asyncio.wait_for(
         asyncio.gather(
-            client.delete(f"/api/v1/destinations/candidates/{candidate_id}"),
+            client.delete(
+                f"/api/v1/destinations/candidates/{candidate_id}"
+                f"?expected_revision=1&client_operation_id={_client_operation_id()}"
+            ),
             client.post(
                 f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
-                json={"action": "ignore"},
+                json={
+                    "client_operation_id": _client_operation_id(),
+                    "expected_revision": 1,
+                    "action": "ignore",
+                },
             ),
         ),
         timeout=5,
@@ -1130,13 +2064,27 @@ async def test_resolve_candidate_and_deep_research(client, session_factory):
         await s.refresh(place)
         await s.refresh(candidate)
 
+    operation_id = _client_operation_id()
     resolved = await client.post(
         f"/api/v1/destinations/unmatched/{candidate.id}/resolve",
-        json={"action": "match_existing", "place_id": place.place_id},
+        json={
+            "client_operation_id": operation_id,
+            "expected_revision": 1,
+            "action": "match_existing",
+            "place_id": place.place_id,
+        },
     )
     assert resolved.status_code == 200
+    assert resolved.json()["client_operation_id"] == operation_id
+    assert resolved.json()["candidate"]["last_client_operation_id"] == operation_id
     assert resolved.json()["candidate"]["match_status"] == MatchStatus.USER_CORRECTED
     assert resolved.json()["candidate"]["feature_export_status"] == FeatureExportStatus.READY
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate.id}/detail"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["candidate"]["last_client_operation_id"] == operation_id
+    assert detail.json()["list_item"]["last_client_operation_id"] == operation_id
 
     research = await client.post(f"/api/v1/destinations/{place.place_id}/deep-research", json={})
     assert research.status_code == 200
@@ -1168,6 +2116,8 @@ async def test_resolve_candidate_rejects_google_without_mutation(
     response = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
         json={
+            "client_operation_id": _client_operation_id(),
+            "expected_revision": 1,
             "action": "create_place",
             "corrected_name": "Google 저장 금지",
             "latitude": 37.0,
@@ -1214,6 +2164,8 @@ async def test_resolve_candidate_rejects_invalid_selected_hit_timestamps(client)
         "longitude": 127.0,
     }
     payload = {
+        "client_operation_id": _client_operation_id(),
+        "expected_revision": 1,
         "action": "create_place",
         "corrected_name": "타임스탬프 검증 장소",
         "latitude": 37.0,
@@ -1309,6 +2261,8 @@ async def test_resolve_candidate_nearby_409_then_explicit_decisions_and_audit(
         "category": "여행 > 관광지",
     }
     payload = {
+        "client_operation_id": _client_operation_id(),
+        "expected_revision": 1,
         "action": "create_place",
         "corrected_name": "새 관광지",
         "official_address": "부산광역시 해운대구 수정동 1",
@@ -1344,6 +2298,7 @@ async def test_resolve_candidate_nearby_409_then_explicit_decisions_and_audit(
         f"/api/v1/destinations/unmatched/{create_candidate_id}/resolve",
         json={
             **payload,
+            "client_operation_id": _client_operation_id(),
             "corrected_name": "독립 관광지",
             "duplicate_resolution": "create_new",
         },
@@ -1369,11 +2324,24 @@ async def test_resolve_candidate_nearby_409_then_explicit_decisions_and_audit(
         ]
         assert len(logs) == 1
         audit_payload = json.loads(logs[0].payload_json)
+        assert audit_payload["client_operation_id"] == payload["client_operation_id"]
         audited_hit = audit_payload["request"]["selected_hit"]
         assert audited_hit["provider"] == "kakao"
         assert audited_hit["native_id"] == "kakao-near-123"
         assert audited_hit["query"] == "새 관광지"
         assert audited_hit["name"] == "새관광지 원본"
+        last_operation = candidate.provider_evidence_json["review"][
+            "last_client_operation"
+        ]
+        assert last_operation["id"] == payload["client_operation_id"]
+        assert last_operation["action"] == "create_place"
+        assert isinstance(last_operation["timestamp"], str)
+        latest_resolution = candidate.provider_evidence_json["review"][
+            "resolutions"
+        ][-1]
+        assert latest_resolution["client_operation_id"] == payload[
+            "client_operation_id"
+        ]
         assert audited_hit["searched_at"]
         assert audited_hit["selected_at"]
         resolution = audit_payload["resolution"]

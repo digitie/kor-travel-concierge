@@ -729,8 +729,12 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     });
     expect(resolveBodies[1]).toMatchObject({
       ...resolveBodies[0],
+      client_operation_id: expect.any(String),
       duplicate_resolution: 'create_new',
     });
+    expect(resolveBodies[1].client_operation_id).not.toBe(
+      resolveBodies[0].client_operation_id,
+    );
   });
 
   test('설정 화면에서 AI 엔진을 저장한다', async ({ page }) => {
@@ -950,6 +954,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
   test('저장·제외·page 끝 개별 삭제 뒤 다음 page 후보를 자동 선택한다', async ({
     page,
   }) => {
+    test.setTimeout(45_000);
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
@@ -1073,6 +1078,9 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       'create_place',
       'ignore',
     ]);
+    expect(
+      new Set(requests.resolveBodies.map((body) => body.client_operation_id)).size,
+    ).toBe(2);
     expect(requests.resolveCandidateIds).toEqual([1, 2]);
     expect(
       [...requests.processedCandidateIds].sort((left, right) => left - right),
@@ -1080,6 +1088,292 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await expect(page.getByText('298/298개 불러옴')).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('마지막 단건 제외를 snackbar에서 되돌리고 같은 후보를 다시 선택한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page);
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await expect(
+      page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
+    ).toHaveValue('자동 후보 1');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    await expect(page.getByText('자동 후보 1 후보를 제외했습니다.')).toBeVisible();
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBe('1');
+    await expect(
+      page.getByRole('combobox', { name: '검수 후보 상태' }),
+    ).toContainText('검수 대기');
+    await expect(
+      page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
+    ).toHaveValue('자동 후보 1');
+    await expect(page.getByRole('button', { name: '되돌리기' })).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('resolve 500 뒤 exact 완료 상태면 마지막 단건 undo로 승격한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveCommitsThenFails: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    await expect(
+      page.getByText(/응답은 끊겼지만 최신 상태에서 처리 완료를 확인했습니다/),
+    ).toBeVisible();
+    await expect(page.getByText('자동 후보 1 후보를 제외했습니다.')).toBeVisible();
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
+
+    const expectedResourceErrors = errors.filter(
+      (message) =>
+        message.includes('Failed to load resource') &&
+        message.includes('500 (Internal Server Error)'),
+    );
+    expect(expectedResourceErrors).toHaveLength(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !expectedResourceErrors.includes(message)),
+    ).toEqual([]);
+  });
+
+  test('resolve 200 응답 identity가 어긋나면 성공 처리하지 않고 exact detail로 재판정한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveReturnsMismatchedSuccess: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
+    await expect(
+      page.getByText(/응답은 끊겼지만 최신 상태에서 처리 완료를 확인했습니다/),
+    ).toBeVisible();
+    await expect(page.getByText('자동 후보 1 후보를 제외했습니다.')).toBeVisible();
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('resolve 500 뒤 상태와 token이 같아도 operation ID가 다르면 undo로 승격하지 않는다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveForeignCommitThenFails: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
+    await expect(
+      page.getByText(/다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다/),
+    ).toBeVisible();
+    await expect(page.getByText('자동 후보 1 후보를 제외했습니다.')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '되돌리기' })).toHaveCount(0);
+
+    const expectedResourceErrors = errors.filter(
+      (message) =>
+        message.includes('Failed to load resource') &&
+        message.includes('500 (Internal Server Error)'),
+    );
+    expect(expectedResourceErrors).toHaveLength(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !expectedResourceErrors.includes(message)),
+    ).toEqual([]);
+  });
+
+  test('reopen 500은 마지막 undo를 보존해 같은 token으로 재시도한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstReopenFailsWithoutProcessing: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect(
+      page.getByText(/복구 결과를 확인하지 못했습니다/),
+    ).toBeVisible();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
+
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1, 1]);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBe('1');
+    await expect(page.getByRole('button', { name: '되돌리기' })).toHaveCount(0);
+
+    const expectedResourceErrors = errors.filter(
+      (message) =>
+        message.includes('Failed to load resource') &&
+        message.includes('500 (Internal Server Error)'),
+    );
+    expect(expectedResourceErrors).toHaveLength(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !expectedResourceErrors.includes(message)),
+    ).toEqual([]);
+  });
+
+  test('reopen 409는 stale undo를 닫고 최신 상태 안내를 남긴다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstReopenStale: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
+    await expect(
+      page.getByRole('alert').filter({ hasText: '다른 작업으로 상태가 바뀌어' }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '되돌리기' })).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('제외·삭제 목록은 외부 검색 없이 두 상태를 보여주고 삭제 후보를 복구한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      holdOpinionUntilCancelled: true,
+      videoExcludedCandidateId: 2,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await page
+      .getByRole('button', { name: '자동 후보 2 후보 삭제', exact: true })
+      .click();
+    await page.getByRole('button', { name: '삭제', exact: true }).click();
+    await expect.poll(() => requests.deleteCandidateIds).toEqual([2]);
+
+    const statusFilter = page.getByRole('combobox', {
+      name: '검수 후보 상태',
+    });
+    const opinionButton = page.getByRole('button', {
+      name: 'AI(Gemini) 의견 요청',
+    });
+    await expect(opinionButton).toBeEnabled();
+    await opinionButton.click();
+    await expect.poll(() => requests.opinionRequestCount).toBe(1);
+    requests.searchQueries.length = 0;
+    requests.externalProviderUrls.length = 0;
+    await statusFilter.click();
+    await page.getByRole('option', { name: '제외·삭제됨' }).click();
+    await expect(statusFilter).toContainText('제외·삭제됨');
+    const ignoredRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    const deletedRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
+    await expect(ignoredRow).toContainText('제외됨');
+    await expect(deletedRow).toContainText('삭제됨');
+    await expect(ignoredRow.getByRole('checkbox')).toHaveCount(0);
+    await expect(deletedRow.getByRole('checkbox')).toHaveCount(0);
+    await expect(
+      page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __ktcOpinionAbortCount: number;
+              }
+            ).__ktcOpinionAbortCount,
+        ),
+      )
+      .toBe(1);
+    requests.releaseOpinionResponse();
+    await page.waitForTimeout(300);
+    expect(requests.searchQueries).toEqual([]);
+    expect(requests.externalProviderUrls).toEqual([]);
+    await expect(
+      page.getByText('복구 전용 화면에서는 외부 지도와 장소 검색을 호출하지 않습니다.'),
+    ).toBeVisible();
+
+    await deletedRow.click();
+    await expect(page.getByText(/출처 영상은 제외 상태입니다/)).toBeVisible();
+    await deletedRow
+      .getByRole('button', { name: '자동 후보 2 후보 복구' })
+      .click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([2]);
+    await expect(statusFilter).toContainText('검수 대기');
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBe('2');
+    await expect(
+      page.getByText(/후보를 복구하거나 다시 확정해도 영상 제외는 유지됩니다/),
+    ).toBeVisible();
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('모바일 상세에서 DELETE 응답 유실을 확인해 handoff snackbar로 복구하고 sibling 상태 링크를 지킨다', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstDeleteCommitsThenFails: true,
+      includeDetailSiblings: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '자동 후보 1 상세' }).click();
+    await expect(page).toHaveURL(/\/review\/1$/);
+
+    const ignoredSibling = page.getByRole('link').filter({
+      hasText: '제외된 형제 후보',
+    });
+    await expect(ignoredSibling).toContainText('제외됨');
+    await expect(ignoredSibling).toHaveAttribute('href', '/review?candidate=2');
+    const matchedSibling = page.getByRole('link').filter({
+      hasText: '확정된 형제 후보',
+    });
+    await expect(matchedSibling).toContainText('자동 확정');
+    await expect(matchedSibling).toHaveAttribute('href', '/?place=10003');
+
+    await page.getByRole('button', { name: '후보 삭제' }).click();
+    await page.getByRole('button', { name: '삭제', exact: true }).click();
+    await expect.poll(() => requests.deleteCandidateIds).toEqual([1]);
+    await expect(page).toHaveURL(/\/review(?:\?|$)/);
+    await expect(page.getByText('자동 후보 1 후보를 삭제했습니다.')).toBeVisible();
+
+    await page.getByRole('button', { name: '되돌리기', exact: true }).click();
+    await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBe('1');
+    await expect(page.getByRole('button', { name: '되돌리기' })).toHaveCount(0);
+
+    const expectedResourceErrors = errors.filter(
+      (message) =>
+        message.includes('Failed to load resource') &&
+        message.includes('500 (Internal Server Error)'),
+    );
+    expect(expectedResourceErrors).toHaveLength(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !expectedResourceErrors.includes(message)),
+    ).toEqual([]);
   });
 
   test('국내 판정 filter를 서버에 보내 해외 후보가 page 예산을 쓰지 않게 한다', async ({
@@ -1150,7 +1444,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await expect(
       page
         .getByRole('alert')
-        .filter({ hasText: '처리 결과를 확인하지 못했습니다' }),
+        .filter({ hasText: '다른 작업으로 상태가 바뀌어 최신 상태를 반영했습니다' }),
     ).toBeVisible();
     await expect(searchInput).toHaveValue('자동 후보 2');
     await expect(
@@ -1208,6 +1502,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await expect(searchInput).toHaveValue('자동 후보 2');
     await expect(secondRow).toHaveAttribute('aria-selected', 'true');
     await expect(firstRow).toHaveCount(0);
+    await expect(page.getByText('자동 후보 1 후보를 제외했습니다.')).toHaveCount(0);
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
@@ -1260,7 +1555,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('page 밖 resolve 도중 외부 soft delete이면 409·상세 404 뒤 첫 후보로 복귀한다', async ({
+  test('page 밖 resolve 도중 외부 soft delete이면 409·deleted 상세 뒤 첫 후보로 복귀한다', async ({
     page,
   }) => {
     const errors = collectConsoleErrors(page);
@@ -1292,7 +1587,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
           .filter(({ candidateId }) => candidateId === 301)
           .at(-1),
       )
-      .toEqual({ candidateId: 301, status: 404, matchStatus: null });
+      .toEqual({ candidateId: 301, status: 200, matchStatus: 'needs_review' });
     await expect
       .poll(() => new URL(page.url()).searchParams.get('candidate'))
       .toBeNull();
@@ -1358,7 +1653,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     ).toEqual([]);
   });
 
-  test('delete preflight 뒤 외부 soft delete 404와 상세 404를 확인해 modal을 정리한다', async ({
+  test('delete preflight 뒤 외부 soft delete 409와 deleted 상세를 최신 상태로 정리한다', async ({
     page,
   }) => {
     const errors = collectConsoleErrors(page);
@@ -1384,10 +1679,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await dialog.getByRole('button', { name: '삭제', exact: true }).click();
 
     const deleteResponse = await deleteResponsePromise;
-    expect(deleteResponse.status()).toBe(404);
-    expect(await deleteResponse.json()).toEqual({
-      detail: 'candidate not found',
-    });
+    expect(deleteResponse.status()).toBe(409);
     await expect.poll(() => requests.deleteCandidateIds).toEqual([1]);
     await expect
       .poll(() =>
@@ -1395,12 +1687,47 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
           .filter(({ candidateId }) => candidateId === 1)
           .at(-1),
       )
-      .toEqual({ candidateId: 1, status: 404, matchStatus: null });
+      .toEqual({ candidateId: 1, status: 200, matchStatus: 'needs_review' });
     await expect(dialog).toBeHidden();
+    await expect(page.getByText('자동 후보 1 후보를 삭제했습니다.')).toHaveCount(0);
+    await expect(
+      page.getByRole('alert').filter({ hasText: '다른 작업으로 상태가 바뀌어' }),
+    ).toBeVisible();
     await expect(searchInput).toHaveValue('자동 후보 2');
     await expect(
       page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
     ).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('DELETE 전 preflight가 외부 삭제를 발견하면 타인 작업을 undo로 승격하지 않는다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      deletePreflightFindsExternalDelete: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '자동 후보 1 상세' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: '후보 삭제' }).click();
+    await dialog.getByRole('button', { name: '삭제', exact: true }).click();
+
+    await expect
+      .poll(
+        () =>
+          requests.detailResponses.filter(({ candidateId }) => candidateId === 1)
+            .length,
+      )
+      .toBeGreaterThanOrEqual(3);
+    expect(requests.deleteCandidateIds).toEqual([]);
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText('자동 후보 1 후보를 삭제했습니다.')).toHaveCount(0);
+    await expect(
+      page.getByRole('alert').filter({ hasText: '다른 작업으로 상태가 바뀌어' }),
+    ).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
@@ -2116,17 +2443,62 @@ async function installReviewQueueMock(
     holdFirstResolveExternallyProcessed?: boolean;
     firstResolveExternallyDeleted?: boolean;
     firstResolveFailsWithoutProcessing?: boolean;
+    firstResolveCommitsThenFails?: boolean;
+    firstResolveForeignCommitThenFails?: boolean;
+    firstResolveReturnsMismatchedSuccess?: boolean;
     firstDeleteAlreadySoftDeleted?: boolean;
+    firstDeleteCommitsThenFails?: boolean;
+    deletePreflightFindsExternalDelete?: boolean;
+    includeDetailSiblings?: boolean;
+    holdOpinionUntilCancelled?: boolean;
+    firstReopenFailsWithoutProcessing?: boolean;
+    firstReopenStale?: boolean;
+    videoExcludedCandidateId?: number;
   } = {},
 ) {
-  const standardDomesticCandidates = Array.from({ length: 301 }, (_, index) =>
-    reviewCandidateFixture(
+  if (options.holdOpinionUntilCancelled) {
+    await page.addInitScript(() => {
+      const state = window as unknown as {
+        __ktcOpinionAbortCount: number;
+      };
+      state.__ktcOpinionAbortCount = 0;
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const rawUrl =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        const signal = init?.signal;
+        if (
+          new URL(rawUrl, window.location.origin).pathname ===
+            '/api/v1/place-search/opinion' &&
+          signal
+        ) {
+          signal.addEventListener(
+            'abort',
+            () => {
+              state.__ktcOpinionAbortCount += 1;
+            },
+            { once: true },
+          );
+        }
+        return originalFetch(input, init);
+      };
+    });
+  }
+  const standardDomesticCandidates = Array.from({ length: 301 }, (_, index) => {
+    const candidate = reviewCandidateFixture(
       index + 1,
       `자동 후보 ${index + 1}`,
       true,
       index === 0 ? '12:34-13:00' : '00:10',
-    ),
-  );
+    );
+    return candidate.id === options.videoExcludedCandidateId
+      ? { ...candidate, video_is_excluded: true }
+      : candidate;
+  });
   const standardAllCandidates = [
     ...standardDomesticCandidates,
     reviewCandidateFixture(400, '해외 숨김 후보', false),
@@ -2138,9 +2510,41 @@ async function installReviewQueueMock(
   const processedCandidateIds = new Set<number>();
   const resolvedCandidateStatuses = new Map<number, string>();
   const deletedCandidateIds = new Set<number>();
+  const missingCandidateIds = new Set<number>();
+  const candidateRevisions = new Map<number, number>();
+  const lastClientOperationIds = new Map<number, string>();
+  const foreignClientOperationId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const candidateRevision = (candidateId: number) =>
+    candidateRevisions.get(candidateId) ?? candidateId + 10;
+  const removedCandidate = (
+    candidate: ReturnType<typeof reviewCandidateFixture>,
+  ) => {
+    const reviewState = deletedCandidateIds.has(candidate.id)
+      ? 'deleted'
+      : resolvedCandidateStatuses.get(candidate.id);
+    if (!reviewState) return candidate;
+    const revision = candidateRevision(candidate.id);
+    return {
+      ...candidate,
+      match_status:
+        reviewState === 'deleted' ? candidate.match_status : reviewState,
+      review_state: reviewState,
+      state_revision: revision,
+      last_client_operation_id:
+        lastClientOperationIds.get(candidate.id) ?? null,
+      undo: {
+        candidate_id: candidate.id,
+        token: `${reviewState}-undo-${candidate.id}-${revision}`,
+      },
+    };
+  };
   let releaseHeldResolve: () => void = () => undefined;
   const heldResolveResponse = new Promise<void>((resolve) => {
     releaseHeldResolve = () => resolve();
+  });
+  let releaseHeldOpinion: () => void = () => undefined;
+  const heldOpinionResponse = new Promise<void>((resolve) => {
+    releaseHeldOpinion = () => resolve();
   });
   const requests = {
     listCursorPayloads: [] as ReviewQueueMockCursor[],
@@ -2149,9 +2553,13 @@ async function installReviewQueueMock(
     mainListRequests: [] as URL[],
     newerProbeRequests: [] as URL[],
     searchQueries: [] as string[],
+    externalProviderUrls: [] as string[],
+    opinionRequestCount: 0,
+    opinionHandlerCancelled: 0,
     resolveBodies: [] as Array<Record<string, unknown>>,
     resolveCandidateIds: [] as number[],
     deleteCandidateIds: [] as number[],
+    reopenCandidateIds: [] as number[],
     detailResponses: [] as Array<{
       candidateId: number;
       status: 200 | 404;
@@ -2159,7 +2567,18 @@ async function installReviewQueueMock(
     }>,
     processedCandidateIds,
     releaseFirstResolveResponse: () => releaseHeldResolve(),
+    releaseOpinionResponse: () => releaseHeldOpinion(),
   };
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname.startsWith('/api/v1/place-search') ||
+      url.pathname === '/api/v1/place-opinion' ||
+      url.hostname.toLowerCase().includes('vworld.kr')
+    ) {
+      requests.externalProviderUrls.push(url.toString());
+    }
+  });
 
   await page.route('**/api/v1/destinations/unmatched**', async (route) => {
     const request = route.request();
@@ -2171,10 +2590,11 @@ async function installReviewQueueMock(
       const grounding = url.searchParams.get('grounding');
       const newerThanId = url.searchParams.get('newer_than_id');
       const isNewProbe = newerThanId !== null;
+      const requestedStatus = url.searchParams.get('status');
       const contractMismatch =
         url.searchParams.get('limit') !== (isNewProbe ? '1' : '300') ||
         url.searchParams.get('sort') !== 'oldest' ||
-        url.searchParams.get('status') !== 'needs_review' ||
+        (requestedStatus !== 'needs_review' && requestedStatus !== 'removed') ||
         url.searchParams.get('q') !== null ||
         url.searchParams.get('channel_id') !== null ||
         url.searchParams.get('playlist_id') !== null ||
@@ -2197,9 +2617,15 @@ async function installReviewQueueMock(
       const sourceCandidates = options.initialHiddenOnly
         ? initialHiddenCandidates
         : standardAllCandidates;
-      const allCandidates = sourceCandidates.filter(
-        (candidate) => !processedCandidateIds.has(candidate.id),
-      );
+      const allCandidates = sourceCandidates
+        .filter((candidate) =>
+          requestedStatus === 'removed'
+            ? processedCandidateIds.has(candidate.id) &&
+              (deletedCandidateIds.has(candidate.id) ||
+                resolvedCandidateStatuses.get(candidate.id) === 'ignored')
+            : !processedCandidateIds.has(candidate.id),
+        )
+        .map(removedCandidate);
       const domesticCandidates =
         domestic === 'true'
           ? allCandidates.filter((candidate) => candidate.is_domestic === true)
@@ -2315,8 +2741,35 @@ async function installReviewQueueMock(
     if (resolveMatch && request.method() === 'POST') {
       const candidateId = Number(resolveMatch[1]);
       const body = request.postDataJSON() as Record<string, unknown>;
+      const clientOperationId = body.client_operation_id;
       requests.resolveCandidateIds.push(candidateId);
       requests.resolveBodies.push(body);
+      if (
+        typeof clientOperationId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          clientOperationId,
+        )
+      ) {
+        await route.fulfill({
+          status: 422,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'client_operation_id가 필요합니다.' }),
+        });
+        return;
+      }
+      if (body.expected_revision !== candidateRevision(candidateId)) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'candidate_revision_conflict',
+              message: 'stale candidate revision',
+            },
+          }),
+        });
+        return;
+      }
       if (
         options.firstResolveFailsWithoutProcessing &&
         requests.resolveCandidateIds.length === 1
@@ -2334,6 +2787,8 @@ async function installReviewQueueMock(
       ) {
         processedCandidateIds.add(candidateId);
         deletedCandidateIds.add(candidateId);
+        candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+        lastClientOperationIds.set(candidateId, foreignClientOperationId);
         resolvedCandidateStatuses.delete(candidateId);
         await route.fulfill({
           status: 409,
@@ -2349,10 +2804,36 @@ async function installReviewQueueMock(
         body.action === 'ignore' ? 'ignored' : 'user_corrected',
       );
       processedCandidateIds.add(candidateId);
+      candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+      lastClientOperationIds.set(candidateId, clientOperationId);
+      if (
+        options.firstResolveCommitsThenFails &&
+        requests.resolveCandidateIds.length === 1
+      ) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'resolve commit 뒤 응답 유실' }),
+        });
+        return;
+      }
+      if (
+        options.firstResolveForeignCommitThenFails &&
+        requests.resolveCandidateIds.length === 1
+      ) {
+        lastClientOperationIds.set(candidateId, foreignClientOperationId);
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: '외부 작업 commit 뒤 응답 유실' }),
+        });
+        return;
+      }
       if (
         options.firstResolveExternallyProcessed &&
         requests.resolveCandidateIds.length === 1
       ) {
+        lastClientOperationIds.set(candidateId, foreignClientOperationId);
         if (options.holdFirstResolveExternallyProcessed) {
           await heldResolveResponse;
         }
@@ -2368,7 +2849,131 @@ async function installReviewQueueMock(
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'resolved' }),
+        body: JSON.stringify({
+          status: 'resolved',
+          client_operation_id:
+            options.firstResolveReturnsMismatchedSuccess &&
+            requests.resolveCandidateIds.length === 1
+              ? foreignClientOperationId
+              : clientOperationId,
+          candidate: {
+            id: candidateId,
+            video_id: `review-video-${candidateId}`,
+            ai_place_name: `자동 후보 ${candidateId}`,
+            match_status:
+              body.action === 'ignore' ? 'ignored' : 'user_corrected',
+            review_state:
+              body.action === 'ignore' ? 'ignored' : 'user_corrected',
+            state_revision: candidateRevision(candidateId),
+            last_client_operation_id: clientOperationId,
+            video_is_excluded: false,
+            undo: {
+              candidate_id: candidateId,
+              token: `${
+                body.action === 'ignore' ? 'ignored' : 'user_corrected'
+              }-undo-${candidateId}-${candidateRevision(candidateId)}`,
+            },
+            matched_place_id:
+              body.action === 'ignore' ? null : candidateId + 10_000,
+            feature_export_status:
+              body.action === 'ignore' ? 'rejected' : 'ready',
+          },
+          place: null,
+          mapping_id: null,
+          undo: {
+            candidate_id: candidateId,
+            token: `${
+              body.action === 'ignore' ? 'ignored' : 'user_corrected'
+            }-undo-${candidateId}-${candidateRevision(candidateId)}`,
+          },
+        }),
+      });
+      return;
+    }
+
+    const reopenMatch = url.pathname.match(
+      /^\/api\/v1\/destinations\/unmatched\/(\d+)\/reopen$/,
+    );
+    if (reopenMatch && request.method() === 'POST') {
+      const candidateId = Number(reopenMatch[1]);
+      requests.reopenCandidateIds.push(candidateId);
+      const sourceCandidates = options.initialHiddenOnly
+        ? initialHiddenCandidates
+        : standardAllCandidates;
+      const candidate = sourceCandidates.find((item) => item.id === candidateId);
+      const current = candidate ? removedCandidate(candidate) : null;
+      const body = request.postDataJSON() as { undo_token?: unknown };
+      if (
+        !current ||
+        current.review_state === 'needs_review' ||
+        !current.undo ||
+        body.undo_token !== current.undo.token
+      ) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'candidate_revision_conflict',
+              message: 'stale undo token',
+            },
+          }),
+        });
+        return;
+      }
+      if (
+        options.firstReopenFailsWithoutProcessing &&
+        requests.reopenCandidateIds.length === 1
+      ) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: '일시적인 reopen 장애' }),
+        });
+        return;
+      }
+      if (
+        options.firstReopenStale &&
+        requests.reopenCandidateIds.length === 1
+      ) {
+        candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'candidate_revision_conflict',
+              message: '다른 작업으로 후보가 변경됐습니다.',
+            },
+          }),
+        });
+        return;
+      }
+      const reopenedFrom = current.review_state;
+      processedCandidateIds.delete(candidateId);
+      deletedCandidateIds.delete(candidateId);
+      resolvedCandidateStatuses.delete(candidateId);
+      candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'reopened',
+          reopened_from: reopenedFrom,
+          candidate: {
+            id: candidateId,
+            video_id: candidate.video_id,
+            ai_place_name: candidate.ai_place_name,
+            match_status: 'needs_review',
+            review_state: 'needs_review',
+            state_revision: candidateRevision(candidateId),
+            last_client_operation_id:
+              lastClientOperationIds.get(candidateId) ?? null,
+            video_is_excluded: candidate.video_is_excluded,
+            matched_place_id: null,
+            feature_export_status: 'pending',
+          },
+        }),
       });
       return;
     }
@@ -2378,32 +2983,112 @@ async function installReviewQueueMock(
 
   await page.route('**/api/v1/destinations/candidates/*', async (route) => {
     const request = route.request();
-    const deleteMatch = new URL(request.url()).pathname.match(
+    const deleteUrl = new URL(request.url());
+    const deleteMatch = deleteUrl.pathname.match(
       /^\/api\/v1\/destinations\/candidates\/(\d+)$/,
     );
     if (deleteMatch && request.method() === 'DELETE') {
       const candidateId = Number(deleteMatch[1]);
+      const clientOperationId = deleteUrl.searchParams.get(
+        'client_operation_id',
+      );
       requests.deleteCandidateIds.push(candidateId);
-      processedCandidateIds.add(candidateId);
-      deletedCandidateIds.add(candidateId);
-      resolvedCandidateStatuses.delete(candidateId);
+      if (
+        clientOperationId == null ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          clientOperationId,
+        )
+      ) {
+        await route.fulfill({
+          status: 422,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'client_operation_id가 필요합니다.' }),
+        });
+        return;
+      }
+      if (
+        deleteUrl.searchParams.get('expected_revision') !==
+        String(candidateRevision(candidateId))
+      ) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'candidate_revision_conflict',
+              message: 'stale candidate revision',
+            },
+          }),
+        });
+        return;
+      }
       if (
         options.firstDeleteAlreadySoftDeleted &&
         requests.deleteCandidateIds.length === 1
       ) {
+        processedCandidateIds.add(candidateId);
+        deletedCandidateIds.add(candidateId);
+        candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+        lastClientOperationIds.set(candidateId, foreignClientOperationId);
+        resolvedCandidateStatuses.delete(candidateId);
         await route.fulfill({
-          status: 404,
+          status: 409,
           contentType: 'application/json',
           body: JSON.stringify({
-            detail: 'candidate not found',
+            detail: {
+              code: 'candidate_revision_conflict',
+              message: '다른 검수자가 후보를 먼저 삭제했습니다.',
+            },
           }),
+        });
+        return;
+      }
+      processedCandidateIds.add(candidateId);
+      deletedCandidateIds.add(candidateId);
+      candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+      lastClientOperationIds.set(candidateId, clientOperationId);
+      resolvedCandidateStatuses.delete(candidateId);
+      if (
+        options.firstDeleteCommitsThenFails &&
+        requests.deleteCandidateIds.length === 1
+      ) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'delete commit 뒤 응답 유실' }),
         });
         return;
       }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ deleted: true, id: candidateId }),
+        body: JSON.stringify({
+          deleted: true,
+          id: candidateId,
+          client_operation_id: clientOperationId,
+          state_revision: candidateRevision(candidateId),
+          review_state: 'deleted',
+          undo: {
+            candidate_id: candidateId,
+            token: `deleted-undo-${candidateId}-${candidateRevision(candidateId)}`,
+          },
+        }),
+      });
+      return;
+    }
+    const transcriptMatch = deleteUrl.pathname.match(
+      /^\/api\/v1\/destinations\/candidates\/(\d+)\/transcript$/,
+    );
+    if (transcriptMatch && request.method() === 'GET') {
+      const candidateId = Number(transcriptMatch[1]);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          text: null,
+          kind: null,
+          video_id: `review-video-${candidateId}`,
+        }),
       });
       return;
     }
@@ -2425,7 +3110,21 @@ async function installReviewQueueMock(
         ? initialHiddenCandidates
         : standardAllCandidates;
       const candidate = sourceCandidates.find((item) => item.id === candidateId);
-      if (!candidate || deletedCandidateIds.has(candidateId)) {
+      const priorDetailCount = requests.detailResponses.filter(
+        (entry) => entry.candidateId === candidateId,
+      ).length;
+      if (
+        options.deletePreflightFindsExternalDelete &&
+        candidateId === 1 &&
+        priorDetailCount === 1 &&
+        !processedCandidateIds.has(candidateId)
+      ) {
+        processedCandidateIds.add(candidateId);
+        deletedCandidateIds.add(candidateId);
+        candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+        lastClientOperationIds.set(candidateId, foreignClientOperationId);
+      }
+      if (!candidate || missingCandidateIds.has(candidateId)) {
         requests.detailResponses.push({
           candidateId,
           status: 404,
@@ -2438,10 +3137,7 @@ async function installReviewQueueMock(
         });
         return;
       }
-      const matchStatus = resolvedCandidateStatuses.get(candidateId);
-      const latestCandidate = matchStatus
-        ? { ...candidate, match_status: matchStatus }
-        : candidate;
+      const latestCandidate = removedCandidate(candidate);
       requests.detailResponses.push({
         candidateId,
         status: 200,
@@ -2450,7 +3146,32 @@ async function installReviewQueueMock(
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(reviewCandidateDetailFixture(latestCandidate)),
+        body: JSON.stringify(
+          reviewCandidateDetailFixture(
+            latestCandidate,
+            {},
+            options.includeDetailSiblings
+              ? [
+                  {
+                    id: 2,
+                    ai_place_name: '제외된 형제 후보',
+                    match_status: 'needs_review',
+                    review_state: 'ignored',
+                    candidate_category: '카페',
+                    place_id: null,
+                  },
+                  {
+                    id: 3,
+                    ai_place_name: '확정된 형제 후보',
+                    match_status: 'matched',
+                    review_state: 'matched',
+                    candidate_category: '관광지',
+                    place_id: 10_003,
+                  },
+                ]
+              : [],
+          ),
+        ),
       });
     },
   );
@@ -2463,6 +3184,21 @@ async function installReviewQueueMock(
       contentType: 'application/json',
       body: JSON.stringify(reviewSearchResult(query)),
     });
+  });
+  await page.route('**/api/v1/place-search/opinion', async (route) => {
+    requests.opinionRequestCount += 1;
+    if (options.holdOpinionUntilCancelled) {
+      await heldOpinionResponse;
+    }
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ gemini: null, error: null }),
+      });
+    } catch {
+      requests.opinionHandlerCancelled += 1;
+    }
   });
 
   return requests;
@@ -2504,6 +3240,11 @@ function reviewCandidateFixture(
     candidate_category: '카페',
     candidate_category_code: '0',
     match_status: 'needs_review',
+    review_state: 'needs_review',
+    state_revision: id + 10,
+    last_client_operation_id: null,
+    video_is_excluded: false,
+    undo: null,
     confidence_score: id === 1 ? 0.83 : null,
     source_kind: 'transcript',
     grounding_status: groundingStatus,
@@ -2522,6 +3263,19 @@ function reviewCandidateDetailFixture(
     videoChannelId?: string | null;
     sourceSearchQuery?: string | null;
   } = {},
+  siblingCandidates: Array<{
+    id: number;
+    ai_place_name: string;
+    match_status: string;
+    review_state:
+      | 'needs_review'
+      | 'ignored'
+      | 'deleted'
+      | 'matched'
+      | 'user_corrected';
+    candidate_category: string | null;
+    place_id: number | null;
+  }> = [],
 ) {
   return {
     list_item: listItem,
@@ -2535,6 +3289,11 @@ function reviewCandidateDetailFixture(
       candidate_category: listItem.candidate_category,
       candidate_category_code: listItem.candidate_category_code,
       match_status: listItem.match_status,
+      review_state: listItem.review_state,
+      state_revision: listItem.state_revision,
+      last_client_operation_id: listItem.last_client_operation_id,
+      video_is_excluded: listItem.video_is_excluded,
+      undo: listItem.undo,
       confidence_score: listItem.confidence_score,
       is_domestic: listItem.is_domestic,
       speaker_note: null,
@@ -2558,7 +3317,7 @@ function reviewCandidateDetailFixture(
     },
     source_run: null,
     provider_evidence: null,
-    sibling_candidates: [],
+    sibling_candidates: siblingCandidates,
   };
 }
 

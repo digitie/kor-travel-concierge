@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  deleteCandidate,
   groupThemeItems,
   listRunQueue,
   listUnmatchedCandidatesPage,
+  reopenCandidate,
+  resolveCandidate,
   restartRun,
   RUN_HISTORY_REFETCH_INTERVAL_MS,
   RUN_QUEUE_OBSERVER_OPTIONS,
@@ -97,6 +100,158 @@ describe("listUnmatchedCandidatesPage", () => {
       "/api/v1/destinations/unmatched?limit=10&cursor=cursor-1&newer_than_id=7&channel_id=channel-1&playlist_id=playlist-1&keyword=%EC%A0%9C%EC%A3%BC+%EC%97%AC%ED%96%89&q=%EC%84%B1%EC%82%B0%EC%9D%BC%EC%B6%9C%EB%B4%89&sort=oldest&is_domestic=false&status=needs_review&reason=name_mismatch&source_kind=transcript&grounding=unverified",
       expect.objectContaining({
         headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+
+  it("복구 목록 status=removed를 서버 query로 직렬화한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [],
+          next_cursor: null,
+          has_more: false,
+          total: 0,
+          newest_id: null,
+          newer_than: 0,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listUnmatchedCandidatesPage({ status: "removed" }, { limit: 300 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched?limit=300&status=removed",
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+});
+
+describe("검수 후보 상태 전이 API", () => {
+  it("resolve에 필수 state revision을 snake_case로 보낸다", async () => {
+    const clientOperationId = "11111111-1111-4111-8111-111111111111";
+    const responseBody = {
+      status: "resolved",
+      client_operation_id: clientOperationId,
+      candidate: {
+        id: 42,
+        video_id: "video-42",
+        ai_place_name: "후보 42",
+        match_status: "ignored",
+        review_state: "ignored",
+        state_revision: 8,
+        last_client_operation_id: clientOperationId,
+        video_is_excluded: false,
+        undo: { candidate_id: 42, token: "opaque-undo-42" },
+        matched_place_id: null,
+        feature_export_status: "rejected",
+      },
+      place: null,
+      mapping_id: null,
+      undo: { candidate_id: 42, token: "opaque-undo-42" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await resolveCandidate(42, {
+      action: "ignore",
+      expectedRevision: 7,
+      clientOperationId,
+      reviewNote: "검수 페이지 제외",
+    });
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched/42/resolve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "ignore",
+          expected_revision: 7,
+          client_operation_id: clientOperationId,
+          review_note: "검수 페이지 제외",
+        }),
+      }),
+    );
+  });
+
+  it("DELETE revision과 사유를 query로 보내고 서버 undo descriptor를 보존한다", async () => {
+    const clientOperationId = "22222222-2222-4222-8222-222222222222";
+    const responseBody = {
+      deleted: true,
+      id: 42,
+      client_operation_id: clientOperationId,
+      state_revision: 8,
+      review_state: "deleted",
+      undo: { candidate_id: 42, token: "opaque-delete-42" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await deleteCandidate(
+      42,
+      7,
+      clientOperationId,
+      " 검수 오류 ",
+    );
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/destinations/candidates/42?expected_revision=7&client_operation_id=${clientOperationId}&reason=%EA%B2%80%EC%88%98+%EC%98%A4%EB%A5%98`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("reopen은 descriptor candidate 경로에 opaque token만 전송한다", async () => {
+    const responseBody = {
+      status: "reopened",
+      reopened_from: "deleted",
+      candidate: {
+        id: 42,
+        video_id: "video-42",
+        ai_place_name: "후보 42",
+        match_status: "needs_review",
+        review_state: "needs_review",
+        state_revision: 9,
+        last_client_operation_id: null,
+        video_is_excluded: false,
+        matched_place_id: null,
+        feature_export_status: "pending",
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await reopenCandidate({
+      candidate_id: 42,
+      token: "opaque-delete-42",
+    });
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched/42/reopen",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ undo_token: "opaque-delete-42" }),
       }),
     );
   });

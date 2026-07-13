@@ -69,7 +69,7 @@ export function buildCreatePlaceResolution(
     resolution: "merge_existing" | "create_new";
     placeId?: number;
   },
-): ResolveCandidateInput {
+): Omit<ResolveCandidateInput, "expectedRevision" | "clientOperationId"> {
   return {
     action: "create_place",
     correctedName: form.name,

@@ -123,10 +123,14 @@ async def test_apply_geocoding_skips_ignore_reopen_aba_by_xmin(session_factory):
                 )
                 assert ignored.match_status == MatchStatus.IGNORED.value
 
-                reopened, reopened_from = await place_service.reopen_candidate(
-                    reviewer_session, candidate_id=candidate_id
+                undo_token = place_service.encode_candidate_undo_token(ignored)
+                reopen_result = await place_service.reopen_candidate(
+                    reviewer_session,
+                    candidate_id=candidate_id,
+                    undo_token=undo_token,
                 )
-                assert reopened_from == "ignored"
+                reopened = reopen_result.candidate
+                assert reopen_result.reopened_from == "ignored"
                 assert reopened.match_status == MatchStatus.NEEDS_REVIEW.value
                 await reviewer_session.commit()
 
@@ -247,18 +251,32 @@ async def test_concurrent_auto_matches_share_one_place(
 
     second_pid_ready = asyncio.Event()
     second_pid: int | None = None
+    lifecycle_call_count = 0
+    original_lifecycle_lock = place_service.acquire_place_lifecycle_lock
 
-    async def apply_one(candidate_id: int, *, capture_second_pid: bool = False):
-        nonlocal second_pid
+    async def capture_second_lifecycle_pid(session):
+        nonlocal lifecycle_call_count, second_pid
+        lifecycle_call_count += 1
+        if lifecycle_call_count == 2:
+            # lifecycle lock을 요청할 바로 그 transaction/connection의 PID다.
+            # 앞선 snapshot commit이나 pool 재할당과 무관하게 pg_locks 관측
+            # 대상이 실제 lock waiter와 일치한다.
+            second_pid = int(
+                (
+                    await session.execute(text("SELECT pg_backend_pid()"))
+                ).scalar_one()
+            )
+            second_pid_ready.set()
+        await original_lifecycle_lock(session)
+
+    monkeypatch.setattr(
+        place_service,
+        "acquire_place_lifecycle_lock",
+        capture_second_lifecycle_pid,
+    )
+
+    async def apply_one(candidate_id: int):
         async with session_factory() as worker_session:
-            if capture_second_pid:
-                second_pid = int(
-                    (
-                        await worker_session.execute(text("SELECT pg_backend_pid()"))
-                    ).scalar_one()
-                )
-                await worker_session.commit()
-                second_pid_ready.set()
             candidate = await worker_session.get(ExtractedPlaceCandidate, candidate_id)
             assert candidate is not None
             return await apply_geocode_to_current_candidate(
@@ -271,33 +289,41 @@ async def test_concurrent_auto_matches_share_one_place(
     second_task: asyncio.Task[TravelPlace | None] | None = None
     try:
         await asyncio.wait_for(first_candidate_locked.wait(), timeout=10)
-        second_task = asyncio.create_task(
-            apply_one(candidate_ids[1], capture_second_pid=True)
-        )
+        second_task = asyncio.create_task(apply_one(candidate_ids[1]))
         await asyncio.wait_for(second_pid_ready.wait(), timeout=10)
         assert second_pid is not None
 
         # 첫 worker는 lifecycle advisory -> candidate 순서로 잠금을 보유한다. 둘째는
         # candidate row가 서로 달라도 같은 lifecycle lock에서 기다려야 두 요청이 동시에
         # "근접 장소 없음"을 보고 중복 장소를 만들지 않는다.
-        second_is_waiting = False
+        second_waits_for_lifecycle = False
         async with session_factory() as monitor_session:
-            for _ in range(200):
-                wait_event_type = (
-                    await monitor_session.execute(
-                        text(
-                            "SELECT wait_event_type FROM pg_stat_activity "
-                            "WHERE pid = :pid"
-                        ),
-                        {"pid": second_pid},
-                    )
-                ).scalar_one_or_none()
+            wait_deadline = asyncio.get_running_loop().time() + 10
+            while asyncio.get_running_loop().time() < wait_deadline:
+                waits_for_lifecycle = bool(
+                    (
+                        await monitor_session.execute(
+                            text(
+                                "SELECT EXISTS ("
+                                "SELECT 1 FROM pg_locks "
+                                "WHERE pid = :pid AND locktype = 'advisory' "
+                                "AND granted = false AND classid::bigint = 0 "
+                                "AND objid::bigint = :lock_id AND objsubid = 1"
+                                ")"
+                            ),
+                            {
+                                "pid": second_pid,
+                                "lock_id": place_service.PLACE_LIFECYCLE_ADVISORY_LOCK_ID,
+                            },
+                        )
+                    ).scalar_one()
+                )
                 await monitor_session.commit()
-                if wait_event_type == "Lock":
-                    second_is_waiting = True
+                if waits_for_lifecycle:
+                    second_waits_for_lifecycle = True
                     break
-                await asyncio.sleep(0.01)
-        assert second_is_waiting is True
+                await asyncio.sleep(0.02)
+        assert second_waits_for_lifecycle is True
 
         resume_first.set()
         results = await asyncio.wait_for(

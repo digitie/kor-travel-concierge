@@ -14,7 +14,19 @@ from enum import Enum
 from typing import Any
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    FetchedValue,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ktc.models.base import Base, TimestampMixin
@@ -26,15 +38,67 @@ class DescriptionReviewStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class PlaceLifecycleOrigin(str, Enum):
+    """장소가 생성된 생명주기 경로.
+
+    후보를 확정하며 생성한 장소만 원본 후보를 추적한다. 직접 생성하거나 후보와 독립적으로
+    유지해야 하는 장소는 ``persistent``, 이 컬럼 도입 전 장소는 보수적으로
+    ``legacy_unknown``으로 구분한다.
+    """
+
+    CANDIDATE_CREATED = "candidate_created"
+    PERSISTENT = "persistent"
+    LEGACY_UNKNOWN = "legacy_unknown"
+
+
 class TravelPlace(TimestampMixin, Base):
     __tablename__ = "travel_places"
     __table_args__ = (
         Index("ix_travel_places_geom_gist", "geom", postgresql_using="gist"),
         Index("ix_travel_places_sigungu_code", "sigungu_code"),
         Index("ix_travel_places_legal_dong_code", "legal_dong_code"),
+        Index("ix_travel_places_origin_candidate_id", "origin_candidate_id"),
+        CheckConstraint(
+            "lifecycle_origin IN "
+            "('candidate_created', 'persistent', 'legacy_unknown')",
+            name="ck_travel_places_lifecycle_origin",
+        ),
+        CheckConstraint(
+            "(lifecycle_origin = 'candidate_created' "
+            "AND origin_candidate_id IS NOT NULL) OR "
+            "(lifecycle_origin IN ('persistent', 'legacy_unknown') "
+            "AND origin_candidate_id IS NULL)",
+            name="ck_travel_places_origin_candidate_consistency",
+        ),
+        CheckConstraint(
+            "state_revision > 0",
+            name="ck_travel_places_state_revision_positive",
+        ),
     )
 
     place_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lifecycle_origin: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=PlaceLifecycleOrigin.PERSISTENT.value,
+        server_default=PlaceLifecycleOrigin.PERSISTENT.value,
+    )
+    origin_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "extracted_place_candidates.id",
+            name="fk_travel_places_origin_candidate_id_epc",
+            ondelete="NO ACTION",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    state_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default="1",
+        server_onupdate=FetchedValue(),
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     gemini_enriched_description: Mapped[str | None] = mapped_column(Text, nullable=True)

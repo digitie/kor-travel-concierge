@@ -12,9 +12,11 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     Float,
     ForeignKey,
     Index,
@@ -67,6 +69,10 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
             "deleted_at IS NULL OR deletion_reason IS NOT NULL",
             name="ck_epc_deleted_requires_reason",
         ),
+        CheckConstraint(
+            "state_revision > 0",
+            name="ck_epc_state_revision_positive",
+        ),
         # 검수 큐 access path는 항상 `deleted_at IS NULL`을 포함하므로(T-160)
         # T-154의 복합 인덱스 3종을 같은 이름의 partial index로 대체한다.
         Index(
@@ -100,6 +106,13 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default="1",
+        server_onupdate=FetchedValue(),
+    )
     video_id: Mapped[str] = mapped_column(
         ForeignKey("youtube_videos.video_id", ondelete="NO ACTION"),
         nullable=False,

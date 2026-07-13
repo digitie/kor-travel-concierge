@@ -6,13 +6,14 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from ktc.core.database import async_session_factory, init_db
 from ktc.models import (
     AuditLog,
     CrawlRun,
     ExtractedPlaceCandidate,
+    FeatureExport,
     MatchStatus,
     MediaAsset,
     PublicApiKey,
@@ -30,12 +31,20 @@ from ktc.models import (
 async def main() -> None:
     await init_db()
     async with async_session_factory() as session:
+        # 후보 생성 장소는 `travel_places.origin_candidate_id -> candidate`를,
+        # 확정 후보는 `candidate.matched_place_id -> travel_place`를 동시에 가질 수
+        # 있다(T-184). FK 양방향을 먼저 끊지 않고 후보부터 지우면 다음 E2E seed가
+        # provenance FK에서 실패한다. 참조 행/링크를 해제한 뒤 place→candidate 순으로
+        # 정리해 매 테스트가 같은 빈 snapshot에서 시작하게 한다.
+        for model in (VideoPlaceMapping, MediaAsset, FeatureExport, PublicApiKey):
+            await session.execute(delete(model))
+        await session.execute(
+            update(ExtractedPlaceCandidate).values(matched_place_id=None)
+        )
+        await session.execute(delete(TravelPlace))
+        await session.execute(delete(ExtractedPlaceCandidate))
+
         for model in (
-            VideoPlaceMapping,
-            ExtractedPlaceCandidate,
-            MediaAsset,
-            PublicApiKey,
-            TravelPlace,
             YoutubeVideo,
             YoutubeChannel,
             CrawlRun,

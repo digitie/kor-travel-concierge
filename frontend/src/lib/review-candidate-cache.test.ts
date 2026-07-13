@@ -15,6 +15,8 @@ import {
   candidateActionFailureDecision,
   candidateFailureSelectionDecision,
   getCandidateFromReviewPageCache,
+  prepareCandidateReopenCaches,
+  reconcileCandidateReopenCaches,
   reconcileProcessedCandidateCaches,
   revalidateCandidateActionFailure,
   removeCandidatesFromReviewPageCaches,
@@ -34,6 +36,11 @@ function candidate(id: number): UnmatchedCandidate {
     candidate_category: null,
     candidate_category_code: null,
     match_status: "needs_review",
+    review_state: "needs_review",
+    state_revision: id + 10,
+    last_client_operation_id: null,
+    video_is_excluded: false,
+    undo: null,
     confidence_score: null,
     source_kind: "transcript",
     grounding_status: "unverified",
@@ -47,8 +54,13 @@ function candidate(id: number): UnmatchedCandidate {
 function detail(
   id: number,
   matchStatus = "needs_review",
+  reviewState = matchStatus === "ignored" ? "ignored" : "needs_review",
 ): CandidateDetail {
-  const listItem = { ...candidate(id), match_status: matchStatus };
+  const listItem = {
+    ...candidate(id),
+    match_status: matchStatus,
+    review_state: reviewState as CandidateDetail["list_item"]["review_state"],
+  };
   return {
     list_item: listItem,
     candidate: {
@@ -61,6 +73,11 @@ function detail(
       candidate_category: listItem.candidate_category,
       candidate_category_code: listItem.candidate_category_code,
       match_status: matchStatus,
+      review_state: listItem.review_state,
+      state_revision: listItem.state_revision,
+      last_client_operation_id: listItem.last_client_operation_id,
+      video_is_excluded: listItem.video_is_excluded,
+      undo: listItem.undo,
       confidence_score: listItem.confidence_score,
       grounding_status: listItem.grounding_status,
       is_domestic: listItem.is_domestic,
@@ -570,6 +587,213 @@ describe("검수 후보 cache 일관성", () => {
       "keep",
     );
     expect(queryClient.getQueryData(detailKey)).toEqual(detail(9));
+  });
+
+  it("reopen 전 page·probe·detail 요청을 모두 취소하고 모든 scope에서 후보를 제거한다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const pageKey = ["unmatched-candidates", "pages", "removed-scope"];
+    const otherPageKey = ["unmatched-candidates", "pages", "other-scope"];
+    const newerKey = ["unmatched-candidates", "newer", "removed-scope", 2];
+    const detailKey = ["candidate-detail", 1];
+    queryClient.setQueryData(pageKey, data([1, 2], 2));
+    queryClient.setQueryData(otherPageKey, data([1, 3], 2));
+    queryClient.setQueryData(newerKey, data([1], 1));
+    queryClient.setQueryData(detailKey, detail(1, "ignored"));
+    const aborted: string[] = [];
+    const startPending = (queryKey: unknown[], label: string) =>
+      queryClient
+        .fetchQuery({
+          queryKey,
+          staleTime: 0,
+          queryFn: ({ signal }) =>
+            new Promise<never>((_resolve, reject) => {
+              signal.addEventListener("abort", () => {
+                aborted.push(label);
+                reject(new Error(`${label} 취소`));
+              });
+            }),
+        })
+        .catch(() => undefined);
+    const pending = [
+      startPending(pageKey, "page"),
+      startPending(newerKey, "probe"),
+      startPending(detailKey, "detail"),
+    ];
+    await Promise.resolve();
+
+    const result = await prepareCandidateReopenCaches(queryClient, 1);
+    await Promise.all(pending);
+
+    expect(result.cancelledQueryCount).toBe(3);
+    expect(aborted.sort()).toEqual(["detail", "page", "probe"]);
+    expect(
+      queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        pageKey,
+      )?.pages[0].items.map((item) => item.id),
+    ).toEqual([2]);
+    expect(
+      queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        otherPageKey,
+      )?.pages[0].items.map((item) => item.id),
+    ).toEqual([3]);
+    expect(queryClient.getQueryState(pageKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherPageKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(newerKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
+  });
+
+  it("reopen 뒤 active infinite snapshot과 상세를 exact 재조회하고 needs_review만 재선택 허용한다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const pageKey = ["unmatched-candidates", "pages", "active-scope"];
+    let serverIds = [1, 2];
+    let pageFetchCount = 0;
+    await queryClient.fetchInfiniteQuery({
+      queryKey: pageKey,
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+      queryFn: async () => {
+        pageFetchCount += 1;
+        return data(serverIds, serverIds.length).pages[0];
+      },
+    });
+    await prepareCandidateReopenCaches(queryClient, 1);
+    serverIds = [1, 2, 3];
+    const fetchCandidateDetail = vi.fn(async () => detail(1));
+
+    const result = await reconcileCandidateReopenCaches(queryClient, {
+      candidateId: 1,
+      activePageKey: pageKey,
+      fetchCandidateDetail,
+    });
+
+    expect(pageFetchCount).toBeGreaterThanOrEqual(2);
+    expect(result).toMatchObject({
+      canReselect: true,
+      activePageRefreshed: true,
+      refreshFailed: false,
+      detail: { status: "success" },
+    });
+    expect(fetchCandidateDetail).toHaveBeenCalledTimes(1);
+    expect(fetchCandidateDetail).toHaveBeenCalledWith(1);
+    expect(
+      queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        pageKey,
+      )?.pages[0].items.map((item) => item.id),
+    ).toEqual([1, 2, 3]);
+    expect(queryClient.getQueryData(["candidate-detail", 1])).toEqual(detail(1));
+  });
+
+  it("비활성 observer의 retained page도 reopen 뒤 저장된 queryFn으로 exact 재조회한다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const pageKey = ["unmatched-candidates", "pages", "disabled-scope"];
+    let serverIds = [1, 2];
+    let pageFetchCount = 0;
+    const queryFn = async () => {
+      pageFetchCount += 1;
+      return data(serverIds, serverIds.length).pages[0];
+    };
+    await queryClient.fetchInfiniteQuery({
+      queryKey: pageKey,
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+      queryFn,
+    });
+    const observer = new InfiniteQueryObserver(queryClient, {
+      queryKey: pageKey,
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+      queryFn,
+      enabled: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await prepareCandidateReopenCaches(queryClient, 1);
+    serverIds = [1, 2, 3];
+
+    const result = await reconcileCandidateReopenCaches(queryClient, {
+      candidateId: 1,
+      activePageKey: pageKey,
+      fetchCandidateDetail: async () => detail(1),
+    });
+    unsubscribe();
+
+    expect(pageFetchCount).toBeGreaterThanOrEqual(2);
+    expect(result.activePageRefreshed).toBe(true);
+    expect(result.refreshFailed).toBe(false);
+    expect(
+      queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        pageKey,
+      )?.pages[0].items.map((item) => item.id),
+    ).toEqual([1, 2, 3]);
+  });
+
+  it("active page query가 사라진 전환 순간은 상세 성공과 별개로 refresh 실패를 알린다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    const result = await reconcileCandidateReopenCaches(queryClient, {
+      candidateId: 1,
+      activePageKey: ["unmatched-candidates", "pages", "missing-scope"],
+      fetchCandidateDetail: async () => detail(1),
+    });
+
+    expect(result.canReselect).toBe(true);
+    expect(result.activePageRefreshed).toBe(false);
+    expect(result.refreshFailed).toBe(true);
+  });
+
+  it("exact 상세가 여전히 ignored이면 UI 재선택을 허용하지 않는다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    const result = await reconcileCandidateReopenCaches(queryClient, {
+      candidateId: 7,
+      fetchCandidateDetail: async () => detail(7, "ignored", "ignored"),
+    });
+
+    expect(result.detail.status).toBe("success");
+    expect(result.canReselect).toBe(false);
+    expect(result.refreshFailed).toBe(false);
+  });
+
+  it("reopen commit 전 다시 시작된 상세 요청에도 합류하지 않고 authoritative 상세를 새로 읽는다", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const detailKey = ["candidate-detail", 8];
+    let staleRequestAborted = false;
+    const staleRequest = queryClient
+      .fetchQuery({
+        queryKey: detailKey,
+        queryFn: ({ signal }) =>
+          new Promise<CandidateDetail>((_resolve, reject) => {
+            signal.addEventListener("abort", () => {
+              staleRequestAborted = true;
+              reject(new Error("commit 전 상세 요청 취소"));
+            });
+          }),
+      })
+      .catch(() => undefined);
+    await Promise.resolve();
+    const fetchCandidateDetail = vi.fn(async () => detail(8));
+
+    const result = await reconcileCandidateReopenCaches(queryClient, {
+      candidateId: 8,
+      fetchCandidateDetail,
+    });
+    await staleRequest;
+
+    expect(staleRequestAborted).toBe(true);
+    expect(fetchCandidateDetail).toHaveBeenCalledTimes(1);
+    expect(result.detail.status).toBe("success");
+    expect(result.canReselect).toBe(true);
   });
 
   it("cursor 누락·반복과 terminal total 누락을 pagination 계약 오류로 막는다", () => {
