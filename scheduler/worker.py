@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -43,6 +44,7 @@ from ktc.models import (
     YoutubePlaylistVideo,
     YoutubeVideo,
     YoutubeVideoAnalysisRun,
+    utcnow,
 )
 from ktc.services import (
     crawl_run_service,
@@ -191,21 +193,53 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
                 progress=progress,
             )
 
+        # durable 단계 이벤트(T-162): harvest는 검색(harvest_search)/적재(harvest_ingest)
+        # 2단계가 순차라, 마지막 경계 이후 경과를 monotonic으로 실측해 단계 소요로
+        # 기록한다. run_harvest는 성공 경계만 발행하고, 실패 귀속(어느 단계에서
+        # 죽었는지)은 아래 except에서 발행된 경계 집합으로 판정한다.
+        stage_clock: dict[str, Any] = {"last": time.monotonic(), "wall": utcnow()}
+        emitted_stages: set[str] = set()
+
+        async def report_stage(stage: str, *, outcome: str, detail: str | None = None) -> None:
+            now_mono = time.monotonic()
+            elapsed_ms = int((now_mono - stage_clock["last"]) * 1000)
+            emitted_stages.add(stage)
+            await crawl_run_service.record_stage_event(
+                session,
+                run.id,
+                stage=stage,
+                outcome=outcome,
+                started_at=stage_clock["wall"],
+                elapsed_ms=elapsed_ms,
+                detail=detail,
+            )
+            stage_clock["last"] = now_mono
+            stage_clock["wall"] = utcnow()
+
         await report_status("수집 작업 입력값을 검증했습니다.", 0.12)
-        harvest_summary = await run_harvest(
-            session,
-            client,
-            seed_keyword=str(query) if query else None,
-            channel_id=str(channel_id) if channel_id else None,
-            playlist_id=str(playlist_id) if playlist_id else None,
-            direct_video_ids=direct_video_ids,
-            max_videos=_max_videos_from_payload(payload),
-            content_filter=str(payload.get("content_filter") or "both"),
-            shorts_max_seconds=settings.SHORTS_MAX_DURATION_SECONDS,
-            # 강제 재실행(force)이면 증분 워터마크를 무시하고 처음부터 다시 수집한다.
-            ignore_watermark=bool(payload.get("force")),
-            status_reporter=report_status,
-        )
+        try:
+            harvest_summary = await run_harvest(
+                session,
+                client,
+                seed_keyword=str(query) if query else None,
+                channel_id=str(channel_id) if channel_id else None,
+                playlist_id=str(playlist_id) if playlist_id else None,
+                direct_video_ids=direct_video_ids,
+                max_videos=_max_videos_from_payload(payload),
+                content_filter=str(payload.get("content_filter") or "both"),
+                shorts_max_seconds=settings.SHORTS_MAX_DURATION_SECONDS,
+                # 강제 재실행(force)이면 증분 워터마크를 무시하고 처음부터 다시 수집한다.
+                ignore_watermark=bool(payload.get("force")),
+                status_reporter=report_status,
+                stage_reporter=report_stage,
+            )
+        except Exception as exc:
+            # harvest_search 경계 이전 실패면 검색 단계, 이후면 적재 단계 실패다.
+            failed_stage = (
+                "harvest_ingest" if "harvest_search" in emitted_stages else "harvest_search"
+            )
+            await report_stage(failed_stage, outcome="failure", detail=str(exc))
+            raise
         if payload.get("skip_transcript"):
             collected = harvest_summary.get("video_ids") or []
             await report_status(
@@ -348,6 +382,9 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         runtime=runtime,
         transcript_fetcher=postprocess_service._default_transcript_fetcher,
         status_reporter=report_status,
+        # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
+        # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.
+        stage_reporter=crawl_run_service.make_stage_reporter(session, run.id),
         start_stage=start_stage,
         default_category_code=default_category_code,
     )

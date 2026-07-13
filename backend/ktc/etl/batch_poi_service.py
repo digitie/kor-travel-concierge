@@ -9,6 +9,7 @@ AI가 마스터 코드표에서 고른 8자리 코드를 그대로 후보 eviden
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -38,6 +39,11 @@ from ktc.models import (
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 TranscriptFetcher = Callable[[str], Awaitable["TranscriptResult | None"]]
+# durable 단계 이벤트 콜백(T-162, crawl_run_service.StageReporter 계약과 동일):
+# (stage, *, outcome, provider=None, attempt=None, item_ref=None,
+#  elapsed_ms=None, detail=None). 주입형으로 두어 ETL 계층이 crawl_run에
+# 직접 의존하지 않게 한다(테스트 가능성 포함).
+StageReporter = Callable[..., Awaitable[None]]
 
 # 단일 영상 자막이 분당 토큰 한도(TPM)를 넘지 않도록 LLM 입력에 적용하는 문자 상한.
 # 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
@@ -47,6 +53,35 @@ _MAX_TRANSCRIPT_CHARS = 350_000
 async def _report(reporter: StatusReporter | None, message: str, progress: float | None = None) -> None:
     if reporter is not None:
         await reporter(message, progress)
+
+
+async def _report_stage(
+    reporter: StageReporter | None,
+    stage: str,
+    *,
+    outcome: str,
+    started: float | None = None,
+    provider: str | None = None,
+    attempt: int | None = None,
+    item_ref: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """단계 이벤트를 best-effort로 보고한다. `started`는 `time.monotonic()` 시각이며
+    elapsed_ms를 monotonic 실측으로 계산한다(§7 지표·T-172 게이트의 정확성 요건)."""
+    if reporter is None:
+        return
+    elapsed_ms = (
+        int((time.monotonic() - started) * 1000) if started is not None else None
+    )
+    await reporter(
+        stage,
+        outcome=outcome,
+        provider=provider,
+        attempt=attempt,
+        item_ref=item_ref,
+        elapsed_ms=elapsed_ms,
+        detail=detail,
+    )
 
 
 async def _source_playlist_id_for_video(session: AsyncSession, video_id: str) -> str | None:
@@ -67,6 +102,7 @@ async def process_video_batch(
     runtime: llm_client.LlmRuntime,
     transcript_fetcher: TranscriptFetcher,
     status_reporter: StatusReporter | None = None,
+    stage_reporter: StageReporter | None = None,
     start_stage: str = "transcript",
     default_category_code: str | None = None,
 ) -> dict[str, Any]:
@@ -111,6 +147,14 @@ async def process_video_batch(
                     status_reporter,
                     f"{label} 저장된 교정본으로 POI만 다시 추출합니다.",
                 )
+                for skipped_stage in ("transcript_fetch", "correction"):
+                    await _report_stage(
+                        stage_reporter,
+                        skipped_stage,
+                        outcome="skipped",
+                        item_ref=video.video_id,
+                        detail="저장된 교정본 재사용(fetch·교정 생략)",
+                    )
 
         # 교정본이 없으면(또는 transcript/correction 단계면) 원본 자막을 확보해 교정한다.
         if corrected is None:
@@ -129,14 +173,50 @@ async def process_video_batch(
                     await _report(
                         status_reporter, f"{label} 저장된 자막으로 교정부터 다시 합니다."
                     )
+                    await _report_stage(
+                        stage_reporter,
+                        "transcript_fetch",
+                        outcome="skipped",
+                        item_ref=video.video_id,
+                        detail="저장된 원본 자막 재사용(fetch 생략)",
+                    )
             # 자막부터 또는 저장된 자막이 없으면: YouTube에서 새로 가져온다.
             if raw_text is None:
-                transcript = await transcript_fetcher(video.video_id)
+                fetch_started = time.monotonic()
+                try:
+                    transcript = await transcript_fetcher(video.video_id)
+                except Exception as exc:
+                    await _report_stage(
+                        stage_reporter,
+                        "transcript_fetch",
+                        outcome="failure",
+                        started=fetch_started,
+                        item_ref=video.video_id,
+                        detail=str(exc),
+                    )
+                    raise
                 if transcript is None or not transcript.segments:
+                    await _report_stage(
+                        stage_reporter,
+                        "transcript_fetch",
+                        outcome="failure",
+                        started=fetch_started,
+                        item_ref=video.video_id,
+                        detail="자막을 찾지 못함(모든 provider 실패)",
+                    )
                     video.crawl_status = CrawlStatus.FAILED
                     summary["failed_videos"] += 1
                     await _report(status_reporter, f"{label}의 자막을 찾지 못해 건너뜁니다.")
                     continue
+                await _report_stage(
+                    stage_reporter,
+                    "transcript_fetch",
+                    outcome="success",
+                    started=fetch_started,
+                    provider=transcript.source,
+                    item_ref=video.video_id,
+                    detail=f"segments={len(transcript.segments)}",
+                )
                 raw_text = transcript.to_timestamped_text()
                 transcript_source = transcript.source
                 raw_asset = await media_store.store_and_record(
@@ -151,6 +231,7 @@ async def process_video_batch(
                 raw_asset_id = raw_asset.id
             await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
             correction_timeout = get_settings().LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS
+            correction_started = time.monotonic()
             try:
                 corrected = await asyncio.wait_for(
                     transcript_correction.correct_transcript(
@@ -161,16 +242,42 @@ async def process_video_batch(
                     timeout=correction_timeout,
                 )
                 summary["corrected_videos"] += 1
+                await _report_stage(
+                    stage_reporter,
+                    "correction",
+                    outcome="success",
+                    started=correction_started,
+                    provider=runtime.model,
+                    item_ref=video.video_id,
+                )
             except TimeoutError:
                 # 한 영상의 교정이 시간예산을 넘으면(긴 자막·느린 LLM) 단일 워커를 무한
                 # 점유하지 않도록 원본 자막으로 진행하고 다음 영상으로 넘어간다.
                 corrected = raw_text
+                await _report_stage(
+                    stage_reporter,
+                    "correction",
+                    outcome="failure",
+                    started=correction_started,
+                    provider=runtime.model,
+                    item_ref=video.video_id,
+                    detail=f"교정 시간 초과({correction_timeout}s) — 원본 자막으로 진행",
+                )
                 await _report(
                     status_reporter,
                     f"{label} 자막 교정 시간 초과({correction_timeout}s) — 원본으로 진행합니다.",
                 )
             except Exception as exc:  # 교정 실패는 best-effort: 원본 자막으로 진행
                 corrected = raw_text
+                await _report_stage(
+                    stage_reporter,
+                    "correction",
+                    outcome="failure",
+                    started=correction_started,
+                    provider=runtime.model,
+                    item_ref=video.video_id,
+                    detail=f"교정 실패 — 원본 자막으로 진행: {exc}",
+                )
                 await _report(status_reporter, f"{label} 자막 교정 실패({exc}) — 원본으로 진행합니다.")
             await media_store.store_and_record(
                 session,
@@ -215,15 +322,37 @@ async def process_video_batch(
     if current:
         sub_batches.append(current)
     pois = []
+    extract_started = time.monotonic()
+    sub_index = 0
     try:
-        for sub in sub_batches:
+        for sub_index, sub in enumerate(sub_batches, start=1):
             await _report(
                 status_reporter, f"동영상 {len(sub)}개를 묶어 POI를 추출 중입니다."
             )
-            pois.extend(await batch_poi.extract_batch(runtime, sub))
+            extract_started = time.monotonic()
+            extracted = await batch_poi.extract_batch(runtime, sub)
+            pois.extend(extracted)
+            await _report_stage(
+                stage_reporter,
+                "poi_extract",
+                outcome="success",
+                started=extract_started,
+                provider=runtime.model,
+                attempt=sub_index,
+                detail=f"videos={len(sub)}, pois={len(extracted)}",
+            )
     except gemini_rate_limiter.GeminiQuotaExceeded as exc:
         # 일일 쿼터 소진 → 하드 실패 대신 보류(교정본은 저장됨, 영상은 DISCOVERED 유지로
         # 다음 PT일/수동 재실행 시 재처리). 후보는 생성하지 않는다.
+        await _report_stage(
+            stage_reporter,
+            "poi_extract",
+            outcome="deferred",
+            started=extract_started,
+            provider=runtime.model,
+            attempt=sub_index,
+            detail=f"일일 쿼터 보류: {exc}",
+        )
         await _report(status_reporter, f"Gemini 일일 한도로 POI 추출을 보류합니다: {exc}")
         summary["quota_deferred"] = True
         return summary
@@ -232,11 +361,40 @@ async def process_video_batch(
         # 그 외 LLM 오류는 실제 실패로 전파한다.
         message = str(exc)
         if exc.status_code == 429 or "429" in message or "quota" in message.lower():
+            await _report_stage(
+                stage_reporter,
+                "poi_extract",
+                outcome="deferred",
+                started=extract_started,
+                provider=runtime.model,
+                attempt=sub_index,
+                detail=f"쿼터(429) 보류: {exc}",
+            )
             await _report(
                 status_reporter, f"Gemini 쿼터(429)로 POI 추출을 보류합니다: {exc}"
             )
             summary["quota_deferred"] = True
             return summary
+        await _report_stage(
+            stage_reporter,
+            "poi_extract",
+            outcome="failure",
+            started=extract_started,
+            provider=runtime.model,
+            attempt=sub_index,
+            detail=message,
+        )
+        raise
+    except Exception as exc:
+        await _report_stage(
+            stage_reporter,
+            "poi_extract",
+            outcome="failure",
+            started=extract_started,
+            provider=runtime.model,
+            attempt=sub_index,
+            detail=str(exc),
+        )
         raise
 
     # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 장소명) 중복은 건너뛴다(멱등성:
@@ -334,8 +492,30 @@ async def process_video_batch(
     if geocode_targets:
         from ktc.etl import postprocess_service  # 지연 import(순환 회피)
 
-        geo = await postprocess_service.geocode_candidates(
-            session, geocode_targets, status_reporter=status_reporter
+        geocode_started = time.monotonic()
+        try:
+            geo = await postprocess_service.geocode_candidates(
+                session, geocode_targets, status_reporter=status_reporter
+            )
+        except Exception as exc:
+            await _report_stage(
+                stage_reporter,
+                "geocode",
+                outcome="failure",
+                started=geocode_started,
+                detail=str(exc),
+            )
+            raise
+        await _report_stage(
+            stage_reporter,
+            "geocode",
+            outcome="success",
+            started=geocode_started,
+            detail=(
+                f"candidates={len(geocode_targets)}, "
+                f"matched={geo.get('matched_places', 0)}, "
+                f"needs_review={geo.get('needs_review_candidates', 0)}"
+            ),
         )
         summary["matched_places"] = geo.get("matched_places", 0)
         summary["needs_review_candidates"] = geo.get("needs_review_candidates", 0)

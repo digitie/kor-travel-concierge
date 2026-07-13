@@ -22,6 +22,10 @@ from ktc.etl.keyword_expansion import (
 from ktc.etl.youtube_client import YouTubeClient
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
+# durable 단계 이벤트 콜백(T-162). run_harvest는 단계 경계에서 성공 이벤트만 발행하고,
+# elapsed 계산·실패 귀속(어느 단계에서 죽었는지)은 주입한 호출자(worker handler)가
+# 담당한다 — 호출 계약: (stage, *, outcome, detail=None).
+StageReporter = Callable[..., Awaitable[None]]
 
 
 async def _report(
@@ -340,6 +344,7 @@ async def run_harvest(
     now: datetime | None = None,
     generator: KeywordGenerator | None = None,
     status_reporter: StatusReporter | None = None,
+    stage_reporter: StageReporter | None = None,
 ) -> dict[str, Any]:
     """키워드·채널·재생목록 기준 수집을 실행하고 요약을 반환한다.
 
@@ -536,6 +541,13 @@ async def run_harvest(
     else:
         await _report(status_reporter, "YouTube에서 처리할 새 동영상을 찾지 못했습니다.", 0.72)
 
+    # 검색 단계(수집·상세조회·필터·랭킹) 종료 경계 — durable 단계 이벤트(T-162).
+    if stage_reporter is not None:
+        await stage_reporter(
+            "harvest_search",
+            outcome="success",
+            detail=f"video_candidates={len(candidates)}, quota_used={client.quota_used}",
+        )
     await _report(
         status_reporter,
         f"동영상 후보 {len(candidates)}개를 데이터베이스에 저장 중입니다.",
@@ -554,6 +566,13 @@ async def run_harvest(
             target_type=target_type,
             source_value=target_id,
             crawled_at=now,
+        )
+    # 적재 단계(ingest + watermark) 종료 경계 — durable 단계 이벤트(T-162).
+    if stage_reporter is not None:
+        await stage_reporter(
+            "harvest_ingest",
+            outcome="success",
+            detail=f"inserted={summary['inserted']}, updated={summary['updated']}",
         )
     await _report(
         status_reporter,
