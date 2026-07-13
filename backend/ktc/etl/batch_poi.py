@@ -39,6 +39,11 @@ _SYSTEM_TEMPLATE = (
     "각 장소가 대한민국(한국) 안에 있으면 is_domestic을 true로, 해외(국외)면 false로 "
     "설정하라. 이 서비스는 국내 여행지만 다루므로 해외 장소는 검수용으로만 남는다. "
     "국내인지 해외인지 확실하지 않으면 true로 둔다.\n\n"
+    "각 장소마다 그 장소가 언급된 자막 문장을 evidence_quote에 **원문 그대로** 인용하라. "
+    "자막에 실제로 등장한 연속된 문자열을 20자 이상 그대로 복사해야 하며, 요약·의역·"
+    "창작·오타 수정을 하지 마라(원문 대조로 근거를 기계 검증한다). 적절한 인용을 찾지 "
+    "못하면 evidence_quote를 빈 문자열로 두어라(억지로 만들지 마라). confidence에는 "
+    "추출 확신도를 0~1 사이 숫자로 적어라(참고용이며 자동 확정 판단에는 쓰지 않는다).\n\n"
     "### [카테고리 마스터 테이블] (코드<TAB>분류 경로)\n{catalog}\n"
 )
 
@@ -60,6 +65,11 @@ BATCH_RESPONSE_SCHEMA: dict = {
                     "timestamp_end": {"type": "string"},
                     "speaker_note": {"type": "string"},
                     "is_domestic": {"type": "boolean"},
+                    # 해당 장소가 언급된 자막 원문 인용(원문 그대로, 최소 20자). raw
+                    # timestamp segment 대조로 grounding을 기계 검증한다(T-165, B3).
+                    "evidence_quote": {"type": "string"},
+                    # LLM 자가 보고 확신도(0~1). 기록·표시만 하고 게이트에는 쓰지 않는다.
+                    "confidence": {"type": "number"},
                 },
                 "required": ["video_id", "official_name"],
             },
@@ -79,6 +89,10 @@ class BatchExtractedPOI(BaseModel):
     speaker_note: str | None = None
     # 국내 여부(LLM 판정). None=미판정, True=대한민국, False=해외.
     is_domestic: bool | None = None
+    # 장소가 언급된 자막 원문 인용(raw segment grounding 대조 원천, T-165).
+    evidence_quote: str | None = None
+    # LLM 자가 보고 확신도(0~1). 기록·표시 전용 — 어떤 자동확정 게이트에도 쓰지 않는다.
+    confidence: float | None = None
 
 
 class BatchPOIResult(BaseModel):
