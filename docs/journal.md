@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-07-14: T-172·T-173 게이트 착수 계획서 작성 (구현 아님)
+
+- **배경**: Agent A 구현 트랙(T-158~T-171) 완료 후 남은 T-172(자막 fetch 병렬화)·T-173(프레임 비전/
+  OCR)은 `[게이트]` 태스크로, 실측·정책 승인 없이 착수하면 로드맵의 게이트 규율(필수 절차)을 어긴다.
+  게이트가 열리는 즉시 다른 에이전트가 그대로 실행할 수 있는 **실행 계획서 + 게이트 판정 SQL**을 미리
+  작성했다(구현 코드는 아직 없음).
+- **산출물**: `docs/plan-t172-transcript-parallelization.md`, `docs/plan-t173-vision-ocr.md`. 각 문서는
+  게이트 판정 기준·**실행 가능한 SQL**(부록 A), 범위·파일 소유(Agent A), 코드 앵커 기반 단계별 구현,
+  테스트, 위험·금지·적대적 리뷰 포커스, 2렌즈 검증 반영(부록 B)을 담는다.
+- **게이트 판정 요약**: T-172 = 실운영 poi_batch에서 `transcript_fetch` 단계 합이 `poi_batch_total`
+  벽시계의 ≥30%(T-162 `crawl_run_stage_events` 집계, 표본 ≥20배치·2주+). T-173 = 2주 지표 "유효 원료
+  전무 영상 비율" >20% ∧ B4(PR-29 provider 정책) 승인 ∧ T-158·T-161 선행(`transcript_attempts`·
+  `youtube_videos.transcript_source/failure_code`·후보 테이블 집계), 착수 시 Gemini URL 분석 승격안과
+  비용·품질 비교표를 journal에 기록.
+- **작성 방식**: 워크플로(draft 2 + verify 2, 실코드 대조)로 계획을 코드 앵커에 근거해 작성·검증.
+  검증 정정 반영 — T-172(partial): 재배선이 깨는 테스트(`test_transcript_attempts.py`·`test_whisper_
+  force.py`) 범위 추가, `_whisper_forced_transcript_fetcher` 개명 여부 확정, whisper 단일-provider 체인
+  표현 정정. T-173(accurate): route 핸들러 `list_unmatched_candidates` 명명 정정, **VISUAL 후보는
+  `grounding_status=not_applicable`**(transcript grounding 오판 방지), **DeepSeek 엔진에서 `generate_
+  multimodal` ValueError → 엔진 가드로 no-op**(안전).
+- **미구현·게이트 유지**: 두 태스크는 게이트 판정 전까지 착수하지 않는다. 이 항목은 계획 산출물 기록일
+  뿐 T-172/T-173 완료가 아니다.
 ## 2026-07-14: T-188 — /destinations SQL 푸시다운 (S5, G8)
 
 - **문제**: `/destinations` 목록 `list_place_summaries`가 확정 장소·mention을 Python으로 **전량** 로드·
