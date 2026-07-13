@@ -347,8 +347,11 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 #### PR-33. 소비자 read key 회전 rollout `[보안 P0 운영]` `[S]` — T-176
 
+- **완료(2026-07-13)**: DB read key를 Map Dagster·daemon에만 주입하고 Map API에서는 제거했다.
+  n150에서 snapshot/changes 각각 8페이지·1,416개 전체 순회와 실제 Dagster 가져오기 경로, read 공급 GET 200·
+  write/내부 GET 403, 구 정적 admin 401·신규 BFF/operator admin 200을 확인한 뒤 구 값을 제거했다.
 - **해결**: B5 완결(A1의 실질 해소). 선행: PR-01(T-175).
-- **절차**: DB read key 발급 → `kor-travel-map`(형제 저장소 — 과거 문서의 `python-krtour-map` 명칭 정정, `KOR_TRAVEL_MAP_KOR_TRAVEL_CONCIERGE_API_KEY` 사용) secret 교체 → snapshot/changes 다중 page smoke → read key로 write 403 확인 → 구 consumer static key를 `API_KEYS`에서 제거 → BFF/operator key와 consumer key 분리 확인. runbook에 rollback 창·제거 시점 기록(키 값은 문서·로그에 쓰지 않는다).
+- **절차**: DB read key 발급 → `kor-travel-map`(형제 저장소 — 과거 문서의 `python-krtour-map` 명칭 정정, `KOR_TRAVEL_MAP_KOR_TRAVEL_CONCIERGE_API_KEY` 사용) 인증 정보 교체 → snapshot/changes 다중 페이지 확인 → read key로 write 403 확인 → 구 consumer 정적 key를 `API_KEYS`에서 제거 → BFF/operator key와 consumer key 분리 확인. runbook에 되돌리기 가능 구간·제거 시점 기록(키 값은 문서·로그에 쓰지 않는다).
 - **완료 기준**: G2 마감.
 
 #### PR-34. durable stage events + restart lineage·attention `[관측 P0]` `[M]` — T-162
@@ -1062,9 +1065,9 @@ PR-01은 다음을 보강한다.
    원문의 테스트 기대를 이 경로에 적용하면 안 된다.
 5. route 문자열의 우연한 prefix에 권한이 붙지 않도록 read 공급 표면을 명시적 policy/dependency로
    등록하고 deny-by-default 테스트를 둔다.
-6. DB read key 발급→`kor-travel-map` secret 교체→snapshot/changes 다중 page smoke→
-   read key write 403→구 consumer static key 제거 순으로 배포한다.
-7. BFF/operator static key와 consumer key가 같으면 먼저 분리한다. rollback 창과 제거 시점을
+6. DB read key 발급→`kor-travel-map` 인증 정보 교체→snapshot/changes 다중 페이지 확인→
+   read key write 403→구 consumer 정적 key 제거 순으로 배포한다.
+7. BFF/operator 정적 key와 consumer key가 같으면 먼저 분리한다. 되돌리기 가능 구간과 제거 시점을
    runbook에 남기되 키 값은 문서·로그에 쓰지 않는다.
 
 #### B6. job lifecycle·LLM gateway·lane을 같은 순서 문제로 다룬다

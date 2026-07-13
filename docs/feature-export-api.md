@@ -5,9 +5,10 @@
 `GET /api/v1/features/changes`이며, 최초 consumer는 `kor-travel-map`의
 `kor-travel-concierge-youtube` provider다.
 
-> **전환 상태**: T-175는 DB read key 발급·검증 capability를 제공한다. production consumer의
-> 실제 read key 발급·secret 교체·구 static entry 제거와 다중 page smoke는 T-176에서 수행한다.
-> 그 전까지 기존 static consumer key가 admin 권한으로 남을 수 있으므로 보안 전환 완료로 보지 않는다.
+> **전환 상태**: T-175의 DB read key capability를 바탕으로 T-176에서 production consumer의
+> read key 발급·인증 정보 교체·구 정적 admin 항목 제거를 완료했다. n150에서 snapshot/changes
+> 각각 opaque cursor 2페이지 확인과 1,416개 전체 순회, 실제 Dagster 가져오기 결과, read 공급 GET 200·
+> write/내부 GET 403, 구 admin key 401을 검증했다. key 값은 어떤 추적 문서에도 기록하지 않는다.
 
 ## 기본 원칙
 

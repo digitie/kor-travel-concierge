@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-07-13: T-176 — 소비자 read key 회전 및 운영 권한 분리
+
+- **선행 migration 복구**: T-175와 T-160이 동시에 사용하던 Alembic revision `0016`을
+  scope `0016` → candidate soft delete `0017`의 단일 선형 graph로 복구하고 PR #182를 병합했다.
+  n150 prod write 서비스를 중지하고 장기 transaction이 없음을 확인한 뒤 유한 lock/statement
+  timeout으로 `0015→0017`을 적용했다. scope 컬럼·CHECK, soft delete 3컬럼·CHECK·partial index
+  3종, 현재 revision `0017`을 확인한 후 API·MCP·scheduler·UI를 재생성했다.
+- **consumer 최소 권한 전환**: 관리자 BFF로 DB `read` key를 발급하고, docker-manager를 비밀의
+  단일 원천으로 삼아 `kor-travel-map` Dagster·daemon에만 주입했다. Map API에는 이 인증 정보를
+  주입하지 않으며, 기존 값 제거를 보장하기 위해 컨테이너를 재생성해 환경에 남지 않음을 확인했다.
+  Map 소비자 계약·테스트는 `kor-travel-map` PR #664, 배선·runbook은 docker-manager PR #51에
+  반영했다.
+- **실데이터 검증**: snapshot/changes 각각 `limit=1`로 두 페이지의 opaque cursor 전진을 먼저
+  검증한 뒤 `limit=200`으로 8페이지·1,416개를 끝까지 순회했다. 실제 Dagster 가져오기 경로도 두
+  endpoint에서 각각 1,416개를 반환했다. export ID 중복이 없고 read key 공급 GET은 200,
+  장소 삭제와 설정 조회는 403임을 확인했다.
+- **구 정적 admin 인증 정보 폐기**: 새 BFF/operator admin 인증 정보와 구 인증 정보의
+  짧은 중첩 기간에 UI를 먼저 전환한 뒤 구 값을 allowlist에서 제거했다. 최종 검증은 구 key 401,
+  새 admin 설정 GET 200, admin key 관리 경로의 직접 접근 403, read key 공급 200·write 403이다.
+  UI 로그인 POST 200+`Set-Cookie`, session BFF 200, 틀린 비밀번호 401도 재확인했다. UI 재생성
+  직후 준비 시간 중 한 차례 503은 재시도 후 정상화됐으며 최종 최근 로그의 오류 패턴 검색은 0건이었다.
+- **보안 마감**: 평문 key는 임시 `0600` 파일로만 전달하고 출력·문서화하지 않았다. 전환용
+  백업, cookie, DB 복원 지점, 임시 key 파일을 성공 검증 뒤 제거했다. 실제 값·접속 정보가
+  없는 재현 절차는 각 저장소의 추적 문서에, 민감 운영 이력은 gitignore된 배포 runbook에 남겼다.
+
 ## 2026-07-13: T-176 선행 — Alembic 0016 revision 충돌 해소
 
 - **원인**: T-175 공개 API key scope와 뒤이어 병합된 T-160 candidate soft delete migration이
