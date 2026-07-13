@@ -91,6 +91,31 @@ def _apply_cached_transcript_cache(video: YoutubeVideo, raw_asset: Any) -> None:
 # 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
 _MAX_TRANSCRIPT_CHARS = 350_000
 
+# description 단독 후보(T-168) evidence에 남기는 원문 발췌 상한. 검수 참고용 근거이므로
+# 전체 설명을 복사해 evidence JSON을 부풀리지 않고 앞부분만 발췌한다.
+_DESCRIPTION_EVIDENCE_EXCERPT_CHARS = 4_000
+
+
+def _build_description_text(video: YoutubeVideo) -> str:
+    """영상 설명 단독 POI 추출에 투입할 텍스트(제목+설명 원문+태그)를 조립한다(T-168).
+
+    자막이 최종 실패했을 때만 쓰는 fallback 입력이다. **저장된 `description_raw`를 재활용**
+    하며 새로 YouTube API를 호출하지 않는다 — YouTube API metadata의 refresh/delete·30일
+    보존 규칙은 metadata 저장 계층(`youtube_videos`) 소관이고(T-158 `docs/provider-policy.md`
+    C-7), 이 파생 후보는 그 규칙의 대상이 아니다(파생 POI로 확대 금지).
+    """
+    parts: list[str] = []
+    if video.title:
+        parts.append(video.title.strip())
+    if video.description_raw:
+        parts.append(video.description_raw.strip())
+    tags = video.tags_json
+    if isinstance(tags, list) and tags:
+        tag_text = " ".join(str(tag).strip() for tag in tags if str(tag).strip())
+        if tag_text:
+            parts.append(tag_text)
+    return "\n".join(part for part in parts if part)
+
 
 async def _report(reporter: StatusReporter | None, message: str, progress: float | None = None) -> None:
     if reporter is not None:
@@ -276,11 +301,40 @@ async def process_video_batch(
                         item_ref=video.video_id,
                         detail=detail,
                     )
+                    # 자막 전 provider 최종 실패(T-164 판정). 영상을 폐기하는 대신 description
+                    # 단독 경로(T-168, recall)를 시도한다: 저장된 설명(제목·태그 포함)이 임계
+                    # 길이 이상이면 그 텍스트로 검수 전용 후보를 만든다(자동확정 금지). 이 경로는
+                    # 자막 최종 실패 fallback 전용이라 자막이 있으면(위 분기에서 진행) 타지 않는다.
+                    description_text = _build_description_text(video)
+                    min_length = get_settings().DESCRIPTION_POI_MIN_LENGTH
+                    if len(description_text) >= min_length:
+                        await _report(
+                            status_reporter,
+                            f"{label} 자막 최종 실패 — 영상 설명"
+                            f"({len(description_text)}자)으로 검수 전용 후보를 추출합니다. "
+                            f"자막 사유: {attempts_line or '없음'}.",
+                        )
+                        # description은 교정·자막 asset 저장을 거치지 않고(정제된 metadata라
+                        # 교정 불필요, 신규 취득 아님) 그대로 배치 POI 입력·grounding haystack이
+                        # 된다. source_kind=description으로 아래 후보 생성이 분기한다.
+                        batch[alias] = {
+                            "video": video,
+                            "transcript_source": "description",
+                            "asset_id": None,
+                            "corrected": description_text,
+                            "raw_text": description_text,
+                            "source_kind": EvidenceSourceKind.DESCRIPTION.value,
+                        }
+                        continue
+                    # description 미달: 기존대로 실패. 사유 코드 description_too_short를 남긴다
+                    # (T-164 관측 재사용 — transcript_failure_code는 실제 자막 실패 코드를 보존).
                     video.crawl_status = CrawlStatus.FAILED
                     summary["failed_videos"] += 1
                     await _report(
                         status_reporter,
-                        f"{label}의 자막을 찾지 못해 건너뜁니다. 사유: {attempts_line or '없음'}.",
+                        f"{label}의 자막을 찾지 못했고 설명도 짧아 건너뜁니다"
+                        f"(description_too_short: {len(description_text)}자<{min_length}자). "
+                        f"자막 사유: {attempts_line or '없음'}.",
                     )
                     continue
                 await _report_stage(
@@ -541,17 +595,62 @@ async def process_video_batch(
             or category_catalog.UNKNOWN_CATEGORY_CODE
         )
         category_label = category_catalog.label_for_or_unknown(category_code)
-        # raw 자막 대조 grounding(T-165, B3). 교정본이 아니라 원본 자막과 대조한다.
-        # 실패(unverified/missing) 후보도 폐기하지 않고 저신뢰로 마킹만 하며(사유 표시),
-        # verified_raw가 아니면 아래 지오코딩 자동확정·export가 차단된다.
+        # 원문 대조 grounding(T-165/T-168, B3). transcript 후보는 원본 자막, description
+        # 후보는 원문 설명(raw description)을 haystack으로 대조한다(grounding_indexes가
+        # 영상별 raw_text로 만들어졌으므로 source_kind에 맞는 원천이 자동 반영). 실패
+        # (unverified/missing) 후보도 폐기하지 않고 상태만 기록한다. transcript는 verified_raw가
+        # 아니면 지오코딩 자동확정·export가 차단되고, description은 grounding과 무관하게 늘
+        # 검수 전용이라(자동확정 금지) grounding_status는 관측용으로만 남는다.
         grounded = grounding.evaluate_transcript_grounding(
             poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
         )
+        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
+        # 근거(evidence) 공통 조각: 카테고리·타임스탬프·grounding. transcript/description이
+        # 같은 형태를 공유하고 producer별 출처 필드만 다르게 감싼다.
+        common_evidence = {
+            "timestamp_start": poi.timestamp_start,
+            "timestamp_end": poi.timestamp_end,
+            "speaker_note": poi.speaker_note,
+            "location_hint": poi.location_hint,
+            # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
+            "category_code": category_code,
+            "category_source": "llm"
+            if poi.category_code
+            else ("default" if normalized_default_category else "unknown"),
+            # raw grounding 근거. quote·판정·매칭 세그먼트 ref를 보존한다.
+            # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
+            "evidence_quote": grounded.evidence_quote,
+            "grounding_status": grounded.status.value,
+            "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
+            "matched_segment_index": grounded.matched_segment_index,
+            "matched_segment_start_seconds": grounded.matched_segment_start_seconds,
+            "llm_confidence": poi.confidence,
+        }
+        if source_kind == EvidenceSourceKind.DESCRIPTION.value:
+            # description 단독 후보(T-168): 원문 출처(발췌·영상 id)를 evidence에 남긴다.
+            provider_evidence: dict[str, Any] = {
+                "description": {
+                    "source": "youtube_description",
+                    "video_id": video.video_id,
+                    "excerpt": (item.get("raw_text") or "")[
+                        :_DESCRIPTION_EVIDENCE_EXCERPT_CHARS
+                    ],
+                    **common_evidence,
+                }
+            }
+        else:
+            provider_evidence = {
+                "transcript": {
+                    "source": item["transcript_source"],
+                    "asset_id": item["asset_id"],
+                    **common_evidence,
+                }
+            }
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
             source_channel_id=video.channel_id,
             source_playlist_id=playlist_id,
-            source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+            source_kind=source_kind,
             source_text=poi.speaker_note or poi.official_name,
             ai_place_name=poi.official_name,
             speaker_note=poi.speaker_note,
@@ -565,31 +664,7 @@ async def process_video_batch(
             review_note=(
                 "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
             ),
-            provider_evidence_json={
-                "transcript": {
-                    "source": item["transcript_source"],
-                    "asset_id": item["asset_id"],
-                    "timestamp_start": poi.timestamp_start,
-                    "timestamp_end": poi.timestamp_end,
-                    "speaker_note": poi.speaker_note,
-                    "location_hint": poi.location_hint,
-                    # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
-                    "category_code": category_code,
-                    "category_source": "llm"
-                    if poi.category_code
-                    else ("default" if normalized_default_category else "unknown"),
-                    # raw grounding 근거(T-165). quote·판정·매칭 세그먼트 ref를 보존한다.
-                    # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
-                    "evidence_quote": grounded.evidence_quote,
-                    "grounding_status": grounded.status.value,
-                    "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
-                    "matched_segment_index": grounded.matched_segment_index,
-                    "matched_segment_start_seconds": (
-                        grounded.matched_segment_start_seconds
-                    ),
-                    "llm_confidence": poi.confidence,
-                }
-            },
+            provider_evidence_json=provider_evidence,
             feature_export_status=FeatureExportStatus.PENDING.value,
         )
         session.add(candidate)

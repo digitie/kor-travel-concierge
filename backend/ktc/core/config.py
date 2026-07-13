@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     # POI 배치 1콜에 담을 영상 수 상한과 토큰 예산(TPM 헤드룸 확보). 20분급 영상은 수가 줄어든다.
     POI_BATCH_MAX_VIDEOS: int = 10
     POI_BATCH_TOKEN_BUDGET: int = 180_000
+    # description 단독 후보 경로(T-168, 로드맵 PR-17, §1.3 D1 수율). 자막 전 provider 최종
+    # 실패(T-164 판정) 시 영상을 폐기하는 대신, 저장된 영상 설명(제목·태그 포함)이 이 길이
+    # 이상이면 그 텍스트로 검수 전용 후보를 추출한다(자동확정 금지, recall 경로). 미달이면
+    # 기존대로 실패(사유 코드 description_too_short). 너무 짧은 설명은 POI 신호가 희박해
+    # 오탐만 늘리므로 하한을 둔다.
+    DESCRIPTION_POI_MIN_LENGTH: int = 200
 
     # --- 자동확정 근접 병합·audit 표본 (T-167, 로드맵 PR-14 개정판, D6·G9) ---
     # 근접 중복 재사용(병합) 반경(m). 이름·행정구역 identity 게이트(T-166) 통과 후에만 쓰이므로
