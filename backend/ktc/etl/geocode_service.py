@@ -21,8 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vworld import AsyncVworldClient
 
 from ktc.models import (
+    EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     TravelPlace,
     utcnow,
@@ -111,6 +113,17 @@ async def apply_geocode_to_candidate(
         await session.commit()
         return None
 
+    # raw grounding 게이트(T-165, 로드맵 B3·G4): transcript 후보는 근거가 raw 자막에서
+    # 확인(verified_raw)되지 않으면 지오코딩이 matched여도 자동확정하지 않는다. 그럴듯한
+    # hallucination이 자동 승격돼 downstream(export)까지 전파되는 것을 막는다. 지오코딩
+    # 결정은 이미 위에서 evidence에 기록됐다. 후보는 폐기하지 않고 needs_review로 남긴다.
+    if _grounding_blocks_autoconfirm(candidate):
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.review_note = "ungrounded"
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.commit()
+        return None
+
     c = decision.candidate
 
     # 좌표 근접 중복 확인 (T-005 저장소 계층 재사용)
@@ -176,6 +189,19 @@ async def apply_geocode_to_candidate(
     await session.commit()
     await session.refresh(place)
     return place
+
+
+def _grounding_blocks_autoconfirm(candidate: ExtractedPlaceCandidate) -> bool:
+    """transcript 후보의 근거가 raw 자막에서 확인되지 않으면 자동확정을 막는다(T-165, G4).
+
+    transcript source_kind만 대상이다(description/visual은 각자의 grounding 규칙 — 후속
+    T-168/T-173에서 not_applicable로 둔다). LLM 자가 보고 confidence는 이 판단에 절대
+    쓰지 않는다(§2.4 가짜 정밀도 방지). legacy_unknown(재처리 전 기존 후보)도 verified가
+    아니므로 자동확정은 막되, 사람 검수는 허용된다(needs_review로만 남긴다).
+    """
+    if candidate.source_kind != EvidenceSourceKind.TRANSCRIPT.value:
+        return False
+    return candidate.grounding_status != GroundingStatus.VERIFIED_RAW.value
 
 
 def _names_compatible(*values: str | None) -> bool:

@@ -28,10 +28,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.models import (
+    EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExport,
     FeatureExportOperation,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     TravelPlace,
     YoutubeChannel,
@@ -230,6 +232,22 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return f"sha256:{digest}"
 
 
+def _export_grounding_blocked(candidate: ExtractedPlaceCandidate) -> bool:
+    """자동확정된 transcript 후보는 raw grounding(verified_raw)이 아니면 export를 막는다.
+
+    T-165 G4의 defense-in-depth: 지오코딩 자동확정 게이트가 verified_raw 아닌 transcript
+    후보의 MATCHED 승격을 이미 막지만, 게이트 도입 전 자동확정된 legacy MATCHED 행이
+    export되지 않도록 export 단계에서도 재확인한다. 사람이 확정한(user_corrected) 후보는
+    사람 판단이므로 grounding과 무관하게 허용한다(legacy_unknown도 사람 검수는 허용).
+    LLM 자가 보고 confidence는 이 판단에 쓰지 않는다.
+    """
+    if candidate.source_kind != EvidenceSourceKind.TRANSCRIPT.value:
+        return False
+    if candidate.match_status == MatchStatus.USER_CORRECTED.value:
+        return False
+    return candidate.grounding_status != GroundingStatus.VERIFIED_RAW.value
+
+
 def _classify(
     candidate: ExtractedPlaceCandidate, *, has_row: bool
 ) -> tuple[str | None, str | None, str | None]:
@@ -251,9 +269,14 @@ def _classify(
                 candidate.review_note,
             )
         return None, None, None
-    if status in EXPORTABLE_STATUSES and candidate.matched_place_id is not None:
+    if (
+        status in EXPORTABLE_STATUSES
+        and candidate.matched_place_id is not None
+        and not _export_grounding_blocked(candidate)
+    ):
         return FeatureExportOperation.UPSERT.value, status, None
-    # pending/needs_review: 과거 export가 있으면 tombstone, 없으면 미노출.
+    # pending/needs_review(또는 grounding 미확인 auto-match): 과거 export가 있으면
+    # tombstone으로 회수, 없으면 미노출.
     if has_row:
         return FeatureExportOperation.TOMBSTONE.value, status, None
     return None, None, None

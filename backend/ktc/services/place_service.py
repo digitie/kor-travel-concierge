@@ -22,6 +22,7 @@ from ktc.models import (
     ExtractedPlaceCandidate,
     EvidenceSourceKind,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     MediaAsset,
     TravelPlace,
@@ -1488,6 +1489,17 @@ def _candidate_queue_reason_expression():
     )
     review_note = func.lower(func.coalesce(ExtractedPlaceCandidate.review_note, ""))
     return case(
+        (
+            # raw grounding 미확인 transcript 후보(T-165, B3). 근거가 원본 자막에서
+            # 확인되지 않아 자동확정이 차단된 상태 — 지오코딩 사유보다 앞선다(최우선).
+            and_(
+                ExtractedPlaceCandidate.source_kind
+                == EvidenceSourceKind.TRANSCRIPT.value,
+                ExtractedPlaceCandidate.grounding_status
+                != GroundingStatus.VERIFIED_RAW.value,
+            ),
+            QueueReason.UNGROUNDED.value,
+        ),
         (
             or_(
                 geocoding_reason == QueueReason.NAME_MISMATCH.value,
