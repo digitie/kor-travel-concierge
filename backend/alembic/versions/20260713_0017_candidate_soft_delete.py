@@ -17,8 +17,8 @@
   후보가 live로 부활한다(검수 큐 재등장 가능). export ledger tombstone은 남지만
   후보 상태와 어긋난다.
 
-Revision ID: 20260713_0016
-Revises: 20260710_0015
+Revision ID: 20260713_0017
+Revises: 20260713_0016
 Create Date: 2026-07-13
 """
 
@@ -27,8 +27,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "20260713_0016"
-down_revision = "20260710_0015"
+revision = "20260713_0017"
+down_revision = "20260713_0016"
 branch_labels = None
 depends_on = None
 
