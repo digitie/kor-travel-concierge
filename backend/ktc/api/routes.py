@@ -224,12 +224,12 @@ class AuditResultRequest(BaseModel):
     """auto-match audit 표본 검토 결과 기록 요청(T-167, G9).
 
     `accurate=True`=자동확정이 정확, `False`=오확정. 기록은 사후 관측이라 자동확정
-    상태(MATCHED·export)를 바꾸지 않는다(실제 되돌리기는 별도 reopen).
+    상태(MATCHED·export)를 바꾸지 않는다(실제 되돌리기는 별도 reopen). 검토자(reviewed_by)는
+    요청 본문으로 받지 않고 서버가 인증된 admin proxy actor에서 유도한다(provenance 위조 방지).
     """
 
     accurate: bool
     note: str | None = Field(default=None, max_length=1000)
-    reviewed_by: str = "web"
 
 
 class AuthEventRequest(BaseModel):
@@ -1763,19 +1763,21 @@ async def get_audit_summary(
 async def submit_audit_result(
     candidate_id: int,
     payload: AuditResultRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """audit 표본에 사람 검토 결과(정확/오확정)를 기록한다(G9).
 
     사후 관측이라 자동확정(MATCHED)·export 상태를 바꾸지 않는다. 표본이 아니면 409,
-    없는/삭제된 후보면 404.
+    없는/삭제된 후보면 404. 검토자는 인증된 admin proxy actor에서 유도한다(위조 방지).
     """
+    actor = resolve_admin_proxy_actor(request, get_settings()) or "unverified-web"
     try:
         candidate = await place_service.record_audit_result(
             session,
             candidate_id=candidate_id,
             accurate=payload.accurate,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=actor,
             note=payload.note,
         )
     except place_service.AuditNotSampledError as exc:

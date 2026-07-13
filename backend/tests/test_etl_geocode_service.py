@@ -705,6 +705,18 @@ async def test_apply_ambiguous_all_unrefined_stays_review(session):
 # --- T-167 auto-match audit 표본 ---
 
 
+def test_audit_sample_fraction_is_deterministic_and_bounded():
+    # 같은 id는 늘 같은 값(재현성), 값은 [0,1), id 없으면 경계 밖(1.0)이라 표본화되지 않는다.
+    from ktc.etl.geocode_service import _audit_sample_fraction
+
+    frac = _audit_sample_fraction(12345)
+    assert frac == _audit_sample_fraction(12345)
+    assert 0.0 <= frac < 1.0
+    assert _audit_sample_fraction(None) == 1.0
+    # 서로 다른 id는 (일반적으로) 다른 값 — 표본이 특정 id에 고정되지 않음.
+    assert _audit_sample_fraction(1) != _audit_sample_fraction(2)
+
+
 async def _matched_poi_decision(name="월정리 카페"):
     return GeocodeDecision(
         status="matched",

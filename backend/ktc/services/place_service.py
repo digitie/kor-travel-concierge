@@ -188,6 +188,11 @@ async def find_duplicate_candidates(
     )
 
 
+# 병합 제안의 반경 조회 스캔 상한(이름 필터 전 후보 풀). 확정 장소가 수백 건 규모라
+# 반경 내 이 개수까지 근접순으로 훑고 이름 게이트 통과분만 상위 N을 제안한다.
+_MERGE_SUGGESTION_SCAN_LIMIT = 50
+
+
 @dataclass(frozen=True)
 class MergeSuggestion:
     """확정 장소의 잠재 중복 병합 후보(T-167, 로드맵 PR-14 개정판, D6).
@@ -224,12 +229,15 @@ async def merge_suggestions_for_place(
         if radius_meters is not None
         else get_settings().GEOCODE_MERGE_RADIUS_METERS
     )
+    # 반경 조회는 이름 필터 전이라 넉넉히 스캔한다(밀집 지역의 실제 중복이 근접순 12번째
+    # 이후라 이름 필터 후 상위 N에서 누락되는 것을 완화 — 제안 전용이라 비용이 싸다).
+    scan_limit = max(_MERGE_SUGGESTION_SCAN_LIMIT, limit + 1)
     nearby = await find_places_within_radius(
         session,
         lat=place.latitude,
         lng=place.longitude,
         radius_meters=radius,
-        limit=limit + 1,
+        limit=scan_limit,
     )
     suggestions: list[MergeSuggestion] = []
     for other, distance in nearby:

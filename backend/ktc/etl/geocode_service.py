@@ -8,7 +8,14 @@
 
 from __future__ import annotations
 
+import hashlib
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from vworld import AsyncVworldClient
+
+from ktc.core.config import get_settings
 from ktc.core.spatial import sync_place_geometry
+from ktc.etl import category_catalog, region_gate
 from ktc.etl.geocoding import (
     GeocodeCandidate,
     GeocodeDecision,
@@ -19,9 +26,7 @@ from ktc.etl.geocoding import (
     geocode_with_vworld,
     reverse_with_vworld,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
-from vworld import AsyncVworldClient
-
+from ktc.etl.place_name import names_match as _names_match
 from ktc.models import (
     AuditStatus,
     EvidenceSourceKind,
@@ -32,12 +37,7 @@ from ktc.models import (
     TravelPlace,
     utcnow,
 )
-import random
-
 from ktc.services import place_service
-from ktc.core.config import get_settings
-from ktc.etl import category_catalog, region_gate
-from ktc.etl.place_name import names_match as _names_match
 
 
 async def geocode_query(
@@ -264,6 +264,10 @@ def _maybe_flag_audit_sample(
     사람이 사후에 "정확/오확정"을 기록할 수 있게 한다. 표본 표시는 상태 전이가 아니라
     사후 관측이므로 MATCHED·export 상태는 건드리지 않는다. rate<=0이면 비활성, rate>=1이면
     전량. 이미 표시된 후보(재처리)는 유지한다(멱등).
+
+    표본 선택은 `candidate.id` 해시 기반 **결정적** 판정이다(전역 random 미사용). 같은
+    후보는 재현 가능하게 늘 같은 결정을 받아 테스트·재처리에서 안정적이고, id 해시가 rate에
+    고르게 분포해 표본율을 근사한다.
     """
     if reviewer != "system":
         return
@@ -272,8 +276,19 @@ def _maybe_flag_audit_sample(
     rate = get_settings().AUTO_MATCH_AUDIT_SAMPLE_RATE
     if rate <= 0:
         return
-    if rate >= 1 or random.random() < rate:
+    if rate >= 1 or _audit_sample_fraction(candidate.id) < rate:
         candidate.audit_status = AuditStatus.PENDING.value
+
+
+def _audit_sample_fraction(candidate_id: int | None) -> float:
+    """`candidate.id`를 [0,1) 구간의 결정적 값으로 매핑한다(sha256 기반, 균등 분포).
+
+    id가 아직 없으면(비영속) 표본화하지 않도록 1.0(=경계 밖)을 반환한다.
+    """
+    if candidate_id is None:
+        return 1.0
+    digest = hashlib.sha256(str(candidate_id).encode("utf-8")).hexdigest()
+    return (int(digest[:16], 16) % 1_000_000) / 1_000_000
 
 
 def _evaluate_identity_gates(

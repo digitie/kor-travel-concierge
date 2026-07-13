@@ -6,14 +6,20 @@ from ktc.etl.place_name import names_match, normalize_place_name
 
 
 def test_normalize_strips_conservative_branch_suffixes():
-    # 본점/본관/직영점/N호점만 제거하고, 공백·대소문자 변형은 무시한다.
+    # 본점/본관/직영점만 제거하고, 공백·대소문자 변형은 무시한다.
     assert normalize_place_name("성심당 본점") == "성심당"
     assert normalize_place_name("성심당본점") == "성심당"
     assert normalize_place_name("성심당") == "성심당"
     assert normalize_place_name("스타벅스 강남 본관") == "스타벅스강남"
     assert normalize_place_name("교촌치킨 직영점") == "교촌치킨"
-    assert normalize_place_name("롯데리아 1호점") == "롯데리아"
-    assert normalize_place_name("맘스터치 12호점") == "맘스터치"
+
+
+def test_normalize_keeps_numbered_branch_names():
+    # N호점은 실지점 식별자라 제거하지 않는다(정밀도 우선, ADR-39).
+    assert normalize_place_name("롯데리아 1호점") == "롯데리아1호점"
+    assert normalize_place_name("맘스터치 12호점") == "맘스터치12호점"
+    # 서로 다른 번호 지점은 다른 정규화 이름으로 남는다(뭉개면 별개 지점 폐기·오재사용).
+    assert normalize_place_name("롯데리아 1호점") != normalize_place_name("롯데리아 2호점")
 
 
 def test_normalize_keeps_non_generic_branch_names():
@@ -26,7 +32,6 @@ def test_normalize_keeps_non_generic_branch_names():
 def test_normalize_all_suffix_does_not_collapse_to_empty():
     # 이름 전체가 접미뿐이면 빈 문자열로 붕괴하지 않는다(서로 다른 장소의 빈 키 오병합 방지).
     assert normalize_place_name("본점") == "본점"
-    assert normalize_place_name("1호점") == "1호점"
 
 
 def test_normalize_casefold_and_whitespace():
@@ -38,8 +43,9 @@ def test_normalize_casefold_and_whitespace():
 def test_names_match_dedups_branch_variants():
     assert names_match("성심당", "성심당 본점")
     assert names_match("성심당 본점", "성심당본점")
-    # 서로 다른 지점(구체적 지점명)은 병합하지 않는다.
+    # 서로 다른 지점(구체적 지점명·번호 지점)은 병합하지 않는다.
     assert not names_match("성심당 본점", "성심당 대전역점")
+    assert not names_match("롯데리아 1호점", "롯데리아 2호점")
 
 
 def test_names_match_pairwise_and_short_partial_rules():

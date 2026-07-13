@@ -57,11 +57,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_epc_audit_sample",
-        table_name="extracted_place_candidates",
-        postgresql_where=sa.text("audit_status IS NOT NULL"),
-    )
+    op.drop_index("ix_epc_audit_sample", table_name="extracted_place_candidates")
     op.drop_column("extracted_place_candidates", "audit_note")
     op.drop_column("extracted_place_candidates", "audit_reviewed_at")
     op.drop_column("extracted_place_candidates", "audit_reviewed_by")
