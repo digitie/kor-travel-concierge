@@ -27,6 +27,7 @@ from ktc.core.security import (
 )
 from ktc.etl import (
     category_catalog,
+    llm_client,
     media_store,
     place_search,
     postprocess_service,
@@ -783,9 +784,9 @@ async def place_search_opinion_endpoint(
         return {"gemini": None, "error": None}
     try:
         runtime = await settings_service.get_llm_runtime(session)
+        # thread 격리·rate limiter 예약은 게이트웨이(`llm_client`)가 처리한다(T-161).
         gemini_opinion = await asyncio.wait_for(
-            asyncio.to_thread(
-                place_search.gemini_place_opinion,
+            place_search.gemini_place_opinion(
                 runtime,
                 query=query,
                 hits=payload.hits,
@@ -794,6 +795,13 @@ async def place_search_opinion_endpoint(
             timeout=12.0,
         )
         return {"gemini": gemini_opinion, "error": None}
+    except llm_client.GeminiQuotaBusy:
+        # 분 윈도우 혼잡(quota_max_wait=0 즉시 반환) — 오도성 "12초 시간 초과" 대신
+        # 정확한 사유를 안내한다(잠시 후 재시도하면 성공할 수 있는 상태).
+        return {
+            "gemini": None,
+            "error": "Gemini 쿼터 윈도우 대기 중 — 잠시 후 재시도하세요. 검색 결과는 정상입니다.",
+        }
     except (asyncio.TimeoutError, TimeoutError):
         return {
             "gemini": None,
@@ -803,7 +811,8 @@ async def place_search_opinion_endpoint(
         status = getattr(exc, "status_code", None)
         message = str(exc)
         if (
-            status == 429
+            isinstance(exc, llm_client.GeminiQuotaExceeded)
+            or status == 429
             or "429" in message
             or "quota" in message.lower()
             or "RESOURCE_EXHAUSTED" in message

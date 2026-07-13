@@ -1,12 +1,23 @@
-"""Gemini API 키 전역 rate limiter (DB 단일 행, 순차).
+"""Gemini API 키 전역 rate limiter (DB 단일 행, admission 카운팅).
 
 API·scheduler 두 프로세스가 같은 Gemini 키를 공유하므로, 분당 요청(RPM)·분당 토큰(TPM)·
-일일 요청(RPD, PT 자정 리셋)을 DB 단일 행에 `FOR UPDATE`로 기록해 강제한다. 병렬은 쓰지
-않으며(순차), 한도 초과 시 분 윈도우가 풀릴 때까지 대기(RPM/TPM)하고, 일일 한도면
-`GeminiQuotaExceeded`를 던져 작업을 보류시킨다. DeepSeek 등 비-Gemini 콜은 대상이 아니다.
+일일 요청(RPD, PT 자정 리셋)을 DB 단일 행에 `FOR UPDATE`로 기록해 강제한다. row lock은
+quota 숫자를 갱신하는 짧은 트랜잭션 동안만 유지된다 — **network 호출을 직렬화하지 않고
+admission(입장 허가)만 카운팅한다**. 한도 초과 시 분 윈도우가 풀릴 때까지 대기(RPM/TPM)하고,
+일일 한도면 `GeminiQuotaExceeded`를 던져 작업을 보류시킨다. DeepSeek 등 비-Gemini 콜은
+별도 쿼터라 대상이 아니다.
 
-사용: 동기 Gemini 호출을 `asyncio.to_thread`로 감싸기 **직전**에 `await acquire(...)`로 슬롯을
-예약한다. 모든 Gemini 호출부(파이프라인·검수 의견·deep research)가 같은 카운터를 공유한다.
+사용: LLM 게이트웨이(`llm_client.generate`)가 Gemini 호출 직전에 `await acquire(...)`로
+슬롯을 예약한다(T-161). 모든 Gemini 호출(POI 배치·자막 교정·keyword 확장·검수 의견·
+카테고리 제안·deep research·video analysis 멀티모달)이 게이트웨이를 경유하므로 같은
+카운터를 공유한다. 게이트웨이 밖에서 `acquire`를 직접 호출하지 않는다(이중 예약 방지 —
+`tests/test_llm_gateway_guard.py`가 강제).
+
+한도 값(`GEMINI_RATE_RPM/TPM/RPD`)은 env로 조정한다. 기본값은 무료 티어 예시이며 실제
+한도는 모델·티어·계정 상태에 따라 다르다(`.env.example` 주석 참조, PR-05).
+
+한계: provider 내부 재시도(일시 오류 시 최대 `LLM_RETRY_MAX_ATTEMPTS`회 HTTP)는 admission
+1건만 소비한다 — 재시도가 잦으면 실제 RPM/RPD가 과소 계상될 수 있다(PR-05 실측으로 관찰).
 """
 
 from __future__ import annotations
@@ -29,6 +40,15 @@ _MAX_WAIT_LOOPS = 120  # 분 윈도우 대기 안전장치(최대 ~2시간)
 
 class GeminiQuotaExceeded(RuntimeError):
     """일일 쿼터(RPD) 소진 — 작업을 다음 PT 일자로 보류한다."""
+
+
+class GeminiQuotaBusy(RuntimeError):
+    """분 윈도우(RPM/TPM)가 가득 참 — `max_wait_seconds` 안에 슬롯을 얻지 못했다.
+
+    일일 소진(`GeminiQuotaExceeded`)과 달리 잠시 뒤 재시도하면 성공할 수 있는 상태다.
+    대화형 경로(검수 의견 등)가 분 윈도우 대기로 응답을 오래 막지 않도록
+    `max_wait_seconds=0`(즉시)으로 예약을 시도할 때 쓴다.
+    """
 
 
 def estimate_tokens(*parts: str) -> int:
@@ -62,11 +82,14 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
-async def acquire(*, estimated_tokens: int) -> None:
+async def acquire(*, estimated_tokens: int, max_wait_seconds: float | None = None) -> None:
     """Gemini 콜 1건 전에 호출한다.
 
     RPM/TPM 초과면 분 윈도우가 풀릴 때까지 대기, RPD 초과면 `GeminiQuotaExceeded`.
-    키 전역(DB 단일 행 `FOR UPDATE`)으로 순차 직렬화한다.
+    `max_wait_seconds`가 주어지면 그 시간 안에 슬롯을 얻지 못할 때 대기 대신
+    `GeminiQuotaBusy`를 던진다(`0`=윈도우가 꽉 차 있으면 즉시 — 대화형 경로용).
+    None(기본)이면 현행대로 윈도우가 풀릴 때까지 대기한다.
+    키 전역(DB 단일 행 `FOR UPDATE`)으로 admission을 카운팅한다.
     """
     settings = get_settings()
     rpm, rpd, tpm = (
@@ -78,9 +101,12 @@ async def acquire(*, estimated_tokens: int) -> None:
     # 무한 대기 대신 즉시 보류(입력 절단은 호출부 책임).
     if estimated_tokens > tpm:
         raise GeminiQuotaExceeded(
-            f"단일 호출 추정 토큰({estimated_tokens})이 분당 한도(TPM={tpm})를 초과한다."
+            f"단일 호출 추정 토큰({estimated_tokens})이 분당 한도(TPM={tpm})를 초과한다 — "
+            "설정 GEMINI_RATE_TPM이 요청 추정(멀티모달 고정 가산 포함)보다 작다. "
+            "티어 확인 후 GEMINI_RATE_TPM을 조정하거나 입력을 줄여라."
         )
     await _ensure_row()
+    waited_seconds = 0.0
     for _ in range(_MAX_WAIT_LOOPS):
         wait_seconds = 0.0
         async with async_session_factory() as session:
@@ -117,5 +143,12 @@ async def acquire(*, estimated_tokens: int) -> None:
                     state.day_count += 1
                     return  # 컨텍스트 종료 시 commit(예약 확정)
                 wait_seconds = max(1.0, 60.0 - window_age + 0.5)
+        # 대기 한도가 있으면(대화형) 다음 대기가 한도를 넘는 순간 즉시 busy로 반환한다.
+        if max_wait_seconds is not None and waited_seconds + wait_seconds > max_wait_seconds:
+            raise GeminiQuotaBusy(
+                f"Gemini 분 윈도우(RPM/TPM)가 가득 참 — 대기 한도({max_wait_seconds}s) 안에 "
+                f"슬롯 없음(다음 윈도우까지 ~{wait_seconds:.0f}s). 잠시 후 재시도."
+            )
         await asyncio.sleep(wait_seconds)
+        waited_seconds += wait_seconds
     raise GeminiQuotaExceeded("Gemini rate limit 대기 한도를 초과했습니다.")

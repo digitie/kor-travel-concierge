@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-161**: LLM async/multimodal 게이트웨이 — 전 LLM 호출 수렴(quota reservation 포함: deep research·키워드 확장·검수 의견·카테고리·video analysis의 리미터 우회 해소), timeout/retry/usage 실측/provider·model 기록, direct SDK guard, 실제 결제 티어 확인·`.env.example` 숫자는 예시 표기. (PR-23+PR-05 통합, §10 B6)
 - [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
 - [ ] **T-163**: 워커 레인 분리 — lane 컬럼+인덱스, `create_run` 호출 전수 표 기반 enqueue 매핑(restart lane 복사, run-now, `/jobs/poi-batch`, MCP harvest/deep research, transcript child 포함), parent lane·lineage 전파, 구 job id(`crawl-run-worker`) 제거. 선행: T-161·T-162 권장. (PR-04 개정판)
 - [ ] **T-164**: transcript_attempts 관측 — provider별 시도·순서·시각·duration·outcome·language·tool version durable 기록(성공 전 실패 보존), `TRANSCRIPT_PROVIDER_ORDER` 연결, yt-dlp 실제 언어 기록, 절단 로그. 수율 기준선 재설정(실측: no-whisper 3/27, whisper 11/27). (PR-11 개정판, G7)
@@ -60,6 +59,17 @@
 
 ## 완료
 
+- [x] **T-161**: LLM async/multimodal 게이트웨이 — 모든 LLM 호출을 `llm_client` 단일 계약으로 수렴
+  (`generate/complete_json/complete_text/generate_multimodal` + `LlmResult` usage 실측). quota 예약
+  우회 6곳(deep research·키워드 확장·검수 의견·카테고리·POI 추출·video_analysis 직접 호출)을 전부
+  게이트웨이 경유로 이관(§10 B6/C6 해소)하고, 동기 SDK 호출은 게이트웨이 내 `to_thread`로 격리
+  (T-101/105/111/121-E 계열 근절). direct SDK guard 테스트(genai·post_generate_content·acquire·
+  DeepSeek 헬퍼·openai import, backend/ktc+scheduler+mcp+etl 스캔). 적대적 리뷰 3렌즈: BLOCKER 0,
+  MAJOR 2(대화형 의견 경로의 리미터 대기 → `GeminiQuotaBusy`+`quota_max_wait=0` 무대기 옵션과 정확한
+  메시지, guard DeepSeek/openai 미검출) ·MINOR 7 전부 머지 전 반영. 기존 semantics(교정 240s·batch
+  재시도·폴백·12s 상한) 함수 단위 보존 확인. PR-05 통합: `.env.example` GEMINI_RATE_* 예시 표기+TPM
+  하한 주석, `docs/dev-environment.md` §12 티어 반영 절차, `llm_usage` 실측 로그. 검증: backend 전체
+  pytest 336 passed(pre-existing 2건 외 0, 격리 disposable DB). (2026-07-13, 로드맵 PR-23+PR-05, §10 B6)
 - [x] **T-160**: candidate soft delete 상태 모델 — hard delete가 export tombstone·undo를 원천
   차단하던 구조(§10 B1, FK NO ACTION + ledger 선삭제)를 해소했다. `deleted_at/deletion_reason/
   deleted_by` 컬럼+CHECK+검수 큐 partial index 3종(migration 20260713_0017, T-175 0016 이후), `soft_delete_candidates`

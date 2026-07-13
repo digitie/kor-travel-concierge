@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-13: T-161 — LLM async/multimodal 게이트웨이 (B6)
+
+- **문제**: rate limiter가 자막 교정·batch POI 2곳만 커버하고 deep research·키워드 확장·검수
+  의견·카테고리·POI 추출·video_analysis(직접 HTTP 호출)는 quota 예약을 우회했다(§1.5 C6). 동기
+  LLM 호출의 이벤트 루프 차단 사고(T-101/105/111/121-E)도 호출부별 격리로 반복 땜질 중이었다.
+- **구현**: `llm_client`를 단일 async 게이트웨이로 — quota reservation(Gemini)·`to_thread` 격리·
+  timeout/retry per-call 옵션·usage 실측(`llm_usage` 구조화 로그, 추정식 보정 데이터 원천)·
+  multimodal(`parts`/`file_data` pass-through, media당 65,536 floor 가산)을 한 계약으로. 호출부
+  11곳 이관, 기존 semantics(교정 max_attempts=1·240s, batch 파싱 재시도, 키워드 템플릿 폴백,
+  의견 12s 흡수, video_analysis 페이로드 동등) 함수 단위 보존. direct SDK guard 테스트로 재발 방지.
+- **적대적 리뷰(PR 전)**: async 정확성(await 누락 전수 0)·B6 명세·semantics 3렌즈 — BLOCKER 0.
+  MAJOR 2: ① 대화형 검수 의견이 배치 쿼터 소진 시 리미터 대기로 12초를 태우고 오도성 timeout
+  메시지 → `acquire(max_wait_seconds)`+`GeminiQuotaBusy` 신설, 의견 경로는 무대기(quota_max_wait=0)
+  +"쿼터 윈도우 대기 중" 정확 메시지. ② guard가 DeepSeek 헬퍼·openai import 미검출 → 패턴·스캔
+  범위(scheduler/mcp/etl) 확장. MINOR 7(진단 메시지·TPM 하한 주석·stale 주석·floor 표현·리미터
+  한계 명시·RPD 비대칭 주석·dev-environment §12 절차) 전부 반영.
+- **검증**: backend 전체 pytest 336 passed(pre-existing 2건 외 0) — 공유 test DB 경합을 피해 격리
+  disposable DB로 실행(병렬 트랙 검증 시 세션별 DB 분리 권장 사항으로 기록). rebase 후 핵심 스위트
+  재실행 통과. `git diff --check` 통과.
+
 ## 2026-07-13: T-176 — 소비자 read key 회전 및 운영 권한 분리
 
 - **선행 migration 복구**: T-175와 T-160이 동시에 사용하던 Alembic revision `0016`을

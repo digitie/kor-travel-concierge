@@ -146,35 +146,56 @@ async def test_search_naver_local_converts_and_strips():
     assert hit["storage_block_reason"] is None
 
 
-def test_gemini_place_opinion_parses(monkeypatch):
-    monkeypatch.setattr(
-        llm_client,
-        "complete_json",
-        lambda *a, **k: '{"best_name":"감천문화마을","latitude":35.097,"longitude":129.01,"category":"관광지","confidence":0.9,"reason":"세 provider 일치"}',
-    )
+async def test_gemini_place_opinion_parses(monkeypatch):
+    captured: dict = {}
+
+    async def fake_complete_json(*a, **k):
+        captured.update(k)
+        return '{"best_name":"감천문화마을","latitude":35.097,"longitude":129.01,"category":"관광지","confidence":0.9,"reason":"세 provider 일치"}'
+
+    monkeypatch.setattr(llm_client, "complete_json", fake_complete_json)
     runtime = llm_client.LlmRuntime(model="gemini-2.5-flash", gemini_api_key="k")
-    out = place_search.gemini_place_opinion(
+    out = await place_search.gemini_place_opinion(
         runtime, query="감천문화마을", hits=[{"provider": "google", "name": "감천문화마을"}]
     )
     assert out is not None
     assert out["best_name"] == "감천문화마을"
     assert out["confidence"] == 0.9
+    # 대화형: 단발 호출 + 분 윈도우 무대기(quota_max_wait=0).
+    assert captured["max_attempts"] == 1
+    assert captured["quota_max_wait"] == 0
 
 
-def test_gemini_place_opinion_failure_returns_none(monkeypatch):
-    def boom(*a, **k):
+async def test_gemini_place_opinion_failure_returns_none(monkeypatch):
+    async def boom(*a, **k):
         raise llm_client.LlmRequestError("fail", status_code=500, model="gemini-2.5-flash")
 
     monkeypatch.setattr(llm_client, "complete_json", boom)
     runtime = llm_client.LlmRuntime(model="gemini-2.5-flash", gemini_api_key="k")
     assert (
-        place_search.gemini_place_opinion(
+        await place_search.gemini_place_opinion(
             runtime, query="x", hits=[{"provider": "kakao", "name": "x"}]
         )
         is None
     )
     # 빈 후보면 호출 없이 None.
-    assert place_search.gemini_place_opinion(runtime, query="x", hits=[]) is None
+    assert await place_search.gemini_place_opinion(runtime, query="x", hits=[]) is None
+
+
+async def test_gemini_place_opinion_quota_busy_absorbed_or_raised(monkeypatch):
+    async def busy(*a, **k):
+        raise llm_client.GeminiQuotaBusy("분 윈도우 가득 참")
+
+    monkeypatch.setattr(llm_client, "complete_json", busy)
+    runtime = llm_client.LlmRuntime(model="gemini-2.5-flash", gemini_api_key="k")
+    hits = [{"provider": "kakao", "name": "x"}]
+    # 기본(raise_on_error=False): busy도 None으로 흡수(검색 흐름 비차단).
+    assert await place_search.gemini_place_opinion(runtime, query="x", hits=hits) is None
+    # raise_on_error=True: 호출부(routes)가 정확한 메시지로 매핑하도록 전파.
+    with pytest.raises(llm_client.GeminiQuotaBusy):
+        await place_search.gemini_place_opinion(
+            runtime, query="x", hits=hits, raise_on_error=True
+        )
 
 
 @pytest_asyncio.fixture
@@ -225,7 +246,7 @@ async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
         "category": None,
     }
 
-    def fake_opinion(runtime, *, query, hits, **kwargs):
+    async def fake_opinion(runtime, *, query, hits, **kwargs):
         return {
             "best_name": "감천문화마을",
             "latitude": 35.1,
@@ -245,7 +266,7 @@ async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
     assert ok_body["gemini"]["best_name"] == "감천문화마을"
 
     # LLM 실패는 500이 아니라 gemini=null로 흡수.
-    def boom(runtime, *, query, hits, **kwargs):
+    async def boom(runtime, *, query, hits, **kwargs):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(place_search, "gemini_place_opinion", boom)
@@ -256,3 +277,18 @@ async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
     assert failed.status_code == 200
     assert failed.json()["gemini"] is None
     assert failed.json()["error"]
+
+    # 분 윈도우 혼잡(GeminiQuotaBusy)은 오도성 "시간 초과" 대신 정확한 안내로 매핑.
+    async def busy(runtime, *, query, hits, **kwargs):
+        raise llm_client.GeminiQuotaBusy("분 윈도우 가득 참")
+
+    monkeypatch.setattr(place_search, "gemini_place_opinion", busy)
+    busy_resp = await api_client.post(
+        "/api/v1/place-search/opinion",
+        json={"query": "감천문화마을", "hits": [hit]},
+    )
+    assert busy_resp.status_code == 200
+    busy_body = busy_resp.json()
+    assert busy_body["gemini"] is None
+    assert "쿼터 윈도우 대기 중" in busy_body["error"]
+    assert "시간 초과" not in busy_body["error"]

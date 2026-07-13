@@ -388,6 +388,8 @@ async def deep_research_handler(session: AsyncSession, run: CrawlRun) -> dict[st
             progress=progress,
         )
 
+    # 정책 주석(T-161): RPD 소진(GeminiQuotaExceeded)이면 이 run은 terminal failed로
+    # 남는다 — poi_batch의 quota_deferred(보류)와 비대칭. 보류 통일은 후속 검토.
     return await deep_research_service.research_place(
         session,
         place,
@@ -582,6 +584,9 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
 
     executed_results: list[dict[str, Any]] = []
     skipped_unsupported = 0
+    # 정책 주석(T-161): RPD 소진(GeminiQuotaExceeded)이면 analysis run은 서비스 내부
+    # broad except로 terminal failed 처리된다 — poi_batch의 quota_deferred(보류)와
+    # 비대칭. 보류 통일은 후속 검토.
     for run_type in _analysis_run_type_values(payload):
         pending_runs = await _pending_analysis_runs(
             session,

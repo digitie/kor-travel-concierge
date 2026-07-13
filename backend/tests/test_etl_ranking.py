@@ -45,24 +45,30 @@ def test_composite_score_weighting():
     assert abs(s - 0.4) < 1e-9
 
 
-def test_generate_derived_keywords_fallback():
-    kws = generate_derived_keywords("부산", "summer")
+async def test_generate_derived_keywords_fallback():
+    kws = await generate_derived_keywords("부산", "summer")
     assert len(kws) == 3
     assert all("부산" in k for k in kws)
     assert any("여름" in k for k in kws)
 
 
-def test_generate_derived_keywords_custom_generator_dedup():
+async def test_generate_derived_keywords_custom_generator_dedup():
     def gen(seed, season):
         return [f"{seed} a", f"{seed} a", seed, "  "]
 
-    kws = generate_derived_keywords("X", "winter", generator=gen)
+    kws = await generate_derived_keywords("X", "winter", generator=gen)
     # 중복·시드자체·공백 제거
     assert kws == ["X a"]
 
 
-def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
-    from ktc.etl import gemini_client, keyword_expansion
+async def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
+    from ktc.etl import gemini_client, gemini_rate_limiter, keyword_expansion
+
+    async def fake_acquire(*, estimated_tokens, max_wait_seconds=None):
+        return None
+
+    # production generator는 게이트웨이 경유 — rate limiter 예약을 stub한다(T-161).
+    monkeypatch.setattr(gemini_rate_limiter, "acquire", fake_acquire)
 
     def ok_post(**kwargs):
         return {
@@ -77,10 +83,10 @@ def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
 
     monkeypatch.setattr(gemini_client, "post_generate_content", ok_post)
     gen = keyword_expansion.make_gemini_keyword_generator(api_key="k", model="m")
-    assert gen("제주", "summer") == ["제주 카페", "제주 오름"]
+    assert await gen("제주", "summer") == ["제주 카페", "제주 오름"]
 
     def boom(**kwargs):
         raise RuntimeError("gemini down")
 
     monkeypatch.setattr(gemini_client, "post_generate_content", boom)
-    assert gen("제주", "summer") == keyword_expansion._fallback_generator("제주", "summer")
+    assert await gen("제주", "summer") == keyword_expansion._fallback_generator("제주", "summer")

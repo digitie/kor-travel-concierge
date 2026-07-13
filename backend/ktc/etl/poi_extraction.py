@@ -6,12 +6,14 @@
 
 실제 Gemini 호출은 주입형 `llm` 콜러블(prompt -> JSON 문자열)로 분리해, 키 없이도
 파싱·검증·재시도 로직을 테스트할 수 있게 한다. 파싱 실패 시 재시도한다.
+production 콜러블은 게이트웨이(`llm_client`) 경유 async이며 rate limiter 예약·
+thread 격리는 게이트웨이가 처리한다(T-161). 테스트 fake는 동기 함수도 지원한다.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
@@ -19,8 +21,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ktc.etl import category_catalog, llm_client
 
-# llm 시그니처: (prompt) -> JSON 문자열
-LlmCallable = Callable[[str], str]
+# llm 시그니처: (prompt) -> JSON 문자열 (동기 또는 awaitable)
+LlmCallable = Callable[[str], "str | Awaitable[str]"]
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 
@@ -109,7 +111,7 @@ def parse_extraction(payload: str) -> POIExtractionResult:
     return result
 
 
-def extract_pois(
+async def extract_pois(
     *,
     timestamped_transcript: str,
     description_raw: str | None,
@@ -126,7 +128,7 @@ def extract_pois(
     last_error: Exception | None = None
     for _ in range(max_retries + 1):
         try:
-            payload = llm(prompt)
+            payload = await llm_client.maybe_await(llm(prompt))
             return parse_extraction(payload)
         except (json.JSONDecodeError, ValidationError) as exc:
             last_error = exc
@@ -137,9 +139,9 @@ def extract_pois(
 def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
     """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 POI 추출 `LlmCallable`을 만든다."""
 
-    def call(prompt: str) -> str:
+    async def call(prompt: str) -> str:
         try:
-            return llm_client.complete_json(
+            return await llm_client.complete_json(
                 runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
             )
         except llm_client.LlmRequestError as exc:

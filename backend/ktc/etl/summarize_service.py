@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -96,11 +95,11 @@ async def summarize_video(
     )
     await _report(status_reporter, f"{video_label}의 자막을 RustFS에 저장했습니다.", None)
 
-    # 2) Gemini POI 추출 (파싱 실패 시 재시도)
+    # 2) Gemini POI 추출 (파싱 실패 시 재시도) — thread 격리·rate limiter 예약은
+    #    게이트웨이(`llm_client`)가 처리한다(T-161).
     try:
         await _report(status_reporter, f"Gemini에서 {video_label}의 장소 후보를 추출 중입니다.", None)
-        result = await asyncio.to_thread(
-            poi_extraction.extract_pois,
+        result = await poi_extraction.extract_pois(
             timestamped_transcript=transcript_text,
             description_raw=video.description_raw,
             llm=llm,

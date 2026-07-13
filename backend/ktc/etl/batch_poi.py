@@ -3,18 +3,17 @@
 교정된 자막 N개(≤10)를 `<video_transcripts>` XML로 묶어 한 번에 POI를 추출한다. 시스템
 지시문에 카테고리 마스터(8자리 코드표)를 포함해 카테고리를 코드로 분류하고, 각 영상은
 서로 교차참조하지 않도록 강제한다. 결과는 입력 video_id(alias)로 역매핑·검증한다
-(입력에 없는 alias·미지 코드는 폐기 → 환각/교차오염 차단). Gemini로 가는 경우 키 전역
-rate limiter를 통과한 뒤 호출한다.
+(입력에 없는 alias·미지 코드는 폐기 → 환각/교차오염 차단). Gemini rate limiter 예약·
+thread 격리는 게이트웨이(`llm_client`)가 처리한다(T-161).
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 from pydantic import BaseModel, Field, ValidationError
 
-from ktc.etl import category_catalog, gemini_rate_limiter, llm_client
+from ktc.etl import category_catalog, llm_client
 
 POI_BATCH_TEMPERATURE = 0.1
 
@@ -143,13 +142,8 @@ async def extract_batch(
     aliases = {alias for alias, _ in items}
     last_error: Exception | None = None
     for _ in range(max_retries + 1):
-        if not runtime.is_deepseek:
-            await gemini_rate_limiter.acquire(
-                estimated_tokens=gemini_rate_limiter.estimate_tokens(system, prompt)
-            )
         try:
-            raw = await asyncio.to_thread(
-                llm_client.complete_json,
+            raw = await llm_client.complete_json(
                 runtime,
                 prompt,
                 response_schema=BATCH_RESPONSE_SCHEMA,
