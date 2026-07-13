@@ -726,6 +726,18 @@ async def process_video_batch(
         if video.crawl_status != CrawlStatus.FAILED:
             video.crawl_status = CrawlStatus.SUMMARIZED
     summary["processed_videos"] = len(batch)
+    if created_candidates:
+        # 신규 후보를 durable dirty outbox에 표시한다(T-171). 대부분 PENDING/needs_review라
+        # 이 시점엔 export 대상이 아니지만(sync 시 no-op consume), outbox를 정본으로 유지한다.
+        # 이후 지오코딩 자동확정 시 apply_geocode가 다시 dirty로 표시한다.
+        await session.flush()  # candidate.id 확보(같은 트랜잭션)
+        from ktc.services import feature_export_service  # 지연 import(순환 회피)
+
+        await feature_export_service.mark_candidates_dirty(
+            session,
+            [c.id for c in created_candidates],
+            reason="candidate_created",
+        )
     await session.commit()
     await _report(
         status_reporter,

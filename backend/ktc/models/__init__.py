@@ -32,6 +32,7 @@ from ktc.models.extracted_place_candidate import (
     ExtractedPlaceCandidate,
     MatchStatus,
 )
+from ktc.models.export_dirty_outbox import ExportDirtyOutbox
 from ktc.models.feature_evidence import (
     EvidenceSourceKind,
     FeatureExportStatus,
@@ -109,6 +110,7 @@ __all__ = [
     "FeatureExport",
     "FeatureExportOperation",
     "feature_export_sequence",
+    "ExportDirtyOutbox",
     "VideoPlaceMapping",
     "MediaAsset",
     "AssetType",

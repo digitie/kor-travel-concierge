@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
 - [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
 - [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9)
 - [ ] **T-193**: [조건부] 자막 품질 개선 — 사용자 결정(2026-07-13)으로 신설: prod whisper 자동 전사는
@@ -64,6 +63,25 @@
 
 ## 완료
 
+- [x] **T-171**: export durable dirty outbox (S6/A2) — feature export GET이 매 요청 전 후보
+  `sync_feature_exports`(O(후보수)) + `_read_page` `last_exported_at` write-commit 하던 것을 **DB durable
+  dirty outbox**로 대체(PR-22 개정: process-local 스로틀·워터마크·플래그는 2프로세스·재시작 정본 불가).
+  `export_dirty_outbox`(candidate_id BIGINT PK·reason·marked_at, FK ondelete CASCADE, migration 0025 →
+  T-183 위 rebase로 down_revision 0023). `mark_candidates_dirty`(변경과 같은 트랜잭션 on_conflict upsert)를
+  resolve/reject/reopen·soft_delete(tombstone)·apply_geocode(자동확정)·merge·correct·batch 신규 후보·
+  delete_place·exclude_video에 배선. `sync_dirty`가 outbox를 `DELETE...RETURNING`으로 원자 claim→그 후보만
+  `_sync_scope`(전량과 동일 분류·upsert·tombstone 공유, golden)→consume. GET은 sync_dirty(빈 outbox면 쓰기
+  0, 순수 읽기), 안전망은 process 시작 1회 + scheduler 시간당 전량 reconcile(`FEATURE_EXPORT_RECONCILE_*`).
+  응답 스키마·cursor·operation 계약 불변. 2렌즈 적대적 리뷰: **확정 결함 1클래스(3지점) 수정** — place의
+  payload 필드(description·주소·category 등)를 바꾸는 mutation이 **그 place에 이미 매칭된 co-후보**를 dirty
+  로 표시 안 해 golden 불변식(dirty==full sync) 위반·안전망 전까지 stale → 공용 헬퍼
+  `mark_place_candidates_dirty(place_id)`(그 place 매칭 후보 전부)를 merge_places(target backfill)·geocode
+  재사용·resolve 재사용에 적용(correct_place 패턴 일원화, 실제 필드 변경 시만). golden 테스트 2건 추가.
+  리뷰의 나머지 probe(consume 원자성·FK cascade·트랜잭션 순서·GET 순수읽기)는 결함 없음. 검증: 격리 DB
+  backend 전체 pytest 675 passed(실패 0 — T-183가 기존 pre-existing 수정), migration round-trip 단일 head
+  0025. **rebase 코디네이션**: 착수 중 origin/main이 T-183(#196)로 전진해 0023(down 0024)이 head가 됨 →
+  T-183 위 rebase(무텍스트충돌 auto-merge, 함수 단위 검증)·migration 0025 down_revision 0023 reparent.
+  (2026-07-14, 로드맵 PR-22 개정·S6/A2·G1)
 - [x] **T-170**: 지오코딩 provider별 캐시 (S7) — 반복 장소 provider 재호출을 DB 캐시로 감소.
   **provider-policy allowlist 준수가 핵심**: `PROVIDER_CACHE_POLICY`(감사가능 dict, `{cacheable,
   positive/negative TTL, allowed_fields}`)로 **Kakao만 캐시**(UX cache 허용+최신 유지 의무, positive

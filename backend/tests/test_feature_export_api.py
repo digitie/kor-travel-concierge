@@ -45,8 +45,13 @@ async def _seed_ready_candidate(
     source_search_query: str | None = None,
     grounding_status: str | None = None,
     match_status=None,
+    mark_dirty: bool = True,
 ):
-    """확정(`ready`) 후보 1건과 연결 장소/영상/채널을 시드한다."""
+    """확정(`ready`) 후보 1건과 연결 장소/영상/채널을 시드한다.
+
+    `mark_dirty=False`면 dirty outbox 표시를 생략해, wired 전이를 우회한 '미배선' 후보를
+    재현한다(안전망 전량 sync 검증용).
+    """
     from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExportStatus,
@@ -136,9 +141,35 @@ async def _seed_ready_candidate(
             },
         )
         s.add(candidate)
+        await s.flush()
+        # 실제 파이프라인에서 후보가 export 대상(ready)이 되는 전이(geocode 자동확정·resolve)는
+        # 같은 트랜잭션에서 dirty outbox에 표시된다(T-171). 직접 시드는 그 전이를 우회하므로,
+        # 시드가 동일하게 dirty로 표시해 공급 GET(sync_dirty)이 ledger를 만들도록 한다.
+        if mark_dirty:
+            from ktc.services import feature_export_service
+
+            await feature_export_service.mark_candidates_dirty(
+                s, [candidate.id], reason="seed"
+            )
         await s.commit()
         await s.refresh(candidate)
         return candidate.id, place.place_id
+
+
+async def _mark_dirty(session_factory, *candidate_ids: int) -> None:
+    """직접 DB를 변경한 테스트가 실제 wired mutation처럼 후보를 dirty outbox에 표시한다.
+
+    프로덕션에서는 상태 전이가 resolve/geocode/reopen 등 wired 경로를 거쳐 같은 트랜잭션에서
+    dirty로 표시된다. 아래 테스트들은 분류 로직을 직접 DB 쓰기로 검증하는 지름길을 쓰므로,
+    그 트리거(dirty 표시)를 명시적으로 재현해 공급 GET(`sync_dirty`)이 반영하게 한다(T-171).
+    """
+    from ktc.services import feature_export_service
+
+    async with session_factory() as s:
+        await feature_export_service.mark_candidates_dirty(
+            s, list(candidate_ids), reason="test"
+        )
+        await s.commit()
 
 
 async def test_snapshot_returns_ready_candidate_as_upsert(client, session_factory):
@@ -339,6 +370,7 @@ async def test_changes_tombstones_legacy_after_reprocess_marks_failed(
         cand = await s.get(ExtractedPlaceCandidate, candidate_id)
         cand.grounding_status = GroundingStatus.UNVERIFIED.value
         await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
 
     after = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     assert after.status_code == 200
@@ -380,6 +412,7 @@ async def test_changes_emits_reject_after_export(client, session_factory):
         candidate.feature_export_status = FeatureExportStatus.REJECTED.value
         candidate.review_note = "중복 장소"
         await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
 
     changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     assert changes.status_code == 200
@@ -434,6 +467,8 @@ async def test_changes_emits_upsert_on_payload_change(client, session_factory):
         place = await s.get(TravelPlace, place_id)
         place.name = "월정리 해수욕장"
         await s.commit()
+    # 프로덕션에서는 place 보정(correct_place)이 매칭 후보를 dirty로 표시한다(T-171).
+    await _mark_dirty(session_factory, candidate_id)
 
     changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     items = changes.json()["items"]
@@ -485,6 +520,7 @@ async def test_source_entity_id_stable_across_upsert_and_reject(client, session_
         candidate.match_status = MatchStatus.IGNORED.value
         candidate.feature_export_status = FeatureExportStatus.REJECTED.value
         await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
 
     changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     reject_items = changes.json()["items"]
@@ -806,3 +842,315 @@ async def test_sync_safety_net_tombstones_soft_deleted_without_helper(
         assert row.operation == "tombstone"
 
     await _assert_full_sync_is_stable(session_factory)
+
+
+# --- T-171: durable dirty outbox (스로틀/consume·순수 읽기·golden·안전망) ---
+
+
+async def _outbox_ids(session_factory) -> set[int]:
+    from sqlalchemy import select
+
+    from ktc.models import ExportDirtyOutbox
+
+    async with session_factory() as s:
+        rows = (await s.execute(select(ExportDirtyOutbox.candidate_id))).scalars().all()
+        return {int(r) for r in rows}
+
+
+async def test_get_consumes_dirty_outbox_and_is_idempotent(client, session_factory):
+    """공급 GET은 outbox에 실린 후보만 sync하고, 처리한 outbox 행을 consume(삭제)한다.
+    변경이 없는 반복 GET은 outbox를 다시 채우지 않는다(폴링 churn 없음)."""
+    candidate_id, _ = await _seed_ready_candidate(session_factory, video_id="ob1")
+    # 시드가 후보를 dirty로 표시했다.
+    assert await _outbox_ids(session_factory) == {candidate_id}
+
+    snap = await client.get("/api/v1/features/snapshot")
+    assert [i["candidate_id"] for i in snap.json()["items"]] == [candidate_id]
+    # GET이 outbox를 consume했다.
+    assert await _outbox_ids(session_factory) == set()
+
+    # 변경 없는 반복 GET은 outbox를 다시 채우지 않는다(O(dirty)=0).
+    again = await client.get("/api/v1/features/snapshot")
+    assert [i["candidate_id"] for i in again.json()["items"]] == [candidate_id]
+    assert await _outbox_ids(session_factory) == set()
+
+
+async def test_get_is_pure_read_when_no_dirty(client, session_factory):
+    """dirty가 없는 GET은 어떤 쓰기도 하지 않는다 — sequence 불변, `last_exported_at`
+    write-commit 제거(항상 None)."""
+    from sqlalchemy import select
+
+    from ktc.models import FeatureExport
+
+    await _seed_ready_candidate(session_factory, video_id="pr1")
+    # 최초 GET: dirty consume + ledger 생성.
+    await client.get("/api/v1/features/snapshot")
+    ledger_before = await _ledger_state(session_factory)
+    assert await _outbox_ids(session_factory) == set()
+
+    # dirty 없는 반복 GET × 2: 쓰기 없음.
+    await client.get("/api/v1/features/snapshot")
+    await client.get("/api/v1/features/changes")
+
+    assert await _ledger_state(session_factory) == ledger_before
+    async with session_factory() as s:
+        rows = (await s.execute(select(FeatureExport))).scalars().all()
+        # GET은 더 이상 last_exported_at을 쓰지 않는다(순수 읽기).
+        assert all(r.last_exported_at is None for r in rows)
+
+
+async def test_wired_place_correction_marks_dirty_and_reissues(client, session_factory):
+    """place 보정 라우트(correct_place)가 매칭 후보를 dirty로 표시해, 다음 GET에서
+    payload 변경이 upsert로 재발행된다(직접 DB 조작이 아닌 wired 경로)."""
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory, video_id="corr1"
+    )
+    first = await client.get("/api/v1/features/changes")
+    cursor = first.json()["next_cursor"]
+    assert await _outbox_ids(session_factory) == set()
+
+    resp = await client.post(
+        f"/api/v1/destinations/{place_id}/correct",
+        json={"name": "월정리 해수욕장(보정)"},
+    )
+    assert resp.status_code == 200
+
+    changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    items = changes.json()["items"]
+    assert [i["operation"] for i in items] == ["upsert"]
+    assert items[0]["export_id"] == f"ytpc_{candidate_id}"
+    assert items[0]["place"]["name"] == "월정리 해수욕장(보정)"
+    await _assert_full_sync_is_stable(session_factory)
+
+
+async def test_place_delete_route_tombstones_via_dirty(client, session_factory):
+    """장소 삭제 라우트가 되돌린 후보를 dirty로 표시하고, sync_dirty가 tombstone을
+    발행한다(전량 sync 없이 dirty 경로로 회수)."""
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory, video_id="pd1"
+    )
+    first = await client.get("/api/v1/features/changes")
+    assert [i["operation"] for i in first.json()["items"]] == ["upsert"]
+    cursor = first.json()["next_cursor"]
+
+    deleted = await client.delete(f"/api/v1/destinations/{place_id}")
+    assert deleted.status_code == 200
+
+    changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    items = changes.json()["items"]
+    assert [i["operation"] for i in items] == ["tombstone"]
+    assert items[0]["export_id"] == f"ytpc_{candidate_id}"
+
+    snapshot = await client.get("/api/v1/features/snapshot")
+    assert snapshot.json()["items"] == []
+    await _assert_full_sync_is_stable(session_factory)
+
+
+async def test_dirty_sync_result_matches_full_sync_golden(client, session_factory):
+    """golden 동일성: 여러 wired 변경(유지·삭제·place 보정)을 dirty 경로로 반영한 뒤,
+    전량 sync를 돌려도 아무 변화가 없다(dirty 결과 == 전량 sync fixpoint)."""
+    from ktc.services import feature_export_service
+
+    a_id, _ = await _seed_ready_candidate(
+        session_factory, video_id="gold-a", place_name="장소 A"
+    )
+    b_id, b_place = await _seed_ready_candidate(
+        session_factory, video_id="gold-b", place_name="장소 B"
+    )
+    c_id, c_place = await _seed_ready_candidate(
+        session_factory, video_id="gold-c", place_name="장소 C"
+    )
+
+    # 최초 노출(dirty consume → upsert 3건).
+    await client.get("/api/v1/features/changes")
+
+    # b: 장소 삭제 → 후보 needs_review 복귀 + tombstone(확정 후보에도 동작하는 wired
+    # tombstone 경로. T-183가 개별 후보 삭제에 needs_review 선행조건을 추가했으므로 확정
+    # 후보의 tombstone은 장소 삭제로 만든다).
+    assert (
+        await client.delete(f"/api/v1/destinations/{b_place}")
+    ).status_code == 200
+    # c: place 보정(→ upsert 재발행).
+    assert (
+        await client.post(
+            f"/api/v1/destinations/{c_place}/correct",
+            json={"name": "장소 C(보정)"},
+        )
+    ).status_code == 200
+
+    # dirty 경로로 모두 반영.
+    await client.get("/api/v1/features/changes")
+    await client.get("/api/v1/features/snapshot")
+    assert await _outbox_ids(session_factory) == set()
+
+    ledger_dirty = await _ledger_state(session_factory)
+    # 전량 sync를 돌려도 변화 0(golden 동일) — dirty 결과가 전량 sync의 fixpoint다.
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 0
+    assert await _ledger_state(session_factory) == ledger_dirty
+
+    # 활성 snapshot은 a·c만(b는 tombstone).
+    snap = await client.get("/api/v1/features/snapshot")
+    active_ids = sorted(i["candidate_id"] for i in snap.json()["items"])
+    assert active_ids == sorted([a_id, c_id])
+
+
+async def test_safety_net_full_sync_heals_unwired_ready_candidate(
+    client, session_factory
+):
+    """미배선 자가 치유: dirty 표시를 우회해 export 대상이 된 후보는 GET(sync_dirty)에는
+    안 보이다가, 안전망 전량 sync가 ledger로 surface한다."""
+    from ktc.services import feature_export_service
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory, video_id="unwired1", mark_dirty=False
+    )
+    # dirty가 없으므로 GET에는 나타나지 않는다.
+    assert await _outbox_ids(session_factory) == set()
+    snap = await client.get("/api/v1/features/snapshot")
+    assert snap.json()["items"] == []
+
+    # 안전망 전량 sync가 미배선 후보를 보정한다.
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 1
+
+    healed = await client.get("/api/v1/features/snapshot")
+    assert [i["candidate_id"] for i in healed.json()["items"]] == [candidate_id]
+    await _assert_full_sync_is_stable(session_factory)
+
+
+async def test_golden_merge_backfill_dirties_target_resident_candidate(
+    client, session_factory
+):
+    """golden(co-매칭): merge가 target place 필드를 backfill하면, target에 이미 매칭돼 있던
+    후보(C_target)의 export payload도 바뀐다. 그 후보를 dirty로 표시하지 않으면 전량 sync가
+    변화를 감지(dirty != full)한다 — 표시하면 merge 직후 전량 sync가 fixpoint(changed==0)."""
+    from ktc.models import TravelPlace
+    from ktc.services import feature_export_service, place_service
+
+    src_id, src_place = await _seed_ready_candidate(
+        session_factory, video_id="mrg-src", place_name="병합 출처"
+    )
+    tgt_id, tgt_place = await _seed_ready_candidate(
+        session_factory, video_id="mrg-tgt", place_name="병합 대상"
+    )
+    # target place가 description을 결여하도록 비운다(merge backfill이 실제로 채우게).
+    async with session_factory() as s:
+        tgt = await s.get(TravelPlace, tgt_place)
+        tgt.description = None
+        tgt.gemini_enriched_description = None
+        await s.commit()
+
+    # 최초 노출(dirty consume → upsert 2건). C_target ledger는 description=None로 고정.
+    await client.get("/api/v1/features/changes")
+    assert await _outbox_ids(session_factory) == set()
+
+    # source→target 병합: target.description을 source에서 backfill.
+    async with session_factory() as s:
+        await place_service.merge_places(
+            s, source_place_id=src_place, target_place_id=tgt_place
+        )
+    # moved 후보(src)와 target-resident 후보(tgt)가 **모두** dirty여야 한다.
+    assert await _outbox_ids(session_factory) == {src_id, tgt_id}
+
+    # dirty 반영 후 전량 sync fixpoint(golden 동일).
+    await client.get("/api/v1/features/changes")
+    await client.get("/api/v1/features/snapshot")
+    assert await _outbox_ids(session_factory) == set()
+
+    ledger_dirty = await _ledger_state(session_factory)
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 0
+    assert await _ledger_state(session_factory) == ledger_dirty
+
+    # target-resident 후보의 payload가 backfill된 description을 반영한다.
+    snap = await client.get("/api/v1/features/snapshot")
+    by_cid = {i["candidate_id"]: i for i in snap.json()["items"]}
+    assert by_cid[tgt_id]["place"]["description"] == (
+        "에메랄드빛 바다와 카페가 가까운 제주 동쪽 해변"
+    )
+
+
+async def test_golden_resolve_reuse_dirties_co_matched_candidate(
+    client, session_factory
+):
+    """golden(co-매칭): 한 place에 후보 2개가 매칭될 때, resolve 재사용이 place.category를
+    채우면 이미 매칭돼 있던 co-매칭 후보도 stale해진다. 그 후보를 dirty로 표시하면 전량 sync가
+    fixpoint(changed==0)."""
+    from sqlalchemy import select
+
+    from ktc.etl import category_catalog
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExportStatus,
+        GroundingStatus,
+        MatchStatus,
+        TravelPlace,
+    )
+    from ktc.services import feature_export_service
+
+    # 1) place P + co-매칭 확정 후보 C1(seed). category_code_suggestion을 UNKNOWN 센티넬로
+    # 두어 재사용 category fill이 트리거되게 한다(category·category_code_suggestion 모두
+    # NOT NULL이라 None 대신 UNKNOWN 코드를 쓴다).
+    c1_id, p_place = await _seed_ready_candidate(
+        session_factory, video_id="reuse-co", place_name="재사용 장소"
+    )
+    async with session_factory() as s:
+        p = await s.get(TravelPlace, p_place)
+        p.category_code_suggestion = category_catalog.UNKNOWN_CATEGORY_CODE
+        await s.commit()
+
+    # 2) 같은 place에 match_existing으로 확정될 needs_review 후보 C2(카테고리 코드 evidence).
+    async with session_factory() as s:
+        s.add(
+            ExtractedPlaceCandidate(
+                video_id="reuse-co",
+                source_channel_id="chan-reuse-co",
+                source_text="같은 장소 다른 후보",
+                ai_place_name="재사용 장소",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                grounding_status=GroundingStatus.VERIFIED_RAW.value,
+                feature_export_status=FeatureExportStatus.PENDING.value,
+                provider_evidence_json={"transcript": {"category_code": "01050100"}},
+            )
+        )
+        await s.commit()
+    async with session_factory() as s:
+        c2_id = (
+            await s.execute(
+                select(ExtractedPlaceCandidate.id).where(
+                    ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW
+                )
+            )
+        ).scalar_one()
+
+    # 3) 최초 노출(C1 upsert, category 없음).
+    await client.get("/api/v1/features/changes")
+    assert await _outbox_ids(session_factory) == set()
+
+    # 4) C2를 P에 match_existing 확정 → P.category 채워짐 → C1(co-매칭)도 dirty.
+    resolved = await client.post(
+        f"/api/v1/destinations/unmatched/{c2_id}/resolve",
+        json={"action": "match_existing", "place_id": p_place},
+    )
+    assert resolved.status_code == 200
+    assert await _outbox_ids(session_factory) == {c1_id, c2_id}
+
+    # 5) dirty 반영 후 전량 sync fixpoint(golden 동일).
+    await client.get("/api/v1/features/changes")
+    await client.get("/api/v1/features/snapshot")
+    assert await _outbox_ids(session_factory) == set()
+
+    ledger_dirty = await _ledger_state(session_factory)
+    async with session_factory() as s:
+        changed = await feature_export_service.sync_feature_exports(s)
+    assert changed == 0
+    assert await _ledger_state(session_factory) == ledger_dirty
+
+    # C1의 payload가 채워진 카테고리 코드를 반영한다.
+    snap = await client.get("/api/v1/features/snapshot")
+    by_cid = {i["candidate_id"]: i for i in snap.json()["items"]}
+    assert by_cid[c1_id]["place"]["category_code_suggestion"] == "01050100"

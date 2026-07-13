@@ -24,11 +24,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.models import (
     EvidenceSourceKind,
+    ExportDirtyOutbox,
     ExtractedPlaceCandidate,
     FeatureExport,
     FeatureExportOperation,
@@ -290,6 +292,64 @@ def _classify(
     return None, None, None
 
 
+async def mark_candidates_dirty(
+    session: AsyncSession,
+    candidate_ids: Sequence[int],
+    reason: str,
+    *,
+    marked_at: Any | None = None,
+) -> None:
+    """export payload에 영향을 주는 후보 변경을 durable dirty outbox에 기록한다(T-171).
+
+    **변경을 일으키는 같은 트랜잭션/세션**에서 호출해야 한다(commit은 호출자 책임). 같은
+    후보가 다시 실리면 `candidate_id` PK 충돌을 `on_conflict_do_update`로 흡수해 마지막
+    사유가 이긴다(자가 dedup). sync는 멱등이라 경계 중복은 안전하다.
+
+    이 outbox에 실린 후보만 공급 GET(`sync_dirty`)이 동기화하므로, export payload를 바꾸는
+    mutation 지점에서 반드시 호출해야 즉시 반영된다. 놓친 지점은 안전망(전량
+    `sync_feature_exports`)이 최대 1시간 내 보정한다.
+    """
+    ids = [int(cid) for cid in candidate_ids if cid is not None]
+    if not ids:
+        return
+    now = marked_at or utcnow()
+    values = [
+        {"candidate_id": cid, "reason": reason, "marked_at": now}
+        for cid in dict.fromkeys(ids)  # 세션 내 중복 id를 먼저 제거(같은 값 재삽입 방지)
+    ]
+    stmt = pg_insert(ExportDirtyOutbox).values(values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ExportDirtyOutbox.candidate_id],
+        set_={"reason": stmt.excluded.reason, "marked_at": stmt.excluded.marked_at},
+    )
+    await session.execute(stmt)
+
+
+async def mark_place_candidates_dirty(
+    session: AsyncSession, place_id: int | None, reason: str
+) -> None:
+    """`place_id`에 매칭된(soft delete 안 된) **모든** 후보를 dirty outbox에 표시한다(T-171).
+
+    한 확정 장소에는 여러 후보가 co-매칭될 수 있고, export payload의 place_block은 그 장소
+    필드에서 만들어진다. 따라서 장소의 payload 관련 필드(이름·설명·주소·카테고리·좌표 등)를
+    바꾸는 mutation은 현재 후보만이 아니라 **그 장소에 매칭된 후보 전부**를 dirty로 표시해야
+    dirty sync 결과가 전량 sync와 같아진다(golden 불변식). 그렇지 않으면 co-매칭 후보의
+    export가 안전망 reconcile 전까지 stale해진다. 변경이 실제로 있을 때만 호출하는 것은
+    호출자 책임이다(불필요 churn 방지). 같은 트랜잭션에서 호출하고 commit은 호출자 몫이다.
+    """
+    if place_id is None:
+        return
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.matched_place_id == place_id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    await mark_candidates_dirty(session, list(ids), reason)
+
+
 async def _next_sequence(session: AsyncSession) -> int:
     value = await session.scalar(select(feature_export_sequence.next_value()))
     return int(value)
@@ -383,32 +443,34 @@ async def _load_related(
     return videos, channels, playlists, places
 
 
-async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) -> int:
-    """후보 테이블로부터 `feature_exports` ledger를 멱등 동기화한다.
+async def _sync_scope(
+    session: AsyncSession, *, candidate_ids: set[int] | None
+) -> int:
+    """후보 테이블로부터 `feature_exports` ledger를 멱등 동기화한다(commit 없음).
 
-    payload가 바뀐 export에만 새 sequence를 부여한다. 변경 건수를 반환한다.
+    `candidate_ids`가 None이면 전량(안전망 reconciliation), 아니면 그 후보와 그 후보의
+    ledger 행만 동기화(dirty consume 경로). 두 경로가 **같은 per-candidate 분류·upsert·
+    후보 소멸(tombstone) 로직**을 공유하므로, dirty 범위가 변경된 후보를 모두 포함하는 한
+    dirty sync 결과는 전량 sync 결과와 동일하다(golden 동일성). payload가 바뀐 export에만
+    새 sequence를 부여한다. 변경 건수를 반환한다.
 
     soft delete된 후보(`deleted_at IS NOT NULL`)는 스캔에서 제외한다(T-160). 이들의
     ledger 행은 아래 '후보 소멸' 루프에서 tombstone으로 잡히므로, 삭제 트랜잭션의
     `tombstone_candidate_exports`가 어떤 이유로 누락돼도 다음 sync가 복구하는
     이중 안전망이 된다.
     """
-    candidates = list(
-        (
-            await session.execute(
-                select(ExtractedPlaceCandidate).where(
-                    ExtractedPlaceCandidate.deleted_at.is_(None)
-                )
-            )
-        )
-        .scalars()
-        .all()
+    cand_stmt = select(ExtractedPlaceCandidate).where(
+        ExtractedPlaceCandidate.deleted_at.is_(None)
     )
+    if candidate_ids is not None:
+        cand_stmt = cand_stmt.where(ExtractedPlaceCandidate.id.in_(candidate_ids))
+    candidates = list((await session.execute(cand_stmt)).scalars().all())
     videos, channels, playlists, places = await _load_related(session, candidates)
 
-    existing_rows = list(
-        (await session.execute(select(FeatureExport))).scalars().all()
-    )
+    row_stmt = select(FeatureExport)
+    if candidate_ids is not None:
+        row_stmt = row_stmt.where(FeatureExport.candidate_id.in_(candidate_ids))
+    existing_rows = list((await session.execute(row_stmt)).scalars().all())
     existing_by_candidate = {row.candidate_id: row for row in existing_rows}
 
     now = utcnow()
@@ -500,6 +562,47 @@ async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) ->
             row.sequence = await _next_sequence(session)
             changed += 1
 
+    return changed
+
+
+async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) -> int:
+    """전 후보를 스캔해 ledger를 멱등 동기화하는 **안전망(reconciliation)** 전량 sync.
+
+    비용은 O(후보 수)라 공급 GET 경로에서는 쓰지 않는다(그 경로는 `sync_dirty`). 프로세스
+    시작 시 1회 + scheduler 시간당 1회 실행해, dirty outbox 배선을 놓친 mutation을 최대
+    1시간 내 자가 치유한다(T-171). 변경 건수를 반환한다.
+    """
+    changed = await _sync_scope(session, candidate_ids=None)
+    if commit:
+        await session.commit()
+    return changed
+
+
+async def sync_dirty(session: AsyncSession, *, commit: bool = True) -> int:
+    """durable dirty outbox에 실린 후보만 ledger에 동기화하고 처리한 outbox 행을 consume한다.
+
+    공급 GET(`get_snapshot`/`get_changes`)의 동기화 경로다. 비용이 후보 수가 아니라 최근
+    변경 수(O(dirty))에 비례해, 소비자가 폴링해도 서버 부하가 후보 수에 비례하지 않는다
+    (S6/A2 해소). outbox가 비어 있으면 아무 것도 쓰지 않고 0을 반환한다(순수 읽기 GET).
+
+    outbox가 비었으면 먼저 가벼운 존재 확인(SELECT)만 하고 어떤 쓰기 statement도 내지 않아
+    GET을 순수 읽기로 둔다. 행이 있으면 DELETE ... RETURNING으로 **원자적으로 claim**한 뒤
+    그 후보만 동기화한다. 같은 트랜잭션이라 실패 시 claim이 롤백돼 outbox 행이 보존되고,
+    존재 확인 이후 커밋된 새 변경은 outbox에 남아 다음 GET이 처리한다(유실 없음). 변경
+    건수를 반환한다.
+    """
+    has_dirty = await session.scalar(select(ExportDirtyOutbox.candidate_id).limit(1))
+    if has_dirty is None:
+        return 0
+    claimed = (
+        await session.execute(
+            delete(ExportDirtyOutbox).returning(ExportDirtyOutbox.candidate_id)
+        )
+    ).scalars().all()
+    dirty_ids = {int(cid) for cid in claimed}
+    if not dirty_ids:
+        return 0
+    changed = await _sync_scope(session, candidate_ids=dirty_ids)
     if commit:
         await session.commit()
     return changed
@@ -547,12 +650,11 @@ async def _read_page(
     rows = rows[:page_limit]
     items = [_serialize_item(row) for row in rows]
 
+    # 순수 읽기(T-171): 예전에는 노출 진단용 `last_exported_at`를 매 GET write-commit 했으나,
+    # 그 컬럼을 읽는 소비처가 없어(진단 전용) GET을 상시 쓰기로 만들 뿐이었다. 컬럼은 유지하되
+    # 갱신은 제거해 GET을 순수 읽기로 둔다(동기화 쓰기는 `sync_dirty`가 dirty 있을 때만 수행).
     if rows:
         next_cursor: str | None = _encode_cursor(rows[-1].sequence)
-        now = utcnow()
-        for row in rows:
-            row.last_exported_at = now
-        await session.commit()
     else:
         # 변경이 없으면 입력 cursor를 그대로 유지해 다음 polling이 재스캔하지 않게 한다.
         next_cursor = cursor or None
@@ -567,7 +669,7 @@ async def get_snapshot(
     limit: int = FEATURE_EXPORT_LIMIT_DEFAULT,
 ) -> FeatureExportPage:
     """현재 활성(`upsert`) feature를 full snapshot으로 노출한다."""
-    await sync_feature_exports(session)
+    await sync_dirty(session)
     return await _read_page(
         session, cursor=cursor, limit=limit, only_active=True
     )
@@ -580,7 +682,7 @@ async def get_changes(
     limit: int = FEATURE_EXPORT_LIMIT_DEFAULT,
 ) -> FeatureExportPage:
     """`upsert`/`reject`/`tombstone` 변경을 incremental로 노출한다."""
-    await sync_feature_exports(session)
+    await sync_dirty(session)
     return await _read_page(
         session, cursor=cursor, limit=limit, only_active=False
     )

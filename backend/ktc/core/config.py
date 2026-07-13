@@ -280,6 +280,10 @@ class Settings(BaseSettings):
     SOURCE_SCAN_BATCH_SIZE: int = 20
     SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES: int = 10_080
     SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES: int = 15
+    # feature export durable dirty outbox 안전망(T-171): 미배선 mutation 보정을 위해
+    # 스케줄러 시작 시 1회 + 주기적으로 전량 sync를 돌린다.
+    FEATURE_EXPORT_RECONCILE_ENABLED: bool = True
+    FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS: int = 3_600
 
     @property
     def api_keys(self) -> list[str]:

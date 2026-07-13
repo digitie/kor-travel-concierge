@@ -1047,6 +1047,11 @@ async def correct_place(
         place.legal_dong_code = None
         place.legal_dong_name = None
     place.last_reviewed_at = utcnow()
+    # 확정 장소 보정이 export payload(이름·좌표·주소·카테고리·설명)를 바꾸므로, 이 장소를
+    # 매칭한 후보 전부를 dirty로 표시해 다음 공급 GET에 반영한다(T-171, 공용 헬퍼).
+    await feature_export_service.mark_place_candidates_dirty(
+        session, place.place_id, reason="correct_place"
+    )
     if commit:
         corrected_place_id = place.place_id
         await session.commit()
@@ -1133,6 +1138,7 @@ async def merge_places(
     for asset in moved_assets:
         asset.place_id = target_place_id
 
+    target_backfilled = False
     for field in (
         "description",
         "gemini_enriched_description",
@@ -1144,8 +1150,22 @@ async def merge_places(
     ):
         if not getattr(target, field) and getattr(source, field):
             setattr(target, field, getattr(source, field))
+            target_backfilled = True
     target.last_reviewed_at = utcnow()
     await session.delete(source)
+    # source→target으로 재배치된 후보의 export payload(place 이름·좌표·주소)가 바뀌므로
+    # 같은 트랜잭션에서 dirty로 표시한다(T-171).
+    await feature_export_service.mark_candidates_dirty(
+        session,
+        [candidate.id for candidate in moved_candidates],
+        reason="merge_places",
+    )
+    # target place 필드가 backfill로 실제 바뀌면, target에 이미 매칭돼 있던 co-매칭 후보들의
+    # export payload도 바뀌므로 그 후보 전부를 dirty로 표시한다(golden 불변식, T-171).
+    if target_backfilled:
+        await feature_export_service.mark_place_candidates_dirty(
+            session, target_place_id, reason="merge_target_backfill"
+        )
     if commit:
         await session.commit()
         await session.refresh(target)
@@ -1473,6 +1493,9 @@ async def resolve_candidate(
     mapping: VideoPlaceMapping | None = None
     nearby_decision: str | None = None
     nearby_place_ids: list[int] = []
+    # 재사용(기존) place의 payload 필드가 실제로 바뀌었는지. 바뀌면 그 place의 co-매칭 후보
+    # 전부를 dirty로 표시해야 golden 불변식을 지킨다(T-171).
+    reused_place_field_changed = False
     if action == "ignore":
         candidate.match_status = MatchStatus.IGNORED
         candidate.feature_export_status = FeatureExportStatus.REJECTED.value
@@ -1495,6 +1518,8 @@ async def resolve_candidate(
             None,
             category_catalog.UNKNOWN_CATEGORY_CODE,
         ):
+            if place.category_code_suggestion != code:
+                reused_place_field_changed = True
             place.category_code_suggestion = code
             place.category = category_catalog.label_for_or_unknown(code)
         candidate.match_status = MatchStatus.USER_CORRECTED
@@ -1569,6 +1594,11 @@ async def resolve_candidate(
                 or place.category_code_suggestion
                 in (None, category_catalog.UNKNOWN_CATEGORY_CODE)
             ):
+                if (
+                    place.category_code_suggestion != selected_code
+                    or place.category != selected_label
+                ):
+                    reused_place_field_changed = True
                 place.category_code_suggestion = selected_code
                 place.category = selected_label
         else:
@@ -1614,6 +1644,17 @@ async def resolve_candidate(
     )
     if place is not None:
         mapping = await _ensure_candidate_mapping(session, candidate, place)
+    # export payload에 영향을 주는 상태 전이(ignore=reject, match/create=upsert)를 같은
+    # 트랜잭션의 dirty outbox에 기록한다(T-171). 다음 공급 GET이 이 후보만 동기화한다.
+    await feature_export_service.mark_candidates_dirty(
+        session, [candidate.id], reason=f"resolve:{action}"
+    )
+    # 재사용 place의 카테고리 필드가 실제 바뀌면 그 place의 co-매칭 후보 전부도 stale해지므로
+    # 함께 dirty로 표시한다(golden 불변식, T-171).
+    if reused_place_field_changed and place is not None:
+        await feature_export_service.mark_place_candidates_dirty(
+            session, place.place_id, reason="resolve_reuse_backfill"
+        )
     if commit:
         resolved_place_id = place.place_id if place is not None else None
         await session.commit()
@@ -1825,6 +1866,12 @@ async def delete_place(
     # ORM relationship에 flush 순서를 맡기지 않고 FK 자식 정리를 먼저 확정한다.
     await session.flush()
     await session.delete(place)
+    # 되돌린 후보(needs_review + pending, 장소 링크 해제)의 기존 export는 tombstone으로
+    # 회수돼야 하므로 같은 트랜잭션에서 dirty로 표시한다(T-171). 호출부(route)가
+    # `sync_dirty`를 돌리면 tombstone이 발행된다.
+    await feature_export_service.mark_candidates_dirty(
+        session, [candidate.id for candidate in reverted], reason="place_deleted"
+    )
     await session.flush()
     return reverted
 
@@ -2363,6 +2410,13 @@ async def soft_delete_candidates(
     tombstoned = await feature_export_service.tombstone_candidate_exports(
         session, live_ids, reason=reason_text
     )
+    # 삭제된 후보를 dirty로도 표시한다(T-171). 위 tombstone 전환이 이미 ledger를 갱신하므로
+    # 이는 belt-and-suspenders다 — sync_dirty의 '후보 소멸' 분류는 이미 tombstone인 행을
+    # 재sequence하지 않아(freeze) 결과가 동일하다. 삭제 경로가 스캔에 안 잡히는 만큼
+    # outbox를 정본으로 유지한다.
+    await feature_export_service.mark_candidates_dirty(
+        session, live_ids, reason="soft_delete"
+    )
     await session.flush()
     return SoftDeleteSummary(
         candidate_ids=live_ids,
@@ -2406,6 +2460,11 @@ async def reopen_candidate(
         # 사유 참고 가치가 있어 보존한다.
         candidate.reviewed_by = None
         candidate.reviewed_at = None
+        # 복귀(needs_review+pending)로 기존 export가 tombstone 회수돼야 하므로 dirty로
+        # 표시한다(T-171). 재확정 전까지 sync는 tombstone을 유지한다(freeze).
+        await feature_export_service.mark_candidates_dirty(
+            session, [candidate.id], reason="reopen:deleted"
+        )
         await session.flush()
         return candidate, "deleted"
     if candidate.match_status == MatchStatus.IGNORED.value:
@@ -2414,6 +2473,9 @@ async def reopen_candidate(
         # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 보존.
         candidate.reviewed_by = None
         candidate.reviewed_at = None
+        await feature_export_service.mark_candidates_dirty(
+            session, [candidate.id], reason="reopen:ignored"
+        )
         await session.flush()
         return candidate, "ignored"
     if candidate.match_status == MatchStatus.NEEDS_REVIEW.value:
