@@ -25,7 +25,7 @@ from ktc.etl import (
     media_store,
     transcript_correction,
 )
-from ktc.etl.transcript import TranscriptResult
+from ktc.etl.transcript import TranscriptAttempt, TranscriptOutcome, TranscriptResult
 from ktc.models import (
     AssetType,
     CrawlStatus,
@@ -38,12 +38,24 @@ from ktc.models import (
 )
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
-TranscriptFetcher = Callable[[str], Awaitable["TranscriptResult | None"]]
+# fetcher는 T-164 이후 `TranscriptOutcome`(성공 result + provider별 시도)을 반환한다.
+# 구 계약(TranscriptResult|None)도 `TranscriptOutcome.coerce`로 흡수한다(주입 호환).
+TranscriptFetcher = Callable[
+    [str], Awaitable["TranscriptOutcome | TranscriptResult | None"]
+]
 # durable 단계 이벤트 콜백(T-162, crawl_run_service.StageReporter 계약과 동일):
 # (stage, *, outcome, provider=None, attempt=None, item_ref=None,
 #  elapsed_ms=None, detail=None). 주입형으로 두어 ETL 계층이 crawl_run에
 # 직접 의존하지 않게 한다(테스트 가능성 포함).
 StageReporter = Callable[..., Awaitable[None]]
+# transcript 시도 기록 콜백(T-164, crawl_run_service.AttemptRecorder 계약과 동일):
+# (video_id, attempts) — provider별 시도를 transcript_attempts에 durable하게 남긴다.
+AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
+
+
+def _attempts_one_line(outcome: TranscriptOutcome) -> str:
+    """provider별 시도 요약 1줄(작업 상태 로그용). stage 이벤트와 정합(요약 vs 상세)."""
+    return ", ".join(f"{a.provider}={a.outcome}" for a in outcome.attempts)
 
 # 단일 영상 자막이 분당 토큰 한도(TPM)를 넘지 않도록 LLM 입력에 적용하는 문자 상한.
 # 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
@@ -103,6 +115,7 @@ async def process_video_batch(
     transcript_fetcher: TranscriptFetcher,
     status_reporter: StatusReporter | None = None,
     stage_reporter: StageReporter | None = None,
+    attempt_recorder: AttemptRecorder | None = None,
     start_stage: str = "transcript",
     default_category_code: str | None = None,
 ) -> dict[str, Any]:
@@ -184,7 +197,7 @@ async def process_video_batch(
             if raw_text is None:
                 fetch_started = time.monotonic()
                 try:
-                    transcript = await transcript_fetcher(video.video_id)
+                    fetched = await transcript_fetcher(video.video_id)
                 except Exception as exc:
                     await _report_stage(
                         stage_reporter,
@@ -195,18 +208,35 @@ async def process_video_batch(
                         detail=str(exc),
                     )
                     raise
+                # provider별 시도(성공 전 실패 포함)를 durable하게 기록하고, 영상의
+                # 요약 캐시(성공 provider·최종 실패 코드)를 attempts에서 파생 갱신한다.
+                outcome = TranscriptOutcome.coerce(fetched)
+                if attempt_recorder is not None and outcome.attempts:
+                    await attempt_recorder(video.video_id, outcome.attempts)
+                video.transcript_source = outcome.success_provider
+                video.transcript_failure_code = outcome.failure_code
+                transcript = outcome.result
+                attempts_line = _attempts_one_line(outcome)
                 if transcript is None or not transcript.segments:
+                    detail = (
+                        f"자막 실패(provider별: {attempts_line})"
+                        if attempts_line
+                        else "자막을 찾지 못함(모든 provider 실패)"
+                    )
                     await _report_stage(
                         stage_reporter,
                         "transcript_fetch",
                         outcome="failure",
                         started=fetch_started,
                         item_ref=video.video_id,
-                        detail="자막을 찾지 못함(모든 provider 실패)",
+                        detail=detail,
                     )
                     video.crawl_status = CrawlStatus.FAILED
                     summary["failed_videos"] += 1
-                    await _report(status_reporter, f"{label}의 자막을 찾지 못해 건너뜁니다.")
+                    await _report(
+                        status_reporter,
+                        f"{label}의 자막을 찾지 못해 건너뜁니다. 사유: {attempts_line or '없음'}.",
+                    )
                     continue
                 await _report_stage(
                     stage_reporter,
@@ -215,7 +245,13 @@ async def process_video_batch(
                     started=fetch_started,
                     provider=transcript.source,
                     item_ref=video.video_id,
-                    detail=f"segments={len(transcript.segments)}",
+                    detail=f"segments={len(transcript.segments)}; 시도: {attempts_line}",
+                )
+                # 최종 성공 provider·이전 실패 코드를 작업 상태 로그에도 요약 1줄로 남긴다
+                # (stage 이벤트는 요약, transcript_attempts는 provider별 상세 — 정합).
+                await _report(
+                    status_reporter,
+                    f"{label} 자막 확보(provider={transcript.source}). 시도: {attempts_line}.",
                 )
                 raw_text = transcript.to_timestamped_text()
                 transcript_source = transcript.source
@@ -230,13 +266,21 @@ async def process_video_batch(
                 )
                 raw_asset_id = raw_asset.id
             await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
+            # 긴 영상 대응 절단(D7 미통지 해소): 원 길이→절단 길이를 작업 로그에 남긴다.
+            correction_input = raw_text[:_MAX_TRANSCRIPT_CHARS]
+            if len(raw_text) > _MAX_TRANSCRIPT_CHARS:
+                await _report(
+                    status_reporter,
+                    f"{label} 자막이 길어 교정 입력을 "
+                    f"{len(raw_text)}자→{_MAX_TRANSCRIPT_CHARS}자로 절단했습니다.",
+                )
             correction_timeout = get_settings().LLM_TRANSCRIPT_CORRECTION_TIMEOUT_SECONDS
             correction_started = time.monotonic()
             try:
                 corrected = await asyncio.wait_for(
                     transcript_correction.correct_transcript(
                         runtime,
-                        transcript=raw_text[:_MAX_TRANSCRIPT_CHARS],
+                        transcript=correction_input,
                         description=video.description_raw,
                     ),
                     timeout=correction_timeout,
@@ -312,6 +356,13 @@ async def process_video_batch(
     for alias, corrected in items:
         # 단일 영상이 예산을 넘지 않도록 절단(rate limiter 무한 보류 방지).
         if len(corrected) > max_chars:
+            # D7 미통지 해소: 토큰 예산 절단 사실(원 길이→절단 길이)을 1줄 남긴다.
+            item_label = batch[alias]["video"].title or batch[alias]["video"].video_id
+            await _report(
+                status_reporter,
+                f"{item_label} POI 입력을 토큰 예산으로 "
+                f"{len(corrected)}자→{max_chars}자로 절단했습니다.",
+            )
             corrected = corrected[:max_chars]
         tok = gemini_rate_limiter.estimate_tokens(corrected)
         if current and current_tokens + tok > budget:
