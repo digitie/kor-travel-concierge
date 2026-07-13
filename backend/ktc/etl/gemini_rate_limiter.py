@@ -1,12 +1,20 @@
-"""Gemini API 키 전역 rate limiter (DB 단일 행, 순차).
+"""Gemini API 키 전역 rate limiter (DB 단일 행, admission 카운팅).
 
 API·scheduler 두 프로세스가 같은 Gemini 키를 공유하므로, 분당 요청(RPM)·분당 토큰(TPM)·
-일일 요청(RPD, PT 자정 리셋)을 DB 단일 행에 `FOR UPDATE`로 기록해 강제한다. 병렬은 쓰지
-않으며(순차), 한도 초과 시 분 윈도우가 풀릴 때까지 대기(RPM/TPM)하고, 일일 한도면
-`GeminiQuotaExceeded`를 던져 작업을 보류시킨다. DeepSeek 등 비-Gemini 콜은 대상이 아니다.
+일일 요청(RPD, PT 자정 리셋)을 DB 단일 행에 `FOR UPDATE`로 기록해 강제한다. row lock은
+quota 숫자를 갱신하는 짧은 트랜잭션 동안만 유지된다 — **network 호출을 직렬화하지 않고
+admission(입장 허가)만 카운팅한다**. 한도 초과 시 분 윈도우가 풀릴 때까지 대기(RPM/TPM)하고,
+일일 한도면 `GeminiQuotaExceeded`를 던져 작업을 보류시킨다. DeepSeek 등 비-Gemini 콜은
+별도 쿼터라 대상이 아니다.
 
-사용: 동기 Gemini 호출을 `asyncio.to_thread`로 감싸기 **직전**에 `await acquire(...)`로 슬롯을
-예약한다. 모든 Gemini 호출부(파이프라인·검수 의견·deep research)가 같은 카운터를 공유한다.
+사용: LLM 게이트웨이(`llm_client.generate`)가 Gemini 호출 직전에 `await acquire(...)`로
+슬롯을 예약한다(T-161). 모든 Gemini 호출(POI 배치·자막 교정·keyword 확장·검수 의견·
+카테고리 제안·deep research·video analysis 멀티모달)이 게이트웨이를 경유하므로 같은
+카운터를 공유한다. 게이트웨이 밖에서 `acquire`를 직접 호출하지 않는다(이중 예약 방지 —
+`tests/test_llm_gateway_guard.py`가 강제).
+
+한도 값(`GEMINI_RATE_RPM/TPM/RPD`)은 env로 조정한다. 기본값은 무료 티어 예시이며 실제
+한도는 모델·티어·계정 상태에 따라 다르다(`.env.example` 주석 참조, PR-05).
 """
 
 from __future__ import annotations
