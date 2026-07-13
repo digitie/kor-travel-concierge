@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from time import perf_counter
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -20,7 +21,9 @@ from ktc.models import (
     TravelPlace,
     VideoPlaceMapping,
     YoutubeChannel,
+    YoutubePlaylist,
     YoutubeVideo,
+    utcnow,
 )
 from ktc.services import crawl_run_service
 from main import app
@@ -285,6 +288,528 @@ async def test_unmatched_301_keyset_filter_guard_and_page_outside_detail(
     detail = await client.get("/api/v1/destinations/candidates/1/detail")
     assert detail.status_code == 200
     assert detail.json()["candidate"]["id"] == 1
+    assert detail.json()["list_item"]["id"] == 1
+
+
+async def test_unmatched_oldest_501_snapshot_and_all_filter_new_count(
+    client, session
+):
+    session.add_all(
+        [
+            YoutubeChannel(channel_id="queue-channel", title="검수 채널"),
+            YoutubeChannel(channel_id="other-channel", title="다른 채널"),
+        ]
+    )
+    session.add(
+        YoutubePlaylist(
+            playlist_id="queue-playlist",
+            channel_id="queue-channel",
+            title="검수 재생목록",
+        )
+    )
+    session.add_all(
+        [
+            YoutubeVideo(
+                video_id="queue-video",
+                title="검수 영상",
+                url="https://example.invalid/queue",
+                channel_id="queue-channel",
+                source_search_query="검수 검색어",
+            ),
+            YoutubeVideo(
+                video_id="other-video",
+                title="다른 영상",
+                url="https://example.invalid/other",
+                channel_id="other-channel",
+                source_search_query="다른 검색어",
+            ),
+        ]
+    )
+    await session.flush()
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text=f"서울 근거 {index}",
+                ai_place_name=f"서울 후보 {index}",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                grounding_status=GroundingStatus.VERIFIED_RAW.value,
+                is_domestic=True,
+            )
+            for index in range(501)
+        ]
+    )
+    await session.commit()
+
+    filters = {
+        "q": "서울",
+        "sort": "oldest",
+        "is_domestic": "true",
+        "status": "needs_review",
+        "channel_id": "queue-channel",
+        "playlist_id": "queue-playlist",
+        "keyword": "검수 검색어",
+        "reason": "extraction_only",
+        "source_kind": "transcript",
+        "grounding": "verified_raw",
+    }
+    first = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={**filters, "limit": 300},
+    )
+    assert first.status_code == 200
+    body = first.json()
+    assert body["total"] == 501
+    assert body["newest_id"] == 501
+    assert body["has_more"] is True
+    assert [item["id"] for item in body["items"]] == list(range(1, 301))
+    assert {item["grounding_status"] for item in body["items"]} == {
+        GroundingStatus.VERIFIED_RAW.value
+    }
+
+    page_out_detail = await client.get(
+        "/api/v1/destinations/candidates/501/detail"
+    )
+    assert page_out_detail.status_code == 200
+    detail_body = page_out_detail.json()
+    assert detail_body["list_item"]["id"] == 501
+    assert detail_body["candidate"]["source_channel_id"] == "queue-channel"
+    assert detail_body["candidate"]["source_playlist_id"] == "queue-playlist"
+    assert detail_body["video"]["channel_id"] == "queue-channel"
+    assert detail_body["video"]["source_search_query"] == "검수 검색어"
+
+    # cursor snapshot 뒤에는 filter별 비일치 신규 행도 함께 만든다. newer_than은
+    # q/status/is_domestic/출처/사유 전체가 같은 한 행만 세어야 한다.
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="서울 제외 근거",
+                ai_place_name="서울 제외 후보",
+                match_status=MatchStatus.IGNORED,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="서울 해외 근거",
+                ai_place_name="서울 해외 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=False,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="부산 근거",
+                ai_place_name="부산 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="description",
+                source_text="서울 설명 근거",
+                ai_place_name="서울 설명 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_kind="transcript",
+                source_text="서울 다른 재생목록 근거",
+                ai_place_name="서울 다른 재생목록 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="other-video",
+                source_channel_id="other-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="서울 다른 출처 근거",
+                ai_place_name="서울 다른 출처 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="서울 모호 근거",
+                ai_place_name="서울 모호 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+                provider_evidence_json={
+                    "geocoding": {"decision": {"reason": "ambiguous"}}
+                },
+            ),
+            # 일치 행을 마지막 ID로 둬 `max_id - baseline` 같은 잘못된 신규 건수
+            # 계산이 8을 반환하고, 실제 filter count만 1을 반환하도록 고정한다.
+            ExtractedPlaceCandidate(
+                video_id="queue-video",
+                source_channel_id="queue-channel",
+                source_playlist_id="queue-playlist",
+                source_kind="transcript",
+                source_text="서울 신규 근거",
+                ai_place_name="서울 신규 후보",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                grounding_status=GroundingStatus.VERIFIED_RAW.value,
+                is_domestic=True,
+            ),
+        ]
+    )
+    await session.commit()
+
+    second = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            **filters,
+            "limit": 300,
+            "cursor": body["next_cursor"],
+            "newer_than_id": 501,
+        },
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert [item["id"] for item in second_body["items"]] == list(range(301, 502))
+    assert second_body["total"] == 501
+    assert second_body["newest_id"] == 501
+    assert second_body["newer_than"] == 1
+    assert second_body["has_more"] is False
+    assert second_body["next_cursor"] is None
+    assert detail_body["list_item"] == next(
+        item for item in second_body["items"] if item["id"] == 501
+    )
+
+    fresh = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={**filters, "limit": 1, "newer_than_id": 501},
+    )
+    assert fresh.status_code == 200
+    assert fresh.json()["total"] == 502
+    assert fresh.json()["newest_id"] == 509
+    assert fresh.json()["newer_than"] == 1
+
+    newest_count = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            **filters,
+            "sort": "newest",
+            "limit": 1,
+            "newer_than_id": 501,
+        },
+    )
+    assert newest_count.status_code == 200
+    assert newest_count.json()["newest_id"] == 509
+    assert newest_count.json()["newer_than"] == 1
+
+    for changed_filter in (
+        {"q": "부산"},
+        {"sort": "newest"},
+        {"is_domestic": "false"},
+        {"status": "ignored"},
+        {"grounding": "missing"},
+    ):
+        mismatch = await client.get(
+            "/api/v1/destinations/unmatched",
+            params={
+                **filters,
+                **changed_filter,
+                "limit": 1,
+                "cursor": body["next_cursor"],
+            },
+        )
+        assert mismatch.status_code == 400
+
+
+async def test_unmatched_search_normalization_wildcards_status_and_detail(
+    client, session
+):
+    session.add(YoutubeChannel(channel_id="search-channel", title="검색 채널"))
+    session.add(
+        YoutubeVideo(
+            video_id="search-video",
+            title="검색 검수 영상",
+            url="https://example.invalid/search",
+            channel_id="search-channel",
+        )
+    )
+    await session.flush()
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="특수 검색어 근거",
+                ai_place_name="100%_맛집",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="wildcard 대조 근거",
+                ai_place_name="100XX맛집",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                is_domestic=True,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="위치 검색 근거",
+                ai_place_name="이름만 있는 후보",
+                location_hint="종로 골목",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="제외 근거 1",
+                ai_place_name="제외 후보 1",
+                match_status=MatchStatus.IGNORED,
+                is_domestic=False,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="제외 근거 2",
+                ai_place_name="제외 후보 2",
+                match_status=MatchStatus.IGNORED,
+                is_domestic=False,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="삭제 근거",
+                ai_place_name="삭제 후보",
+                match_status=MatchStatus.IGNORED,
+                is_domestic=False,
+                deleted_at=utcnow(),
+                deletion_reason="테스트 soft delete",
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="Unicode 자기검색 근거",
+                ai_place_name="Straße 카페",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="Unicode 대조 근거",
+                ai_place_name="Strasse 카페",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="percent 문자 근거",
+                ai_place_name="퍼센트 100% 맛집",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="percent 대조 근거",
+                ai_place_name="퍼센트 100X 맛집",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="underscore 문자 근거",
+                ai_place_name="밑줄 A_B",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="underscore 대조 근거",
+                ai_place_name="밑줄 AXB",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="backslash 문자 근거",
+                ai_place_name=r"역슬래시 A\B",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="search-video",
+                source_text="backslash 대조 근거",
+                ai_place_name="역슬래시 AB",
+                match_status=MatchStatus.NEEDS_REVIEW,
+            ),
+        ]
+    )
+    await session.commit()
+
+    literal = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            "q": " 100%_맛집 ",
+            "status": "needs_review",
+            "is_domestic": "true",
+        },
+    )
+    assert literal.status_code == 200
+    assert literal.json()["total"] == 1
+    assert literal.json()["items"][0]["ai_place_name"] == "100%_맛집"
+
+    location = await client.get(
+        "/api/v1/destinations/unmatched", params={"q": "종로"}
+    )
+    assert location.status_code == 200
+    assert [item["ai_place_name"] for item in location.json()["items"]] == [
+        "이름만 있는 후보"
+    ]
+
+    for query, expected_name in (
+        ("Straße", "Straße 카페"),
+        ("100% 맛집", "퍼센트 100% 맛집"),
+        ("A_B", "밑줄 A_B"),
+        (r"A\B", r"역슬래시 A\B"),
+    ):
+        escaped = await client.get(
+            "/api/v1/destinations/unmatched", params={"q": query}
+        )
+        assert escaped.status_code == 200
+        assert escaped.json()["total"] == 1
+        assert [item["ai_place_name"] for item in escaped.json()["items"]] == [
+            expected_name
+        ]
+
+    no_query = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={"limit": 1, "sort": "oldest"},
+    )
+    whitespace_query = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            "limit": 1,
+            "sort": "oldest",
+            "q": "   ",
+            "is_domestic": "all",
+            "cursor": no_query.json()["next_cursor"],
+        },
+    )
+    assert whitespace_query.status_code == 200
+    assert whitespace_query.json()["items"][0]["id"] == 2
+
+    ignored = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            "limit": 2,
+            "sort": "oldest",
+            "status": "ignored",
+            "is_domestic": "false",
+        },
+    )
+    ignored_body = ignored.json()
+    assert ignored_body["total"] == 2
+    assert [item["id"] for item in ignored_body["items"]] == [4, 5]
+    assert ignored_body["has_more"] is False
+    assert ignored_body["next_cursor"] is None
+
+    ignored_detail = await client.get("/api/v1/destinations/candidates/4/detail")
+    assert ignored_detail.status_code == 200
+    assert ignored_detail.json()["list_item"]["match_status"] == "ignored"
+    assert ignored_detail.json()["list_item"]["video_title"] == "검색 검수 영상"
+    assert (
+        await client.get("/api/v1/destinations/candidates/6/detail")
+    ).status_code == 404
+
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"q": "x" * 255}
+        )
+    ).status_code == 200
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"q": "x" * 256}
+        )
+    ).status_code == 422
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"sort": "confidence"}
+        )
+    ).status_code == 422
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"status": "matched"}
+        )
+    ).status_code == 422
+    for accepted_domestic, expected_total in {
+        "true": 2,
+        "false": 0,
+        "all": 11,
+    }.items():
+        accepted = await client.get(
+            "/api/v1/destinations/unmatched",
+            params={"is_domestic": accepted_domestic},
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["total"] == expected_total
+    for rejected_domestic in ("1", "yes", "on", "unknown"):
+        assert (
+            await client.get(
+                "/api/v1/destinations/unmatched",
+                params={"is_domestic": rejected_domestic},
+            )
+        ).status_code == 422
+
+
+async def test_unmatched_search_reaches_unique_candidate_in_2000_backlog(
+    client, session, record_property
+):
+    session.add_all(
+        [
+            YoutubeChannel(
+                channel_id="search-backlog-channel", title="대규모 검수 채널"
+            ),
+            YoutubeVideo(
+                video_id="search-backlog-video",
+                title="대규모 검수 영상",
+                url="https://example.invalid/search-backlog",
+                channel_id="search-backlog-channel",
+            ),
+        ]
+    )
+    await session.flush()
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="search-backlog-video",
+                source_text=f"대규모 근거 {index}",
+                ai_place_name=(
+                    "심층검색표식 후보"
+                    if index == 0
+                    else f"일반 검수 후보 {index}"
+                ),
+                match_status=MatchStatus.NEEDS_REVIEW,
+            )
+            for index in range(2000)
+        ]
+    )
+    await session.commit()
+
+    started_at = perf_counter()
+    response = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={"q": "심층검색표식", "limit": 1},
+    )
+    elapsed_seconds = perf_counter() - started_at
+    record_property("search_response_seconds", f"{elapsed_seconds:.6f}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["id"] for item in body["items"]] == [1]
+    assert body["has_more"] is False
+    assert elapsed_seconds < 3.0, f"검색 응답 {elapsed_seconds:.3f}초"
 
 
 async def test_unmatched_lightweight_payload_reason_priority_and_filters(
@@ -521,6 +1046,7 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
     assert extraction["channel_title"] == "정규 검수 채널"
     assert extraction["confidence_score"] == 0.83
     assert extraction["source_kind"] == "transcript"
+    assert extraction["grounding_status"] == GroundingStatus.VERIFIED_RAW.value
     assert extraction["created_at"].endswith("+00:00")
     assert "provider_evidence_json" not in extraction
     assert "source_text" not in extraction
@@ -567,6 +1093,56 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
     assert (
         await client.get(
             "/api/v1/destinations/unmatched", params={"source_kind": "unknown"}
+        )
+    ).status_code == 422
+
+
+async def test_unmatched_grounding_exact_filter_exposes_all_strict_states(
+    client, session
+):
+    session.add(
+        YoutubeVideo(
+            video_id="grounding-filter-video",
+            title="grounding 필터 영상",
+            url="https://example.invalid/grounding-filter",
+            channel_id="grounding-filter-channel",
+        )
+    )
+    await session.flush()
+    statuses = list(GroundingStatus)
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="grounding-filter-video",
+                source_text=f"grounding 근거 {status.value}",
+                ai_place_name=f"grounding 후보 {status.value}",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                grounding_status=status.value,
+            )
+            for status in statuses
+        ]
+    )
+    await session.commit()
+
+    for status in statuses:
+        response = await client.get(
+            "/api/v1/destinations/unmatched",
+            params={"grounding": status.value},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert [item["grounding_status"] for item in body["items"]] == [
+            status.value
+        ]
+        assert [item["ai_place_name"] for item in body["items"]] == [
+            f"grounding 후보 {status.value}"
+        ]
+
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched",
+            params={"grounding": "verified"},
         )
     ).status_code == 422
 

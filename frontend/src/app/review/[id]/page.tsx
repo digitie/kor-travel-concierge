@@ -6,11 +6,12 @@ import { ArrowLeftIcon } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
+import { parseReviewCandidateIdValue } from "@/lib/review-list-state";
 
 export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const id = Number(params.id);
+  const id = parseReviewCandidateIdValue(params.id);
 
   return (
     <AppShell title="검수 후보 상세">
@@ -23,13 +24,15 @@ export default function CandidateDetailPage() {
           검수 큐로
         </Link>
         <div className="mt-3 rounded-xl border p-4">
-          {Number.isFinite(id) ? (
+          {id != null ? (
             <CandidateDetailView
               candidateId={id}
               onDeleted={() => router.push("/review")}
             />
           ) : (
-            <p className="text-sm text-destructive">잘못된 후보 ID</p>
+            <p role="alert" className="text-sm text-destructive">
+              잘못된 후보 ID
+            </p>
           )}
         </div>
       </div>

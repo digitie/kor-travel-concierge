@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
+from sqlalchemy import select, text
 
 from ktc.models import (
+    AuditLog,
     AuditStatus,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -12,7 +17,7 @@ from ktc.models import (
     TravelPlace,
     YoutubeVideo,
 )
-from ktc.services import place_service
+from ktc.services import audit_service, place_service
 
 
 async def _place(session, name, lat, lng):
@@ -101,6 +106,133 @@ async def test_record_audit_result_rejects_non_sample(session):
         await place_service.record_audit_result(
             session, candidate_id=candidate.id, accurate=True, reviewed_by="tester"
         )
+
+
+@pytest.mark.parametrize(
+    "audit_status",
+    [AuditStatus.ACCURATE.value, AuditStatus.MISCONFIRMED.value],
+)
+async def test_record_audit_result_rejects_already_reviewed_sample(
+    session, audit_status
+):
+    candidate = await _matched_candidate(session, audit_status=audit_status)
+    with pytest.raises(place_service.AuditResultConflictError):
+        await place_service.record_audit_result(
+            session, candidate_id=candidate.id, accurate=True, reviewed_by="tester"
+        )
+
+
+async def test_concurrent_audit_result_waits_and_commits_one_audit_log(
+    session_factory,
+):
+    """두 검토자가 같은 pending 표본을 판정해도 선점자 1건만 원자 확정한다."""
+    async with session_factory() as seed_session:
+        candidate = await _matched_candidate(
+            seed_session,
+            audit_status=AuditStatus.PENDING.value,
+            video_id="audit-concurrent",
+        )
+        candidate_id = candidate.id
+
+    loser_started = asyncio.Event()
+    loser_pid: list[int] = []
+
+    async def review_concurrently() -> None:
+        async with session_factory() as loser_session:
+            stale_candidate = await loser_session.get(
+                ExtractedPlaceCandidate, candidate_id
+            )
+            assert stale_candidate is not None
+            assert stale_candidate.audit_status == AuditStatus.PENDING.value
+            # expire_on_commit=False identity map의 stale pending도 잠금 해제 뒤 재조회해야 한다.
+            await loser_session.commit()
+            loser_pid.append(
+                int(await loser_session.scalar(text("SELECT pg_backend_pid()")))
+            )
+            loser_started.set()
+            reviewed = await place_service.record_audit_result(
+                loser_session,
+                candidate_id=candidate_id,
+                accurate=False,
+                reviewed_by="second-reviewer",
+                commit=False,
+            )
+            await audit_service.record(
+                loser_session,
+                actor_type="web",
+                action="candidate.audit_result",
+                target_type="extracted_place_candidate",
+                target_id=str(candidate_id),
+                payload={
+                    "audit_status": reviewed.audit_status,
+                    "accurate": False,
+                },
+            )
+
+    async with session_factory() as winner_session:
+        winner = await place_service.record_audit_result(
+            winner_session,
+            candidate_id=candidate_id,
+            accurate=True,
+            reviewed_by="first-reviewer",
+            note="첫 판정",
+            commit=False,
+        )
+        loser_task = asyncio.create_task(review_concurrently())
+        try:
+            await asyncio.wait_for(loser_started.wait(), timeout=10)
+            loser_is_waiting = False
+            async with session_factory() as monitor_session:
+                for _ in range(1000):
+                    wait_event_type = await monitor_session.scalar(
+                        text(
+                            "SELECT wait_event_type FROM pg_stat_activity "
+                            "WHERE pid = :pid"
+                        ),
+                        {"pid": loser_pid[0]},
+                    )
+                    await monitor_session.commit()
+                    if wait_event_type == "Lock":
+                        loser_is_waiting = True
+                        break
+                    await asyncio.sleep(0.01)
+            assert loser_is_waiting is True
+
+            # 운영 route와 같은 마지막 호출이 후보 갱신+감사 로그를 한 번에 commit한다.
+            await audit_service.record(
+                winner_session,
+                actor_type="web",
+                action="candidate.audit_result",
+                target_type="extracted_place_candidate",
+                target_id=str(candidate_id),
+                payload={
+                    "audit_status": winner.audit_status,
+                    "accurate": True,
+                },
+            )
+            with pytest.raises(place_service.AuditResultConflictError):
+                await asyncio.wait_for(loser_task, timeout=10)
+        finally:
+            if not loser_task.done():
+                loser_task.cancel()
+            await asyncio.gather(loser_task, return_exceptions=True)
+
+    async with session_factory() as check_session:
+        current = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        assert current.audit_status == AuditStatus.ACCURATE.value
+        assert current.audit_reviewed_by == "first-reviewer"
+        assert current.audit_note == "첫 판정"
+        logs = (
+            await check_session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "candidate.audit_result",
+                    AuditLog.target_id == str(candidate_id),
+                )
+            )
+        ).scalars().all()
+        assert len(logs) == 1
+        assert json.loads(logs[0].payload_json)["accurate"] is True
 
 
 async def test_audit_summary_computes_misconfirmation_rate(session):

@@ -99,7 +99,7 @@ def _seed_video(session, video_id: str = "v1") -> None:
     )
 
 
-def _patch_poi_batch_pipeline(monkeypatch, *, extract=None):
+def _patch_poi_batch_pipeline(monkeypatch, *, extract=None, geocode_summary=None):
     """poi_batch handler의 외부 의존(스토리지/자막/교정/LLM/지오코딩)을 fake로 바꾼다."""
     monkeypatch.setattr(
         postprocess_service, "_make_media_store", lambda settings: InMemoryMediaStore()
@@ -135,6 +135,8 @@ def _patch_poi_batch_pipeline(monkeypatch, *, extract=None):
     monkeypatch.setattr(batch_poi, "extract_batch", extract)
 
     async def fake_geocode(session_, candidates, *, status_reporter=None):
+        if geocode_summary is not None:
+            return geocode_summary
         return {"matched_places": 0, "needs_review_candidates": len(candidates)}
 
     monkeypatch.setattr(postprocess_service, "geocode_candidates", fake_geocode)
@@ -143,7 +145,33 @@ def _patch_poi_batch_pipeline(monkeypatch, *, extract=None):
 async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, session):
     _seed_video(session)
     await session.commit()
-    _patch_poi_batch_pipeline(monkeypatch)
+
+    async def extract_with_foreign(runtime, items, **kwargs):
+        alias = items[0][0]
+        return [
+            batch_poi.BatchExtractedPOI(
+                video_id=alias,
+                official_name="부산역 국밥집",
+                category_code="01050100",
+                is_domestic=True,
+            ),
+            batch_poi.BatchExtractedPOI(
+                video_id=alias,
+                official_name="해외 국밥집",
+                category_code="01050100",
+                is_domestic=False,
+            ),
+        ]
+
+    _patch_poi_batch_pipeline(
+        monkeypatch,
+        extract=extract_with_foreign,
+        geocode_summary={
+            "matched_places": 0,
+            "needs_review_candidates": 0,
+            "skipped_state_changed_candidates": 1,
+        },
+    )
 
     run = await crawl_run_service.create_run(
         session, job_type="poi_batch", source="web", payload={"video_ids": ["v1"]}
@@ -153,6 +181,15 @@ async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, sess
     result = await worker.poi_batch_handler(session, claimed)
 
     assert result["processed_videos"] == 1
+    assert result["created_candidates"] == 2
+    assert result["matched_places"] == 0
+    assert result["needs_review_candidates"] == 1
+    assert result["skipped_state_changed_candidates"] == 1
+    assert result["created_candidates"] == (
+        result["matched_places"]
+        + result["needs_review_candidates"]
+        + result["skipped_state_changed_candidates"]
+    )
     events = await crawl_run_service.list_stage_events(session, run.id)
     # poi_batch_total은 handler가 process_video_batch 반환 뒤(finally)에 기록하므로 맨 끝.
     assert [e.stage for e in events] == [
@@ -173,7 +210,21 @@ async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, sess
     assert correction.provider  # LLM 모델명
     assert extract.attempt == 1
     assert "videos=1" in (extract.detail or "")
+    assert "candidates=1" in (geocode.detail or "")
+    assert "created_candidates=2" in (geocode.detail or "")
+    assert "geocode_targets=1" in (geocode.detail or "")
+    assert "foreign_needs_review=1" in (geocode.detail or "")
     assert "needs_review=1" in (geocode.detail or "")
+    assert "skipped_state_changed_candidates=1" in (geocode.detail or "")
+    refreshed_run = await crawl_run_service.get_run(session, run.id)
+    messages = [
+        item["message"] for item in crawl_run_service.load_status_logs(refreshed_run)
+    ]
+    assert (
+        "POI 후보 처리 집계 — 전체 2개, 확정 0개, "
+        "검수 필요 1개(해외 1개 포함), 사용자 처리로 건너뜀 1개입니다."
+        in messages
+    )
     # T-172 분모: 배치 총소요는 세부 stage 합 이상이어야 한다(사이 RustFS/commit 포함).
     assert "videos=1" in (total.detail or "")
     detail_sum = sum(e.elapsed_ms for e in (fetch, correction, extract, geocode))

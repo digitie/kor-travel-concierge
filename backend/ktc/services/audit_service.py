@@ -23,14 +23,31 @@ async def record(
     target_type: str,
     target_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+    idempotency_state: str | None = None,
     commit: bool = True,
 ) -> AuditLog:
     """감사 로그 1건을 기록한다."""
+    if (idempotency_key is None) != (idempotency_state is None):
+        raise ValueError("audit idempotency key/state는 함께 지정해야 한다")
+    if idempotency_key is not None:
+        if not 1 <= len(idempotency_key) <= 255:
+            raise ValueError("audit idempotency key는 1~255자여야 한다")
+        if idempotency_state not in {"pending", "final"}:
+            raise ValueError("audit idempotency state는 pending 또는 final이어야 한다")
+        if (
+            payload is None
+            or payload.get("idempotency_key") != idempotency_key
+            or payload.get("idempotency_state") != idempotency_state
+        ):
+            raise ValueError("audit idempotency column과 payload가 일치해야 한다")
     log = AuditLog(
         actor_type=actor_type,
         action=action,
         target_type=target_type,
         target_id=target_id,
+        idempotency_key=idempotency_key,
+        idempotency_state=idempotency_state,
         payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     )
     session.add(log)
@@ -53,27 +70,14 @@ async def find_by_idempotency_key(
     actor_type: str,
     action: str,
     idempotency_key: str,
-    limit: int = 200,
 ) -> AuditLog | None:
-    """멱등 키가 같은 최근 감사 로그를 찾는다.
-
-    `audit_logs.payload_json`은 SQLite 호환성을 위해 Text로 저장한다. JSON 함수
-    의존을 피하고 최근 동일 action 로그만 좁혀 파싱한다.
-    """
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.actor_type == actor_type, AuditLog.action == action)
-        .order_by(AuditLog.id.desc())
-        .limit(limit)
-    )
-    result = await session.execute(stmt)
-    for log in result.scalars().all():
-        if not log.payload_json:
-            continue
-        try:
-            payload = json.loads(log.payload_json)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("idempotency_key") == idempotency_key:
-            return log
-    return None
+    """전용 partial unique index로 actor/action/key 감사 로그를 직접 찾는다."""
+    return (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.actor_type == actor_type,
+                AuditLog.action == action,
+                AuditLog.idempotency_key == idempotency_key,
+            ).execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()

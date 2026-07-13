@@ -18,7 +18,9 @@ from ktc.etl import (
     transcript_correction,
 )
 from ktc.etl.batch_poi_service import _build_description_text
-from ktc.etl.geocode_service import apply_geocode_to_candidate
+from ktc.etl.geocode_service import (
+    apply_geocode_to_current_candidate as apply_geocode_to_candidate,
+)
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.etl.llm_client import LlmRuntime
 from ktc.etl.media_store import InMemoryMediaStore
@@ -44,6 +46,13 @@ _LONG_DESCRIPTION = (
     "맛집에서 마무리했습니다. 다음 영상에서는 대청호 드라이브 코스를 소개할 예정이니 많은 관심과 "
     "기대 부탁드립니다. 구독과 좋아요는 채널에 큰 힘이 됩니다. 감사합니다."
 )
+
+
+class _ReverseMustNotRun:
+    """description 검수 전용 경로에서 reverse VWorld 접근을 즉시 실패시킨다."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"description 후보에서 reverse VWorld 호출 금지: {name}")
 
 
 async def _make_video(
@@ -267,7 +276,12 @@ async def test_description_candidate_not_autoconfirmed_and_queue_reason(session)
         reason="single_result",
         candidate_count=1,
     )
-    place = await apply_geocode_to_candidate(session, candidate, decision)
+    place = await apply_geocode_to_candidate(
+        session,
+        candidate,
+        decision,
+        vworld=_ReverseMustNotRun(),
+    )
     assert place is None
     await session.refresh(candidate)
     assert candidate.match_status == MatchStatus.NEEDS_REVIEW

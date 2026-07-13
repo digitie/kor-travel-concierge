@@ -180,6 +180,15 @@ export type ReviewSourceKind =
   | "description"
   | "visual";
 
+export type ReviewCandidateSort = "newest" | "oldest";
+export type ReviewCandidateStatus = "needs_review" | "ignored";
+export type ReviewGroundingStatus =
+  | "verified_raw"
+  | "unverified"
+  | "missing"
+  | "not_applicable"
+  | "legacy_unknown";
+
 export type UnmatchedCandidate = {
   id: number;
   video_id: string;
@@ -192,6 +201,7 @@ export type UnmatchedCandidate = {
   match_status: string;
   confidence_score: number | null;
   source_kind: ReviewSourceKind;
+  grounding_status: ReviewGroundingStatus;
   created_at: string;
   queue_reason: ReviewQueueReason;
   timestamp_start: string | null;
@@ -606,8 +616,13 @@ export type ReviewCandidateFilter = Pick<
   DestinationFilter,
   "channelId" | "playlistId" | "keyword"
 > & {
+  query?: string | null;
+  sort?: ReviewCandidateSort;
+  isDomestic?: boolean | null;
+  status?: ReviewCandidateStatus;
   queueReason?: ReviewQueueReason | null;
   sourceKind?: ReviewSourceKind | null;
+  grounding?: ReviewGroundingStatus | null;
 };
 
 export type DestinationFacets = {
@@ -682,8 +697,15 @@ export async function listUnmatchedCandidatesPage(
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
+  if (filter?.query) params.set("q", filter.query);
+  if (filter?.sort) params.set("sort", filter.sort);
+  if (filter?.isDomestic != null) {
+    params.set("is_domestic", String(filter.isDomestic));
+  }
+  if (filter?.status) params.set("status", filter.status);
   if (filter?.queueReason) params.set("reason", filter.queueReason);
   if (filter?.sourceKind) params.set("source_kind", filter.sourceKind);
+  if (filter?.grounding) params.set("grounding", filter.grounding);
   const qs = params.toString();
   return requestJson<ListEnvelope<UnmatchedCandidate>>(
     `/api/v1/destinations/unmatched${qs ? `?${qs}` : ""}`,
@@ -1130,15 +1152,19 @@ export async function getPlaceOpinion(
 
 // ── 상세 정보 (검수 후보 / 확정 장소) ───────────────────────────────────────
 export type CandidateDetail = {
+  list_item: UnmatchedCandidate;
   candidate: {
     id: number;
     video_id: string;
+    source_channel_id: string | null;
+    source_playlist_id: string | null;
     ai_place_name: string;
     location_hint: string | null;
     candidate_category: string | null;
     candidate_category_code: string | null;
     match_status: string;
     confidence_score: number | null;
+    grounding_status: ReviewGroundingStatus;
     is_domestic: boolean | null;
     speaker_note: string | null;
     source_kind: string | null;
@@ -1151,7 +1177,9 @@ export type CandidateDetail = {
     video_id: string;
     title: string | null;
     url: string;
+    channel_id: string | null;
     channel_title: string | null;
+    source_search_query: string | null;
     published_at: string | null;
     duration_seconds: number | null;
     description: string | null;

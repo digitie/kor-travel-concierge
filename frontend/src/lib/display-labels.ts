@@ -1,4 +1,9 @@
-import type { CrawlRunSummary, RunAttention, RunOutcome } from "./api";
+import type {
+  CrawlRunSummary,
+  ReviewGroundingStatus,
+  RunAttention,
+  RunOutcome,
+} from "./api";
 
 const HIGH_PRIORITY_QUEUE_REASONS = new Set([
   "ungrounded",
@@ -172,6 +177,30 @@ export function sourceKindLabel(source: string | null | undefined): string {
     visual: "영상 프레임",
   };
   return labels[key] ?? fallbackLabel(source, "출처 없음");
+}
+
+export function groundingStatusLabel(
+  status: string | null | undefined,
+): string {
+  const key = normalizeKey(status);
+  const labels: Record<ReviewGroundingStatus, string> = {
+    verified_raw: "원문 근거 확인",
+    unverified: "원문 근거 불일치",
+    missing: "원문 근거 없음",
+    not_applicable: "원문 대조 비대상",
+    legacy_unknown: "기존 데이터 미확인",
+  };
+  return key in labels
+    ? labels[key as ReviewGroundingStatus]
+    : fallbackLabel(status, "근거 상태 없음");
+}
+
+export function groundingStatusBadgeVariant(
+  status: ReviewGroundingStatus,
+): "outline" | "secondary" | "destructive" {
+  if (status === "unverified" || status === "missing") return "destructive";
+  if (status === "verified_raw") return "secondary";
+  return "outline";
 }
 
 export function categoryDisplayLabel(value: string | null | undefined): string {

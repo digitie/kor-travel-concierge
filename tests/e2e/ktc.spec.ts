@@ -947,7 +947,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     'live 모드에서는 browser API mock 기반 스펙을 건너뛴다.',
   );
 
-  test('저장·제외·개별 삭제 뒤 visible 다음 후보를 검색하고 마지막 page에서 완료한다', async ({
+  test('저장·제외·page 끝 개별 삭제 뒤 다음 page 후보를 자동 선택한다', async ({
     page,
   }) => {
     const errors = collectConsoleErrors(page);
@@ -960,7 +960,9 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     );
     await expect(searchInput).toHaveValue('자동 후보 1');
     for (const name of ['자동 후보 1', '자동 후보 2', '자동 후보 3']) {
-      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+      await expect(
+        page.getByRole('row', { name: new RegExp(`${name}(?!\\d)`) }),
+      ).toBeVisible();
     }
     await page.waitForTimeout(250);
     expect(requests.searchQueries).toEqual([]);
@@ -970,19 +972,48 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       'https://www.youtube.com/watch?v=review-video-1&t=754s',
     );
 
-    const hideForeign = page.getByRole('switch', {
-      name: '해외(국내 아님) 후보 숨기기',
+    const groundingFilter = page.getByRole('combobox', {
+      name: '원문 근거 필터',
     });
-    await hideForeign.click();
-    await expect(hideForeign).toBeChecked();
+    await groundingFilter.click();
+    await page.getByRole('option', { name: '원문 근거 확인' }).click();
+    await expect(groundingFilter).toContainText('원문 근거 확인');
+    await expect.poll(() => requests.groundingFilters).toContain('verified_raw');
+    await expect
+      .poll(() =>
+        requests.newerProbeRequests.some(
+          (url) => url.searchParams.get('grounding') === 'verified_raw',
+        ),
+      )
+      .toBe(true);
+
+    const domesticFilter = page.getByRole('combobox', {
+      name: '국내 여부 필터',
+    });
+    await domesticFilter.click();
+    await page.getByRole('option', { name: '국내 판정만' }).click();
+    await expect(domesticFilter).toContainText('국내 판정만');
+    await expect.poll(() => requests.domesticFilters).toContain('true');
+    await expect
+      .poll(() =>
+        requests.mainListRequests.some(
+          (url) =>
+            url.searchParams.get('is_domestic') === 'true' &&
+            url.searchParams.get('grounding') === 'verified_raw' &&
+            url.searchParams.get('cursor') === null,
+        ),
+      )
+      .toBe(true);
+    await expect(page.getByText('300/301개 불러옴')).toBeVisible();
     await expect(searchInput).toHaveValue('자동 후보 1');
 
-    const firstRow = page.getByRole('row', { name: /자동 후보 1/ });
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
     await expect(firstRow).toHaveAttribute('aria-selected', 'true');
     await expect(firstRow).toContainText('자동 검수 영상 1');
     await expect(firstRow).toContainText('자동 검수 채널');
     await expect(firstRow).toContainText('매칭 신뢰도 83%');
     await expect(firstRow).toContainText('추출 직후');
+    await expect(firstRow).toContainText('원문 근거 확인');
     await expect(firstRow).toContainText('등록');
     await firstRow.click();
     await expect.poll(() => requests.searchQueries).toContain('자동 후보 1');
@@ -994,55 +1025,64 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await expect.poll(() => requests.resolveBodies.length).toBe(1);
     expect(requests.resolveBodies[0]).toMatchObject({ action: 'create_place' });
     await expect(searchInput).toHaveValue('자동 후보 2');
-    await expect(page.getByRole('row', { name: /자동 후보 2/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    await expect(
+      page.getByRole('row', { name: /자동 후보 2(?!\d)/ }),
+    ).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => requests.searchQueries).toContain('자동 후보 2');
 
     await page.getByRole('button', { name: '제외', exact: true }).click();
     await expect.poll(() => requests.resolveBodies.length).toBe(2);
     expect(requests.resolveBodies[1]).toMatchObject({ action: 'ignore' });
     await expect(searchInput).toHaveValue('자동 후보 3');
-    await expect(page.getByRole('row', { name: /자동 후보 3/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    await expect(
+      page.getByRole('row', { name: /자동 후보 3(?!\d)/ }),
+    ).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => requests.searchQueries).toContain('자동 후보 3');
 
+    const pageTailRow = page.getByRole('row', { name: /자동 후보 300/ });
+    await pageTailRow.click();
+    await expect(pageTailRow).toHaveAttribute('aria-selected', 'true');
+    await expect(searchInput).toHaveValue('자동 후보 300');
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 300');
     await page
-      .getByRole('button', { name: '자동 후보 3 후보 삭제', exact: true })
+      .getByRole('button', { name: '자동 후보 300 후보 삭제', exact: true })
       .click();
     await page.getByRole('button', { name: '삭제', exact: true }).click();
-    await expect.poll(() => requests.deleteCandidateIds).toEqual([3]);
+    await expect.poll(() => requests.deleteCandidateIds).toEqual([300]);
 
-    await expect.poll(() => requests.listCursors).toContain('review-page-2');
-    await expect.poll(() => requests.listCursors).toContain('review-page-3');
-    await expect(searchInput).toHaveValue('자동 후보 4');
-    await expect.poll(() => requests.searchQueries).toContain('자동 후보 4');
+    await expect
+      .poll(() =>
+        requests.listCursorPayloads.some(
+          (cursor) =>
+            cursor.sort === 'oldest' &&
+            cursor.status === 'needs_review' &&
+            cursor.filter.isDomestic === 'true' &&
+            cursor.filter.grounding === 'verified_raw' &&
+            cursor.snapshotId === 301 &&
+            cursor.lastId === 300,
+        ),
+      )
+      .toBe(true);
+    await expect(searchInput).toHaveValue('자동 후보 301');
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 301');
     await expect(
       page.getByRole('row', { name: /해외 숨김 후보/ }),
     ).toHaveCount(0);
 
-    await page.getByRole('button', { name: '제외', exact: true }).click();
-    await expect.poll(() => requests.resolveBodies.length).toBe(3);
     expect(requests.resolveBodies.map((body) => body.action)).toEqual([
       'create_place',
       'ignore',
-      'ignore',
     ]);
-    expect(requests.resolveCandidateIds).toEqual([1, 2, 4]);
-    await expect(
-      page
-        .getByRole('status')
-        .filter({ hasText: '현재 표시 조건의 검수 후보를 모두 처리했습니다.' })
-        .first(),
-    ).toBeVisible();
+    expect(requests.resolveCandidateIds).toEqual([1, 2]);
+    expect(
+      [...requests.processedCandidateIds].sort((left, right) => left - right),
+    ).toEqual([1, 2, 300]);
+    await expect(page.getByText('298/298개 불러옴')).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('첫 page가 숨김 후보뿐이면 국내 후보가 나올 때까지 자동 탐색한다', async ({
+  test('국내 판정 filter를 서버에 보내 해외 후보가 page 예산을 쓰지 않게 한다', async ({
     page,
   }) => {
     const errors = collectConsoleErrors(page);
@@ -1052,13 +1092,25 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdmin(page, '/review');
 
-    const hideForeign = page.getByRole('switch', {
-      name: '해외(국내 아님) 후보 숨기기',
+    const domesticFilter = page.getByRole('combobox', {
+      name: '국내 여부 필터',
     });
-    await hideForeign.click();
-    await expect(hideForeign).toBeChecked();
-    await expect.poll(() => requests.listCursors).toContain(
-      'review-initial-page-2',
+    await domesticFilter.click();
+    await page.getByRole('option', { name: '국내 판정만' }).click();
+    await expect(domesticFilter).toContainText('국내 판정만');
+    await expect.poll(() => requests.domesticFilters).toContain('true');
+    await expect
+      .poll(() =>
+        requests.mainListRequests.some(
+          (url) =>
+            url.searchParams.get('is_domestic') === 'true' &&
+            url.searchParams.get('cursor') === null,
+        ),
+      )
+      .toBe(true);
+    await expect(page.getByText('1/1개 불러옴')).toBeVisible();
+    await expect(page.getByRole('button', { name: '후보 더 불러오기' })).toHaveCount(
+      0,
     );
     await expect(page.getByRole('row', { name: /뒤 page 국내 후보/ })).toHaveAttribute(
       'aria-selected',
@@ -1069,6 +1121,757 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     ).toHaveValue('뒤 page 국내 후보');
     await page.waitForTimeout(250);
     expect(requests.searchQueries).toEqual([]);
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('resolve 409 후 non-actionable 상세를 확인하고 stale 패널을 닫는다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveExternallyProcessed: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 1');
+
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 1)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 1, status: 200, matchStatus: 'ignored' });
+    await expect(
+      page
+        .getByRole('alert')
+        .filter({ hasText: '처리 결과를 확인하지 못했습니다' }),
+    ).toBeVisible();
+    await expect(searchInput).toHaveValue('자동 후보 2');
+    await expect(
+      page.getByRole('row', { name: /자동 후보 2(?!\d)/ }),
+    ).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
+    ).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('resolve 409 중 A→B→A로 다시 선택해도 처리된 A의 stale workflow를 정리한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveExternallyProcessed: true,
+      holdFirstResolveExternallyProcessed: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
+    await expect(searchInput).toHaveValue('자동 후보 1');
+    const firstCheckbox = firstRow.getByRole('checkbox');
+    await firstCheckbox.click();
+    await expect(firstCheckbox).toBeChecked();
+
+    const resolveResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          '/api/v1/destinations/unmatched/1/resolve' &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
+    await secondRow.click();
+    await expect(searchInput).toHaveValue('자동 후보 2');
+    await firstRow.click();
+    await expect(searchInput).toHaveValue('자동 후보 1');
+
+    requests.releaseFirstResolveResponse();
+    expect((await resolveResponsePromise).status()).toBe(409);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 1)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 1, status: 200, matchStatus: 'ignored' });
+    await expect(searchInput).toHaveValue('자동 후보 2');
+    await expect(secondRow).toHaveAttribute('aria-selected', 'true');
+    await expect(firstRow).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('page 밖 resolve 409 뒤 non-actionable 상세이면 URL을 지우고 첫 후보로 복귀한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveExternallyProcessed: true,
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?candidate=301&sort=oldest&is_domestic=true',
+    );
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 301');
+    await expect(
+      page.getByText(/현재 필터에는 포함되지만 아직 불러온 페이지 밖 후보입니다/),
+    ).toBeVisible();
+
+    const resolveResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          '/api/v1/destinations/unmatched/301/resolve' &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    expect((await resolveResponsePromise).status()).toBe(409);
+    await expect.poll(() => requests.resolveCandidateIds).toEqual([301]);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 301)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 301, status: 200, matchStatus: 'ignored' });
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBeNull();
+    await expect(searchInput).toHaveValue('자동 후보 1');
+    await expect(
+      page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
+    ).toHaveAttribute('aria-selected', 'true');
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('page 밖 resolve 도중 외부 soft delete이면 409·상세 404 뒤 첫 후보로 복귀한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveExternallyDeleted: true,
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?candidate=301&sort=oldest&is_domestic=true',
+    );
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 301');
+
+    const resolveResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          '/api/v1/destinations/unmatched/301/resolve' &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    expect((await resolveResponsePromise).status()).toBe(409);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 301)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 301, status: 404, matchStatus: null });
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBeNull();
+    await expect(searchInput).toHaveValue('자동 후보 1');
+    await expect(
+      page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
+    ).toHaveAttribute('aria-selected', 'true');
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('page 밖 resolve 500 뒤 actionable 상세이면 URL과 선택을 유지한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstResolveFailsWithoutProcessing: true,
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?candidate=301&sort=oldest&is_domestic=true',
+    );
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 301');
+
+    const resolveResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          '/api/v1/destinations/unmatched/301/resolve' &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+
+    expect((await resolveResponsePromise).status()).toBe(500);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 301)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 301, status: 200, matchStatus: 'needs_review' });
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('candidate'))
+      .toBe('301');
+    await expect(searchInput).toHaveValue('자동 후보 301');
+    await expect(
+      page
+        .getByRole('alert')
+        .filter({ hasText: '처리 결과를 확인하지 못했습니다' }),
+    ).toBeVisible();
+
+    const isExpectedResource500 = (message: string) =>
+      message.includes('Failed to load resource') &&
+      message.includes('500 (Internal Server Error)');
+    await expect
+      .poll(() => errors.filter(isExpectedResource500).length)
+      .toBe(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !isExpectedResource500(message)),
+    ).toEqual([]);
+  });
+
+  test('delete preflight 뒤 외부 soft delete 404와 상세 404를 확인해 modal을 정리한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      firstDeleteAlreadySoftDeleted: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 1');
+    await page.getByRole('button', { name: '자동 후보 1 상세' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('자동 후보 1', { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '후보 삭제' }).click();
+    const deleteResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          '/api/v1/destinations/candidates/1' &&
+        response.request().method() === 'DELETE',
+    );
+    await dialog.getByRole('button', { name: '삭제', exact: true }).click();
+
+    const deleteResponse = await deleteResponsePromise;
+    expect(deleteResponse.status()).toBe(404);
+    expect(await deleteResponse.json()).toEqual({
+      detail: 'candidate not found',
+    });
+    await expect.poll(() => requests.deleteCandidateIds).toEqual([1]);
+    await expect
+      .poll(() =>
+        requests.detailResponses
+          .filter(({ candidateId }) => candidateId === 1)
+          .at(-1),
+      )
+      .toEqual({ candidateId: 1, status: 404, matchStatus: null });
+    await expect(dialog).toBeHidden();
+    await expect(searchInput).toHaveValue('자동 후보 2');
+    await expect(
+      page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
+    ).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('oldest page를 append하고 정확한 새 후보 배너에서 새 snapshot을 시작한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const mainListRequests: URL[] = [];
+    const cursorRequests: URL[] = [];
+    const newerProbeRequests: URL[] = [];
+    let freshSnapshot = false;
+    const firstPageCandidates = Array.from({ length: 300 }, (_, index) =>
+      reviewCandidateFixture(index + 1, `표식 오래된 후보 ${index + 1}`),
+    );
+    const oldTail = reviewCandidateFixture(301, '표식 오래된 후보 301');
+    const newTail = reviewCandidateFixture(302, '표식 새 후보 302');
+
+    await page.route('**/api/v1/destinations/unmatched**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== '/api/v1/destinations/unmatched') {
+        await route.continue();
+        return;
+      }
+      const cursor = url.searchParams.get('cursor');
+      const newerThanId = url.searchParams.get('newer_than_id');
+      const isNewProbe = newerThanId !== null;
+      const expectedLimit = isNewProbe ? '1' : '300';
+      const contractMismatch =
+        url.searchParams.get('limit') !== expectedLimit ||
+        url.searchParams.get('q') !== '표식' ||
+        url.searchParams.get('sort') !== 'oldest' ||
+        url.searchParams.get('is_domestic') !== 'true' ||
+        url.searchParams.get('status') !== 'needs_review' ||
+        url.searchParams.get('channel_id') !== null ||
+        url.searchParams.get('playlist_id') !== null ||
+        url.searchParams.get('keyword') !== null ||
+        url.searchParams.get('reason') !== null ||
+        url.searchParams.get('source_kind') !== null ||
+        url.searchParams.get('grounding') !== 'verified_raw' ||
+        (isNewProbe && cursor !== null);
+      if (contractMismatch) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `검수 목록 계약 불일치: ${url.search}` }),
+        });
+        return;
+      }
+      if (isNewProbe) {
+        newerProbeRequests.push(url);
+      } else {
+        mainListRequests.push(url);
+        if (cursor !== null) cursorRequests.push(url);
+      }
+
+      let envelope: ReturnType<typeof reviewQueueEnvelope>;
+      if (isNewProbe) {
+        if (newerThanId !== '301' && newerThanId !== '302') {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({ detail: `예상하지 않은 baseline: ${newerThanId}` }),
+          });
+          return;
+        }
+        envelope = reviewQueueEnvelope([firstPageCandidates[0]], null, {
+          total: 302,
+          newestId: 302,
+          newerThan: newerThanId === '301' ? 1 : 0,
+        });
+      } else if (!freshSnapshot && cursor === null) {
+        envelope = reviewQueueEnvelope(firstPageCandidates, 'old-snapshot-next', {
+          total: 301,
+          newestId: 301,
+          newerThan: 0,
+        });
+      } else if (!freshSnapshot && cursor === 'old-snapshot-next') {
+        envelope = reviewQueueEnvelope([oldTail], null, {
+          total: 301,
+          newestId: 301,
+          newerThan: 0,
+        });
+      } else if (freshSnapshot && cursor === null) {
+        envelope = reviewQueueEnvelope(firstPageCandidates, 'fresh-snapshot-next', {
+          total: 302,
+          newestId: 302,
+          newerThan: 0,
+        });
+      } else if (freshSnapshot && cursor === 'fresh-snapshot-next') {
+        envelope = reviewQueueEnvelope([oldTail, newTail], null, {
+          total: 302,
+          newestId: 302,
+          newerThan: 0,
+        });
+      } else {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(envelope),
+      });
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?sort=oldest&q=%ED%91%9C%EC%8B%9D&is_domestic=true&grounding=verified_raw',
+    );
+
+    await expect(
+      page.getByRole('combobox', { name: '원문 근거 필터' }),
+    ).toContainText('원문 근거 확인');
+    await expect(page.getByRole('textbox', { name: '검수 후보 검색' })).toHaveValue(
+      '표식',
+    );
+    await expect(
+      page.getByRole('row', { name: /표식 오래된 후보 1(?!\d)/ }),
+    ).toBeVisible();
+    await expect(page.getByRole('row', { name: /표식 오래된 후보 300/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /새 후보 1건/ })).toBeVisible();
+    await expect
+      .poll(() =>
+        newerProbeRequests.some(
+          (url) => url.searchParams.get('newer_than_id') === '301',
+        ),
+      )
+      .toBe(true);
+
+    await page.getByRole('button', { name: '후보 더 불러오기' }).click();
+    await expect(page.getByRole('row', { name: /표식 오래된 후보 301/ })).toBeVisible();
+    expect(
+      cursorRequests.some(
+        (url) => url.searchParams.get('cursor') === 'old-snapshot-next',
+      ),
+    ).toBe(true);
+
+    freshSnapshot = true;
+    await page.getByRole('button', { name: /새 후보 1건/ }).click();
+    await expect(page.getByText('300/302개 불러옴')).toBeVisible();
+    await expect(page.getByRole('button', { name: /새 후보 1건/ })).toHaveCount(0);
+    await expect
+      .poll(() =>
+        newerProbeRequests.some(
+          (url) => url.searchParams.get('newer_than_id') === '302',
+        ),
+      )
+      .toBe(true);
+    await page.getByRole('button', { name: '후보 더 불러오기' }).click();
+    await expect(page.getByRole('row', { name: /표식 새 후보 302/ })).toBeVisible();
+    expect(
+      cursorRequests.some(
+        (url) => url.searchParams.get('cursor') === 'fresh-snapshot-next',
+      ),
+    ).toBe(true);
+    expect(
+      mainListRequests.every(
+        (url) =>
+          url.searchParams.get('newer_than_id') === null &&
+          url.searchParams.get('limit') === '300' &&
+          url.searchParams.get('grounding') === 'verified_raw',
+      ),
+    ).toBe(true);
+    expect(
+      newerProbeRequests.every(
+        (url) =>
+          url.searchParams.get('newer_than_id') !== null &&
+          url.searchParams.get('limit') === '1' &&
+          url.searchParams.get('grounding') === 'verified_raw',
+      ),
+    ).toBe(true);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('page 밖 딥링크를 단건 조회하고 URL 필터 포함·이탈을 정확히 안내한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const mainListRequests: URL[] = [];
+    const cursorRequests: URL[] = [];
+    const newerProbeRequests: URL[] = [];
+    const detailRequests: string[] = [];
+    const searchQueries: string[] = [];
+    const linked = reviewCandidateFixture(
+      999,
+      '필터검색 page 밖 후보',
+      true,
+      '00:10',
+      'unverified',
+    );
+    const firstPageCandidates = Array.from({ length: 300 }, (_, index) =>
+      reviewCandidateFixture(
+        index + 1,
+        index === 0
+          ? '필터검색 첫 page 후보'
+          : `필터검색 page 후보 ${index + 1}`,
+        true,
+        '00:10',
+        'unverified',
+      ),
+    );
+
+    await page.route('**/api/v1/destinations/unmatched**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== '/api/v1/destinations/unmatched') {
+        await route.continue();
+        return;
+      }
+      const cursor = url.searchParams.get('cursor');
+      const newerThanId = url.searchParams.get('newer_than_id');
+      const isNewProbe = newerThanId !== null;
+      const query = url.searchParams.get('q');
+      const channelId = url.searchParams.get('channel_id');
+      const grounding = url.searchParams.get('grounding');
+      const isInitialFilter =
+        query === '필터검색' &&
+        channelId === 'channel-filter' &&
+        grounding === 'unverified';
+      const isChangedFilter =
+        query === '부산' &&
+        channelId === 'channel-filter' &&
+        grounding === 'unverified';
+      const isClearedFilter =
+        query === null && channelId === null && grounding === null;
+      const contractMismatch =
+        url.searchParams.get('limit') !== (isNewProbe ? '1' : '300') ||
+        url.searchParams.get('sort') !== 'oldest' ||
+        url.searchParams.get('status') !== 'needs_review' ||
+        url.searchParams.get('is_domestic') !== null ||
+        url.searchParams.get('playlist_id') !== null ||
+        url.searchParams.get('keyword') !== null ||
+        url.searchParams.get('reason') !== null ||
+        url.searchParams.get('source_kind') !== null ||
+        (!isInitialFilter && !isChangedFilter && !isClearedFilter) ||
+        (isNewProbe && cursor !== null);
+      if (contractMismatch) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `딥링크 목록 계약 불일치: ${url.search}` }),
+        });
+        return;
+      }
+      if (isNewProbe) {
+        newerProbeRequests.push(url);
+      } else {
+        mainListRequests.push(url);
+        if (cursor !== null) cursorRequests.push(url);
+      }
+      let envelope: ReturnType<typeof reviewQueueEnvelope>;
+      if (isNewProbe) {
+        const expectedBaseline = isChangedFilter ? '0' : '999';
+        if (newerThanId !== expectedBaseline) {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              detail: `딥링크 probe baseline 불일치: ${newerThanId}`,
+            }),
+          });
+          return;
+        }
+        envelope = isChangedFilter
+          ? reviewQueueEnvelope([], null, {
+              total: 0,
+              newestId: null,
+              newerThan: 0,
+            })
+          : reviewQueueEnvelope([firstPageCandidates[0]], null, {
+              total: 301,
+              newestId: 999,
+              newerThan: 0,
+            });
+      } else if (isChangedFilter && cursor === null) {
+        envelope = reviewQueueEnvelope([], null, {
+          total: 0,
+          newestId: null,
+          newerThan: 0,
+        });
+      } else if ((isInitialFilter || isClearedFilter) && cursor === null) {
+        envelope = reviewQueueEnvelope(firstPageCandidates, 'must-not-follow', {
+          total: 301,
+          newestId: 999,
+          newerThan: 0,
+        });
+      } else if (
+        (isInitialFilter || isClearedFilter) &&
+        cursor === 'must-not-follow'
+      ) {
+        envelope = reviewQueueEnvelope([linked], null, {
+          total: 301,
+          newestId: 999,
+          newerThan: 0,
+        });
+      } else {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(envelope),
+      });
+    });
+    await page.route(
+      '**/api/v1/destinations/candidates/999/detail',
+      async (route) => {
+        detailRequests.push(route.request().url());
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            reviewCandidateDetailFixture(linked, {
+              sourceChannelId: 'channel-filter',
+              videoChannelId: 'channel-filter',
+            }),
+          ),
+        });
+      },
+    );
+    await page.route('**/api/v1/place-search?**', async (route) => {
+      const query = new URL(route.request().url()).searchParams.get('q') ?? '';
+      searchQueries.push(query);
+      await route.abort('blockedbyclient');
+      throw new Error(`page 밖 딥링크에서 예상하지 않은 자동 장소 검색: ${query}`);
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?candidate=999&sort=oldest&group=channel&group_value=channel-filter&q=%ED%95%84%ED%84%B0%EA%B2%80%EC%83%89&grounding=unverified',
+    );
+
+    await expect(
+      page.getByRole('combobox', { name: '원문 근거 필터' }),
+    ).toContainText('원문 근거 불일치');
+    await expect(
+      page.getByText(
+        '현재 필터에는 포함되지만 아직 불러온 페이지 밖 후보입니다. 목록 전체를 순회하지 않고 단건 상세로 바로 열었습니다.',
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
+    ).toHaveValue('필터검색 page 밖 후보');
+    expect(detailRequests).toHaveLength(1);
+    const initialMainRequests = mainListRequests.filter(
+      (url) => url.searchParams.get('q') === '필터검색',
+    );
+    expect(initialMainRequests.length).toBeGreaterThan(0);
+    expect(
+      initialMainRequests.every(
+        (url) =>
+          url.searchParams.get('cursor') === null &&
+          url.searchParams.get('channel_id') === 'channel-filter' &&
+          url.searchParams.get('sort') === 'oldest' &&
+          url.searchParams.get('status') === 'needs_review' &&
+          url.searchParams.get('grounding') === 'unverified',
+      ),
+    ).toBe(true);
+    expect(
+      newerProbeRequests.some(
+        (url) =>
+          url.searchParams.get('newer_than_id') === '999' &&
+          url.searchParams.get('grounding') === 'unverified',
+      ),
+    ).toBe(true);
+    expect(cursorRequests).toEqual([]);
+    expect(searchQueries).toEqual([]);
+    expect(new URL(page.url()).searchParams.get('candidate')).toBe('999');
+    expect(new URL(page.url()).searchParams.get('group_value')).toBe(
+      'channel-filter',
+    );
+
+    const reviewSearchInput = page.getByRole('textbox', {
+      name: '검수 후보 검색',
+    });
+    await reviewSearchInput.fill('부산');
+    const filterOutStatus = page
+      .getByRole('status')
+      .filter({ hasText: '현재 필터 밖 후보를 단건 상세로 열었습니다.' });
+    const loadedOutStatus = page
+      .getByRole('status')
+      .filter({
+        hasText:
+          '현재 필터에는 포함되지만 아직 불러온 페이지 밖 후보입니다.',
+      });
+    const currentDeepLinkFilterState = async () => {
+      const latestMainRequest = [...mainListRequests]
+        .reverse()
+        .find((url) => url.searchParams.get('cursor') === null);
+      return {
+        urlQuery: new URL(page.url()).searchParams.get('q'),
+        urlGrounding: new URL(page.url()).searchParams.get('grounding'),
+        inputQuery: await reviewSearchInput.inputValue(),
+        latestMainRequest: latestMainRequest
+          ? {
+              query: latestMainRequest.searchParams.get('q'),
+              channelId: latestMainRequest.searchParams.get('channel_id'),
+              grounding: latestMainRequest.searchParams.get('grounding'),
+            }
+          : null,
+        filterOutVisible: await filterOutStatus.isVisible(),
+        loadedOutCount: await loadedOutStatus.count(),
+      };
+    };
+    const expectedDeepLinkFilterState = {
+      urlQuery: '부산',
+      urlGrounding: 'unverified',
+      inputQuery: '부산',
+      latestMainRequest: {
+        query: '부산',
+        channelId: 'channel-filter',
+        grounding: 'unverified',
+      },
+      filterOutVisible: true,
+      loadedOutCount: 0,
+    };
+    await expect
+      .poll(currentDeepLinkFilterState)
+      .toEqual(expectedDeepLinkFilterState);
+    // debounce 1회 주기 이후에도 늦은 useSearchParams snapshot이 URL/목록/판정을
+    // 이전 필터로 되감지 않는지 한 번 더 확인한다.
+    await page.waitForTimeout(350);
+    expect(await currentDeepLinkFilterState()).toEqual(
+      expectedDeepLinkFilterState,
+    );
+    await filterOutStatus
+      .locator('..')
+      .getByRole('button', { name: '필터 해제' })
+      .click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('q'))
+      .toBeNull();
+    expect(new URL(page.url()).searchParams.get('grounding')).toBeNull();
+    await expect(
+      page.getByRole('combobox', { name: '원문 근거 필터' }),
+    ).toContainText('원문 근거 전체');
+    expect(new URL(page.url()).searchParams.get('candidate')).toBe('999');
+    await expect
+      .poll(() =>
+        mainListRequests.some(
+          (url) =>
+            url.searchParams.get('q') === null &&
+            url.searchParams.get('channel_id') === null &&
+            url.searchParams.get('grounding') === null &&
+            url.searchParams.get('cursor') === null,
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        newerProbeRequests.some(
+          (url) =>
+            url.searchParams.get('q') === null &&
+            url.searchParams.get('grounding') === null &&
+            url.searchParams.get('newer_than_id') === '999',
+        ),
+      )
+      .toBe(true);
+    expect(cursorRequests).toEqual([]);
+    expect(searchQueries).toEqual([]);
+
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 });
@@ -1145,52 +1948,339 @@ async function loginAsAdminWithQuery(page: Page, nextPath: string) {
   );
 }
 
+type ReviewQueueMockFilter = {
+  query: string | null;
+  channelId: string | null;
+  playlistId: string | null;
+  keyword: string | null;
+  isDomestic: string | null;
+  queueReason: string | null;
+  sourceKind: string | null;
+  grounding: string | null;
+};
+
+type ReviewQueueMockGroundingStatus =
+  | 'verified_raw'
+  | 'unverified'
+  | 'missing'
+  | 'not_applicable'
+  | 'legacy_unknown';
+
+const REVIEW_QUEUE_MOCK_GROUNDING_STATUSES = new Set<string>([
+  'verified_raw',
+  'unverified',
+  'missing',
+  'not_applicable',
+  'legacy_unknown',
+]);
+
+type ReviewQueueMockCursor = {
+  version: 1;
+  filter: ReviewQueueMockFilter;
+  sort: string;
+  status: string;
+  snapshotId: number;
+  lastId: number;
+};
+
+const BASE64URL_ALPHABET =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+function encodeBase64UrlUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let encoded = '';
+  for (let index = 0; index < bytes.length; index += 3) {
+    const remaining = bytes.length - index;
+    const chunk =
+      (bytes[index] << 16) |
+      ((bytes[index + 1] ?? 0) << 8) |
+      (bytes[index + 2] ?? 0);
+    encoded += BASE64URL_ALPHABET[(chunk >>> 18) & 0x3f];
+    encoded += BASE64URL_ALPHABET[(chunk >>> 12) & 0x3f];
+    if (remaining > 1) encoded += BASE64URL_ALPHABET[(chunk >>> 6) & 0x3f];
+    if (remaining > 2) encoded += BASE64URL_ALPHABET[chunk & 0x3f];
+  }
+  return encoded;
+}
+
+function decodeBase64UrlUtf8(value: string): string {
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
+    throw new Error('유효하지 않은 base64url cursor');
+  }
+  const bytes: number[] = [];
+  for (let index = 0; index < value.length; index += 4) {
+    const remaining = Math.min(4, value.length - index);
+    const digits = [0, 1, 2, 3].map((offset) => {
+      if (offset >= remaining) return 0;
+      const digit = BASE64URL_ALPHABET.indexOf(value[index + offset]);
+      if (digit < 0) throw new Error('유효하지 않은 base64url cursor');
+      return digit;
+    });
+    const chunk =
+      (digits[0] << 18) |
+      (digits[1] << 12) |
+      (digits[2] << 6) |
+      digits[3];
+    bytes.push((chunk >>> 16) & 0xff);
+    if (remaining > 2) bytes.push((chunk >>> 8) & 0xff);
+    if (remaining > 3) bytes.push(chunk & 0xff);
+  }
+  const decoded = new TextDecoder('utf-8', { fatal: true }).decode(
+    Uint8Array.from(bytes),
+  );
+  if (encodeBase64UrlUtf8(decoded) !== value) {
+    throw new Error('비정규 base64url cursor');
+  }
+  return decoded;
+}
+
+function reviewQueueMockFilter(url: URL): ReviewQueueMockFilter {
+  return {
+    query: url.searchParams.get('q'),
+    channelId: url.searchParams.get('channel_id'),
+    playlistId: url.searchParams.get('playlist_id'),
+    keyword: url.searchParams.get('keyword'),
+    isDomestic: url.searchParams.get('is_domestic'),
+    queueReason: url.searchParams.get('reason'),
+    sourceKind: url.searchParams.get('source_kind'),
+    grounding: url.searchParams.get('grounding'),
+  };
+}
+
+function encodeReviewQueueMockCursor(
+  url: URL,
+  snapshotId: number,
+  lastId: number,
+): string {
+  const payload: ReviewQueueMockCursor = {
+    version: 1,
+    filter: reviewQueueMockFilter(url),
+    sort: url.searchParams.get('sort') ?? '',
+    status: url.searchParams.get('status') ?? '',
+    snapshotId,
+    lastId,
+  };
+  return encodeBase64UrlUtf8(JSON.stringify(payload));
+}
+
+function decodeReviewQueueMockCursor(
+  cursor: string,
+  url: URL,
+): ReviewQueueMockCursor | null {
+  try {
+    const decoded: unknown = JSON.parse(decodeBase64UrlUtf8(cursor));
+    const expectedKeys = [
+      'filter',
+      'lastId',
+      'snapshotId',
+      'sort',
+      'status',
+      'version',
+    ];
+    if (
+      decoded === null ||
+      typeof decoded !== 'object' ||
+      Array.isArray(decoded)
+    ) {
+      return null;
+    }
+    const value = decoded as Record<string, unknown>;
+    if (
+      Object.keys(value).sort().join(',') !== expectedKeys.join(',') ||
+      value.version !== 1 ||
+      value.sort !== url.searchParams.get('sort') ||
+      value.status !== url.searchParams.get('status') ||
+      JSON.stringify(value.filter) !==
+        JSON.stringify(reviewQueueMockFilter(url)) ||
+      typeof value.snapshotId !== 'number' ||
+      !Number.isSafeInteger(value.snapshotId) ||
+      value.snapshotId < 0 ||
+      typeof value.lastId !== 'number' ||
+      !Number.isSafeInteger(value.lastId) ||
+      value.lastId < 1 ||
+      value.lastId > value.snapshotId
+    ) {
+      return null;
+    }
+    return value as unknown as ReviewQueueMockCursor;
+  } catch {
+    return null;
+  }
+}
+
 async function installReviewQueueMock(
   page: Page,
-  options: { initialHiddenOnly?: boolean } = {},
+  options: {
+    initialHiddenOnly?: boolean;
+    firstResolveExternallyProcessed?: boolean;
+    holdFirstResolveExternallyProcessed?: boolean;
+    firstResolveExternallyDeleted?: boolean;
+    firstResolveFailsWithoutProcessing?: boolean;
+    firstDeleteAlreadySoftDeleted?: boolean;
+  } = {},
 ) {
+  const standardDomesticCandidates = Array.from({ length: 301 }, (_, index) =>
+    reviewCandidateFixture(
+      index + 1,
+      `자동 후보 ${index + 1}`,
+      true,
+      index === 0 ? '12:34-13:00' : '00:10',
+    ),
+  );
+  const standardAllCandidates = [
+    ...standardDomesticCandidates,
+    reviewCandidateFixture(400, '해외 숨김 후보', false),
+  ];
+  const initialHiddenCandidates = [
+    reviewCandidateFixture(1, '첫 page 해외 후보', false),
+    reviewCandidateFixture(5, '뒤 page 국내 후보'),
+  ];
+  const processedCandidateIds = new Set<number>();
+  const resolvedCandidateStatuses = new Map<number, string>();
+  const deletedCandidateIds = new Set<number>();
+  let releaseHeldResolve: () => void = () => undefined;
+  const heldResolveResponse = new Promise<void>((resolve) => {
+    releaseHeldResolve = () => resolve();
+  });
   const requests = {
-    listCursors: [] as Array<string | null>,
+    listCursorPayloads: [] as ReviewQueueMockCursor[],
+    domesticFilters: [] as Array<string | null>,
+    groundingFilters: [] as Array<string | null>,
+    mainListRequests: [] as URL[],
+    newerProbeRequests: [] as URL[],
     searchQueries: [] as string[],
     resolveBodies: [] as Array<Record<string, unknown>>,
     resolveCandidateIds: [] as number[],
     deleteCandidateIds: [] as number[],
+    detailResponses: [] as Array<{
+      candidateId: number;
+      status: 200 | 404;
+      matchStatus: string | null;
+    }>,
+    processedCandidateIds,
+    releaseFirstResolveResponse: () => releaseHeldResolve(),
   };
 
   await page.route('**/api/v1/destinations/unmatched**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === '/api/v1/destinations/unmatched') {
+      try {
       const cursor = url.searchParams.get('cursor');
-      requests.listCursors.push(cursor);
-      const envelope = options.initialHiddenOnly
-        ? cursor === null
-          ? reviewQueueEnvelope(
-              [reviewCandidateFixture(91, '첫 page 해외 후보', false)],
-              'review-initial-page-2',
-            )
-          : cursor === 'review-initial-page-2'
-            ? reviewQueueEnvelope([
-                reviewCandidateFixture(5, '뒤 page 국내 후보'),
-              ])
-            : null
-        : cursor === null
-          ? reviewQueueEnvelope(
-              [
-                reviewCandidateFixture(1, '자동 후보 1', true, '12:34-13:00'),
-                reviewCandidateFixture(2, '자동 후보 2'),
-                reviewCandidateFixture(3, '자동 후보 3'),
-              ],
-              'review-page-2',
-            )
-          : cursor === 'review-page-2'
-            ? reviewQueueEnvelope(
-                [reviewCandidateFixture(90, '해외 숨김 후보', false)],
-                'review-page-3',
-              )
-            : cursor === 'review-page-3'
-              ? reviewQueueEnvelope([reviewCandidateFixture(4, '자동 후보 4')])
-              : null;
+      const domestic = url.searchParams.get('is_domestic');
+      const grounding = url.searchParams.get('grounding');
+      const newerThanId = url.searchParams.get('newer_than_id');
+      const isNewProbe = newerThanId !== null;
+      const contractMismatch =
+        url.searchParams.get('limit') !== (isNewProbe ? '1' : '300') ||
+        url.searchParams.get('sort') !== 'oldest' ||
+        url.searchParams.get('status') !== 'needs_review' ||
+        url.searchParams.get('q') !== null ||
+        url.searchParams.get('channel_id') !== null ||
+        url.searchParams.get('playlist_id') !== null ||
+        url.searchParams.get('keyword') !== null ||
+        url.searchParams.get('reason') !== null ||
+        url.searchParams.get('source_kind') !== null ||
+        (grounding !== null &&
+          !REVIEW_QUEUE_MOCK_GROUNDING_STATUSES.has(grounding)) ||
+        (domestic !== null && domestic !== 'true' && domestic !== 'false') ||
+        (isNewProbe && cursor !== null);
+      if (contractMismatch) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `검수 mock 계약 불일치: ${url.search}` }),
+        });
+        return;
+      }
+
+      const sourceCandidates = options.initialHiddenOnly
+        ? initialHiddenCandidates
+        : standardAllCandidates;
+      const allCandidates = sourceCandidates.filter(
+        (candidate) => !processedCandidateIds.has(candidate.id),
+      );
+      const domesticCandidates =
+        domestic === 'true'
+          ? allCandidates.filter((candidate) => candidate.is_domestic === true)
+          : domestic === 'false'
+            ? allCandidates.filter((candidate) => candidate.is_domestic === false)
+            : allCandidates;
+      const filteredCandidates = domesticCandidates
+        .filter(
+          (candidate) =>
+            grounding === null || candidate.grounding_status === grounding,
+        )
+        .sort((left, right) => left.id - right.id);
+      const newestId = filteredCandidates.at(-1)?.id ?? null;
+      let envelope: ReturnType<typeof reviewQueueEnvelope> | null = null;
+
+      if (isNewProbe) {
+        requests.newerProbeRequests.push(url);
+        const baseline = Number(newerThanId);
+        if (
+          newerThanId === null ||
+          !/^\d+$/.test(newerThanId) ||
+          !Number.isSafeInteger(baseline)
+        ) {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              detail: `유효하지 않은 신규 probe baseline: ${newerThanId}`,
+            }),
+          });
+          return;
+        }
+        const probeItems = filteredCandidates.slice(0, 1);
+        const probeCursor =
+          filteredCandidates.length > 1 && newestId != null && probeItems[0]
+            ? encodeReviewQueueMockCursor(url, newestId, probeItems[0].id)
+            : null;
+        envelope = reviewQueueEnvelope(probeItems, probeCursor, {
+          total: filteredCandidates.length,
+          newestId,
+          newerThan: filteredCandidates.filter(
+            (candidate) => candidate.id > baseline,
+          ).length,
+        });
+      } else {
+        requests.mainListRequests.push(url);
+        requests.domesticFilters.push(domestic);
+        requests.groundingFilters.push(grounding);
+        const decodedCursor =
+          cursor === null ? null : decodeReviewQueueMockCursor(cursor, url);
+        if (cursor !== null && decodedCursor === null) {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              detail: `현재 필터에 사용할 수 없는 cursor: ${cursor}`,
+            }),
+          });
+          return;
+        }
+        if (decodedCursor) requests.listCursorPayloads.push(decodedCursor);
+
+        const snapshotId = decodedCursor?.snapshotId ?? newestId ?? 0;
+        const snapshotCandidates = filteredCandidates.filter(
+          (candidate) => candidate.id <= snapshotId,
+        );
+        const pageCandidates = snapshotCandidates.filter((candidate) =>
+          decodedCursor ? candidate.id > decodedCursor.lastId : true,
+        );
+        const pageItems = pageCandidates.slice(0, 300);
+        const lastPageItem = pageItems.at(-1);
+        const nextCursor =
+          pageCandidates.length > pageItems.length && lastPageItem
+            ? encodeReviewQueueMockCursor(url, snapshotId, lastPageItem.id)
+            : null;
+        envelope = reviewQueueEnvelope(pageItems, nextCursor, {
+          total: snapshotCandidates.length,
+          newestId: snapshotId || null,
+          newerThan: 0,
+        });
+      }
       if (!envelope) {
         await route.fulfill({
           status: 400,
@@ -1205,16 +2295,76 @@ async function installReviewQueueMock(
         body: JSON.stringify(envelope),
       });
       return;
+      } catch (error) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: `검수 mock 처리 실패: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          }),
+        });
+        return;
+      }
     }
 
     const resolveMatch = url.pathname.match(
       /^\/api\/v1\/destinations\/unmatched\/(\d+)\/resolve$/,
     );
     if (resolveMatch && request.method() === 'POST') {
-      requests.resolveCandidateIds.push(Number(resolveMatch[1]));
-      requests.resolveBodies.push(
-        request.postDataJSON() as Record<string, unknown>,
+      const candidateId = Number(resolveMatch[1]);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      requests.resolveCandidateIds.push(candidateId);
+      requests.resolveBodies.push(body);
+      if (
+        options.firstResolveFailsWithoutProcessing &&
+        requests.resolveCandidateIds.length === 1
+      ) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: '일시적인 resolve 장애' }),
+        });
+        return;
+      }
+      if (
+        options.firstResolveExternallyDeleted &&
+        requests.resolveCandidateIds.length === 1
+      ) {
+        processedCandidateIds.add(candidateId);
+        deletedCandidateIds.add(candidateId);
+        resolvedCandidateStatuses.delete(candidateId);
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: '다른 검수자가 후보를 먼저 삭제했습니다.',
+          }),
+        });
+        return;
+      }
+      resolvedCandidateStatuses.set(
+        candidateId,
+        body.action === 'ignore' ? 'ignored' : 'user_corrected',
       );
+      processedCandidateIds.add(candidateId);
+      if (
+        options.firstResolveExternallyProcessed &&
+        requests.resolveCandidateIds.length === 1
+      ) {
+        if (options.holdFirstResolveExternallyProcessed) {
+          await heldResolveResponse;
+        }
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: '다른 검수자가 후보를 먼저 처리했습니다.',
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -1232,16 +2382,78 @@ async function installReviewQueueMock(
       /^\/api\/v1\/destinations\/candidates\/(\d+)$/,
     );
     if (deleteMatch && request.method() === 'DELETE') {
-      requests.deleteCandidateIds.push(Number(deleteMatch[1]));
+      const candidateId = Number(deleteMatch[1]);
+      requests.deleteCandidateIds.push(candidateId);
+      processedCandidateIds.add(candidateId);
+      deletedCandidateIds.add(candidateId);
+      resolvedCandidateStatuses.delete(candidateId);
+      if (
+        options.firstDeleteAlreadySoftDeleted &&
+        requests.deleteCandidateIds.length === 1
+      ) {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: 'candidate not found',
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ deleted: true, id: Number(deleteMatch[1]) }),
+        body: JSON.stringify({ deleted: true, id: candidateId }),
       });
       return;
     }
     await route.continue();
   });
+
+  await page.route(
+    '**/api/v1/destinations/candidates/*/detail',
+    async (route) => {
+      const detailMatch = new URL(route.request().url()).pathname.match(
+        /^\/api\/v1\/destinations\/candidates\/(\d+)\/detail$/,
+      );
+      if (!detailMatch) {
+        await route.continue();
+        return;
+      }
+      const candidateId = Number(detailMatch[1]);
+      const sourceCandidates = options.initialHiddenOnly
+        ? initialHiddenCandidates
+        : standardAllCandidates;
+      const candidate = sourceCandidates.find((item) => item.id === candidateId);
+      if (!candidate || deletedCandidateIds.has(candidateId)) {
+        requests.detailResponses.push({
+          candidateId,
+          status: 404,
+          matchStatus: null,
+        });
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'candidate not found' }),
+        });
+        return;
+      }
+      const matchStatus = resolvedCandidateStatuses.get(candidateId);
+      const latestCandidate = matchStatus
+        ? { ...candidate, match_status: matchStatus }
+        : candidate;
+      requests.detailResponses.push({
+        candidateId,
+        status: 200,
+        matchStatus: latestCandidate.match_status,
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(reviewCandidateDetailFixture(latestCandidate)),
+      });
+    },
+  );
 
   await page.route('**/api/v1/place-search?**', async (route) => {
     const query = new URL(route.request().url()).searchParams.get('q') ?? '';
@@ -1258,15 +2470,20 @@ async function installReviewQueueMock(
 
 function reviewQueueEnvelope(
   items: ReturnType<typeof reviewCandidateFixture>[],
-  nextCursor: string | null = null,
+  nextCursor: string | null,
+  metadata: {
+    total: number;
+    newestId: number | null;
+    newerThan: number;
+  },
 ) {
   return {
     items,
     next_cursor: nextCursor,
     has_more: nextCursor !== null,
-    total: 5,
-    newest_id: 90,
-    newer_than: 0,
+    total: metadata.total,
+    newest_id: metadata.newestId,
+    newer_than: metadata.newerThan,
   };
 }
 
@@ -1275,6 +2492,7 @@ function reviewCandidateFixture(
   name: string,
   isDomestic = true,
   timestampStart = '00:10',
+  groundingStatus: ReviewQueueMockGroundingStatus = 'verified_raw',
 ) {
   return {
     id,
@@ -1288,10 +2506,59 @@ function reviewCandidateFixture(
     match_status: 'needs_review',
     confidence_score: id === 1 ? 0.83 : null,
     source_kind: 'transcript',
+    grounding_status: groundingStatus,
     created_at: '2026-07-13T03:00:00Z',
     queue_reason: isDomestic ? 'extraction_only' : 'foreign',
     timestamp_start: timestampStart,
     is_domestic: isDomestic,
+  };
+}
+
+function reviewCandidateDetailFixture(
+  listItem: ReturnType<typeof reviewCandidateFixture>,
+  provenance: {
+    sourceChannelId?: string | null;
+    sourcePlaylistId?: string | null;
+    videoChannelId?: string | null;
+    sourceSearchQuery?: string | null;
+  } = {},
+) {
+  return {
+    list_item: listItem,
+    candidate: {
+      id: listItem.id,
+      video_id: listItem.video_id,
+      source_channel_id: provenance.sourceChannelId ?? null,
+      source_playlist_id: provenance.sourcePlaylistId ?? null,
+      ai_place_name: listItem.ai_place_name,
+      location_hint: listItem.location_hint,
+      candidate_category: listItem.candidate_category,
+      candidate_category_code: listItem.candidate_category_code,
+      match_status: listItem.match_status,
+      confidence_score: listItem.confidence_score,
+      is_domestic: listItem.is_domestic,
+      speaker_note: null,
+      source_kind: listItem.source_kind,
+      grounding_status: listItem.grounding_status,
+      feature_export_status: 'pending',
+      timestamp_start: listItem.timestamp_start,
+      timestamp_end: null,
+      source_text: null,
+    },
+    video: {
+      video_id: listItem.video_id,
+      title: listItem.video_title,
+      url: `https://www.youtube.com/watch?v=${listItem.video_id}`,
+      channel_id: provenance.videoChannelId ?? null,
+      channel_title: listItem.channel_title,
+      source_search_query: provenance.sourceSearchQuery ?? null,
+      published_at: null,
+      duration_seconds: null,
+      description: null,
+    },
+    source_run: null,
+    provider_evidence: null,
+    sibling_candidates: [],
   };
 }
 

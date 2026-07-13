@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from ktc.etl import admin_region_service
 from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExport,
@@ -34,6 +35,32 @@ async def _add_place(session, name, lat, lng, geocoded=True):
     await session.commit()
     await session.refresh(p)
     return p
+
+
+async def test_correct_place_runs_admin_after_core_commit(session, monkeypatch):
+    place = await _add_place(session, "보정 전", 35.1587, 129.1604)
+    observed: list[int] = []
+
+    async def fake_isolated(_factory, place_id, **_kwargs):
+        assert session.in_transaction() is False
+        observed.append(place_id)
+        return False
+
+    monkeypatch.setattr(
+        admin_region_service,
+        "enrich_place_admin_codes_isolated",
+        fake_isolated,
+    )
+
+    corrected = await svc.correct_place(
+        session,
+        place_id=place.place_id,
+        updates={"latitude": 35.159, "longitude": 129.161},
+    )
+
+    assert corrected.latitude == 35.159
+    assert corrected.longitude == 129.161
+    assert observed == [place.place_id]
 
 
 async def test_find_within_radius_filters_and_sorts(session):
@@ -122,6 +149,297 @@ async def test_resolve_create_place_copies_category_code_from_candidate(session)
     )
     assert place is not None
     assert place.category_code_suggestion == "01050100"
+
+
+async def test_resolve_create_place_runs_admin_after_candidate_lock_commit(
+    session,
+    monkeypatch,
+):
+    session.add(
+        YoutubeVideo(
+            video_id="resolve-postcommit",
+            title="t",
+            url="u",
+            channel_id="c",
+        )
+    )
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="resolve-postcommit",
+        source_text="s",
+        ai_place_name="월정리 카페",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+    observed: list[int] = []
+
+    async def fake_isolated(_factory, place_id, **_kwargs):
+        assert session.in_transaction() is False
+        observed.append(place_id)
+        return False
+
+    monkeypatch.setattr(
+        admin_region_service,
+        "enrich_place_admin_codes_isolated",
+        fake_isolated,
+    )
+
+    _, place, _ = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="create_place",
+        reviewed_by="web",
+        place_data={
+            "name": "월정리 카페",
+            "latitude": 33.5563,
+            "longitude": 126.7958,
+        },
+    )
+
+    assert place is not None
+    assert observed == [place.place_id]
+
+
+async def test_resolve_rejects_stale_identity_map_candidate_with_typed_conflict(
+    session_factory,
+):
+    async with session_factory() as seed_session:
+        seed_session.add(
+            YoutubeVideo(
+                video_id="resolve-stale-conflict",
+                title="t",
+                url="u",
+                channel_id="c",
+            )
+        )
+        await seed_session.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="resolve-stale-conflict",
+            source_text="s",
+            ai_place_name="동시 검수 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        seed_session.add(candidate)
+        await seed_session.commit()
+        candidate_id = candidate.id
+
+    async with session_factory() as stale_session:
+        stale_candidate = await stale_session.get(
+            ExtractedPlaceCandidate, candidate_id
+        )
+        assert stale_candidate is not None
+        await stale_session.commit()
+
+        async with session_factory() as current_session:
+            await svc.resolve_candidate(
+                current_session,
+                candidate_id=candidate_id,
+                action="ignore",
+                reviewed_by="first-reviewer",
+            )
+
+        # expire_on_commit=False 세션에 needs_review 객체가 남아 있어도 FOR UPDATE
+        # 재조회가 DB의 ignored 상태를 강제로 적재해 typed 409 계약으로 거부한다.
+        with pytest.raises(svc.CandidateResolveConflictError):
+            await svc.resolve_candidate(
+                stale_session,
+                candidate_id=candidate_id,
+                action="ignore",
+                reviewed_by="stale-reviewer",
+            )
+        await stale_session.rollback()
+
+
+async def test_review_waits_for_resolve_lock_and_rejects_latest_status(
+    session_factory,
+):
+    """동시 resolve가 선점한 후보를 review가 기다린 뒤 stale 메타데이터로 덮지 않는다."""
+    async with session_factory() as seed_session:
+        seed_session.add(
+            YoutubeVideo(
+                video_id="review-resolve-lock",
+                title="동시 검수",
+                url="u",
+                channel_id="review-resolve-channel",
+            )
+        )
+        await seed_session.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="review-resolve-lock",
+            source_text="s",
+            ai_place_name="동시 검수 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        seed_session.add(candidate)
+        await seed_session.commit()
+        candidate_id = candidate.id
+
+    review_preloaded = asyncio.Event()
+    resume_review = asyncio.Event()
+    review_started = asyncio.Event()
+    review_pid: list[int] = []
+
+    async def review_concurrently():
+        async with session_factory() as review_session:
+            stale_candidate = await review_session.get(
+                ExtractedPlaceCandidate, candidate_id
+            )
+            assert stale_candidate is not None
+            assert stale_candidate.match_status == MatchStatus.NEEDS_REVIEW.value
+            # expire_on_commit=False identity map에 needs_review 객체를 남긴다.
+            await review_session.commit()
+            review_preloaded.set()
+            await resume_review.wait()
+            review_pid.append(
+                int(await review_session.scalar(text("SELECT pg_backend_pid()")))
+            )
+            review_started.set()
+            return await svc.review_candidate(
+                review_session,
+                candidate_id=candidate_id,
+                reviewed_by="stale-reviewer",
+                review_note="이미 끝난 후보를 뒤늦게 검수",
+            )
+
+    review_task = asyncio.create_task(review_concurrently())
+    try:
+        await asyncio.wait_for(review_preloaded.wait(), timeout=10)
+        async with session_factory() as resolve_session:
+            await svc.resolve_candidate(
+                resolve_session,
+                candidate_id=candidate_id,
+                action="ignore",
+                reviewed_by="first-reviewer",
+                review_note="먼저 제외",
+                commit=False,
+            )
+            resume_review.set()
+            try:
+                await asyncio.wait_for(review_started.wait(), timeout=10)
+                review_is_waiting = False
+                async with session_factory() as monitor_session:
+                    for _ in range(1000):
+                        wait_event_type = await monitor_session.scalar(
+                            text(
+                                "SELECT wait_event_type FROM pg_stat_activity "
+                                "WHERE pid = :pid"
+                            ),
+                            {"pid": review_pid[0]},
+                        )
+                        await monitor_session.commit()
+                        if wait_event_type == "Lock":
+                            review_is_waiting = True
+                            break
+                        await asyncio.sleep(0.01)
+                assert review_is_waiting is True
+            finally:
+                # resolve의 status/reviewer를 DB에 반영하고 대기 중 review를 깨운다.
+                await resolve_session.commit()
+
+        with pytest.raises(svc.CandidateResolveConflictError):
+            await asyncio.wait_for(review_task, timeout=10)
+    finally:
+        resume_review.set()
+        if not review_task.done():
+            review_task.cancel()
+        await asyncio.gather(review_task, return_exceptions=True)
+
+    async with session_factory() as check_session:
+        current = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        assert current.match_status == MatchStatus.IGNORED.value
+        assert current.reviewed_by == "first-reviewer"
+        assert current.review_note == "먼저 제외"
+
+
+async def test_resolve_normalizes_all_legacy_duplicate_candidate_mappings(session):
+    """unique 제약 없는 legacy mapping 전부를 candidate의 최신 연결로 맞춘다."""
+    session.add_all(
+        [
+            YoutubeVideo(
+                video_id="resolve-legacy-mapping",
+                title="정본 영상",
+                url="u1",
+                channel_id="c-resolve-legacy-mapping",
+            ),
+            YoutubeVideo(
+                video_id="resolve-legacy-mapping-stale",
+                title="legacy 오연결 영상",
+                url="u2",
+                channel_id="c-resolve-legacy-mapping-stale",
+            ),
+        ]
+    )
+    old_place = TravelPlace(
+        name="이전 장소", latitude=35.0, longitude=129.0, is_geocoded=True
+    )
+    target_place = TravelPlace(
+        name="최종 장소", latitude=35.1, longitude=129.1, is_geocoded=True
+    )
+    session.add_all([old_place, target_place])
+    await session.flush()
+    candidate = ExtractedPlaceCandidate(
+        video_id="resolve-legacy-mapping",
+        source_text="최종 장소를 방문했습니다.",
+        ai_place_name="최종 장소",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.flush()
+    session.add_all(
+        [
+            VideoPlaceMapping(
+                video_id="resolve-legacy-mapping",
+                place_id=old_place.place_id,
+                place_candidate_id=candidate.id,
+                ai_summary="legacy 중복 1",
+            ),
+            VideoPlaceMapping(
+                video_id="resolve-legacy-mapping-stale",
+                place_id=old_place.place_id,
+                place_candidate_id=candidate.id,
+                ai_summary="legacy 중복 2",
+            ),
+        ]
+    )
+    await session.commit()
+
+    resolved, place, returned_mapping = await svc.resolve_candidate(
+        session,
+        candidate_id=candidate.id,
+        action="match_existing",
+        reviewed_by="web",
+        place_id=target_place.place_id,
+    )
+
+    assert place is not None
+    assert returned_mapping is not None
+    assert resolved.matched_place_id == target_place.place_id
+    mappings = (
+        (
+            await session.execute(
+                select(VideoPlaceMapping)
+                .where(VideoPlaceMapping.place_candidate_id == candidate.id)
+                .order_by(VideoPlaceMapping.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(mappings) == 2
+    assert returned_mapping.id == mappings[-1].id
+    assert {mapping.video_id for mapping in mappings} == {candidate.video_id}
+    assert {mapping.place_id for mapping in mappings} == {target_place.place_id}
+    assert all(
+        mapping.feature_export_status == FeatureExportStatus.READY.value
+        for mapping in mappings
+    )
+    assert all(
+        mapping.provider_evidence_json == resolved.provider_evidence_json
+        for mapping in mappings
+    )
 
 
 async def test_resolve_create_place_without_evidence_code_uses_unknown(session):
@@ -531,6 +849,159 @@ async def test_delete_place_missing_raises(session):
         await svc.delete_place(session, place_id=999_999)
 
 
+async def test_delete_place_and_merge_serialize_candidate_less_legacy_refs(
+    session_factory,
+    monkeypatch,
+):
+    """후보 없는 legacy 장소도 lifecycle 경계에서 mapping/asset 교착을 막는다."""
+    async with session_factory() as seed_session:
+        video = YoutubeVideo(
+            video_id="v-delete-merge-legacy",
+            title="후보 없는 legacy 장소",
+            url="u",
+            channel_id="c-delete-merge-legacy",
+        )
+        source = TravelPlace(
+            name="legacy 원본",
+            latitude=35.0,
+            longitude=129.0,
+            is_geocoded=True,
+        )
+        target = TravelPlace(
+            name="legacy 통합본",
+            latitude=35.1,
+            longitude=129.1,
+            is_geocoded=True,
+        )
+        seed_session.add_all([video, source, target])
+        await seed_session.flush()
+        mapping = VideoPlaceMapping(
+            video_id=video.video_id,
+            place_id=source.place_id,
+            place_candidate_id=None,
+            ai_summary="candidate FK가 없는 legacy mapping",
+        )
+        asset = MediaAsset(
+            video_id=video.video_id,
+            place_id=source.place_id,
+            asset_type="frame",
+            bucket="b",
+            object_key="legacy-lock-order",
+            object_uri="u",
+        )
+        seed_session.add_all([mapping, asset])
+        await seed_session.commit()
+        source_place_id = source.place_id
+        target_place_id = target.place_id
+        mapping_id = mapping.id
+        asset_id = asset.id
+
+    merge_has_place_locks = asyncio.Event()
+    resume_merge_mapping_lock = asyncio.Event()
+    delete_pid_ready = asyncio.Event()
+    delete_pid: int | None = None
+
+    async def merge_concurrently() -> int:
+        async with session_factory() as merge_session:
+            original_execute = merge_session.execute
+            paused = False
+
+            async def pause_before_mapping_lock(statement, *args, **kwargs):
+                nonlocal paused
+                descriptions = getattr(statement, "column_descriptions", ())
+                selects_mapping = any(
+                    description.get("entity") is VideoPlaceMapping
+                    for description in descriptions
+                )
+                if selects_mapping and not paused:
+                    paused = True
+                    merge_has_place_locks.set()
+                    await resume_merge_mapping_lock.wait()
+                return await original_execute(statement, *args, **kwargs)
+
+            monkeypatch.setattr(merge_session, "execute", pause_before_mapping_lock)
+            merged = await svc.merge_places(
+                merge_session,
+                source_place_id=source_place_id,
+                target_place_id=target_place_id,
+            )
+            return merged.place_id
+
+    async def delete_concurrently() -> str:
+        nonlocal delete_pid
+        async with session_factory() as delete_session:
+            delete_pid = int(
+                (
+                    await delete_session.execute(text("SELECT pg_backend_pid()"))
+                ).scalar_one()
+            )
+            await delete_session.commit()
+            delete_pid_ready.set()
+            try:
+                await svc.delete_place(delete_session, place_id=source_place_id)
+                await delete_session.commit()
+            except ValueError:
+                await delete_session.rollback()
+                return "not_found"
+            return "deleted"
+
+    merge_task = asyncio.create_task(merge_concurrently())
+    delete_task: asyncio.Task[str] | None = None
+    try:
+        await asyncio.wait_for(merge_has_place_locks.wait(), timeout=10)
+        delete_task = asyncio.create_task(delete_concurrently())
+        await asyncio.wait_for(delete_pid_ready.wait(), timeout=10)
+        assert delete_pid is not None
+
+        # 새 순서에서는 delete가 mapping/asset을 건드리기 전에 merge의 lifecycle
+        # 임계구간에서 대기한다. 구 순서는 asset+mapping을 먼저 잡고 place를 기다려,
+        # merge 재개 시 place <-> mapping/asset 교착을 만들었다.
+        delete_is_waiting = False
+        async with session_factory() as monitor_session:
+            for _ in range(200):
+                wait_event_type = (
+                    await monitor_session.execute(
+                        text(
+                            "SELECT wait_event_type FROM pg_stat_activity "
+                            "WHERE pid = :pid"
+                        ),
+                        {"pid": delete_pid},
+                    )
+                ).scalar_one_or_none()
+                await monitor_session.commit()
+                if wait_event_type == "Lock":
+                    delete_is_waiting = True
+                    break
+                await asyncio.sleep(0.01)
+        assert delete_is_waiting is True
+
+        resume_merge_mapping_lock.set()
+        merged_place_id, delete_outcome = await asyncio.wait_for(
+            asyncio.gather(merge_task, delete_task),
+            timeout=10,
+        )
+    finally:
+        resume_merge_mapping_lock.set()
+        pending = [merge_task]
+        if delete_task is not None:
+            pending.append(delete_task)
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    assert merged_place_id == target_place_id
+    assert delete_outcome == "not_found"
+    async with session_factory() as check_session:
+        assert await check_session.get(TravelPlace, source_place_id) is None
+        current_mapping = await check_session.get(VideoPlaceMapping, mapping_id)
+        current_asset = await check_session.get(MediaAsset, asset_id)
+        assert current_mapping is not None
+        assert current_mapping.place_id == target_place_id
+        assert current_asset is not None
+        assert current_asset.place_id == target_place_id
+
+
 async def test_list_place_summaries_sorts_by_mention_count(session):
     # mention_count는 매핑 행 수가 아니라 고유 영상 수다(한 영상에서 여러 번 언급돼도 1회).
     # '반복 장소'는 서로 다른 영상 2개에서 언급 → mention_count=2, '첫 장소'는 1개 → 1.
@@ -596,6 +1067,15 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
 
     session.add_all(
         [
+            # 고아 장소를 삭제해도 RustFS asset 행은 보존하고 place 연결만 해제한다.
+            MediaAsset(
+                video_id="v-ex-1",
+                place_id=orphan.place_id,
+                asset_type="frame",
+                bucket="b",
+                object_key="exclude-orphan-preserved",
+                object_uri="u",
+            ),
             # 제외 대상 영상의 언급 매핑: 세 장소 모두.
             VideoPlaceMapping(video_id="v-ex-1", place_id=orphan.place_id, ai_summary="s"),
             VideoPlaceMapping(video_id="v-ex-1", place_id=shared.place_id, ai_summary="s"),
@@ -618,6 +1098,13 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
         ]
     )
     await session.commit()
+    orphan_asset_id = (
+        await session.execute(
+            select(MediaAsset.id).where(
+                MediaAsset.object_key == "exclude-orphan-preserved"
+            )
+        )
+    ).scalar_one()
 
     # 수정 전에는 place_ids가 비어 있지 않아 고아 판정 루프 진입 즉시 AttributeError.
     summary = await svc.exclude_video(session, "v-ex-1", reason="스팸 영상")
@@ -637,6 +1124,9 @@ async def test_exclude_video_deletes_orphan_place_and_preserves_shared(session):
     )
     # (a) 다른 영상 언급이 없는 고아 장소만 삭제된다.
     assert orphan.place_id not in remaining_place_ids
+    orphan_asset = await session.get(MediaAsset, orphan_asset_id)
+    assert orphan_asset is not None
+    assert orphan_asset.place_id is None
     # (b) 다른 영상 매핑이 있는 장소·다른 영상 matched 후보가 참조하는 장소는 보존된다.
     assert shared.place_id in remaining_place_ids
     assert kept_by_candidate.place_id in remaining_place_ids
@@ -729,6 +1219,109 @@ async def test_soft_delete_requires_reason_and_is_idempotent(session):
     assert again.deleted_candidates == 0
     await session.refresh(candidate)
     assert candidate.deletion_reason == "테스트 삭제"
+
+
+async def test_soft_delete_expected_status_rejects_stale_bulk_atomically(session):
+    needs_review = await _seed_candidate(
+        session, video_id="v-sd-status-needs", name="검수 대기"
+    )
+    ignored = await _seed_candidate(
+        session,
+        video_id="v-sd-status-ignored",
+        name="이미 제외",
+        status=MatchStatus.IGNORED,
+    )
+    matched = await _seed_candidate(
+        session,
+        video_id="v-sd-status-matched",
+        name="이미 확정",
+        status=MatchStatus.MATCHED,
+    )
+
+    with pytest.raises(svc.CandidateStatusConflictError) as raised:
+        await svc.soft_delete_candidates(
+            session,
+            [needs_review.id, ignored.id, matched.id],
+            reason="stale bulk 삭제",
+            expected_status=MatchStatus.NEEDS_REVIEW,
+        )
+
+    assert raised.value.expected_status is MatchStatus.NEEDS_REVIEW
+    assert raised.value.actual_status_by_candidate_id == {
+        ignored.id: MatchStatus.IGNORED.value,
+        matched.id: MatchStatus.MATCHED.value,
+    }
+    # 하나라도 stale면 함께 잠긴 정상 후보도 삭제하지 않는다.
+    for candidate in (needs_review, ignored, matched):
+        await session.refresh(candidate)
+        assert candidate.deleted_at is None
+
+
+async def test_soft_delete_expected_status_serializes_with_concurrent_ignore(
+    session_factory,
+):
+    async with session_factory() as seed_session:
+        candidate = await _seed_candidate(
+            seed_session,
+            video_id="v-sd-status-race",
+            name="동시 삭제 제외",
+        )
+        candidate_id = candidate.id
+
+    async def delete_from_stale_queue() -> str:
+        async with session_factory() as delete_session:
+            try:
+                await svc.soft_delete_candidates(
+                    delete_session,
+                    [candidate_id],
+                    reason="stale row 삭제",
+                    expected_status=MatchStatus.NEEDS_REVIEW,
+                )
+                await delete_session.commit()
+            except svc.CandidateStatusConflictError:
+                await delete_session.rollback()
+                return "delete_conflict"
+            return "deleted"
+
+    async def ignore_from_other_reviewer() -> str:
+        async with session_factory() as resolve_session:
+            try:
+                await svc.resolve_candidate(
+                    resolve_session,
+                    candidate_id=candidate_id,
+                    action="ignore",
+                    reviewed_by="other-reviewer",
+                    commit=False,
+                )
+                await resolve_session.commit()
+            except ValueError:
+                await resolve_session.rollback()
+                return "ignore_rejected"
+            return "ignored"
+
+    outcomes = set(
+        await asyncio.wait_for(
+            asyncio.gather(
+                delete_from_stale_queue(),
+                ignore_from_other_reviewer(),
+            ),
+            timeout=5,
+        )
+    )
+    assert outcomes in (
+        {"deleted", "ignore_rejected"},
+        {"delete_conflict", "ignored"},
+    )
+
+    async with session_factory() as check_session:
+        current = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        if outcomes == {"deleted", "ignore_rejected"}:
+            assert current.deleted_at is not None
+            assert current.match_status == MatchStatus.NEEDS_REVIEW.value
+        else:
+            assert current.deleted_at is None
+            assert current.match_status == MatchStatus.IGNORED.value
 
 
 async def test_soft_delete_conflict_without_force_and_cleanup_with_force(session):

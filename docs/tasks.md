@@ -34,12 +34,26 @@
 - [x] **T-179**: 검수 저장 후 자동 다음 후보 + 타임스탬프 링크 — 검수 목록을 300개 단위 `useInfiniteQuery`로 전환하고 저장·제외·개별 삭제 성공 시 처리 시작 snapshot의 visible 순서로 다음 후보를 선택한다. 뒤 page가 있으면 숨김 후보 page를 포함해 첫 visible 후보 또는 마지막 page까지 자동 탐색하며, 수동 선택은 진행 중 탐색과 딥링크를 취소한다. 최초·딥링크 선택은 자동 검색을 억제하고 이후 자동 진행만 검색을 시작한다. polling 중 선택 후보가 page 밖으로 이동해도 입력 snapshot을 보존하며 scope·늦은 응답·상세 삭제 mutex·오류/재시도를 격리했다. `MM:SS`/`HH:MM:SS`/범위 첫 시각 파서와 `URL`/`URLSearchParams` 기반 YouTube `t=` 링크, 비정상 값 단위 테스트를 추가했다. n150에서 frontend lint/type-check/Vitest/production build와 Playwright 저장·제외·개별 삭제·숨김 page 연속 탐색을 검증했다. 적대적 검토를 3회 반복해 최종 P0/P1 0건을 확인했다. (2026-07-13, PR-02 개정판)
 - [x] **T-180**: 실패 작업 재시작 UI — `/status`와 `/jobs/[jobId]`에 terminal 재시작·running 중지용 공용 `RunActionButtons`를 배선하고 `ConfirmActionButton`, pending 잠금, 행이 즉시 사라져도 유지되는 상위 live feedback을 적용했다. 상태·outcome·attention·lineage를 분리해 `done+quota_deferred`를 성공과 다르게 표시하고 원본/후속 작업 링크를 제공한다. 백엔드는 중지-vs-claim을 `FOR UPDATE`로 직렬화하고 응답/audit용 전이 snapshot을 고정했으며, 재시작 동시 멱등과 보류 child를 거친 성공 descendant의 조상 attention 해소, worker의 `quota_deferred is True` 계약을 보강했다. 적대적 검토를 backend·UX·테스트 3렌즈로 2회 이상 반복해 최종 P0/P1 0건을 확인했다. 최신 main의 T-163 레인 분리 위로 재배치한 뒤 n150에서 관련 backend 113건·변경 파일 Ruff, frontend lint·type-check·Vitest 104건·build, Playwright 11건 통과(live 4건 skip), backend 전체 434건 중 433건 통과(기존 postprocess category 기대 1건 실패)를 검증했다. (2026-07-13, PR-03 개정판, G6)
 - [x] **T-181**: run-queue 폴링 통합 — `GET /runs/queue`가 서버 정본 `USER_JOB_TYPES`의 running→pending FIFO 항목을 최대 100건만 반환하면서 window 집계로 정확한 상태별 수·`has_more`, 종료된 open attention 수를 같은 `REPEATABLE READ` snapshot에서 제공한다. 큰 status/result 컬럼은 `raiseload`로 배제하고 static route를 동적 job route보다 먼저 등록했다. 세 화면은 `['run-queue']` 하나를 공유하며 `JobStatusLink`만 완료 시점 기준 10초 poll을 소유하고, remount·오류·paused 중 timer 폭주를 막는다. 모든 작업 mutation은 즉시 invalidate하고 active 소멸 시 이력·facet을 갱신하며 facet은 10분 safety poll+수동 갱신을 둔다. `/runs`의 `terminal`·`attention`·서버 소유 `user_jobs_only` cursor 이력은 queue 부분 장애와 81건 이상 attention에서도 독립 조회·append된다. backend·UX·계약 세 렌즈를 3회 이상 적대 검토해 최종 P0/P1/P2 0건을 확인했고, 최신 T-164/Alembic 0020 위 n150에서 관련 backend 125건·변경 파일 Ruff, frontend lint·type-check·Vitest 106건·build, Playwright 14건 통과(live 4건 skip)를 검증했다. backend 전체 기준선은 474건 통과, 기존 category 기대 1건과 T-164의 선택 provider 미설치 가정이 n150 설치 환경과 다른 2건만 실패했다. (2026-07-13, PR-06 개정판)
-- [x] **T-182**: 검수 목록 payload 확장 — 후보→영상→정규 채널을 상시 outer join하고 목록에 `video_title`, `channel_title`, 유효한 `confidence_score`, `source_kind`, `created_at`, 파생 `queue_reason`만 추가했다. 긴 evidence·원문은 상세에 유지한다. 사유는 mismatch·reconcile conflict/저신뢰/불확실·geocoding·foreign·description/visual·provider 누락·추출 대기를 안정 enum과 명시 우선순위로 고정하고, `reason`·`source_kind`를 items/total/newer_than/cursor fingerprint에 동일 적용해 `unmatched-v2`로 전환했다. NaN/Infinity/범위 밖 신뢰도와 손상·객체·거대 JSONB 점수를 fail-safe 처리한다. grounding은 T-165 raw 저장 전 가짜 filter를 만들지 않고 명시 이연했다. UI는 후보명·매칭 신뢰도·사유, 영상 제목·채널·위치, 출처·생성일을 행에서 바로 보여준다. 300건 응답은 n150 fixture에서 기존 필드 환산 64,456 byte→122,656 byte(항목당 약 +194 byte)였고 100KB evidence 비례 증가가 없음을 검증했다. n150에서 PostgreSQL 타깃 8건·변경 파일 Ruff, backend 전체 385건(기존 postprocess category 기대 1건 실패), frontend lint/type-check/전체 Vitest/build, Playwright 9건을 검증하고 3단계 적대 검토 최종 P0/P1 0건을 확인했다. 전체 Ruff의 기존 미사용 import/변수 12건은 이 PR에 섞지 않았다. (2026-07-13, PR-07 개정판)
-- [ ] **T-183**: 검수 서버 검색·정렬·cursor + URL 상태화 — envelope 기반 append, oldest 정렬, `newer_than` 새 후보 배너, page 밖 딥링크. 선행: T-177·T-182. (PR-08 개정판, G5)
+- [x] **T-182**: 검수 목록 payload 확장 — 후보→영상→정규 채널을 상시 outer join하고 목록에 `video_title`, `channel_title`, 유효한 `confidence_score`, `source_kind`, `created_at`, 파생 `queue_reason`만 추가했다. 긴 evidence·원문은 상세에 유지한다. 사유는 mismatch·reconcile conflict/저신뢰/불확실·geocoding·foreign·description/visual·provider 누락·추출 대기를 안정 enum과 명시 우선순위로 고정하고, `reason`·`source_kind`를 items/total/newer_than/cursor fingerprint에 동일 적용해 `unmatched-v2`로 전환했다. NaN/Infinity/범위 밖 신뢰도와 손상·객체·거대 JSONB 점수를 fail-safe 처리한다. grounding은 T-165 raw 저장 전 가짜 filter를 만들지 않고 당시 명시 이연했으며 T-183에서 5상태 계약으로 마감했다. UI는 후보명·매칭 신뢰도·사유, 영상 제목·채널·위치, 출처·생성일을 행에서 바로 보여준다. 300건 응답은 n150 fixture에서 기존 필드 환산 64,456 byte→122,656 byte(항목당 약 +194 byte)였고 100KB evidence 비례 증가가 없음을 검증했다. n150에서 PostgreSQL 타깃 8건·변경 파일 Ruff, backend 전체 385건(기존 postprocess category 기대 1건 실패), frontend lint/type-check/전체 Vitest/build, Playwright 9건을 검증하고 3단계 적대 검토 최종 P0/P1 0건을 확인했다. 전체 Ruff의 기존 미사용 import/변수 12건은 이 PR에 섞지 않았다. (2026-07-13, PR-07 개정판)
+- [x] **T-183**: 검수 서버 검색·정렬·cursor + URL 상태화 — 후보명·위치 단서 `q` literal 검색,
+  strict 국내 여부·사유·출처·상태·Grounding 5상태 filter, oldest/newest snapshot keyset
+  (`unmatched-v4`)과 정확한 `total`·`newer_than`을 구현했다. UI는 oldest FIFO 300건 append, URL 단일
+  정본, 명시적 page 밖 `?candidate=` 상세, 큐 변경 배너와 filter 밖 맥락을 제공한다. mutation 실패는
+  단건 상세를 권위 재조회해 404/이미 처리/여전히 actionable을 구분하고 A→B→A ABA·checkbox/cache
+  resurrection·다른 검수자의 선처리 409를 방어한다. 장소 변경은 lifecycle advisory→candidate→place→
+  mapping→asset 순서와 후보 `xmin` fencing으로 직렬화하며 `MediaAsset`/RustFS 객체를 보존한다. MCP는
+  감사 로그 멱등 전용 column·partial unique index, pending owner/lease 인계·fencing으로 외부 보강 뒤
+  최신 결과를 확정하고, auto-match audit은 `pending` 단일 전이와 후보+로그 원자 commit을 보장한다.
+  T-170 재배치에서 Alembic을 `0022→0024→0023` 단일 chain으로 합쳤다. 2회 이상 적대 검토 최종
+  P0/P1/P2 0건. 최신 T-170 위 재배치 후 n150에서 backend 타깃 273건·변경 Python 31개 Ruff·
+  Alembic `head→0024→0022→head` 왕복,
+  frontend lint/type-check/Vitest 159건/build, Playwright 22건 통과(live 4건 skip)를 검증했다. backend
+  전체는 664건 통과, n150 optional transcript library 설치 상태와 가정이 다른 기존 2건만 실패했다.
+  (2026-07-13, PR-08 개정판, G5)
 - [ ] **T-184**: undo/reopen UI + 제외 목록 뷰 — 마지막 처리 undo 토스트, IGNORED·삭제 복구, reference count 기반 장소 정리(공유 장소 보호). 선행: T-160(A). (PR-09 개정판 UI) — **T-160 이연분 포함**: MATCHED/USER_CORRECTED 후보의 reopen 백엔드(현재 400 — 장소 정리 정책과 함께)와 영상 제외 undo 정책(reopen 시 `youtube_videos.is_excluded`는 별개로 잔존)
 - [ ] **T-185**: 검수 bulk — filter snapshot 서버 액션+preview count+확인 token+크기/분할·retry 계약, 해외 일괄 제외 포함. 선행: T-160(A)·T-177. (PR-10 개정판)
 - [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리, provider 요청 debounce 250~400ms+abort+identity, startTransition으로 120ms 해킹 제거. 선행: T-183. (PR-15 개정판)
-- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
+- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
 - [ ] **T-188**: `/destinations` SQL 푸시다운 — EXPLAIN(ANALYZE,BUFFERS) 검증, `source_videos` 사용처 전수→detail lazy 선배포→제거, `limit=None` 시그니처 호환. 선행: T-178. (PR-20 개정판, G8)
 - [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. (PR-25 개정판, G10)
 - [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
@@ -63,9 +77,9 @@
   `run_with_geocode_cache`로 감쌈(별도 세션 팩토리, on_conflict_do_update 멱등). 2렌즈 적대적 리뷰:
   **확정 MAJOR 2**. ① **캐시 best-effort화**(수정): store/lookup 예외가 이미 fetch된 후보를 폐기·전파
   → 상위 광역 `except`가 삼켜 matched(1.0)를 needs_review 'no_result'로 강등 → lookup/store를
-  try/except로 감싸 로그 후 진행(결과 불변). ② **migration fork**(미수정·문서화): T-183의 0023이
-  0022에서 갈라져 병합 시 multiple heads — 단, origin/main에 0023 미존재라 0024←0022가 현재 단일·정확,
-  **T-183 rebase에서 0023을 0024 뒤로 재부모화(또는 merge revision)해야 함**(Agent B 조정). MINOR
+  try/except로 감싸 로그 후 진행(결과 불변). ② **migration fork**(당시 미수정·후속 해소): T-183의
+  0023이 0022에서 갈라지면 multiple heads가 되므로, T-183 최종 rebase에서 0023을 0024 뒤로
+  재부모화해 `0022→0024→0023` 단일 chain으로 합쳤다. MINOR
   (미수정): 캐시 무한 성장은 로드맵 설계(lazy만), 14일 stale은 보수 트레이드오프(<30일). **VWorld 캐시
   정책 긴장**: 약관 전문 미확보로 보수적 제외 — 전문 확보 시 정책 dict 한 줄로 재검토 가능. 검증: 격리
   DB backend 전체 pytest 596 passed(pre-existing 1건 외 0), 캐시 테스트 24 passed, migration round-trip

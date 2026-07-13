@@ -6,9 +6,15 @@ import json
 
 from sqlalchemy import select
 
+from ktc.etl import geocode_service
+from ktc.etl.geocode_service import CandidateStateChangedError
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.etl.media_store import InMemoryMediaStore
-from ktc.etl.postprocess_service import process_harvest_videos
+from ktc.etl.postprocess_service import (
+    _GeocodeContext,
+    _apply_geocoding,
+    process_harvest_videos,
+)
 from ktc.etl.transcript import TranscriptResult, TranscriptSegment
 from ktc.models import (
     CrawlStatus,
@@ -18,9 +24,10 @@ from ktc.models import (
     VideoPlaceMapping,
     YoutubeVideo,
 )
+from ktc.services import place_service
 
 
-async def test_process_harvest_videos_creates_place_from_summarized_poi(session):
+async def test_process_harvest_videos_legacy_summary_stays_fail_closed(session):
     video = YoutubeVideo(
         video_id="busan-1",
         title="부산 맛집 투어",
@@ -92,28 +99,26 @@ async def test_process_harvest_videos_creates_place_from_summarized_poi(session)
     assert summary["summarized_videos"] == 1
     assert summary["failed_videos"] == 0
     assert summary["created_candidates"] == 1
-    assert summary["matched_places"] == 1
-    assert summary["needs_review_candidates"] == 0
+    assert summary["matched_places"] == 0
+    assert summary["needs_review_candidates"] == 1
     assert geocode_queries == ["부산 동구 초량동 부산역 국밥집"]
 
     places = (await session.execute(select(TravelPlace))).scalars().all()
-    assert len(places) == 1
-    assert places[0].name == "부산역 국밥집"
-    assert places[0].category == "음식점"
+    assert places == []
 
     candidates = (await session.execute(select(ExtractedPlaceCandidate))).scalars().all()
     assert len(candidates) == 1
-    assert candidates[0].match_status == MatchStatus.MATCHED
-    assert candidates[0].matched_place_id == places[0].place_id
+    assert candidates[0].match_status == MatchStatus.NEEDS_REVIEW
+    assert candidates[0].matched_place_id is None
+    assert candidates[0].review_note == "ungrounded"
 
-    mapping = (await session.execute(select(VideoPlaceMapping))).scalars().one()
-    assert mapping.video_id == "busan-1"
-    assert mapping.place_id == places[0].place_id
+    mappings = (await session.execute(select(VideoPlaceMapping))).scalars().all()
+    assert mappings == []
 
     refreshed_video = await session.get(YoutubeVideo, "busan-1")
-    assert refreshed_video.crawl_status == CrawlStatus.GEOCODED
+    assert refreshed_video.crawl_status == CrawlStatus.SUMMARIZED
     assert any("자막·장소 추출을 시작합니다" in message for message in reported)
-    assert any("장소 목록에 확정했습니다" in message for message in reported)
+    assert any("검수 큐에 남겼습니다" in message for message in reported)
 
 
 async def test_process_harvest_videos_empty_video_ids_does_not_fall_back_to_backlog(
@@ -146,6 +151,126 @@ async def test_process_harvest_videos_empty_video_ids_does_not_fall_back_to_back
 
     assert summary["processed_videos"] == 0
     assert summary["summarized_videos"] == 0
+
+
+async def test_apply_geocoding_counts_state_changed_separately(session):
+    session.add(
+        YoutubeVideo(
+            video_id="race-video",
+            title="race",
+            url="https://youtu.be/race-video",
+            channel_id="race-channel",
+        )
+    )
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="race-video",
+        source_text="월정리 카페",
+        ai_place_name="월정리 카페",
+        candidate_category="카페",
+        match_status=MatchStatus.NEEDS_REVIEW,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    async def decide(_candidate: ExtractedPlaceCandidate) -> GeocodeDecision:
+        return GeocodeDecision("needs_review", None, 0.0, "no_result", 0)
+
+    seen_versions: list[int] = []
+
+    async def apply(_session, _candidate, _decision, expected_version):
+        seen_versions.append(expected_version)
+        raise CandidateStateChangedError(candidate.id)
+
+    reported: list[str] = []
+
+    async def reporter(message: str, _progress: float | None = None) -> None:
+        reported.append(message)
+
+    summary = {"matched_places": 0, "needs_review_candidates": 0}
+    geocoded_any = await _apply_geocoding(
+        session,
+        [candidate],
+        context=_GeocodeContext(decide, apply),
+        summary=summary,
+        status_reporter=reporter,
+    )
+
+    assert geocoded_any is False
+    assert summary["matched_places"] == 0
+    assert summary["needs_review_candidates"] == 0
+    assert summary["skipped_state_changed_candidates"] == 1
+    assert len(seen_versions) == 1
+    assert seen_versions[0] > 0
+    assert any("이미 처리되어" in message for message in reported)
+
+
+async def test_apply_geocoding_provider_missing_rechecks_latest_state(
+    session_factory,
+    monkeypatch,
+):
+    async with session_factory() as seed_session:
+        seed_session.add(
+            YoutubeVideo(
+                video_id="provider-missing-race",
+                title="provider missing",
+                url="https://youtu.be/provider-missing-race",
+                channel_id="provider-missing-channel",
+            )
+        )
+        await seed_session.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="provider-missing-race",
+            source_text="월정리 카페",
+            ai_place_name="월정리 카페",
+            candidate_category="카페",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        seed_session.add(candidate)
+        await seed_session.commit()
+        await seed_session.refresh(candidate)
+        candidate_id = candidate.id
+
+    original_is_current = geocode_service.candidate_geocode_snapshot_is_current
+
+    async def ignore_then_check(session, checked_id, expected_version):
+        async with session_factory() as reviewer_session:
+            await place_service.resolve_candidate(
+                reviewer_session,
+                candidate_id=checked_id,
+                action="ignore",
+                reviewed_by="provider-missing-reviewer",
+            )
+        return await original_is_current(session, checked_id, expected_version)
+
+    monkeypatch.setattr(
+        geocode_service,
+        "candidate_geocode_snapshot_is_current",
+        ignore_then_check,
+    )
+
+    async def unused_applier(_session, _candidate, _decision, _expected_version):
+        raise AssertionError("provider가 없으면 applier를 호출하지 않아야 한다")
+
+    summary = {"matched_places": 0, "needs_review_candidates": 0}
+    async with session_factory() as worker_session:
+        worker_candidate = await worker_session.get(
+            ExtractedPlaceCandidate, candidate_id
+        )
+        assert worker_candidate is not None
+        geocoded_any = await _apply_geocoding(
+            worker_session,
+            [worker_candidate],
+            context=_GeocodeContext(None, unused_applier),
+            summary=summary,
+            status_reporter=None,
+        )
+
+    assert geocoded_any is False
+    assert summary["matched_places"] == 0
+    assert summary["needs_review_candidates"] == 0
+    assert summary["skipped_state_changed_candidates"] == 1
 
 
 async def test_process_harvest_videos_keeps_candidate_when_geocoder_needs_review(session):

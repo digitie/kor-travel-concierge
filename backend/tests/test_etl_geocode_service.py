@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import json
-
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import InvalidRequestError
 
-from ktc.etl import geocode_service
-from ktc.etl.geocode_service import _names_match, apply_geocode_to_candidate
+from ktc.etl import admin_region_service, geocode_service
+from ktc.etl.geocode_service import (
+    CandidateStateChangedError,
+    _names_match,
+    apply_geocode_to_candidate as apply_geocode_to_candidate_versioned,
+    apply_geocode_to_current_candidate as apply_geocode_to_candidate,
+)
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.models import (
     AuditStatus,
@@ -20,6 +25,12 @@ from ktc.models import (
     VideoPlaceMapping,
     YoutubeVideo,
 )
+from ktc.services import place_service
+
+
+def test_versioned_applier_requires_expected_candidate_version():
+    with pytest.raises(TypeError, match="expected_candidate_version"):
+        apply_geocode_to_candidate_versioned(None, None, None)
 
 
 async def _make_candidate(
@@ -328,6 +339,123 @@ async def test_apply_uses_vworld_for_address_enrichment(session):
     )
     assert place.road_address == "도로명주소"
     assert place.official_address == "지번주소"
+
+
+async def test_apply_new_place_runs_isolated_reverse_after_duplicate_disappears(
+    session,
+    monkeypatch,
+):
+    """격리 reverse provenance를 unique 제약 없는 legacy mapping 전체에 기록한다."""
+    existing = TravelPlace(
+        name="월정리 카페",
+        latitude=33.5563,
+        longitude=126.7958,
+        is_geocoded=True,
+    )
+    session.add(existing)
+    await session.commit()
+    await session.refresh(existing)
+    candidate = await _make_candidate(session)
+
+    duplicate_calls = 0
+
+    async def staged_duplicates(_session, *, lat, lng, **_kwargs):
+        nonlocal duplicate_calls
+        duplicate_calls += 1
+        assert (lat, lng) == (33.5563, 126.7958)
+        return [(existing, 0.0)] if duplicate_calls == 1 else []
+
+    reverse_calls = 0
+
+    async def fake_reverse(_client, lat, lng):
+        nonlocal reverse_calls
+        reverse_calls += 1
+        assert (lat, lng) == (33.5563, 126.7958)
+        return {
+            "road_address": "제주특별자치도 제주시 구좌읍 월정1길",
+            "parcel_address": "제주특별자치도 제주시 구좌읍 월정리",
+        }
+
+    async def insert_legacy_duplicate_mapping(factory, place_id, **_kwargs):
+        async with factory() as legacy_session:
+            legacy_session.add(
+                VideoPlaceMapping(
+                    video_id=candidate.video_id,
+                    place_id=place_id,
+                    place_candidate_id=candidate.id,
+                    ai_summary="unique 제약 도입 전 중복 mapping",
+                    provider_evidence_json={"legacy": {"duplicate": True}},
+                    feature_export_status=FeatureExportStatus.READY.value,
+                )
+            )
+            await legacy_session.commit()
+        return False
+
+    monkeypatch.setattr(
+        place_service, "find_duplicate_candidates", staged_duplicates
+    )
+    monkeypatch.setattr(geocode_service, "reverse_with_vworld", fake_reverse)
+    monkeypatch.setattr(
+        admin_region_service,
+        "enrich_place_admin_codes_isolated",
+        insert_legacy_duplicate_mapping,
+    )
+
+    place = await apply_geocode_to_candidate(
+        session,
+        candidate,
+        GeocodeDecision(
+            status="matched",
+            candidate=GeocodeCandidate(
+                latitude=33.5563,
+                longitude=126.7958,
+                place_name="월정리 카페",
+                source="kakao_keyword",
+            ),
+            confidence=1.0,
+            reason="single_result",
+            candidate_count=1,
+        ),
+        vworld=object(),
+    )
+
+    assert place is not None
+    assert place.place_id != existing.place_id
+    assert place.road_address == "제주특별자치도 제주시 구좌읍 월정1길"
+    assert place.official_address == "제주특별자치도 제주시 구좌읍 월정리"
+    assert duplicate_calls == 2
+    assert reverse_calls == 1
+    await session.refresh(candidate)
+    mappings = (
+        (
+            await session.execute(
+                select(VideoPlaceMapping)
+                .where(VideoPlaceMapping.place_candidate_id == candidate.id)
+                .order_by(VideoPlaceMapping.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reverse_vworld = {
+        "road_address": "제주특별자치도 제주시 구좌읍 월정1길",
+        "parcel_address": "제주특별자치도 제주시 구좌읍 월정리",
+    }
+    assert candidate.provider_evidence_json["geocoding"]["reverse_vworld"] == (
+        reverse_vworld
+    )
+    assert len(mappings) == 2
+    assert all(
+        mapping.provider_evidence_json["geocoding"]["reverse_vworld"]
+        == reverse_vworld
+        for mapping in mappings
+    )
+    legacy_mapping = next(
+        mapping
+        for mapping in mappings
+        if (mapping.provider_evidence_json or {}).get("legacy")
+    )
+    assert legacy_mapping.provider_evidence_json["legacy"] == {"duplicate": True}
 
 
 # --- T-166 identity 게이트: 이름(result_kind별) ---
@@ -860,3 +988,188 @@ async def test_apply_ambiguous_single_pass_still_blocked_by_grounding(session):
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
     assert refreshed.review_note == "ungrounded"
+
+
+def _race_matched_decision() -> GeocodeDecision:
+    """stale guard가 없으면 장소·매핑을 만드는 정상 자동확정 결과."""
+    return GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",
+            road_address="제주특별자치도 제주시 구좌읍",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+
+
+async def test_apply_geocode_skips_stale_candidate_after_concurrent_ignore(
+    session_factory,
+):
+    async with session_factory() as seed_session:
+        candidate = await _make_candidate(seed_session)
+        candidate_id = candidate.id
+
+    # worker가 외부 provider를 기다리는 동안 들고 있던 stale ORM 객체를 재현한다.
+    async with session_factory() as worker_session:
+        stale_candidate = await worker_session.get(
+            ExtractedPlaceCandidate, candidate_id
+        )
+        assert stale_candidate is not None
+
+        async with session_factory() as reviewer_session:
+            await place_service.resolve_candidate(
+                reviewer_session,
+                candidate_id=candidate_id,
+                action="ignore",
+                reviewed_by="concurrent-reviewer",
+            )
+
+        with pytest.raises(CandidateStateChangedError):
+            await apply_geocode_to_candidate(
+                worker_session, stale_candidate, _race_matched_decision()
+            )
+        assert stale_candidate.match_status == MatchStatus.IGNORED.value
+        evidence = stale_candidate.provider_evidence_json or {}
+        assert "geocoding" not in evidence
+        assert evidence["review"]["resolutions"][-1]["action"] == "ignore"
+
+    async with session_factory() as check_session:
+        current = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        assert current.match_status == MatchStatus.IGNORED.value
+        assert current.feature_export_status == FeatureExportStatus.REJECTED.value
+        assert current.matched_place_id is None
+        assert (await check_session.execute(select(TravelPlace))).scalars().all() == []
+        assert (
+            await check_session.execute(select(VideoPlaceMapping))
+        ).scalars().all() == []
+
+
+async def test_apply_geocode_skips_stale_candidate_after_concurrent_delete(
+    session_factory,
+):
+    async with session_factory() as seed_session:
+        candidate = await _make_candidate(seed_session)
+        candidate_id = candidate.id
+
+    async with session_factory() as worker_session:
+        stale_candidate = await worker_session.get(
+            ExtractedPlaceCandidate, candidate_id
+        )
+        assert stale_candidate is not None
+
+        async with session_factory() as delete_session:
+            summary = await place_service.soft_delete_candidates(
+                delete_session,
+                [candidate_id],
+                reason="concurrent reviewer delete",
+                deleted_by="concurrent-reviewer",
+                expected_status=MatchStatus.NEEDS_REVIEW,
+            )
+            assert summary.deleted_candidates == 1
+            await delete_session.commit()
+
+        with pytest.raises(CandidateStateChangedError):
+            await apply_geocode_to_candidate(
+                worker_session, stale_candidate, _race_matched_decision()
+            )
+        assert stale_candidate.deleted_at is not None
+        assert stale_candidate.provider_evidence_json is None
+
+    async with session_factory() as check_session:
+        current = await check_session.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        assert current.deleted_at is not None
+        assert current.match_status == MatchStatus.NEEDS_REVIEW.value
+        assert current.matched_place_id is None
+        assert (await check_session.execute(select(TravelPlace))).scalars().all() == []
+        assert (
+            await check_session.execute(select(VideoPlaceMapping))
+        ).scalars().all() == []
+
+
+async def test_admin_enrichment_exception_does_not_block_next_candidate(
+    session,
+    monkeypatch,
+):
+    first = await _make_candidate(session, name="월정리 카페")
+    second = ExtractedPlaceCandidate(
+        video_id=first.video_id,
+        source_text="성산일출봉 카페",
+        ai_place_name="성산일출봉 카페",
+        candidate_category="카페",
+        match_status=MatchStatus.NEEDS_REVIEW,
+        source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+        grounding_status=GroundingStatus.VERIFIED_RAW.value,
+        is_domestic=True,
+    )
+    session.add(second)
+    await session.commit()
+    await session.refresh(second)
+
+    calls: list[int] = []
+
+    async def fail_admin(_session_factory, place_id, **_kwargs):
+        calls.append(place_id)
+        raise RuntimeError("admin provider failed")
+
+    monkeypatch.setattr(
+        admin_region_service,
+        "enrich_place_admin_codes_isolated",
+        fail_admin,
+    )
+
+    first_place = await apply_geocode_to_candidate(
+        session, first, _race_matched_decision()
+    )
+    assert first_place is not None
+    assert second.ai_place_name == "성산일출봉 카페"
+
+    second_place = await apply_geocode_to_candidate(
+        session,
+        second,
+        GeocodeDecision(
+            status="matched",
+            candidate=GeocodeCandidate(
+                latitude=33.4586,
+                longitude=126.9423,
+                place_name="성산일출봉 카페",
+                road_address="제주특별자치도 서귀포시 성산읍",
+                source="kakao_keyword",
+            ),
+            confidence=1.0,
+            reason="single_result",
+            candidate_count=1,
+        ),
+    )
+    assert second_place is not None
+    assert len(calls) == 2
+    assert len((await session.execute(select(TravelPlace))).scalars().all()) == 2
+
+
+async def test_post_enrichment_refresh_delete_race_becomes_typed_skip(
+    session,
+    monkeypatch,
+):
+    candidate = await _make_candidate(session)
+    original_refresh = session.refresh
+
+    async def fail_place_refresh(instance, *args, **kwargs):
+        if isinstance(instance, TravelPlace):
+            raise InvalidRequestError("place was concurrently deleted")
+        return await original_refresh(instance, *args, **kwargs)
+
+    monkeypatch.setattr(session, "refresh", fail_place_refresh)
+
+    with pytest.raises(CandidateStateChangedError) as caught:
+        await apply_geocode_to_candidate(
+            session, candidate, _race_matched_decision()
+        )
+
+    assert caught.value.candidate_id == candidate.id
+    assert session.in_transaction() is False

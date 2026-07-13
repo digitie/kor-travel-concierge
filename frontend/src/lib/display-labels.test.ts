@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  groundingStatusBadgeVariant,
+  groundingStatusLabel,
   isTerminalRun,
   queueReasonBadgeVariant,
   queueReasonLabel,
@@ -14,6 +16,7 @@ import {
 } from "./display-labels";
 import type {
   ReviewQueueReason,
+  ReviewGroundingStatus,
   ReviewSourceKind,
   RunAttention,
 } from "./api";
@@ -141,5 +144,25 @@ describe("sourceKindLabel", () => {
     ["visual", "영상 프레임"],
   ])("%s를 사용자 출처로 표시한다", (source, label) => {
     expect(sourceKindLabel(source)).toBe(label);
+  });
+});
+
+describe("groundingStatusLabel", () => {
+  it.each<
+    [ReviewGroundingStatus, string, "outline" | "secondary" | "destructive"]
+  >([
+    ["verified_raw", "원문 근거 확인", "secondary"],
+    ["unverified", "원문 근거 불일치", "destructive"],
+    ["missing", "원문 근거 없음", "destructive"],
+    ["not_applicable", "원문 대조 비대상", "outline"],
+    ["legacy_unknown", "기존 데이터 미확인", "outline"],
+  ])("%s를 한국어 근거 배지로 표시한다", (status, label, variant) => {
+    expect(groundingStatusLabel(status)).toBe(label);
+    expect(groundingStatusBadgeVariant(status)).toBe(variant);
+  });
+
+  it("알 수 없는 값도 기존 fallback 규칙으로 읽기 쉽게 표시한다", () => {
+    expect(groundingStatusLabel("future_status")).toBe("future status");
+    expect(groundingStatusLabel(null)).toBe("근거 상태 없음");
   });
 });

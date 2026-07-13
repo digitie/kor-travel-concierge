@@ -536,9 +536,15 @@ def _decode_cursor(cursor: str | None) -> int | None:
 async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory):
     """G1 시나리오: export(snapshot 노출) → 삭제 → changes tombstone(새 sequence) →
     reopen → 재확정 후 다음 sync가 upsert 재발행 → cursor 소비 일관성(유실·중복 없음)."""
-    from sqlalchemy import select
+    from sqlalchemy import delete, select
 
-    from ktc.models import ExtractedPlaceCandidate, FeatureExport
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        FeatureExportStatus,
+        MatchStatus,
+        VideoPlaceMapping,
+    )
 
     candidate_id, place_id = await _seed_ready_candidate(
         session_factory, video_id="vid-g1"
@@ -556,7 +562,28 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     cursor_seqs = [_decode_cursor(cursor)]
     consumed_ops = ["upsert"]
 
-    # 2) 검수 큐 개별 삭제(soft delete) — 행·ledger 보존 + 같은 트랜잭션 tombstone.
+    # 2) stale 확정/제외 UI는 바로 삭제하지 않고 reopen으로 needs_review를
+    # 선행한다. T-184의 matched reopen이 아직 이연된 현재 계약에서는 ignored
+    # 복귀 경로로 동일한 삭제 선행 조건을 만든다.
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        candidate.match_status = MatchStatus.IGNORED.value
+        candidate.matched_place_id = None
+        candidate.feature_export_status = FeatureExportStatus.REJECTED.value
+        await s.execute(
+            delete(VideoPlaceMapping).where(
+                VideoPlaceMapping.place_candidate_id == candidate_id
+            )
+        )
+        await s.commit()
+    delete_prerequisite = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+    )
+    assert delete_prerequisite.status_code == 200
+    assert delete_prerequisite.json()["candidate"]["match_status"] == "needs_review"
+
+    # 3) 검수 큐 개별 삭제(soft delete) — 행·ledger 보존 + 같은 트랜잭션 tombstone.
     deleted = await client.delete(
         f"/api/v1/destinations/candidates/{candidate_id}",
         params={"reason": "G1 삭제"},
@@ -587,7 +614,7 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     )
     assert detail.status_code == 404
 
-    # 3) changes: cursor 이후 tombstone 1건(새 sequence).
+    # 4) changes: cursor 이후 tombstone 1건(새 sequence).
     second = await client.get(f"/api/v1/features/changes?cursor={cursor}")
     second_body = second.json()
     assert [item["operation"] for item in second_body["items"]] == ["tombstone"]
@@ -599,10 +626,10 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     snapshot_after_delete = await client.get("/api/v1/features/snapshot")
     assert snapshot_after_delete.json()["items"] == []
 
-    # 4) process 재시작 등가: 새 세션 전량 sync 반복에도 ledger 불변(golden).
+    # 5) process 재시작 등가: 새 세션 전량 sync 반복에도 ledger 불변(golden).
     await _assert_full_sync_is_stable(session_factory)
 
-    # 5) reopen: 삭제 필드 clear + needs_review + export pending.
+    # 6) reopen: 삭제 필드 clear + needs_review + export pending.
     reopened = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
     )
@@ -628,7 +655,7 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
     snapshot_after_reopen = await client.get("/api/v1/features/snapshot")
     assert snapshot_after_reopen.json()["items"] == []
 
-    # 6) 재확정(기존 장소 매칭) → 다음 sync에서 같은 export_id의 upsert 재발행.
+    # 7) 재확정(기존 장소 매칭) → 다음 sync에서 같은 export_id의 upsert 재발행.
     resolved = await client.post(
         f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
         json={"action": "match_existing", "place_id": place_id},

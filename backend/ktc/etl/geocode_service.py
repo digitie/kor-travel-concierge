@@ -9,8 +9,12 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import BigInteger, literal_column, select
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm.exc import ObjectDeletedError
 from vworld import AsyncVworldClient
 
 from ktc.core.config import get_settings
@@ -35,9 +39,310 @@ from ktc.models import (
     GroundingStatus,
     MatchStatus,
     TravelPlace,
+    VideoPlaceMapping,
     utcnow,
 )
 from ktc.services import place_service
+
+_CANDIDATE_XMIN = literal_column(
+    "extracted_place_candidates.xmin::text::bigint",
+    type_=BigInteger,
+)
+_PLACE_XMIN = literal_column("travel_places.xmin::text::bigint", type_=BigInteger)
+
+
+@dataclass(frozen=True)
+class CandidateGeocodeSnapshot:
+    """외부 provider 호출 직전 후보의 PostgreSQL row version과 적용 가능 상태."""
+
+    version: int
+    match_status: str
+    deleted: bool
+
+    @property
+    def eligible(self) -> bool:
+        return not self.deleted and self.match_status == MatchStatus.NEEDS_REVIEW.value
+
+
+@dataclass(frozen=True)
+class PlaceAddressSnapshot:
+    """늦은 reverse 응답을 조건부 적용하기 위한 장소 row snapshot."""
+
+    place_id: int
+    version: int
+    latitude: float
+    longitude: float
+    road_address: str | None
+    official_address: str | None
+
+
+def _place_address_snapshot(place: TravelPlace, version: int) -> PlaceAddressSnapshot:
+    return PlaceAddressSnapshot(
+        place_id=place.place_id,
+        version=version,
+        latitude=place.latitude,
+        longitude=place.longitude,
+        road_address=place.road_address,
+        official_address=place.official_address,
+    )
+
+
+class CandidateStateChangedError(RuntimeError):
+    """외부 지오코딩 중 후보가 사용자 작업으로 더 이상 적용 가능하지 않음."""
+
+    def __init__(
+        self,
+        candidate_id: int,
+        *,
+        expected_version: int | None = None,
+        current_version: int | None = None,
+    ) -> None:
+        self.candidate_id = candidate_id
+        self.expected_version = expected_version
+        self.current_version = current_version
+        super().__init__(f"candidate {candidate_id} state changed during geocoding")
+
+
+async def read_candidate_geocode_snapshot(
+    session: AsyncSession, candidate_id: int
+) -> CandidateGeocodeSnapshot | None:
+    """후보와 PostgreSQL xmin을 함께 읽어 외부 호출 전 version snapshot을 만든다."""
+    row = (
+        await session.execute(
+            select(ExtractedPlaceCandidate, _CANDIDATE_XMIN)
+            .where(ExtractedPlaceCandidate.id == candidate_id)
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    candidate, version = row
+    return CandidateGeocodeSnapshot(
+        version=int(version),
+        match_status=str(candidate.match_status),
+        deleted=candidate.deleted_at is not None,
+    )
+
+
+async def _lock_current_candidate_for_geocode(
+    session: AsyncSession, candidate_id: int
+) -> tuple[ExtractedPlaceCandidate | None, int | None]:
+    """외부 지오코딩 뒤 최신 후보를 잠그고 identity map의 stale 값을 교체한다."""
+    row = (
+        await session.execute(
+            select(ExtractedPlaceCandidate, _CANDIDATE_XMIN)
+            .where(ExtractedPlaceCandidate.id == candidate_id)
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).one_or_none()
+    if row is None:
+        return None, None
+    candidate, version = row
+    return candidate, int(version)
+
+
+async def candidate_geocode_snapshot_is_current(
+    session: AsyncSession,
+    candidate_id: int,
+    expected_version: int,
+) -> bool:
+    """provider 없음 집계 직전 후보를 잠깐 잠가 version/상태가 그대로인지 확인한다."""
+    current, current_version = await _lock_current_candidate_for_geocode(
+        session, candidate_id
+    )
+    is_current = (
+        current is not None
+        and current.deleted_at is None
+        and current.match_status == MatchStatus.NEEDS_REVIEW.value
+        and current_version == expected_version
+    )
+    await session.commit()
+    return is_current
+
+
+async def _lock_committed_candidate_mappings_for_geocode(
+    session: AsyncSession,
+    *,
+    candidate_id: int,
+    place_id: int,
+    expected_candidate_version: int,
+) -> tuple[ExtractedPlaceCandidate, list[VideoPlaceMapping]]:
+    """post-core 외부 보강 뒤 후보·매핑 연결이 여전히 유효한지 잠가 확인한다.
+
+    audit 표본 필드처럼 연결 의미를 바꾸지 않는 후보 갱신은 허용한다. 반대로 영상
+    강제 제외·장소 삭제·수동 재해결로 후보 상태 또는 매핑이 달라졌으면 사용자 결정을
+    보존하고 typed skip으로 전환한다. DB unique 제약이 없는 legacy 중복 매핑은 모두
+    같은 후보·영상·장소를 가리킬 때만 함께 유효한 연결로 인정한다.
+    """
+    current, current_version = await _lock_current_candidate_for_geocode(
+        session, candidate_id
+    )
+    mappings: list[VideoPlaceMapping] = []
+    if (
+        current is not None
+        and current.deleted_at is None
+        and current.match_status == MatchStatus.MATCHED.value
+        and current.matched_place_id == place_id
+    ):
+        mappings = list(
+            (
+                await session.execute(
+                    select(VideoPlaceMapping)
+                    .where(VideoPlaceMapping.place_candidate_id == candidate_id)
+                    .order_by(VideoPlaceMapping.id.asc())
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    mappings_are_current = (
+        current is not None
+        and bool(mappings)
+        and all(
+            mapping.place_candidate_id == current.id
+            and mapping.video_id == current.video_id
+            and mapping.place_id == place_id
+            for mapping in mappings
+        )
+    )
+    if (
+        current is None
+        or current.deleted_at is not None
+        or current.match_status != MatchStatus.MATCHED.value
+        or current.matched_place_id != place_id
+        or not mappings_are_current
+    ):
+        await session.commit()
+        raise CandidateStateChangedError(
+            candidate_id,
+            expected_version=expected_candidate_version,
+            current_version=current_version,
+        )
+    return current, mappings
+
+
+def _select_geocode_candidate(
+    candidate: ExtractedPlaceCandidate,
+    decision: GeocodeDecision,
+) -> tuple[GeocodeCandidate | None, float, bool]:
+    """확정 검토 대상, 적용 confidence, ambiguous 단일 통과 여부를 계산한다."""
+    if decision.status == "matched" and decision.candidate is not None:
+        return decision.candidate, decision.confidence, False
+    resolved = (
+        _resolve_ambiguous_single(candidate, decision)
+        if decision.reason == "ambiguous"
+        else None
+    )
+    if resolved is None:
+        return None, decision.confidence, False
+    return resolved, 0.7, True
+
+
+async def _prepare_reverse_vworld(
+    session: AsyncSession,
+    candidate: ExtractedPlaceCandidate,
+    decision: GeocodeDecision,
+    vworld: AsyncVworldClient | None,
+) -> tuple[bool, tuple[float, float] | None, dict[str, str | None] | None]:
+    """row lock 전에 필요한 VWorld 역지오코딩을 준비한다.
+
+    stale snapshot으로 자동확정 가능성이 있는 신규 장소만 선조회한다. lock 뒤 최신 후보로
+    모든 gate와 근접 중복을 다시 평가하며, 선택 좌표가 달라졌으면 이 결과를 버린다.
+    """
+    # description fallback은 forward geocode 결과만 검수 evidence로 남기고 어떤 경우에도
+    # 자동확정하지 않는다(T-168). 뒤의 확정 가능성 preflight가 불필요한 reverse HTTP를
+    # 먼저 실행하지 않도록 여기서 명시적으로 제외한다.
+    if (
+        vworld is None
+        or candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value
+    ):
+        return False, None, None
+    selected, _, _ = _select_geocode_candidate(candidate, decision)
+    if selected is None or _grounding_blocks_autoconfirm(candidate):
+        return False, None, None
+    duplicates = await place_service.find_duplicate_candidates(
+        session,
+        lat=selected.latitude,
+        lng=selected.longitude,
+        radius_meters=get_settings().GEOCODE_MERGE_RADIUS_METERS,
+    )
+    nearby_place = duplicates[0][0] if duplicates else None
+    result_kind = selected.result_kind or GeocodeResultKind.ADDRESS.value
+    _, block_note = _evaluate_identity_gates(
+        candidate, selected, result_kind, nearby_place
+    )
+    if nearby_place is not None or block_note is not None:
+        return False, None, None
+    # 근접 중복 SELECT가 연 transaction/connection을 외부 HTTP 대기 동안 점유하지 않는다.
+    # apply 함수는 원래 모든 결과 경로의 commit을 소유하므로 transaction 계약은 같다.
+    await session.commit()
+    reverse = await reverse_with_vworld(
+        vworld, selected.latitude, selected.longitude
+    )
+    return True, (selected.latitude, selected.longitude), reverse
+
+
+async def _enrich_missing_addresses_isolated(
+    session_factory: async_sessionmaker[AsyncSession],
+    place_id: int,
+    vworld: AsyncVworldClient,
+) -> dict[str, str | None] | None:
+    """DB transaction 밖에서 reverse 후 실제 적용한 주소 payload를 반환한다."""
+    try:
+        async with session_factory() as read_session:
+            row = (
+                await read_session.execute(
+                    select(TravelPlace, _PLACE_XMIN).where(
+                        TravelPlace.place_id == place_id
+                    )
+                )
+            ).one_or_none()
+            if row is None:
+                await read_session.commit()
+                return None
+            place, version = row
+            snapshot = _place_address_snapshot(place, int(version))
+            if snapshot.road_address and snapshot.official_address:
+                await read_session.commit()
+                return None
+            # place/xmin SELECT transaction과 connection을 reverse HTTP 전에 반환한다.
+            await read_session.commit()
+
+        reverse = await reverse_with_vworld(
+            vworld, snapshot.latitude, snapshot.longitude
+        )
+        if not reverse.get("road_address") and not reverse.get("parcel_address"):
+            return None
+
+        async with session_factory() as write_session:
+            row = (
+                await write_session.execute(
+                    select(TravelPlace, _PLACE_XMIN)
+                    .where(TravelPlace.place_id == place_id)
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if row is None:
+                await write_session.commit()
+                return None
+            current, current_version = row
+            if _place_address_snapshot(current, int(current_version)) != snapshot:
+                await write_session.commit()
+                return None
+            applied: dict[str, str | None] = {}
+            if not current.road_address and reverse.get("road_address"):
+                current.road_address = reverse["road_address"]
+                applied["road_address"] = reverse["road_address"]
+            if not current.official_address and reverse.get("parcel_address"):
+                current.official_address = reverse["parcel_address"]
+                applied["parcel_address"] = reverse["parcel_address"]
+            await write_session.commit()
+            return applied or None
+    except Exception:
+        return None
 
 
 async def geocode_query(
@@ -95,15 +400,52 @@ async def apply_geocode_to_candidate(
     candidate: ExtractedPlaceCandidate,
     decision: GeocodeDecision,
     *,
+    expected_candidate_version: int,
     vworld: AsyncVworldClient | None = None,
     reviewer: str = "system",
 ) -> TravelPlace | None:
     """평가 결과를 후보에 적용한다.
 
+    외부 provider 호출 중 사람이 먼저 후보를 처리할 수 있으므로 역지오코딩까지 lock
+    밖에서 준비하고, 첫 DB 변경 직전에 현재 행을 `FOR UPDATE`로 다시 읽는다. 이미
+    삭제됐거나 `needs_review`가 아니면 사람 결정을 보존하고
+    `CandidateStateChangedError`로 건너뛴다. 먼저 잠근 쪽이 worker면 아래
+    grounding/identity gate를 통과한 결과만 확정된다.
+
     matched면 중복 확인 후 장소를 확정(또는 재사용)하고, 그 외에는 `needs_review`로
     남긴다. 확정한 `TravelPlace`를 반환한다(미확정 시 None). 8자리 category 코드는
-    POI 추출 때 후보 evidence에 저장된 값을 복사한다(별도 Gemini 호출 없음, A안).
+    POI 추출 때 후보 evidence에 저장해 둔 값을 복사한다.
     """
+    reverse_attempted, reverse_coordinates, reverse_vworld = await _prepare_reverse_vworld(
+        session, candidate, decision, vworld
+    )
+
+    # 장소 연결/생성은 어떤 row lock보다 먼저 lifecycle advisory lock에 참여한다.
+    # merge/delete가 아직 needs_review인 후보를 predicate에서 건너뛴 뒤 장소를 바꾸는
+    # gap을 닫고, 공통 lock 순서를 advisory -> candidate -> place -> mapping으로 맞춘다.
+    await place_service.acquire_place_lifecycle_lock(session)
+
+    # 이 지점 전에는 candidate/place/mapping mutation이 없다. 외부 I/O가 끝난 뒤 짧게
+    # candidate row를 잠그고 identity map의 stale 값을 최신 사용자 결정으로 교체한다.
+    current, current_version = await _lock_current_candidate_for_geocode(
+        session, candidate.id
+    )
+    if (
+        current is None
+        or current.deleted_at is not None
+        or current.match_status != MatchStatus.NEEDS_REVIEW.value
+        or current_version != expected_candidate_version
+    ):
+        # SELECT가 시작한 transaction과 row lock을 다음 후보까지 끌고 가지 않는다.
+        # 이 함수는 기존에도 모든 결과 경로에서 commit하므로 같은 transaction 계약이다.
+        await session.commit()
+        raise CandidateStateChangedError(
+            candidate.id,
+            expected_version=expected_candidate_version,
+            current_version=current_version,
+        )
+    candidate = current
+
     candidate.confidence_score = decision.confidence
 
     # description 단독 후보(T-168, 로드맵 PR-17, §1.3 D1): 자막 실패 fallback으로 생성된
@@ -140,24 +482,15 @@ async def apply_geocode_to_candidate(
     # 확정 후보와 confidence를 정한다. 단일 matched는 그대로 쓰고, 다건(ambiguous)은
     # 이름·행정구역 게이트를 모두 통과하는 후보가 정확히 1개면 0.7로 자동확정한다
     # (검수량 감소, ADR-16 보강 — 무게이트 자동확정은 여전히 금지). 그 외 상태는 검수 큐로.
-    c = decision.candidate
-    confidence = decision.confidence
-    ambiguous_single_pass = False
-    if decision.status != "matched" or c is None:
-        resolved = (
-            _resolve_ambiguous_single(candidate, decision)
-            if decision.reason == "ambiguous"
-            else None
-        )
-        if resolved is None:
-            candidate.match_status = MatchStatus.NEEDS_REVIEW
-            candidate.review_note = decision.reason
-            candidate.feature_export_status = FeatureExportStatus.PENDING.value
-            await session.commit()
-            return None
-        c = resolved
-        confidence = 0.7
-        ambiguous_single_pass = True
+    c, confidence, ambiguous_single_pass = _select_geocode_candidate(
+        candidate, decision
+    )
+    if c is None:
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.review_note = decision.reason
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.commit()
+        return None
     candidate.confidence_score = confidence
 
     # raw grounding 게이트(T-165, 로드맵 B3·G4): transcript 후보는 근거가 raw 자막에서
@@ -181,11 +514,15 @@ async def apply_geocode_to_candidate(
     # 둔다(T-167, 로드맵 PR-14 절차 3). 이 근접 재사용은 아래 identity 게이트가 후보 AI명과
     # 기존 장소명을 대조하므로(이름 불일치 시 needs_review) 반경 확대가 오병합을 늘리지 않는다
     # (무검증 반경 확대 금지 원칙과 정합 — T-166 이름 게이트 통과 후에만 재사용).
+    # 서로 다른 후보의 auto/auto 및 auto/manual 신규 장소 승격은 위 lifecycle lock으로
+    # 최종 중복 조회→생성을 하나의 임계구간에 둔다.
     dups = await place_service.find_duplicate_candidates(
         session,
         lat=c.latitude,
         lng=c.longitude,
         radius_meters=get_settings().GEOCODE_MERGE_RADIUS_METERS,
+        populate_existing=True,
+        for_update=True,
     )
     nearby_place = dups[0][0] if dups else None
 
@@ -220,16 +557,18 @@ async def apply_geocode_to_candidate(
             place.category = category_catalog.label_for_or_unknown(code)
     else:
         road, official = c.road_address, c.official_address
-        if vworld is not None:
-            rev = await reverse_with_vworld(vworld, c.latitude, c.longitude)
-            road = road or rev.get("road_address")
-            official = official or rev.get("parcel_address")
+        if (
+            reverse_coordinates == (c.latitude, c.longitude)
+            and reverse_vworld is not None
+        ):
+            road = road or reverse_vworld.get("road_address")
+            official = official or reverse_vworld.get("parcel_address")
             candidate.provider_evidence_json = _merge_provider_evidence(
                 candidate.provider_evidence_json,
                 geocoding=_geocode_evidence(
                     decision,
                     selected_candidate=c,
-                    reverse_vworld=rev,
+                    reverse_vworld=reverse_vworld,
                     identity=identity,
                 ),
             )
@@ -260,12 +599,90 @@ async def apply_geocode_to_candidate(
 
     await place_service.ensure_candidate_mapping(session, candidate, place)
     await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
+    committed_place_id = place.place_id
+    needs_reverse_fallback = (
+        nearby_place is None
+        and vworld is not None
+        and not reverse_attempted
+        and (not place.road_address or not place.official_address)
+    )
+    # 후보 lock을 외부 admin API 동안 유지하지 않는다. 장소 확정이 정본이며 먼저 commit한다.
+    await session.commit()
+
+    # 행정구역 보강은 core 확정 뒤 완전히 별도 session의 best-effort 작업이다. 실패해도
+    # 호출자 session을 rollback/expire시키거나 이미 commit된 후보·장소·매핑을 되돌리지 않는다.
     from ktc.etl import admin_region_service
 
-    await admin_region_service.enrich_place_admin_codes(session, place)
+    isolated_reverse_vworld: dict[str, str | None] | None = None
+    if session.bind is not None:
+        isolated_factory = async_sessionmaker(session.bind, expire_on_commit=False)
+        if needs_reverse_fallback and vworld is not None:
+            isolated_reverse_vworld = await _enrich_missing_addresses_isolated(
+                isolated_factory, committed_place_id, vworld
+            )
+        try:
+            await admin_region_service.enrich_place_admin_codes_isolated(
+                isolated_factory, committed_place_id
+            )
+        except Exception:
+            # 격리 보강의 예상 밖 실패도 core/호출자 session에는 전파하지 않는다.
+            await session.commit()
+    candidate, mappings = await _lock_committed_candidate_mappings_for_geocode(
+        session,
+        candidate_id=candidate.id,
+        place_id=committed_place_id,
+        expected_candidate_version=expected_candidate_version,
+    )
+    try:
+        await session.refresh(place)
+    except (InvalidRequestError, ObjectDeletedError) as exc:
+        # core commit 뒤 사용자가 장소를 삭제/재개방한 경합이다. read transaction만
+        # commit해 connection을 반환하고 batch가 typed skip으로 집계하도록 전환한다.
+        await session.commit()
+        raise CandidateStateChangedError(
+            candidate.id,
+            expected_version=expected_candidate_version,
+        ) from exc
+    if isolated_reverse_vworld is not None:
+        candidate.provider_evidence_json = _merge_reverse_vworld_provenance(
+            candidate.provider_evidence_json, isolated_reverse_vworld
+        )
+        for mapping in mappings:
+            mapping.provider_evidence_json = _merge_reverse_vworld_provenance(
+                mapping.provider_evidence_json, isolated_reverse_vworld
+            )
     await session.commit()
-    await session.refresh(place)
     return place
+
+
+async def apply_geocode_to_current_candidate(
+    session: AsyncSession,
+    candidate: ExtractedPlaceCandidate,
+    decision: GeocodeDecision,
+    *,
+    vworld: AsyncVworldClient | None = None,
+    reviewer: str = "system",
+) -> TravelPlace | None:
+    """외부 대기가 없는 direct 호출용으로 현재 xmin을 명시적으로 snapshot해 적용한다.
+
+    production worker는 이 helper가 아니라 외부 provider 호출 전에 얻은 version을
+    `apply_geocode_to_candidate`에 반드시 전달한다. 단순 None/fail-open 경로는 두지 않는다.
+    """
+    snapshot = await read_candidate_geocode_snapshot(session, candidate.id)
+    await session.commit()
+    if snapshot is None or not snapshot.eligible:
+        raise CandidateStateChangedError(
+            candidate.id,
+            expected_version=snapshot.version if snapshot is not None else None,
+        )
+    return await apply_geocode_to_candidate(
+        session,
+        candidate,
+        decision,
+        expected_candidate_version=snapshot.version,
+        vworld=vworld,
+        reviewer=reviewer,
+    )
 
 
 def _grounding_blocks_autoconfirm(candidate: ExtractedPlaceCandidate) -> bool:
@@ -466,5 +883,17 @@ def _merge_provider_evidence(
     geocoding: dict,
 ) -> dict:
     merged = dict(existing or {})
+    merged["geocoding"] = geocoding
+    return merged
+
+
+def _merge_reverse_vworld_provenance(
+    existing: dict | None,
+    reverse_vworld: dict[str, str | None],
+) -> dict:
+    """최신 candidate/mapping evidence를 보존하며 격리 reverse 적용값만 합친다."""
+    merged = dict(existing or {})
+    geocoding = dict(merged.get("geocoding") or {})
+    geocoding["reverse_vworld"] = dict(reverse_vworld)
     merged["geocoding"] = geocoding
     return merged

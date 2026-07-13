@@ -42,6 +42,52 @@
 - **검증**: 격리 disposable DB backend 전체 pytest 596 passed(pre-existing 1건 외 0), 캐시 테스트 24 passed,
   migration upgrade/downgrade round-trip 단일 head, `compileall`·`git diff --check` 통과, origin/main(#199) 0 behind.
 
+- **후속 해소(T-183)**: 병렬 작업에서 예상한 migration fork는 T-183의 `0023`을 T-170의 `0024`
+  뒤로 재부모화해 `0022→0024→0023` 단일 chain으로 합쳤다.
+
+## 2026-07-13: T-183 — 검수 서버 검색·정렬·snapshot cursor·URL 상태
+
+- **서버가 소유하는 검수 큐**: `GET /destinations/unmatched`에 후보명·위치 단서의 escaped
+  `ILIKE` literal 검색, `oldest|newest`, strict `is_domestic`, `reason`, `source_kind`, `grounding`,
+  `needs_review|ignored`를 추가했다. Grounding 5상태는 T-165 enum column을 직접 사용하고 items·`total`·
+  `newer_than`·첫 snapshot watermark에 모든 조건을 동일 적용한다. filter fingerprint와 마지막 ID를
+  묶은 `unmatched-v4` opaque cursor로 오래된 순은 `id > last_id`, 최신 순은 `id < last_id`를 쓴다.
+  목록·상세의 `grounding_status`와 유한 confidence 계약을 맞추고 모든 후보 path ID를 PostgreSQL
+  INTEGER 범위로 제한했다.
+- **FIFO 검수 UX와 URL 단일 정본**: 화면은 oldest 기본 300건 `useInfiniteQuery`로 append하고,
+  60초 `newer_than` probe로 새 후보·다른 사용자 처리에 따른 큐 변화를 알린다. 검색·정렬·국내 여부·
+  사유·출처·원문 근거·그룹·상태는 실제 browser URL을 `useSyncExternalStore`로 구독하며 최초 정규화와
+  control 변경도 동기 writer 하나만 사용한다. 일반 행 선택은 URL 소음을 만들지 않고 명시적
+  `?candidate=`만 page 밖 단건 상세를 유지한다. filter 밖 맥락·필터 해제, 한국어 Grounding filter와
+  행 배지를 제공한다.
+- **권위 재검증과 ABA 방어**: 성공 시 page/newer 요청을 취소하고 전체 scope에서 처리 ID와 checkbox를
+  제거한 뒤 active snapshot을 재검증한다. 실패·응답 유실·409·500은 목록뿐 아니라 단건 상세를 다시
+  읽어 404, 다른 검수자가 처리한 상태, 아직 actionable인 상태를 구분한다. A→B→A workflow epoch,
+  page 밖 후보, 지연 응답, retained error, cache resurrection에서도 현재 B의 선택을 보존하고 처리된
+  A만 정리한다.
+- **장소 lifecycle 동시성**: geocode 외부 I/O는 transaction 밖에서 수행하고 후보 `xmin` snapshot을
+  필수 fencing token으로 사용한다. 자동/수동 확정·장소 병합/삭제·영상 제외는 lifecycle advisory 뒤
+  candidate→place→mapping→asset ID 순으로 잠근다. commit 뒤 후보·장소·매핑을 다시 읽어 응답하며,
+  장소 제거 시 `MediaAsset.place_id`만 해제하고 RustFS 객체와 asset 행은 삭제하지 않는다. T-168
+  description 후보의 forward 지오코딩 evidence는 유지하되 reverse VWorld 선호출과 자동확정은 막고,
+  T-169 강제 Whisper의 batch lane·model·duration 계약도 재배치 뒤 보존했다.
+- **MCP 멱등·감사 원자성**: `audit_logs`에 멱등 key/state 전용 column, pair CHECK, actor/action/key
+  partial unique index를 추가했다(Alembic `0022→0024→0023` 단일 chain). 손상 legacy JSON·중복 최신 행을 안전 backfill하고
+  pending이 있으면 downgrade를 중단한다. 외부 admin 보강은 pending owner/lease 인계와 전후 fencing을
+  거쳐 최신 도메인 snapshot과 final을 같은 transaction에 확정한다. auto-match audit은 `FOR UPDATE`
+  아래 `pending`에서 한 번만 전이하고 후보 판정과 감사 INSERT를 원자 commit/rollback한다.
+- **반복 적대 검토·n150 검증**: backend/UX/cache-race/migration/E2E 렌즈로 2회 이상 반복 검토하며
+  상세 Grounding 누락, lifecycle lock과 모순된 concurrency barrier, 의도된 500 console 기대 모순,
+  lease 손상·미래 시각, stale owner, audit 재판정·부분 commit, migration 중복 승격·pending downgrade,
+  RustFS 보존과 post-commit stale 응답을 보완했다. 최신 T-170 위 재배치 뒤에도 2회 교차 검토해 cache
+  I/O 이후 `xmin` fencing과 lifecycle lock, migration 단일 chain을 재확인했고 최종 P0/P1/P2 0건이다.
+  n150 disposable PostGIS에서 backend 타깃 273건·변경 Python 31개 Ruff·Alembic
+  `head→0024→0022→head` 왕복, frontend ESLint·type-check·Vitest 159건·production build,
+  Playwright 22건 통과(live 전용 4건 skip)를 검증했다. 매 실행 후 `cleanup_db_exists=0`·
+  `cleanup_container_exists=0`·E2E listener 0을 확인했다. backend 전체는 664건 통과했으며 실패 2건은
+  n150에 선택 자막 library가 설치돼 `not_configured` 가정과 다른 기존 환경 차이(`download_error`,
+  `no_captions`)다.
+
 ## 2026-07-13: T-169 — whisper 수동 재전사 액션 (D1 STT, 선별 실행)
 
 - **문제**: 자막 최종 실패 영상의 STT 보강 수단이 없다. whisper 기본 ON은 N150 CPU에서 1건 수 분~수십
@@ -105,7 +151,6 @@
 - **검증**: 격리 disposable DB backend 전체 pytest 561 passed(pre-existing 1건 외 0), 신규
   `test_etl_description_path.py` 10 passed, 타깃 스위트 112 passed(pre-existing 1건 외 0), `compileall`·
   `git diff --check` 통과, 최신 main(#197) 0 behind.
-
 ## 2026-07-13: T-167 — 병합 제안 + auto-match audit (D6/G9)
 
 - **문제**: dedup이 `(video_id, official_name)` 완전일치라 "성심당/성심당 본점"이 별개 후보(D6).

@@ -1,13 +1,16 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   memo,
+  Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
@@ -16,7 +19,6 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-  type InfiniteData,
 } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -32,6 +34,7 @@ import {
 
 import {
   deleteCandidate,
+  getCandidateDetail,
   getPlaceOpinion,
   listCategories,
   matchCategory,
@@ -42,19 +45,22 @@ import {
   RUN_QUEUE_QUERY_KEY,
   searchPlaces,
   type DestinationFacets,
-  type DestinationFilter,
   type DestinationGroupDim,
   type DestinationSummary,
   type PlaceOpinion,
   type PlaceSearchHit,
   type PlaceSearchProvider,
   type ReprocessStage,
-  type ListEnvelope,
+  type ReviewGroundingStatus,
+  type ReviewQueueReason,
+  type ReviewSourceKind,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import {
   candidateStatusLabel,
   categoryDisplayLabel,
+  groundingStatusBadgeVariant,
+  groundingStatusLabel,
   queueReasonBadgeVariant,
   queueReasonLabel,
   sourceKindLabel,
@@ -70,6 +76,36 @@ import {
   type ReviewResolutionForm,
   type SelectedPlaceHit,
 } from "@/lib/review-provenance";
+import {
+  candidateActionFailureDecision,
+  candidateFailureSelectionDecision,
+  getCandidateFromReviewPageCache,
+  reconcileProcessedCandidateCaches,
+  revalidateCandidateActionFailure,
+  reviewCandidatePaginationContractError,
+  reviewQueueProbeNotice,
+  settleCandidateDeletes,
+  type CandidateDetailRevalidation,
+} from "@/lib/review-candidate-cache";
+import {
+  applyReviewListStatePatch,
+  candidateMatchesReviewListState,
+  DEFAULT_REVIEW_LIST_STATE,
+  hasReviewListStateParams,
+  isCurrentReviewWorkflow,
+  isReviewCandidateActionable,
+  parseReviewCandidateId,
+  parseReviewListState,
+  reconcileReviewSearchDraft,
+  REVIEW_GROUNDING_STATUSES,
+  REVIEW_QUEUE_REASONS,
+  REVIEW_SOURCE_KINDS,
+  reviewListStateHasFilters,
+  reviewListStateScopeKey,
+  reviewListStateToFilter,
+  writeReviewListState,
+  type ReviewListState,
+} from "@/lib/review-list-state";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Badge } from "@/components/ui/badge";
@@ -107,7 +143,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
@@ -120,12 +155,33 @@ const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
 };
 const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
 const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
+const REVIEW_URL_CHANGE_EVENT = "ktc:review-url-change";
+
+function subscribeReviewUrl(onStoreChange: () => void): () => void {
+  window.addEventListener("popstate", onStoreChange);
+  window.addEventListener(REVIEW_URL_CHANGE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("popstate", onStoreChange);
+    window.removeEventListener(REVIEW_URL_CHANGE_EVENT, onStoreChange);
+  };
+}
+
+function getReviewUrlSnapshot(): string {
+  return window.location.search.slice(1);
+}
 
 type ReviewCandidatesKey = readonly [
   "unmatched-candidates",
   "pages",
   DestinationGroupDim,
   string | null,
+  string,
+  "newest" | "oldest",
+  boolean | null,
+  ReviewQueueReason | null,
+  ReviewSourceKind | null,
+  ReviewGroundingStatus | null,
+  "needs_review" | "ignored",
 ];
 
 type ResolveCommand = {
@@ -135,6 +191,7 @@ type ResolveCommand = {
   orderedCandidateIds: number[];
   loadedPageCount: number;
   queueScope: string;
+  workflowEpoch: number;
   candidatesKey: ReviewCandidatesKey;
   action: "create_place" | "ignore";
   form: ReviewResolutionForm;
@@ -151,29 +208,6 @@ type PendingCandidateAdvance = {
   orderedCandidateIds: number[];
   loadedPageCount: number;
 };
-
-function removeCandidatesFromQueue(
-  data: InfiniteData<ListEnvelope<UnmatchedCandidate>> | undefined,
-  ids: number[],
-): InfiniteData<ListEnvelope<UnmatchedCandidate>> | undefined {
-  if (!data) return data;
-  const removed = new Set(ids);
-  const removedCount = new Set(
-    data.pages.flatMap((page) =>
-      page.items
-        .filter((candidate) => removed.has(candidate.id))
-        .map((candidate) => candidate.id),
-    ),
-  ).size;
-  return {
-    ...data,
-    pages: data.pages.map((page) => ({
-      ...page,
-      items: page.items.filter((candidate) => !removed.has(candidate.id)),
-      total: Math.max(0, page.total - removedCount),
-    })),
-  };
-}
 
 type NearbyConflict = {
   command: ResolveCommand;
@@ -230,18 +264,171 @@ function candidateCategoryForm(candidate: UnmatchedCandidate) {
   };
 }
 
+function candidateFailureShouldAdvance(
+  detailRevalidation: CandidateDetailRevalidation | undefined,
+  reviewListState: ReviewListState,
+): boolean {
+  if (!detailRevalidation) return false;
+  const actionableInCurrentFilter = Boolean(
+    detailRevalidation.status === "success" &&
+      isReviewCandidateActionable(detailRevalidation.detail.list_item) &&
+      candidateMatchesReviewListState(
+        detailRevalidation.detail,
+        reviewListState,
+      ),
+  );
+  return (
+    candidateActionFailureDecision(
+      detailRevalidation,
+      actionableInCurrentFilter,
+    ) === "advance"
+  );
+}
+
 export default function ReviewPage() {
+  return (
+    <Suspense
+      fallback={
+        <p className="p-6 text-sm text-muted-foreground">
+          검수 큐를 준비하는 중…
+        </p>
+      }
+    >
+      <ReviewPageContent />
+    </Suspense>
+  );
+}
+
+function ReviewPageContent() {
   const queryClient = useQueryClient();
-  // 결과 보기와 동일한 출처 필터(유튜버/재생목록/검색어별). 상세 페이지를 다녀와도
-  // 필터가 유지되도록 sessionStorage에 보존한다.
-  const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
-    "ktc.review.groupDim",
-    "none",
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const searchString = searchParams.toString();
+  const getReviewServerSnapshot = useCallback(
+    () => searchString,
+    [searchString],
   );
-  const [groupValue, setGroupValue] = usePersistedState<string | null>(
-    "ktc.review.groupValue",
-    null,
+  // native History patch와 back/forward를 외부 store로 구독해 목록 요청과 deep-link
+  // 판정이 언제나 실제 browser URL의 같은 snapshot을 읽게 한다.
+  const reviewUrlSnapshot = useSyncExternalStore(
+    subscribeReviewUrl,
+    getReviewUrlSnapshot,
+    getReviewServerSnapshot,
   );
+  const reviewSearchParams = useMemo(
+    () => new URLSearchParams(reviewUrlSnapshot),
+    [reviewUrlSnapshot],
+  );
+  const hasListUrlState = hasReviewListStateParams(reviewSearchParams);
+  const reviewListState = useMemo(
+    () => parseReviewListState(reviewSearchParams),
+    [reviewSearchParams],
+  );
+  const {
+    groupDim,
+    groupValue,
+    query: reviewQuery,
+    sort: reviewSort,
+    isDomestic,
+    queueReason,
+    sourceKind,
+    groundingStatus,
+    status: reviewStatus,
+  } = reviewListState;
+  const initialUrlNormalizationRef = useRef(false);
+  const commitReviewUrl = useCallback((params: URLSearchParams) => {
+    const url = new URL(window.location.href);
+    url.search = params.toString();
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (next === current) return;
+    // Next.js App Router는 native History API 변경을 useSearchParams와 동기화한다.
+    // 브라우저 URL을 즉시 바꿔 연속 control event가 항상 직전 patch를 기반으로 한다.
+    window.history.replaceState(window.history.state, "", next);
+    window.dispatchEvent(new Event(REVIEW_URL_CHANGE_EVENT));
+  }, []);
+
+  const updateReviewListState = useCallback(
+    (patch: Partial<ReviewListState>) => {
+      const current = new URL(window.location.href);
+      const optimistic = applyReviewListStatePatch(
+        current.searchParams,
+        parseReviewListState(current.searchParams),
+        patch,
+      );
+      commitReviewUrl(optimistic.params);
+    },
+    [commitReviewUrl],
+  );
+  const updateReviewQuery = useCallback(
+    (query: string) => updateReviewListState({ query }),
+    [updateReviewListState],
+  );
+
+  // URL에 목록 상태가 전혀 없는 최초 진입에서만 sessionStorage를 기본값으로 승격한다.
+  // 이후에는 sort가 항상 URL에 남으므로 URL이 유일한 정본이다.
+  useEffect(() => {
+    const current = new URL(window.location.href);
+    if (hasReviewListStateParams(current.searchParams)) {
+      initialUrlNormalizationRef.current = false;
+      const canonical = writeReviewListState(
+        current.searchParams,
+        parseReviewListState(current.searchParams),
+      );
+      if (canonical.toString() !== current.searchParams.toString()) {
+        commitReviewUrl(canonical);
+      }
+      return;
+    }
+    if (initialUrlNormalizationRef.current) return;
+    initialUrlNormalizationRef.current = true;
+
+    let initial = DEFAULT_REVIEW_LIST_STATE;
+    try {
+      const stored = window.sessionStorage.getItem("ktc.review.listSearch");
+      if (stored) {
+        initial = parseReviewListState(new URLSearchParams(stored));
+      } else {
+        const legacyDim = JSON.parse(
+          window.sessionStorage.getItem("ktc.review.groupDim") ?? '"none"',
+        ) as unknown;
+        const legacyValue = JSON.parse(
+          window.sessionStorage.getItem("ktc.review.groupValue") ?? "null",
+        ) as unknown;
+        const legacyParams = new URLSearchParams({ sort: "oldest" });
+        if (typeof legacyDim === "string") legacyParams.set("group", legacyDim);
+        if (typeof legacyValue === "string") {
+          legacyParams.set("group_value", legacyValue);
+        }
+        // 구 hideForeign=true는 true+미판정을 뜻해 새 3상태 중 어느 값과도
+        // 같지 않으므로 국내 여부는 전체로 안전하게 시작한다.
+        initial = parseReviewListState(legacyParams);
+      }
+    } catch {
+      initial = DEFAULT_REVIEW_LIST_STATE;
+    }
+    const next = writeReviewListState(
+      current.searchParams,
+      initial,
+    );
+    // 최초 진입도 control 변경과 같은 동기 writer를 사용한다. 비동기 router.replace와
+    // 사용자의 첫 control 입력이 경합하면 늦은 navigation이 최신 URL을 되감을 수 있다.
+    commitReviewUrl(next);
+  }, [commitReviewUrl, searchString]);
+
+  useEffect(() => {
+    if (!hasListUrlState) return;
+    try {
+      const persisted = writeReviewListState(
+        new URLSearchParams(),
+        reviewListState,
+      );
+      window.sessionStorage.setItem("ktc.review.listSearch", persisted.toString());
+    } catch {
+      // sessionStorage 비활성/용량 초과는 URL 정본 동작에 영향을 주지 않는다.
+    }
+  }, [hasListUrlState, reviewListState]);
+
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
@@ -254,15 +441,36 @@ export default function ReviewPage() {
     queryFn: listCategories,
     staleTime: 60 * 60 * 1000,
   });
-  const filter = useMemo<DestinationFilter | undefined>(() => {
-    if (!groupValue || groupDim === "none") return undefined;
-    if (groupDim === "channel") return { channelId: groupValue };
-    if (groupDim === "playlist") return { playlistId: groupValue };
-    return { keyword: groupValue };
-  }, [groupDim, groupValue]);
+  const filter = useMemo(
+    () => reviewListStateToFilter(reviewListState),
+    [reviewListState],
+  );
   const candidatesKey = useMemo(
-    () => ["unmatched-candidates", "pages", groupDim, groupValue] as const,
-    [groupDim, groupValue],
+    () =>
+      [
+        "unmatched-candidates",
+        "pages",
+        groupDim,
+        groupValue,
+        reviewQuery,
+        reviewSort,
+        isDomestic,
+        queueReason,
+        sourceKind,
+        groundingStatus,
+        reviewStatus,
+      ] as const,
+    [
+      groupDim,
+      groupValue,
+      groundingStatus,
+      isDomestic,
+      queueReason,
+      reviewQuery,
+      reviewSort,
+      reviewStatus,
+      sourceKind,
+    ],
   );
   const candidatesQuery = useInfiniteQuery({
     queryKey: candidatesKey,
@@ -274,18 +482,16 @@ export default function ReviewPage() {
       }),
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
-    refetchInterval: 60_000,
+    enabled: hasListUrlState,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
   // 선택이 유지된다(쇼핑몰 장바구니). 영상 단위로 dedup.
   const [cart, setCart] = usePersistedState<string[]>("ktc.review.cart", []);
   const [reprocessStage, setReprocessStage] =
     useState<ReprocessStage>("transcript");
-  // 해외(국내 아님) 후보 숨기기 토글(기본 보기). 상세 왕복에도 유지(sessionStorage).
-  const [hideForeign, setHideForeign] = usePersistedState<boolean>(
-    "ktc.review.hideForeign",
-    false,
-  );
   const cartSet = useMemo(() => new Set(cart), [cart]);
   const toggleCart = useCallback(
     (videoId: string) => {
@@ -325,41 +531,105 @@ export default function ReviewPage() {
     () => candidatesQuery.data?.pages ?? [],
     [candidatesQuery.data?.pages],
   );
-  const lastCandidatePage = candidatePages[candidatePages.length - 1];
+  const firstCandidatePage = candidatePages[0];
   const candidatePaginationContractError =
-    lastCandidatePage?.has_more && !lastCandidatePage.next_cursor
-      ? "다음 후보 cursor가 없어 검수 큐의 끝을 확인할 수 없습니다."
-      : null;
-  const canLoadMoreCandidates = Boolean(candidatesQuery.hasNextPage);
-  // 해외 후보 숨기기 토글 적용(장바구니/그룹 필터는 그대로 — 순수 표시 필터).
-  const visibleCandidates = useMemo(
-    () =>
-      hideForeign
-        ? candidates.filter((c) => c.is_domestic !== false)
-        : candidates,
-    [candidates, hideForeign],
-  );
+    reviewCandidatePaginationContractError(candidatePages);
+  const canLoadMoreCandidates =
+    Boolean(candidatesQuery.hasNextPage) && !candidatePaginationContractError;
+  const candidateTotal = firstCandidatePage?.total ?? 0;
+  const candidateNewestId = firstCandidatePage?.newest_id ?? 0;
+  const newCandidatesQuery = useQuery({
+    queryKey: [
+      "unmatched-candidates",
+      "newer",
+      groupDim,
+      groupValue,
+      reviewQuery,
+      reviewSort,
+      isDomestic,
+      queueReason,
+      sourceKind,
+      groundingStatus,
+      reviewStatus,
+      candidateNewestId,
+    ],
+    queryFn: () =>
+      listUnmatchedCandidatesPage(filter, {
+        limit: 1,
+        newerThanId: candidateNewestId,
+      }),
+    enabled: hasListUrlState && firstCandidatePage != null,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+  });
+  const newCandidateCount = newCandidatesQuery.data?.newer_than ?? 0;
+  const newCandidateNotice = newCandidatesQuery.data
+    ? reviewQueueProbeNotice({
+        snapshotTotal: candidateTotal,
+        probeTotal: newCandidatesQuery.data.total,
+        newerThan: newCandidateCount,
+      })
+    : null;
   const queueScope = useMemo(
-    () => JSON.stringify([groupDim, groupValue, hideForeign]),
-    [groupDim, groupValue, hideForeign],
+    () => reviewListStateScopeKey(reviewListState),
+    [reviewListState],
   );
   const queueScopeRef = useRef(queueScope);
-  const previousQueueScopeRef = useRef(queueScope);
-  useEffect(() => {
+  const reviewListStateRef = useRef(reviewListState);
+  const candidatesKeyRef = useRef<ReviewCandidatesKey>(candidatesKey);
+  // layout effect는 commit 직후 paint/사용자 event 전에 동기 실행된다. 따라서 event와
+  // mutation callback은 마지막으로 commit된 scope/key만 읽고 render 중 ref 쓰기도 피한다.
+  useLayoutEffect(() => {
     queueScopeRef.current = queueScope;
-  }, [queueScope]);
+    reviewListStateRef.current = reviewListState;
+    candidatesKeyRef.current = candidatesKey;
+  }, [candidatesKey, queueScope, reviewListState]);
+  const previousQueueScopeRef = useRef(queueScope);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<number[]>([]);
+  const loadedCandidateIds = useMemo(
+    () => new Set(candidates.map((candidate) => candidate.id)),
+    [candidates],
+  );
+  const deepLinkedCandidateId = parseReviewCandidateId(reviewSearchParams);
+  const deepLinkDetailQuery = useQuery({
+    queryKey: ["candidate-detail", deepLinkedCandidateId],
+    queryFn: () => getCandidateDetail(deepLinkedCandidateId as number),
+    enabled: deepLinkedCandidateId != null,
+    retry: false,
+  });
+  const deepLinkDetail = deepLinkDetailQuery.data ?? null;
+  const deepLinkItem = deepLinkDetail?.list_item ?? null;
+  const actionableLoadedCandidates = useMemo(
+    () =>
+      candidates.filter((candidate) =>
+        isReviewCandidateActionable(
+          deepLinkItem?.id === candidate.id ? deepLinkItem : candidate,
+        ),
+      ),
+    [candidates, deepLinkItem],
+  );
+  const actionableLoadedCandidateIds = useMemo(
+    () => new Set(actionableLoadedCandidates.map((candidate) => candidate.id)),
+    [actionableLoadedCandidates],
+  );
+  const selectedActionableCandidateIds = useMemo(
+    () =>
+      selectedCandidateIds.filter((candidateId) =>
+        actionableLoadedCandidateIds.has(candidateId),
+      ),
+    [actionableLoadedCandidateIds, selectedCandidateIds],
+  );
   const selectedCandidateSet = useMemo(
-    () => new Set(selectedCandidateIds),
-    [selectedCandidateIds],
+    () => new Set(selectedActionableCandidateIds),
+    [selectedActionableCandidateIds],
   );
-  const visibleCandidateIds = useMemo(
-    () => new Set(visibleCandidates.map((candidate) => candidate.id)),
-    [visibleCandidates],
-  );
-  const allVisibleCandidatesSelected =
-    visibleCandidates.length > 0 &&
-    visibleCandidates.every((candidate) => selectedCandidateSet.has(candidate.id));
+  const allLoadedCandidatesSelected =
+    actionableLoadedCandidates.length > 0 &&
+    actionableLoadedCandidates.every((candidate) =>
+      selectedCandidateSet.has(candidate.id),
+    );
   const toggleCandidateSelection = useCallback((candidateId: number) => {
     setSelectedCandidateIds((current) =>
       current.includes(candidateId)
@@ -367,21 +637,44 @@ export default function ReviewPage() {
         : [...current, candidateId],
     );
   }, []);
-  function toggleAllVisibleCandidates() {
+  const removeCandidateSelections = useCallback(
+    (candidateIds: readonly number[]) => {
+      if (candidateIds.length === 0) return;
+      const removed = new Set(candidateIds);
+      setSelectedCandidateIds((current) =>
+        current.filter((candidateId) => !removed.has(candidateId)),
+      );
+    },
+    [],
+  );
+  function toggleAllLoadedCandidates() {
     setSelectedCandidateIds((current) =>
-      allVisibleCandidatesSelected
-        ? current.filter((id) => !visibleCandidateIds.has(id))
-        : Array.from(new Set([...current, ...visibleCandidates.map((c) => c.id)])),
+      allLoadedCandidatesSelected
+        ? current.filter((id) => !actionableLoadedCandidateIds.has(id))
+        : Array.from(
+            new Set([
+              ...current,
+              ...actionableLoadedCandidates.map((candidate) => candidate.id),
+            ]),
+          ),
     );
   }
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedCandidateSnapshot, setSelectedCandidateSnapshot] =
     useState<UnmatchedCandidate | null>(null);
+  const selectionScopeEpochRef = useRef(0);
+  const validationGenerationRef = useRef(0);
+  const [deepLinkValidationPending, setDeepLinkValidationPending] =
+    useState(false);
+  const invalidateCandidateWorkflow = useCallback(() => {
+    selectionScopeEpochRef.current += 1;
+    validationGenerationRef.current += 1;
+    setDeepLinkValidationPending(false);
+  }, []);
   const initialSelectionDoneRef = useRef(false);
-  const [deepLinkedCandidateId, setDeepLinkedCandidateId] = useState<
-    number | null
-  >(null);
   const [deepLinkNotFound, setDeepLinkNotFound] = useState<string | null>(null);
+  const previousDeepLinkIdRef = useRef<number | null>(null);
+  const preserveSelectionOnDeepLinkClearRef = useRef(false);
   const pendingCandidateAdvanceRef = useRef<PendingCandidateAdvance | null>(null);
   const [pendingCandidateAdvance, setPendingCandidateAdvance] =
     useState<PendingCandidateAdvance | null>(null);
@@ -413,37 +706,95 @@ export default function ReviewPage() {
   const [candidateActionError, setCandidateActionError] = useState<string | null>(
     null,
   );
-
-  // 작업 상세에서 검수 대기 POI를 누르면 `?candidate=<id>`로 들어온다. 그 후보가 필터에
-  // 가려지지 않도록 그룹 필터를 해제하고 해당 후보를 선택한다(딥링크, 최초 1회).
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const candidateParam = new URLSearchParams(window.location.search).get(
-      "candidate",
+  const [candidateCacheRefreshError, setCandidateCacheRefreshError] = useState<
+    string | null
+  >(null);
+  const candidateCacheRefreshGenerationRef = useRef(0);
+  const markCandidateCacheRefreshError = useCallback(() => {
+    candidateCacheRefreshGenerationRef.current += 1;
+    setCandidateCacheRefreshError(
+      "최신 검수 상태를 다시 확인하지 못했습니다. 목록을 새로 불러와 주세요.",
     );
-    if (!candidateParam) return;
-    const candidateId = Number(candidateParam);
-    if (!Number.isFinite(candidateId)) return;
+  }, []);
+  const clearCandidateCacheRefreshError = useCallback(() => {
+    candidateCacheRefreshGenerationRef.current += 1;
+    setCandidateCacheRefreshError(null);
+  }, []);
+
+  // URL 후보가 바뀌면 필터는 보존하고 단건 상세 조회가 끝날 때까지 기존 snapshot을 비운다.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useLayoutEffect(() => {
+    if (previousDeepLinkIdRef.current === deepLinkedCandidateId) return;
+    previousDeepLinkIdRef.current = deepLinkedCandidateId;
+    invalidateCandidateWorkflow();
     setDeepLinkNotFound(null);
-    setDeepLinkedCandidateId(candidateId);
-    setGroupDim("none");
-    setGroupValue(null);
-    setHideForeign(false);
-    setSelectedId(candidateId);
-  }, [setGroupDim, setGroupValue, setHideForeign]);
+    if (deepLinkedCandidateId == null) {
+      if (preserveSelectionOnDeepLinkClearRef.current) {
+        preserveSelectionOnDeepLinkClearRef.current = false;
+        initialSelectionDoneRef.current = true;
+        return;
+      }
+      initialSelectionDoneRef.current = false;
+      setSelectedCandidateSnapshot(null);
+      setSelectedId(null);
+      return;
+    }
+    preserveSelectionOnDeepLinkClearRef.current = false;
+    initialSelectionDoneRef.current = false;
+    setSelectedCandidateSnapshot(null);
+    setSelectedId(deepLinkedCandidateId);
+  }, [deepLinkedCandidateId, invalidateCandidateWorkflow]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const selected = useMemo(
-    () =>
-      selectedId == null
-        ? null
-        : (candidates.find((candidate) => candidate.id === selectedId) ??
-          (selectedCandidateSnapshot?.id === selectedId
-            ? selectedCandidateSnapshot
-            : null)),
-    [candidates, selectedCandidateSnapshot, selectedId],
+    () => {
+      if (selectedId == null) return null;
+      if (deepLinkedCandidateId != null) {
+        return deepLinkItem?.id === selectedId ? deepLinkItem : null;
+      }
+      return (
+        (selectedCandidateSnapshot?.id === selectedId
+          ? selectedCandidateSnapshot
+          : null) ??
+        candidates.find((candidate) => candidate.id === selectedId) ??
+        null
+      );
+    },
+    [
+      candidates,
+      deepLinkedCandidateId,
+      deepLinkItem,
+      selectedCandidateSnapshot,
+      selectedId,
+    ],
   );
 
+  const deepLinkStatusOut = Boolean(
+    deepLinkItem && !isReviewCandidateActionable(deepLinkItem),
+  );
+  const deepLinkFilterOut = Boolean(
+    deepLinkDetail &&
+      !deepLinkStatusOut &&
+      !candidateMatchesReviewListState(deepLinkDetail, reviewListState),
+  );
+  const deepLinkLoadedOut = Boolean(
+    deepLinkItem &&
+      !deepLinkStatusOut &&
+      !deepLinkFilterOut &&
+      !loadedCandidateIds.has(deepLinkItem.id),
+  );
+  const selectedActionable = Boolean(
+    selected &&
+      isReviewCandidateActionable(selected) &&
+      (deepLinkedCandidateId == null
+        ? !(
+            candidatesQuery.isRefetchError &&
+            !candidatesQuery.isFetchNextPageError
+          )
+        : deepLinkItem?.id === selected.id &&
+          !deepLinkStatusOut &&
+          !deepLinkDetailQuery.isError),
+  );
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
   const autoSearchTimerRef = useRef<number | null>(null);
@@ -487,7 +838,6 @@ export default function ReviewPage() {
   });
   const gemini = opinionQuery.data?.gemini ?? null;
 
-  const router = useRouter();
   const isMobile = useIsMobile();
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailDeletePending, setDetailDeletePending] = useState(false);
@@ -497,6 +847,7 @@ export default function ReviewPage() {
     orderedCandidateIds: number[];
     loadedPageCount: number;
     queueScope: string;
+    workflowEpoch: number;
     candidatesKey: ReviewCandidatesKey;
   } | null>(null);
   // 행 단위 삭제 확인: 2,000행에 AlertDialog를 하나씩 두면 렌더 비용이 폭증하므로
@@ -504,6 +855,11 @@ export default function ReviewPage() {
   const [deleteTarget, setDeleteTarget] = useState<UnmatchedCandidate | null>(
     null,
   );
+  const deleteTargetScopeRef = useRef<string | null>(null);
+  const requestCandidateDelete = useCallback((candidate: UnmatchedCandidate) => {
+    deleteTargetScopeRef.current = queueScopeRef.current;
+    setDeleteTarget(candidate);
+  }, []);
 
   const [form, setForm] = useState({
     name: "",
@@ -521,16 +877,31 @@ export default function ReviewPage() {
   const categoryMatchRequestRef = useRef(0);
   const selectedCandidateIdRef = useRef<number | null>(selected?.id ?? null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previousQueueScopeRef.current === queueScope) return;
     previousQueueScopeRef.current = queueScope;
+    invalidateCandidateWorkflow();
     initialSelectionDoneRef.current = false;
     updatePendingCandidateAdvance(null);
     selectedCandidateIdRef.current = null;
+    if (!detailDeletePending) detailDeleteSnapshotRef.current = null;
+    deleteTargetScopeRef.current = null;
     setQueueCompleted(false);
+    setSelectedCandidateIds([]);
     setSelectedCandidateSnapshot(null);
     setSelectedId(null);
-  }, [queueScope, updatePendingCandidateAdvance]);
+    setNearbyConflict(null);
+    setDeleteTarget(null);
+    setDetailId(null);
+    setCandidateActionError(null);
+    clearCandidateCacheRefreshError();
+  }, [
+    clearCandidateCacheRefreshError,
+    detailDeletePending,
+    invalidateCandidateWorkflow,
+    queueScope,
+    updatePendingCandidateAdvance,
+  ]);
 
   const clearAutoSearchTimer = useCallback(() => {
     if (autoSearchTimerRef.current != null) {
@@ -623,29 +994,35 @@ export default function ReviewPage() {
     },
     [isMobile, router],
   );
-  const clearCandidateParam = useCallback(() => {
+  const clearCandidateParam = useCallback((preserveSelection = false) => {
+    invalidateCandidateWorkflow();
     const url = new URL(window.location.href);
-    if (url.searchParams.has("candidate")) {
+    const hadCandidateParam = url.searchParams.has("candidate");
+    if (hadCandidateParam) {
+      preserveSelectionOnDeepLinkClearRef.current = preserveSelection;
       url.searchParams.delete("candidate");
-      router.replace(`${url.pathname}${url.search}${url.hash}`, {
-        scroll: false,
-      });
+      commitReviewUrl(url.searchParams);
     }
+    initialSelectionDoneRef.current = preserveSelection || hadCandidateParam;
+    if (preserveSelection) return;
+    selectedCandidateIdRef.current = null;
     setDeepLinkNotFound(null);
-    setDeepLinkedCandidateId(null);
-  }, [router]);
+    setSelectedCandidateIds([]);
+    setSelectedCandidateSnapshot(null);
+    setSelectedId(null);
+  }, [commitReviewUrl, invalidateCandidateWorkflow]);
   const clearProcessedCandidateParam = useCallback(
-    (candidateId: number) => {
+    (candidateId: number, preserveSelection = true) => {
       const url = new URL(window.location.href);
-      if (url.searchParams.get("candidate") !== String(candidateId)) return;
+      if (parseReviewCandidateId(url.searchParams) !== candidateId) return false;
+      invalidateCandidateWorkflow();
+      preserveSelectionOnDeepLinkClearRef.current = preserveSelection;
       url.searchParams.delete("candidate");
-      setDeepLinkedCandidateId(null);
       setDeepLinkNotFound(null);
-      router.replace(`${url.pathname}${url.search}${url.hash}`, {
-        scroll: false,
-      });
+      commitReviewUrl(url.searchParams);
+      return true;
     },
-    [router],
+    [commitReviewUrl, invalidateCandidateWorkflow],
   );
   const pickCandidate = useCallback(
     (
@@ -655,13 +1032,14 @@ export default function ReviewPage() {
         preserveWorkflow = false,
       }: { autoSearch?: boolean; preserveWorkflow?: boolean } = {},
     ) => {
+      invalidateCandidateWorkflow();
       // 검색 취소와 새 자동 검색을 함께 조금 늦춰 후보 선택/폼 반영이 먼저 그려지게 한다.
       // 이전 검색 결과는 새 검색을 시작하기 직전에 취소해 새 후보에 매달리지 않도록 한다.
       clearAutoSearchTimer();
       if (!preserveWorkflow) {
-        initialSelectionDoneRef.current = true;
         updatePendingCandidateAdvance(null);
-        clearCandidateParam();
+        clearCandidateParam(true);
+        initialSelectionDoneRef.current = true;
       }
       const nextQuery = buildHintedQuery(candidate);
       selectedCandidateIdRef.current = candidate.id;
@@ -695,6 +1073,7 @@ export default function ReviewPage() {
       cancelCategoryMatch,
       clearAutoSearchTimer,
       clearCandidateParam,
+      invalidateCandidateWorkflow,
       queryClient,
       updatePendingCandidateAdvance,
     ],
@@ -703,7 +1082,7 @@ export default function ReviewPage() {
   const continueCandidateAdvance = useCallback(
     (plan: PendingCandidateAdvance) => {
       const processedIdSet = new Set(plan.processedIds);
-      const remaining = visibleCandidates.filter(
+      const remaining = candidates.filter(
         (candidate) => !processedIdSet.has(candidate.id),
       );
       const remainingById = new Map(
@@ -723,11 +1102,7 @@ export default function ReviewPage() {
       const newlyLoadedCandidate = candidatePages
         .slice(plan.loadedPageCount)
         .flatMap((page) => page.items)
-        .find(
-          (candidate) =>
-            !processedIdSet.has(candidate.id) &&
-            (!hideForeign || candidate.is_domestic !== false),
-        );
+        .find((candidate) => !processedIdSet.has(candidate.id));
       if (newlyLoadedCandidate) {
         updatePendingCandidateAdvance(null);
         setQueueCompleted(false);
@@ -775,13 +1150,12 @@ export default function ReviewPage() {
     },
     [
       candidatesQuery,
+      candidates,
       candidatePaginationContractError,
       candidatePages,
       clearAutoSearchTimer,
-      hideForeign,
       pickCandidate,
       updatePendingCandidateAdvance,
-      visibleCandidates,
     ],
   );
 
@@ -790,7 +1164,7 @@ export default function ReviewPage() {
       processedId: number,
       processedIds: number[] = [processedId],
       visibleIndex?: number,
-      orderedCandidateIds: number[] = visibleCandidates.map(
+      orderedCandidateIds: number[] = candidates.map(
         (candidate) => candidate.id,
       ),
       loadedPageCount: number = candidatePages.length,
@@ -798,6 +1172,9 @@ export default function ReviewPage() {
       const anchorIndex =
         visibleIndex ??
         orderedCandidateIds.findIndex((candidateId) => candidateId === processedId);
+      // 처리 완료가 확인된 후보의 checkbox 선택도 같은 경로에서 제거한다. 목록에서
+      // 잠시 사라진 ID를 state에 남기면 reopen 뒤 과거 bulk 선택이 되살아날 수 있다.
+      removeCandidateSelections(processedIds);
       if (anchorIndex < 0) return;
       clearProcessedCandidateParam(processedId);
       continueCandidateAdvance({
@@ -808,10 +1185,110 @@ export default function ReviewPage() {
       });
     }, [
       candidatePages.length,
+      candidates,
       clearProcessedCandidateParam,
       continueCandidateAdvance,
-      visibleCandidates,
+      removeCandidateSelections,
     ]);
+
+  const reconcileFailedCandidateSelection = useCallback(
+    (
+      candidateId: number,
+      workflow: {
+        visibleIndex: number;
+        orderedCandidateIds: number[];
+        loadedPageCount: number;
+        queueScope: string;
+        workflowEpoch: number;
+        activePageKey: ReviewCandidatesKey;
+      },
+      detailRevalidation: CandidateDetailRevalidation | undefined,
+    ) => {
+      const failureDecision = candidateFailureShouldAdvance(
+        detailRevalidation,
+        reviewListStateRef.current,
+      )
+        ? "advance"
+        : "keep";
+      const selectionDecision = candidateFailureSelectionDecision({
+        failureDecision,
+        candidateId,
+        currentCandidateId: selectedCandidateIdRef.current,
+      });
+      const isCurrentWorkflow =
+        workflow.queueScope === queueScopeRef.current &&
+        workflow.workflowEpoch === selectionScopeEpochRef.current;
+
+      if (selectionDecision !== "keep") {
+        // workflow가 바뀌어도 처리 완료가 확인된 A의 raw checkbox와 상세 cache는
+        // 제거한다. 현재 B를 보고 있다면 B의 선택/snapshot은 건드리지 않는다.
+        removeCandidateSelections([candidateId]);
+        queryClient.removeQueries({
+          queryKey: ["candidate-detail", candidateId],
+          exact: true,
+        });
+      }
+      if (selectionDecision === "cleanup_candidate") {
+        clearProcessedCandidateParam(candidateId, true);
+        return false;
+      }
+
+      if (selectionDecision === "keep") {
+        if (
+          candidateId !== selectedCandidateIdRef.current ||
+          !isCurrentWorkflow
+        ) {
+          return false;
+        }
+        const latestPageCandidate = getCandidateFromReviewPageCache(
+          queryClient,
+          workflow.activePageKey,
+          candidateId,
+        );
+        if (detailRevalidation?.status === "success") {
+          // 앞선 후보의 reopen 등으로 active page 밖으로 밀렸더라도 단건 상세가 현재
+          // filter의 검수 대기 후보임을 증명하면 선택과 최신 snapshot을 유지한다.
+          setSelectedCandidateSnapshot(detailRevalidation.detail.list_item);
+        } else if (latestPageCandidate) {
+          setSelectedCandidateSnapshot(latestPageCandidate);
+        }
+        return false;
+      }
+
+      // 단건 상세 404 또는 최신 상세가 현재 filter에서 처리 불가일 때만 다른 검수자의
+      // 선처리로 확정한다. page 부재만으로는 pagination 이동과 구분할 수 없다.
+      if (!isCurrentWorkflow || workflow.visibleIndex < 0) {
+        // page 밖이거나 A→B→A로 workflow epoch가 바뀌었다면 과거 순서 anchor를
+        // 재사용하지 않고 A만 비운다. 초기 선택 effect가 최신 큐의 첫 후보로 복귀한다.
+        clearProcessedCandidateParam(candidateId, false);
+        clearAutoSearchTimer();
+        cancelCategoryMatch();
+        initialSelectionDoneRef.current = false;
+        selectedCandidateIdRef.current = null;
+        setQueueCompleted(false);
+        removeCandidateSelections([candidateId]);
+        setSelectedCandidateSnapshot(null);
+        setSelectedId(null);
+        return true;
+      }
+      advanceAfterProcessing(
+        candidateId,
+        [candidateId],
+        workflow.visibleIndex,
+        workflow.orderedCandidateIds,
+        workflow.loadedPageCount,
+      );
+      return true;
+    },
+    [
+      advanceAfterProcessing,
+      cancelCategoryMatch,
+      clearAutoSearchTimer,
+      clearProcessedCandidateParam,
+      queryClient,
+      removeCandidateSelections,
+    ],
+  );
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -828,8 +1305,10 @@ export default function ReviewPage() {
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // URL 상태를 아직 확정하지 않은 disabled query를 빈 큐로 오인하면, 느린 첫 응답에서는
+    // initialSelectionDoneRef가 먼저 잠겨 첫 후보 자동 선택이 영구히 건너뛰어진다.
     if (
-      candidatesQuery.isFetching ||
+      !hasListUrlState ||
       initialSelectionDoneRef.current ||
       pendingCandidateAdvance
     ) {
@@ -837,34 +1316,24 @@ export default function ReviewPage() {
     }
     const deepLinkedId = deepLinkedCandidateId;
     if (deepLinkedId != null) {
-      const linked = candidates.find((candidate) => candidate.id === deepLinkedId);
-      if (linked) {
-        setDeepLinkNotFound(null);
+      if (deepLinkDetailQuery.isFetching) return;
+      const linked = deepLinkDetailQuery.data?.list_item;
+      if (!linked || linked.id !== deepLinkedId) {
+        setDeepLinkNotFound(
+          deepLinkDetailQuery.error?.message ??
+            `검수 후보 #${deepLinkedId}을(를) 찾을 수 없습니다.`,
+        );
         initialSelectionDoneRef.current = true;
-        pickCandidate(linked, { autoSearch: false, preserveWorkflow: true });
         return;
       }
-      if (
-        candidatesQuery.hasNextPage &&
-        !candidatesQuery.isFetchNextPageError &&
-        !candidatePaginationContractError
-      ) {
-        void candidatesQuery.fetchNextPage({ cancelRefetch: false });
-        return;
-      }
-      if (
-        candidatesQuery.isError ||
-        candidatesQuery.isFetchNextPageError ||
-        candidatePaginationContractError
-      ) {
-        return;
-      }
-      setDeepLinkNotFound(`검수 후보 #${deepLinkedId}을(를) 찾을 수 없습니다.`);
+      setDeepLinkNotFound(null);
       initialSelectionDoneRef.current = true;
+      pickCandidate(linked, { autoSearch: false, preserveWorkflow: true });
       return;
     }
+    if (candidatesQuery.isFetching) return;
     if (selectedId != null) return;
-    const first = visibleCandidates[0];
+    const first = candidates[0];
     if (first) {
       initialSelectionDoneRef.current = true;
       pickCandidate(first, { autoSearch: false, preserveWorkflow: true });
@@ -886,10 +1355,13 @@ export default function ReviewPage() {
     candidatePaginationContractError,
     candidatesQuery,
     deepLinkedCandidateId,
+    deepLinkDetailQuery.data,
+    deepLinkDetailQuery.error,
+    deepLinkDetailQuery.isFetching,
+    hasListUrlState,
     pendingCandidateAdvance,
     pickCandidate,
     selectedId,
-    visibleCandidates,
   ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -899,80 +1371,142 @@ export default function ReviewPage() {
       !queueCompleted ||
       candidatesQuery.isFetching ||
       pendingCandidateAdvance ||
-      visibleCandidates.length === 0
+      candidates.length === 0
     ) {
       return;
     }
     initialSelectionDoneRef.current = true;
-    pickCandidate(visibleCandidates[0], {
+    pickCandidate(candidates[0], {
       autoSearch: false,
       preserveWorkflow: true,
     });
   }, [
     candidatesQuery.isFetching,
+    candidates,
     pendingCandidateAdvance,
     pickCandidate,
     queueCompleted,
-    visibleCandidates,
   ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const deleteCandidatesMutation = useMutation({
-    mutationFn: async (ids: number[]) => {
-      await Promise.all(ids.map((id) => deleteCandidate(id)));
-      return ids;
-    },
+    mutationFn: (ids: number[]) => settleCandidateDeletes(ids, deleteCandidate),
     onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      const previous =
-        queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
-          candidatesKey,
-        );
+      const mutationCandidatesKey = candidatesKeyRef.current;
+      await queryClient.cancelQueries({
+        queryKey: mutationCandidatesKey,
+        exact: true,
+      });
+      setCandidateActionError(null);
       const focusedId = selectedCandidateIdRef.current;
       return {
-        previous,
-        candidatesKey,
+        candidatesKey: mutationCandidatesKey,
         focusedId,
         visibleIndex:
           focusedId == null
             ? -1
-            : visibleCandidates.findIndex((candidate) => candidate.id === focusedId),
-        orderedCandidateIds: visibleCandidates.map((candidate) => candidate.id),
+            : candidates.findIndex((candidate) => candidate.id === focusedId),
+        orderedCandidateIds: candidates.map((candidate) => candidate.id),
         loadedPageCount: candidatePages.length,
         queueScope: queueScopeRef.current,
+        workflowEpoch: selectionScopeEpochRef.current,
       };
     },
-    onSuccess: async (ids, _variables, context) => {
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      queryClient.setQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
-        context.candidatesKey,
-        (old) => removeCandidatesFromQueue(old, ids),
-      );
-      queryClient.invalidateQueries({
-        queryKey: ["unmatched-candidates"],
-        refetchType: "none",
+    onSuccess: async (result, _variables, context) => {
+      const activeCandidatesKey = candidatesKeyRef.current;
+      const activeQueueScope = queueScopeRef.current;
+      const pageOut =
+        result.succeededIds.length > 0 &&
+        context.focusedId != null &&
+        result.succeededIds.includes(context.focusedId) &&
+        context.visibleIndex < 0;
+      const cacheResult = await reconcileProcessedCandidateCaches(queryClient, {
+        ids: result.succeededIds,
+        capturedPageKey: context.candidatesKey,
+        activePageKey: activeCandidatesKey,
+        pageOut,
       });
-      setSelectedCandidateIds((current) =>
-        current.filter((id) => !ids.includes(id)),
-      );
-      ids.forEach(clearProcessedCandidateParam);
-      const focusedId = context.focusedId;
       if (
-        focusedId != null &&
-        ids.includes(focusedId) &&
-        focusedId === selectedCandidateIdRef.current &&
-        context.queueScope === queueScopeRef.current
+        cacheResult.postCommitRefreshFailed &&
+        activeQueueScope === queueScopeRef.current
       ) {
-        if (ids.length === 1) {
+        markCandidateCacheRefreshError();
+      }
+      removeCandidateSelections(result.succeededIds);
+      if (result.failures.length > 0) {
+        const details = result.failures
+          .map(({ id, reason }) =>
+            `#${id}: ${reason instanceof Error ? reason.message : "삭제 결과 불명"}`,
+          )
+          .join(", ");
+        setCandidateActionError(
+          `후보 ${result.succeededIds.length}개는 삭제했고 ${result.failures.length}개는 삭제 결과를 확인하지 못해 최신 상태를 다시 확인했습니다. ${details}`,
+        );
+        const failureRefresh = await revalidateCandidateActionFailure(
+          queryClient,
+          {
+            candidateIds: result.failures.map(({ id }) => id),
+            activePageKey: activeCandidatesKey,
+            fetchCandidateDetail: getCandidateDetail,
+          },
+        );
+        removeCandidateSelections(
+          result.failures
+            .map(({ id }) => id)
+            .filter((candidateId) =>
+              candidateFailureShouldAdvance(
+                failureRefresh.candidateDetails.get(candidateId),
+                reviewListStateRef.current,
+              ),
+            ),
+        );
+        if (
+          failureRefresh.refreshFailed &&
+          activeQueueScope === queueScopeRef.current
+        ) {
+          markCandidateCacheRefreshError();
+        }
+        if (
+          context.focusedId != null &&
+          result.failures.some(({ id }) => id === context.focusedId)
+        ) {
+          reconcileFailedCandidateSelection(
+            context.focusedId,
+            {
+              visibleIndex: context.visibleIndex,
+              orderedCandidateIds: context.orderedCandidateIds,
+              loadedPageCount: context.loadedPageCount,
+              queueScope: context.queueScope,
+              workflowEpoch: context.workflowEpoch,
+              activePageKey: activeCandidatesKey,
+            },
+            failureRefresh.candidateDetails.get(context.focusedId),
+          );
+        }
+      }
+      const focusedId = context.focusedId;
+      const focusedCandidateProcessed =
+        focusedId != null &&
+        result.succeededIds.includes(focusedId) &&
+        focusedId === selectedCandidateIdRef.current;
+      if (focusedCandidateProcessed) {
+        if (
+          result.attemptedIds.length === 1 &&
+          context.visibleIndex >= 0 &&
+          context.queueScope === queueScopeRef.current &&
+          context.workflowEpoch === selectionScopeEpochRef.current
+        ) {
           advanceAfterProcessing(
             focusedId,
-            ids,
+            result.succeededIds,
             context.visibleIndex,
             context.orderedCandidateIds,
             context.loadedPageCount,
           );
         } else {
-          clearProcessedCandidateParam(focusedId);
+          result.succeededIds.forEach((id) =>
+            clearProcessedCandidateParam(id, false),
+          );
           clearAutoSearchTimer();
           initialSelectionDoneRef.current = false;
           selectedCandidateIdRef.current = null;
@@ -980,15 +1514,51 @@ export default function ReviewPage() {
           setSelectedCandidateSnapshot(null);
           setSelectedId(null);
         }
+      } else {
+        result.succeededIds.forEach((id) =>
+          clearProcessedCandidateParam(id, false),
+        );
       }
     },
-    onError: (_error, _ids, context) => {
-      if (!context?.previous) return;
-      queryClient.setQueryData(context.candidatesKey, context.previous);
-    },
-    onSettled: (_data, error) => {
-      if (error) {
-        queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+    onError: async (error, candidateIds, context) => {
+      setCandidateActionError(`후보 삭제 결과를 확인하지 못했습니다: ${error.message}`);
+      const activeCandidatesKey = candidatesKeyRef.current;
+      const activeQueueScope = queueScopeRef.current;
+      const failureRefresh = await revalidateCandidateActionFailure(queryClient, {
+        candidateIds,
+        activePageKey: activeCandidatesKey,
+        fetchCandidateDetail: getCandidateDetail,
+      });
+      removeCandidateSelections(
+        candidateIds.filter((candidateId) =>
+          candidateFailureShouldAdvance(
+            failureRefresh.candidateDetails.get(candidateId),
+            reviewListStateRef.current,
+          ),
+        ),
+      );
+      if (
+        failureRefresh.refreshFailed &&
+        activeQueueScope === queueScopeRef.current
+      ) {
+        markCandidateCacheRefreshError();
+      }
+      if (
+        context?.focusedId != null &&
+        candidateIds.includes(context.focusedId)
+      ) {
+        reconcileFailedCandidateSelection(
+          context.focusedId,
+          {
+            visibleIndex: context.visibleIndex,
+            orderedCandidateIds: context.orderedCandidateIds,
+            loadedPageCount: context.loadedPageCount,
+            queueScope: context.queueScope,
+            workflowEpoch: context.workflowEpoch,
+            activePageKey: activeCandidatesKey,
+          },
+          failureRefresh.candidateDetails.get(context.focusedId),
+        );
       }
     },
   });
@@ -1097,6 +1667,17 @@ export default function ReviewPage() {
     return hits;
   }, [activeSelectedHit, form, mapHitEntries]);
 
+  function isCurrentResolveCommand(command: ResolveCommand): boolean {
+    return isCurrentReviewWorkflow({
+      commandCandidateId: command.candidateId,
+      commandQueueScope: command.queueScope,
+      commandEpoch: command.workflowEpoch,
+      currentCandidateId: selectedCandidateIdRef.current,
+      currentQueueScope: queueScopeRef.current,
+      currentEpoch: selectionScopeEpochRef.current,
+    });
+  }
+
   const resolveMutation = useMutation({
     mutationFn: (command: ResolveCommand) => {
       if (command.action === "ignore") {
@@ -1114,49 +1695,76 @@ export default function ReviewPage() {
         ),
       );
     },
-    onError: (error, command) => {
+    onError: async (error, command) => {
       const conflict = parseNearbyPlaceConflict(error);
-      const isCurrentCommand =
-        selectedCandidateIdRef.current === command.candidateId &&
-        queueScopeRef.current === command.queueScope;
-      if (
-        conflict &&
-        isCurrentCommand
-      ) {
-        setNearbyConflict({ command, places: conflict });
+      const isCurrentCommand = isCurrentResolveCommand(command);
+      if (conflict) {
+        if (isCurrentCommand) {
+          setNearbyConflict({ command, places: conflict });
+        }
         return;
       }
-      if (!isCurrentCommand) {
+      if (isCurrentCommand) {
         setCandidateActionError(
-          conflict
-            ? `${command.candidateName} 후보는 근접 장소 확인이 필요합니다. 후보를 다시 선택해 처리하세요.`
-            : `${command.candidateName} 후보 처리 실패: ${error.message}`,
+          `${command.candidateName} 후보 처리 결과를 확인하지 못했습니다: ${error.message}`,
         );
       }
+      const activeCandidatesKey = candidatesKeyRef.current;
+      const activeQueueScope = queueScopeRef.current;
+      const failureRefresh = await revalidateCandidateActionFailure(queryClient, {
+        candidateIds: [command.candidateId],
+        activePageKey: activeCandidatesKey,
+        fetchCandidateDetail: getCandidateDetail,
+      });
+      if (
+        failureRefresh.refreshFailed &&
+        activeQueueScope === queueScopeRef.current
+      ) {
+        markCandidateCacheRefreshError();
+      }
+      reconcileFailedCandidateSelection(
+        command.candidateId,
+        {
+          visibleIndex: command.visibleIndex,
+          orderedCandidateIds: command.orderedCandidateIds,
+          loadedPageCount: command.loadedPageCount,
+          queueScope: command.queueScope,
+          workflowEpoch: command.workflowEpoch,
+          activePageKey: activeCandidatesKey,
+        },
+        failureRefresh.candidateDetails.get(command.candidateId),
+      );
     },
     onSuccess: async (_data, command) => {
       // 409 중복 확인 응답은 성공이 아니므로 여기까지 오지 않는다. 실제 확정 뒤에만
       // 큐에서 제거해 확인 다이얼로그가 뜰 때 후보가 사라졌다 복원되는 깜빡임을 막는다.
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      queryClient.setQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
-        command.candidatesKey,
-        (old) => removeCandidatesFromQueue(old, [command.candidateId]),
-      );
-      queryClient.invalidateQueries({
-        queryKey: ["unmatched-candidates"],
-        refetchType: "none",
+      const activeCandidatesKey = candidatesKeyRef.current;
+      const activeQueueScope = queueScopeRef.current;
+      const cacheResult = await reconcileProcessedCandidateCaches(queryClient, {
+        ids: [command.candidateId],
+        capturedPageKey: command.candidatesKey,
+        activePageKey: activeCandidatesKey,
+        pageOut: command.visibleIndex < 0,
+      });
+      if (
+        cacheResult.postCommitRefreshFailed &&
+        activeQueueScope === queueScopeRef.current
+      ) {
+        markCandidateCacheRefreshError();
+      }
+      queryClient.removeQueries({
+        queryKey: ["candidate-detail", command.candidateId],
       });
       queryClient.invalidateQueries({ queryKey: ["destinations"] });
       if (command.action === "create_place") {
         queryClient.invalidateQueries({ queryKey: ["destination-facets"] });
       }
-      setNearbyConflict(null);
-      setCandidateActionError(null);
-      clearProcessedCandidateParam(command.candidateId);
-      if (
-        selectedCandidateIdRef.current === command.candidateId &&
-        queueScopeRef.current === command.queueScope
-      ) {
+      const isCurrentCommand = isCurrentResolveCommand(command);
+      if (isCurrentCommand) {
+        setNearbyConflict(null);
+        setCandidateActionError(null);
+      }
+      if (isCurrentCommand && command.visibleIndex >= 0) {
         cancelCategoryMatch();
         clearAutoSearchTimer();
         advanceAfterProcessing(
@@ -1166,30 +1774,106 @@ export default function ReviewPage() {
           command.orderedCandidateIds,
           command.loadedPageCount,
         );
+      } else {
+        removeCandidateSelections([command.candidateId]);
+        clearProcessedCandidateParam(command.candidateId, false);
+        if (selectedCandidateIdRef.current === command.candidateId) {
+          cancelCategoryMatch();
+          clearAutoSearchTimer();
+          initialSelectionDoneRef.current = false;
+          selectedCandidateIdRef.current = null;
+          setQueueCompleted(false);
+          setSelectedCandidateSnapshot(null);
+          setSelectedId(null);
+        }
       }
     },
-    onSettled: (_data, error) => {
+    onSettled: (_data, error, command) => {
       if (error) {
-        queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+        queryClient.invalidateQueries({
+          queryKey: command.candidatesKey,
+          exact: true,
+          refetchType: "none",
+        });
       }
     },
   });
+
+  function submitResolveCommand(command: ResolveCommand) {
+    if (deepLinkValidationPending || resolveMutation.isPending) return;
+    if (!isCurrentResolveCommand(command)) {
+      setNearbyConflict(null);
+      setCandidateActionError(
+        `${command.candidateName} 후보는 현재 선택 또는 표시 조건과 달라 처리하지 않았습니다. 현재 후보에서 다시 시도해 주세요.`,
+      );
+      return;
+    }
+    if (deepLinkedCandidateId !== command.candidateId) {
+      resolveMutation.mutate(command);
+      return;
+    }
+
+    // page 밖 단건은 제출 직전에 다시 읽어, 다른 검수자가 먼저 처리한 후보를
+    // 오래된 폼으로 재확정하지 않는다.
+    const validationGeneration = validationGenerationRef.current + 1;
+    validationGenerationRef.current = validationGeneration;
+    setDeepLinkValidationPending(true);
+    void deepLinkDetailQuery
+      .refetch()
+      .then(({ data, error }) => {
+        if (
+          validationGenerationRef.current !== validationGeneration ||
+          !isCurrentResolveCommand(command)
+        ) {
+          return;
+        }
+        if (error) {
+          setCandidateActionError(
+            `후보의 최신 상태를 확인하지 못해 처리하지 않았습니다: ${error.message}`,
+          );
+          return;
+        }
+        const latest = data?.list_item;
+        if (!latest || latest.id !== command.candidateId) {
+          setCandidateActionError(
+            "후보의 최신 상태를 확인하지 못했습니다.",
+          );
+          return;
+        }
+        setSelectedCandidateSnapshot(latest);
+        if (!isReviewCandidateActionable(latest)) {
+          setCandidateActionError(
+            `후보 상태가 ${candidateStatusLabel(latest.match_status)}(으)로 변경되어 처리하지 않았습니다.`,
+          );
+          return;
+        }
+        resolveMutation.mutate(command);
+      })
+      .finally(() => {
+        if (validationGenerationRef.current === validationGeneration) {
+          setDeepLinkValidationPending(false);
+        }
+      });
+  }
 
   function resolveSelected(
     action: "create_place" | "ignore",
     duplicate?: ResolveCommand["duplicate"],
   ) {
-    if (!selected || formCandidateId !== selected.id) return;
+    if (!selected || formCandidateId !== selected.id || !selectedActionable) {
+      return;
+    }
     setCandidateActionError(null);
-    resolveMutation.mutate({
+    submitResolveCommand({
       candidateId: selected.id,
       candidateName: selected.ai_place_name,
-      visibleIndex: visibleCandidates.findIndex(
+      visibleIndex: candidates.findIndex(
         (candidate) => candidate.id === selected.id,
       ),
-      orderedCandidateIds: visibleCandidates.map((candidate) => candidate.id),
+      orderedCandidateIds: candidates.map((candidate) => candidate.id),
       loadedPageCount: candidatePages.length,
       queueScope,
+      workflowEpoch: selectionScopeEpochRef.current,
       candidatesKey,
       action,
       form: { ...form },
@@ -1215,6 +1899,31 @@ export default function ReviewPage() {
     updatePendingCandidateAdvance,
   ]);
 
+  const restartCandidateSnapshot = useCallback(async () => {
+    const restartScope = queueScopeRef.current;
+    const cacheRefreshGeneration = candidateCacheRefreshGenerationRef.current;
+    resetReviewScope();
+    await queryClient.cancelQueries({ queryKey: candidatesKey, exact: true });
+    // resetQueries가 infinite query의 pages/pageParams를 함께 폐기해 첫 page부터
+    // 새 watermark snapshot을 만든다.
+    await queryClient.resetQueries({ queryKey: candidatesKey, exact: true });
+    await queryClient.invalidateQueries({
+      queryKey: ["unmatched-candidates", "newer"],
+    });
+    if (
+      queueScopeRef.current === restartScope &&
+      candidateCacheRefreshGenerationRef.current === cacheRefreshGeneration &&
+      queryClient.getQueryState(candidatesKey)?.status !== "error"
+    ) {
+      clearCandidateCacheRefreshError();
+    }
+  }, [
+    candidatesKey,
+    clearCandidateCacheRefreshError,
+    queryClient,
+    resetReviewScope,
+  ]);
+
   // 좌표 입력 검증: 숫자 여부(차단) + 대한민국 대략 범위(경고만, 저장은 허용).
   const latInvalid = Boolean(form.latitude) && !Number.isFinite(Number(form.latitude));
   const lngInvalid =
@@ -1232,6 +1941,7 @@ export default function ReviewPage() {
       Number(form.longitude) > 132);
   const canSave =
     selected != null &&
+    selectedActionable &&
     formCandidateId === selected.id &&
     Boolean(form.name.trim()) &&
     coordsFilled &&
@@ -1246,16 +1956,52 @@ export default function ReviewPage() {
       : null;
   const candidateLoadError =
     deepLinkNotFound ??
+    (deepLinkedCandidateId != null && deepLinkDetailQuery.isError
+      ? deepLinkDetailQuery.error?.message ??
+        `검수 후보 #${deepLinkedCandidateId}을(를) 찾을 수 없습니다.`
+      : null) ??
     candidatePaginationContractError ??
     (candidatesQuery.isError || candidatesQuery.isFetchNextPageError
       ? candidatesQuery.error?.message ?? "검수 후보를 불러오지 못했습니다."
       : null);
+  const candidateSnapshotRefetchError =
+    candidates.length > 0 &&
+    candidatesQuery.isRefetchError &&
+    !candidatesQuery.isFetchNextPageError;
+  const candidateAppendError =
+    candidateCacheRefreshError ??
+    (candidates.length > 0
+      ? candidatePaginationContractError ??
+        (candidatesQuery.isFetchNextPageError
+          ? candidatesQuery.error?.message ?? "다음 후보를 불러오지 못했습니다."
+          : candidateSnapshotRefetchError
+            ? candidatesQuery.error?.message ??
+              "현재 검수 목록을 다시 확인하지 못했습니다."
+            : null)
+      : null);
   const candidateActionPending =
-    resolveMutation.isPending || deleteCandidatesMutation.isPending;
+    resolveMutation.isPending ||
+    deleteCandidatesMutation.isPending ||
+    deepLinkValidationPending;
+  const candidateInitialLoading =
+    !hasListUrlState ||
+    (candidates.length === 0 && candidatesQuery.isLoading) ||
+    (deepLinkedCandidateId != null && deepLinkDetailQuery.isLoading);
+  const detailCandidate =
+    detailId == null
+      ? null
+      : (candidates.find((candidate) => candidate.id === detailId) ??
+        (deepLinkItem?.id === detailId ? deepLinkItem : null));
+  const deleteTargetActionable = Boolean(
+    deleteTarget &&
+      isReviewCandidateActionable(
+        deepLinkItem?.id === deleteTarget.id ? deepLinkItem : deleteTarget,
+      ),
+  );
 
   function retryCandidateAdvance() {
     if (candidatePaginationContractError) {
-      void candidatesQuery.refetch();
+      void restartCandidateSnapshot();
       return;
     }
     if (
@@ -1271,6 +2017,10 @@ export default function ReviewPage() {
   function retryCandidateLoad() {
     setDeepLinkNotFound(null);
     initialSelectionDoneRef.current = false;
+    if (deepLinkedCandidateId != null) {
+      void deepLinkDetailQuery.refetch();
+      return;
+    }
     if (
       candidatesQuery.isFetchNextPageError &&
       candidatesQuery.hasNextPage &&
@@ -1279,13 +2029,17 @@ export default function ReviewPage() {
       void candidatesQuery.fetchNextPage({ cancelRefetch: false });
       return;
     }
-    void candidatesQuery.refetch();
+    void restartCandidateSnapshot();
   }
 
   return (
     <AppShell
       title="검수 큐"
-      actions={<Badge variant="secondary">{candidates.length}개 표시</Badge>}
+      actions={
+        <Badge variant="secondary">
+          {candidates.length}/{candidateTotal}개 불러옴
+        </Badge>
+      }
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
       viewportLocked
     >
@@ -1300,25 +2054,36 @@ export default function ReviewPage() {
                 type="button"
                 size="icon-xs"
                 variant="ghost"
-                aria-label="검수 그룹 기준 새로고침"
-                title="유튜버·재생목록·검색어 그룹 기준 새로고침"
-                disabled={facetsQuery.isFetching}
-                onClick={() => void facetsQuery.refetch()}
+                aria-label="검수 후보 수동 새로고침"
+                title="현재 조건을 첫 페이지부터 새로고침"
+                disabled={candidatesQuery.isFetching}
+                onClick={() => {
+                  void restartCandidateSnapshot();
+                  void facetsQuery.refetch();
+                }}
               >
                 <RefreshCwIcon
-                  className={facetsQuery.isFetching ? "animate-spin" : undefined}
+                  className={candidatesQuery.isFetching ? "animate-spin" : undefined}
                 />
               </Button>
-              <Badge variant="secondary">{visibleCandidates.length}</Badge>
+              <Badge variant="secondary">
+                {candidates.length}/{candidateTotal}
+              </Badge>
             </div>
           </div>
+          <ReviewQueueSearch
+            value={reviewQuery}
+            onDebouncedChange={updateReviewQuery}
+          />
           <div className="grid grid-cols-2 gap-1.5 pb-1">
             <Select
               value={groupDim}
               onValueChange={(value) => {
-                resetReviewScope();
-                setGroupDim(value as DestinationGroupDim);
-                setGroupValue(null);
+                if (!value) return;
+                updateReviewListState({
+                  groupDim: value as DestinationGroupDim,
+                  groupValue: null,
+                });
               }}
             >
               <SelectTrigger className="w-full" aria-label="검수 그룹 기준">
@@ -1337,8 +2102,7 @@ export default function ReviewPage() {
               <Select
                 value={groupValue ?? ""}
                 onValueChange={(value) => {
-                  resetReviewScope();
-                  setGroupValue(value || null);
+                  updateReviewListState({ groupValue: value || null });
                 }}
               >
                 <SelectTrigger className="w-full" aria-label="그룹 값 선택">
@@ -1359,22 +2123,218 @@ export default function ReviewPage() {
             ) : (
               <div />
             )}
+            <Select
+              value={reviewSort}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  sort: value === "newest" ? "newest" : "oldest",
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="검수 후보 정렬">
+                <SelectValue>
+                  {reviewSort === "oldest" ? "오래된 후보 우선" : "최신 후보 우선"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="oldest">오래된 후보 우선</SelectItem>
+                  <SelectItem value="newest">최신 후보 우선</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={isDomestic == null ? "all" : String(isDomestic)}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  isDomestic:
+                    value === "true" ? true : value === "false" ? false : null,
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="국내 여부 필터">
+                <SelectValue>
+                  {isDomestic === true
+                    ? "국내 판정만"
+                    : isDomestic === false
+                      ? "해외 판정만"
+                      : "국내 여부 전체"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">국내 여부 전체</SelectItem>
+                  <SelectItem value="true">국내 판정만</SelectItem>
+                  <SelectItem value="false">해외 판정만</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={queueReason ?? "all"}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  queueReason:
+                    !value || value === "all"
+                      ? null
+                      : (value as ReviewQueueReason),
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="검수 대기 사유 필터">
+                <SelectValue>
+                  {queueReason ? queueReasonLabel(queueReason) : "대기 사유 전체"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectGroup>
+                  <SelectItem value="all">대기 사유 전체</SelectItem>
+                  {REVIEW_QUEUE_REASONS.map((reason) => (
+                    <SelectItem key={reason} value={reason}>
+                      {queueReasonLabel(reason)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={sourceKind ?? "all"}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  sourceKind:
+                    !value || value === "all"
+                      ? null
+                      : (value as ReviewSourceKind),
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="후보 출처 필터">
+                <SelectValue>
+                  {sourceKind ? sourceKindLabel(sourceKind) : "후보 출처 전체"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectGroup>
+                  <SelectItem value="all">후보 출처 전체</SelectItem>
+                  {REVIEW_SOURCE_KINDS.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {sourceKindLabel(kind)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={groundingStatus ?? "all"}
+              onValueChange={(value) =>
+                updateReviewListState({
+                  groundingStatus:
+                    !value || value === "all"
+                      ? null
+                      : (value as ReviewGroundingStatus),
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="원문 근거 필터">
+                <SelectValue>
+                  {groundingStatus
+                    ? groundingStatusLabel(groundingStatus)
+                    : "원문 근거 전체"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectGroup>
+                  <SelectItem value="all">원문 근거 전체</SelectItem>
+                  {REVIEW_GROUNDING_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {groundingStatusLabel(status)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
+          {reviewListStateHasFilters(reviewListState) ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              className="self-start"
+              onClick={() =>
+                updateReviewListState({
+                  ...DEFAULT_REVIEW_LIST_STATE,
+                  sort: reviewSort,
+                })
+              }
+            >
+              필터 해제
+            </Button>
+          ) : null}
           {facetsQuery.isError ? (
             <p role="alert" className="px-1 text-xs text-destructive">
               그룹 기준을 불러오지 못했습니다. 새로고침 버튼으로 다시 시도해 주세요.
             </p>
           ) : null}
-          {selectedCandidateIds.length > 0 ? (
+          {newCandidatesQuery.isError ? (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 px-2 py-1.5 text-xs text-destructive">
+              <span role="alert">
+                새 후보 확인에 실패해 이전 확인값은 표시하지 않습니다.
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => void newCandidatesQuery.refetch()}
+              >
+                다시 확인
+              </Button>
+            </div>
+          ) : newCandidateNotice ? (
+            <div role="status" aria-live="polite">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full border-primary/40 bg-primary/5"
+                onClick={() => void restartCandidateSnapshot()}
+              >
+                {newCandidateNotice}
+              </Button>
+            </div>
+          ) : null}
+          {candidateAppendError ? (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 px-2 py-1.5 text-xs text-destructive">
+              <span role="alert">{candidateAppendError}</span>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={candidatesQuery.isFetchingNextPage}
+                onClick={() => {
+                  if (
+                    candidateCacheRefreshError ||
+                    candidatePaginationContractError ||
+                    candidateSnapshotRefetchError
+                  ) {
+                    void restartCandidateSnapshot();
+                  } else {
+                    retryCandidateLoad();
+                  }
+                }}
+              >
+                다시 시도
+              </Button>
+            </div>
+          ) : null}
+          {selectedActionableCandidateIds.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
               <span className="text-xs font-medium text-destructive">
-                후보 {selectedCandidateIds.length}개 선택됨
+                후보 {selectedActionableCandidateIds.length}개 선택됨
               </span>
               <ConfirmActionButton
-                title={`선택한 후보 ${selectedCandidateIds.length}개를 삭제할까요?`}
+                title={`선택한 후보 ${selectedActionableCandidateIds.length}개를 삭제할까요?`}
                 description="되돌릴 수 없습니다."
                 onConfirm={() =>
-                  deleteCandidatesMutation.mutate(selectedCandidateIds)
+                  deleteCandidatesMutation.mutate(selectedActionableCandidateIds)
                 }
                 trigger={
                   <Button
@@ -1461,18 +2421,8 @@ export default function ReviewPage() {
               ) : null}
             </div>
           ) : null}
-          <label className="flex items-center gap-1.5 px-1 pb-1 text-xs text-muted-foreground">
-            <Switch
-              checked={hideForeign}
-              onCheckedChange={(checked) => {
-                resetReviewScope();
-                setHideForeign(Boolean(checked));
-              }}
-            />
-            해외(국내 아님) 후보 숨기기
-          </label>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {visibleCandidates.length === 0 ? (
+            {candidates.length === 0 ? (
               candidateAdvancePending ? (
                 <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
                   <p role="status">
@@ -1491,17 +2441,37 @@ export default function ReviewPage() {
                     </Button>
                   ) : null}
                 </div>
+              ) : candidateInitialLoading ? (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-lg border p-3 text-xs text-muted-foreground"
+                >
+                  검수 후보를 불러오는 중…
+                </p>
               ) : candidateLoadError ? (
                 <div className="flex flex-col gap-2 rounded-lg border border-destructive/30 p-3 text-xs text-destructive">
                   <p role="alert">{candidateLoadError}</p>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    onClick={retryCandidateLoad}
-                  >
-                    다시 시도
-                  </Button>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={retryCandidateLoad}
+                    >
+                      다시 시도
+                    </Button>
+                    {deepLinkedCandidateId != null ? (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => void restartCandidateSnapshot()}
+                      >
+                        현재 목록으로
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
               ) : (
                 <p
@@ -1519,9 +2489,10 @@ export default function ReviewPage() {
                   <TableRow>
                     <TableHead className="w-10">
                       <Checkbox
-                        checked={allVisibleCandidatesSelected}
-                        onCheckedChange={toggleAllVisibleCandidates}
-                        aria-label="보이는 후보 전체 선택"
+                        checked={allLoadedCandidatesSelected}
+                        onCheckedChange={toggleAllLoadedCandidates}
+                        disabled={actionableLoadedCandidates.length === 0}
+                        aria-label="불러온 후보 전체 선택"
                       />
                     </TableHead>
                     <TableHead>후보</TableHead>
@@ -1531,10 +2502,17 @@ export default function ReviewPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleCandidates.map((candidate) => (
+                  {candidates.map((candidate) => (
                     <CandidateRow
                       key={candidate.id}
                       candidate={candidate}
+                      actionsDisabled={
+                        !isReviewCandidateActionable(
+                          deepLinkItem?.id === candidate.id
+                            ? deepLinkItem
+                            : candidate,
+                        )
+                      }
                       isCurrent={candidate.id === selected?.id}
                       isChecked={selectedCandidateSet.has(candidate.id)}
                       inCart={cartSet.has(candidate.video_id)}
@@ -1542,7 +2520,7 @@ export default function ReviewPage() {
                       onPick={pickCandidate}
                       onToggleCart={toggleCart}
                       onOpenDetail={openDetail}
-                      onRequestDelete={setDeleteTarget}
+                      onRequestDelete={requestCandidateDelete}
                     />
                   ))}
                 </TableBody>
@@ -1579,6 +2557,65 @@ export default function ReviewPage() {
         <section className="flex min-h-0 flex-col gap-4 overflow-y-auto p-5">
           {selected ? (
             <>
+              {deepLinkedCandidateId != null &&
+              deepLinkDetailQuery.data != null &&
+              deepLinkDetailQuery.isError ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                  <span role="alert">
+                    최신 후보 상세를 다시 확인하지 못해 이전 정보를 표시합니다.
+                  </span>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={deepLinkDetailQuery.isFetching}
+                    onClick={() => void deepLinkDetailQuery.refetch()}
+                  >
+                    상세 다시 확인
+                  </Button>
+                </div>
+              ) : null}
+              {deepLinkStatusOut ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/5 p-3 text-sm">
+                  <span role="status">
+                    이 후보는 현재 {candidateStatusLabel(selected.match_status)} 상태라 검수
+                    저장·제외·삭제를 할 수 없습니다.
+                  </span>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void restartCandidateSnapshot()}
+                  >
+                    현재 목록으로
+                  </Button>
+                </div>
+              ) : deepLinkFilterOut ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm">
+                  <span role="status">현재 필터 밖 후보를 단건 상세로 열었습니다.</span>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateReviewListState({
+                        ...DEFAULT_REVIEW_LIST_STATE,
+                        sort: reviewSort,
+                      })
+                    }
+                  >
+                    필터 해제
+                  </Button>
+                </div>
+              ) : deepLinkLoadedOut ? (
+                <p
+                  role="status"
+                  className="rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm"
+                >
+                  현재 필터에는 포함되지만 아직 불러온 페이지 밖 후보입니다. 목록 전체를
+                  순회하지 않고 단건 상세로 바로 열었습니다.
+                </p>
+              ) : null}
               <div className="flex flex-col gap-2 rounded-xl border p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-semibold">
@@ -1622,6 +2659,7 @@ export default function ReviewPage() {
 
               <div className="flex gap-2">
                 <Input
+                  aria-label="외부 장소 검색어"
                   value={query}
                   placeholder="장소명으로 검색 (Google·Kakao·Naver·Gemini)"
                   onChange={(event) => setQueryEdit(event.target.value)}
@@ -1769,7 +2807,7 @@ export default function ReviewPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={candidateActionPending}
+                    disabled={!selectedActionable || candidateActionPending}
                     onClick={() => resolveSelected("ignore")}
                   >
                     제외
@@ -1846,30 +2884,47 @@ export default function ReviewPage() {
             <div className="flex flex-col gap-2 text-sm text-muted-foreground">
               <p
                 role={
-                  candidateLoadError
-                    ? "alert"
-                    : queueCompleted || candidateAdvancePending
+                  candidateAdvancePending || candidateInitialLoading
+                    ? "status"
+                    : candidateLoadError
+                      ? "alert"
+                      : queueCompleted
                       ? "status"
                       : undefined
                 }
+                aria-live={candidateInitialLoading ? "polite" : undefined}
               >
-                {candidateLoadError
-                  ? candidateLoadError
-                  : candidateAdvancePending
+                {candidateAdvancePending
                   ? candidateAdvanceError ?? "다음 검수 후보를 불러오는 중…"
+                  : candidateInitialLoading
+                    ? "검수 후보를 불러오는 중…"
+                    : candidateLoadError
+                      ? candidateLoadError
                   : queueCompleted
                     ? "현재 표시 조건의 검수 후보를 모두 처리했습니다."
                     : "검수할 후보가 없습니다."}
               </p>
-              {candidateLoadError ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={retryCandidateLoad}
-                >
-                  검수 후보 다시 불러오기
-                </Button>
+              {!candidateInitialLoading && candidateLoadError ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={retryCandidateLoad}
+                  >
+                    검수 후보 다시 불러오기
+                  </Button>
+                  {deepLinkedCandidateId != null ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void restartCandidateSnapshot()}
+                    >
+                      현재 목록으로
+                    </Button>
+                  ) : null}
+                </div>
               ) : candidateAdvanceError ? (
                 <Button
                   type="button"
@@ -1908,35 +2963,85 @@ export default function ReviewPage() {
           {detailId != null ? (
             <CandidateDetailView
               candidateId={detailId}
-              actionsDisabled={candidateActionPending || detailDeletePending}
+              cacheHandledByOnDeleted
+              actionsDisabled={
+                candidateActionPending ||
+                detailDeletePending ||
+                (detailCandidate != null &&
+                  !isReviewCandidateActionable(detailCandidate))
+              }
               onDeleteStarted={(candidateId) => {
                 setDetailDeletePending(true);
                 detailDeleteSnapshotRef.current = {
                   candidateId,
-                  visibleIndex: visibleCandidates.findIndex(
+                  visibleIndex: candidates.findIndex(
                     (candidate) => candidate.id === candidateId,
                   ),
-                  orderedCandidateIds: visibleCandidates.map(
+                  orderedCandidateIds: candidates.map(
                     (candidate) => candidate.id,
                   ),
                   loadedPageCount: candidatePages.length,
                   queueScope,
+                  workflowEpoch: selectionScopeEpochRef.current,
                   candidatesKey,
                 };
               }}
-              onDeleteSettled={() => setDetailDeletePending(false)}
+              onDeleteFailureRevalidated={(candidateId, detailRevalidation) => {
+                const snapshot = detailDeleteSnapshotRef.current;
+                if (!snapshot || snapshot.candidateId !== candidateId) return;
+                if (
+                  candidateFailureShouldAdvance(
+                    detailRevalidation,
+                    reviewListStateRef.current,
+                  )
+                ) {
+                  removeCandidateSelections([candidateId]);
+                }
+                const advanced = reconcileFailedCandidateSelection(
+                  candidateId,
+                  {
+                    visibleIndex: snapshot.visibleIndex,
+                    orderedCandidateIds: snapshot.orderedCandidateIds,
+                    loadedPageCount: snapshot.loadedPageCount,
+                    queueScope: snapshot.queueScope,
+                    workflowEpoch: snapshot.workflowEpoch,
+                    activePageKey: candidatesKeyRef.current,
+                  },
+                  detailRevalidation,
+                );
+                if (advanced) setDetailId(null);
+              }}
+              onDeleteSettled={() => {
+                setDetailDeletePending(false);
+                detailDeleteSnapshotRef.current = null;
+              }}
+              onCacheRefreshFailed={() => {
+                if (
+                  detailDeleteSnapshotRef.current?.queueScope ===
+                  queueScopeRef.current
+                ) {
+                  markCandidateCacheRefreshError();
+                }
+              }}
               onDeleted={async (deletedId) => {
                 const snapshot = detailDeleteSnapshotRef.current;
-                await queryClient.cancelQueries({
-                  queryKey: snapshot?.candidatesKey ?? candidatesKey,
-                  exact: true,
-                });
-                queryClient.setQueryData<
-                  InfiniteData<ListEnvelope<UnmatchedCandidate>>
-                >(snapshot?.candidatesKey ?? candidatesKey, (old) =>
-                  removeCandidatesFromQueue(old, [deletedId]),
+                const activeCandidatesKey = candidatesKeyRef.current;
+                const activeQueueScope = queueScopeRef.current;
+                const cacheResult = await reconcileProcessedCandidateCaches(
+                  queryClient,
+                  {
+                    ids: [deletedId],
+                    capturedPageKey: snapshot?.candidatesKey,
+                    activePageKey: activeCandidatesKey,
+                    pageOut: snapshot != null && snapshot.visibleIndex < 0,
+                  },
                 );
-                clearProcessedCandidateParam(deletedId);
+                if (
+                  cacheResult.postCommitRefreshFailed &&
+                  activeQueueScope === queueScopeRef.current
+                ) {
+                  markCandidateCacheRefreshError();
+                }
                 setDetailId((current) =>
                   current === deletedId ? null : current,
                 );
@@ -1944,7 +3049,8 @@ export default function ReviewPage() {
                   deletedId === selectedCandidateIdRef.current &&
                   snapshot?.candidateId === deletedId &&
                   snapshot.visibleIndex >= 0 &&
-                  snapshot.queueScope === queueScopeRef.current
+                  snapshot.queueScope === queueScopeRef.current &&
+                  snapshot.workflowEpoch === selectionScopeEpochRef.current
                 ) {
                   advanceAfterProcessing(
                     deletedId,
@@ -1953,8 +3059,18 @@ export default function ReviewPage() {
                     snapshot.orderedCandidateIds,
                     snapshot.loadedPageCount,
                   );
+                } else {
+                  removeCandidateSelections([deletedId]);
+                  clearProcessedCandidateParam(deletedId, false);
+                  if (deletedId === selectedCandidateIdRef.current) {
+                    clearAutoSearchTimer();
+                    initialSelectionDoneRef.current = false;
+                    selectedCandidateIdRef.current = null;
+                    setQueueCompleted(false);
+                    setSelectedCandidateSnapshot(null);
+                    setSelectedId(null);
+                  }
                 }
-                detailDeleteSnapshotRef.current = null;
               }}
             />
           ) : null}
@@ -2015,7 +3131,7 @@ export default function ReviewPage() {
                   disabled={candidateActionPending}
                   onClick={() => {
                     if (!nearbyConflict) return;
-                    resolveMutation.mutate({
+                    submitResolveCommand({
                       ...nearbyConflict.command,
                       duplicate: {
                         resolution: "merge_existing",
@@ -2044,7 +3160,7 @@ export default function ReviewPage() {
               disabled={candidateActionPending}
               onClick={() => {
                 if (!nearbyConflict) return;
-                resolveMutation.mutate({
+                submitResolveCommand({
                   ...nearbyConflict.command,
                   duplicate: { resolution: "create_new" },
                 });
@@ -2060,7 +3176,12 @@ export default function ReviewPage() {
       {/* 행 삭제 확인 — 페이지 공용 단일 다이얼로그 */}
       <AlertDialog
         open={deleteTarget != null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            deleteTargetScopeRef.current = null;
+            setDeleteTarget(null);
+          }
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -2081,11 +3202,20 @@ export default function ReviewPage() {
               type="button"
               size="sm"
               variant="destructive"
-              disabled={candidateActionPending}
+              disabled={candidateActionPending || !deleteTargetActionable}
               onClick={() => {
-                if (deleteTarget) {
+                if (
+                  deleteTarget &&
+                  deleteTargetActionable &&
+                  deleteTargetScopeRef.current === queueScopeRef.current
+                ) {
                   deleteCandidatesMutation.mutate([deleteTarget.id]);
+                } else if (deleteTarget) {
+                  setCandidateActionError(
+                    `${deleteTarget.ai_place_name} 후보는 표시 조건이 바뀌어 삭제하지 않았습니다. 현재 목록에서 다시 선택해 주세요.`,
+                  );
                 }
+                deleteTargetScopeRef.current = null;
                 setDeleteTarget(null);
               }}
             >
@@ -2098,10 +3228,70 @@ export default function ReviewPage() {
   );
 }
 
+function ReviewQueueSearch({
+  value,
+  onDebouncedChange,
+}: {
+  value: string;
+  onDebouncedChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [isComposing, setIsComposing] = useState(false);
+  const previousValueRef = useRef(value);
+  const pendingValueRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const previousValue = previousValueRef.current;
+    const pendingValue = pendingValueRef.current;
+    previousValueRef.current = value;
+    pendingValueRef.current =
+      value === previousValue ? pendingValue : null;
+    setDraft((currentDraft) => {
+      return reconcileReviewSearchDraft({
+        draft: currentDraft,
+        previousValue,
+        value,
+        pendingValue,
+      }).draft;
+    });
+  }, [value]);
+
+  useEffect(() => {
+    if (isComposing) return;
+    const normalized = draft.trim().slice(0, 255);
+    if (normalized === value) return;
+    const timer = window.setTimeout(() => {
+      pendingValueRef.current = normalized;
+      onDebouncedChange(normalized);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [draft, isComposing, onDebouncedChange, value]);
+
+  return (
+    <div className="relative">
+      <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        aria-label="검수 후보 검색"
+        className="pl-8"
+        maxLength={255}
+        placeholder="후보명·위치 힌트 검색"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={(event) => {
+          setDraft(event.currentTarget.value);
+          setIsComposing(false);
+        }}
+      />
+    </div>
+  );
+}
+
 // 검수 대기 행 — 목록 확장 시 행 수가 많아지므로 memo로 고정해 선택/장바구니
 // 토글 시 바뀐 행만 다시 그린다(콜백은 부모에서 useCallback으로 안정화).
 const CandidateRow = memo(function CandidateRow({
   candidate,
+  actionsDisabled,
   isCurrent,
   isChecked,
   inCart,
@@ -2112,6 +3302,7 @@ const CandidateRow = memo(function CandidateRow({
   onRequestDelete,
 }: {
   candidate: UnmatchedCandidate;
+  actionsDisabled: boolean;
   isCurrent: boolean;
   isChecked: boolean;
   inCart: boolean;
@@ -2155,6 +3346,7 @@ const CandidateRow = memo(function CandidateRow({
       <TableCell>
         <Checkbox
           checked={isChecked}
+          disabled={actionsDisabled}
           data-row-action="true"
           onCheckedChange={() => onToggleSelect(candidate.id)}
           aria-label={`${candidate.ai_place_name} 후보 선택`}
@@ -2169,6 +3361,11 @@ const CandidateRow = memo(function CandidateRow({
             ) : null}
             <Badge variant={queueReasonBadgeVariant(candidate.queue_reason)}>
               {queueReasonLabel(candidate.queue_reason)}
+            </Badge>
+            <Badge
+              variant={groundingStatusBadgeVariant(candidate.grounding_status)}
+            >
+              {groundingStatusLabel(candidate.grounding_status)}
             </Badge>
           </span>
           <span className="text-[12px] text-text-secondary">
@@ -2190,8 +3387,9 @@ const CandidateRow = memo(function CandidateRow({
           </span>
           <button
             type="button"
+            disabled={actionsDisabled}
             data-row-action="true"
-            className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary"
+            className="w-fit rounded border border-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => onToggleCart(candidate.video_id)}
             title="영상 재처리 선택"
           >
@@ -2228,6 +3426,7 @@ const CandidateRow = memo(function CandidateRow({
             type="button"
             size="icon-xs"
             variant="destructive"
+            disabled={actionsDisabled}
             data-row-action="true"
             aria-label={`${candidate.ai_place_name} 후보 삭제`}
             onClick={() => onRequestDelete(candidate)}

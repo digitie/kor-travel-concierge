@@ -466,7 +466,7 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 > **개정(2026-07-13, §10 반영)**: `queue_reason`은 파생 문자열이 아니라 **안정 enum + 우선순위 규칙 문서화**(ungrounded > name_mismatch > region_mismatch > ambiguous > no_result > foreign > description_only > visual_only 등). reason·source_kind·grounding을 서버 필터로도 노출(grounding 값은 T-165 후).
 
-> **구현 완료(2026-07-13, T-182)**: 목록 scalar·안정 사유 우선순위·`reason`/`source_kind` filter와 `unmatched-v2` cursor를 적용했다. grounding은 T-165 raw 저장 계약 전에는 산출·filter하지 않는 것으로 명시 이연했다. 상세 evidence 비노출과 300건 응답 증가분을 n150에서 측정했고, 오염 confidence/JSONB fail-safe를 추가했다.
+> **구현 완료(2026-07-13, T-182)**: 목록 scalar·안정 사유 우선순위·`reason`/`source_kind` filter와 `unmatched-v2` cursor를 적용했다. 당시 이연한 grounding은 T-165 병합 뒤 T-183에서 5상태 exact filter·목록 scalar·`unmatched-v4`로 마감했다. 상세 evidence 비노출과 300건 응답 증가분을 n150에서 측정했고, 오염 confidence/JSONB fail-safe를 추가했다.
 
 - **해결**: U2, D3(표시 측).
 - **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`(`_candidate_list_payload`), `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
@@ -480,6 +480,15 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 #### PR-08. 검수 큐 서버 검색·정렬·커서 + URL 상태화 `[UX P0]` `[M]`
 
 > **개정(2026-07-13, §10 반영)**: PR-32(T-177)의 envelope 계약 기반으로 구현 — `total`·`newest_id`·filter fingerprint cursor, "새 후보 N건"은 `limit=1` 비교가 아니라 `newer_than_id` count, `?candidate=`가 page 밖이어도 detail 단건 직접 조회. "3초 내 도달" 완료 기준은 측정 조건(server latency vs 첫 paint vs debounce) 명시.
+
+> **구현 완료(2026-07-13, T-183)**: `q` literal 검색, strict 국내외·상태·사유·출처·Grounding
+> 5상태 filter, oldest/newest `unmatched-v4` snapshot keyset, 정확한 `newer_than`·`total` probe를
+> 서버 계약으로 고정했다. 검수 화면은 FIFO를
+> 위해 oldest를 기본으로 300건씩 append하고 모든 filter와 명시적 `?candidate=` 딥링크를 URL에서
+> 복원한다. page 밖 상세, filter 밖 맥락, 큐 변경 배너, mutation-vs-in-flight cache 경합, 연속 URL 변경과 ABA
+> selection 경합과 다른 검수자의 선처리 409·페이지 밖 실패 재검증까지 방어한다. 후보 전용
+> channel/playlist/keyword facet은 장소 facet 재사용의
+> 부정확성을 확인해 T-187 gate 범위에 명시적으로 이관했다.
 
 - **해결**: U3, U11, S8의 데이터 측면. 의존: PR-07.
 - **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
