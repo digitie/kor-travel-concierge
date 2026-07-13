@@ -16,7 +16,14 @@ from __future__ import annotations
 
 from ktc.models.audit_log import AuditLog
 from ktc.models.base import Base, TimestampMixin, utcnow
-from ktc.models.crawl_run import CrawlRun, RunSource, RunState
+from ktc.models.crawl_run import (
+    TERMINAL_RUN_STATES,
+    CrawlRun,
+    RunAttention,
+    RunSource,
+    RunState,
+)
+from ktc.models.crawl_run_stage_event import CrawlRunStageEvent, StageOutcome
 from ktc.models.extracted_place_candidate import ExtractedPlaceCandidate, MatchStatus
 from ktc.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
 from ktc.models.feature_export import (
@@ -52,6 +59,10 @@ __all__ = [
     "CrawlRun",
     "RunState",
     "RunSource",
+    "RunAttention",
+    "TERMINAL_RUN_STATES",
+    "CrawlRunStageEvent",
+    "StageOutcome",
     "AuditLog",
     "SystemSetting",
     "GeminiRateState",
