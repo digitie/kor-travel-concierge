@@ -954,7 +954,7 @@ async def test_dirty_sync_result_matches_full_sync_golden(client, session_factor
     a_id, _ = await _seed_ready_candidate(
         session_factory, video_id="gold-a", place_name="장소 A"
     )
-    b_id, _ = await _seed_ready_candidate(
+    b_id, b_place = await _seed_ready_candidate(
         session_factory, video_id="gold-b", place_name="장소 B"
     )
     c_id, c_place = await _seed_ready_candidate(
@@ -964,9 +964,11 @@ async def test_dirty_sync_result_matches_full_sync_golden(client, session_factor
     # 최초 노출(dirty consume → upsert 3건).
     await client.get("/api/v1/features/changes")
 
-    # b: 검수 큐 개별 삭제(soft delete → tombstone).
+    # b: 장소 삭제 → 후보 needs_review 복귀 + tombstone(확정 후보에도 동작하는 wired
+    # tombstone 경로. T-183가 개별 후보 삭제에 needs_review 선행조건을 추가했으므로 확정
+    # 후보의 tombstone은 장소 삭제로 만든다).
     assert (
-        await client.delete(f"/api/v1/destinations/candidates/{b_id}")
+        await client.delete(f"/api/v1/destinations/{b_place}")
     ).status_code == 200
     # c: place 보정(→ upsert 재발행).
     assert (
