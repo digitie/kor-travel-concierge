@@ -15,8 +15,7 @@ from typing import Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import delete as sa_delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
@@ -1331,6 +1330,42 @@ async def resolve_unmatched_candidate(
     }
 
 
+@router.post("/destinations/unmatched/{candidate_id}/reopen")
+async def reopen_unmatched_candidate(
+    candidate_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """soft delete/제외(`ignored`)된 후보를 검수 대기로 복귀한다(T-160, PR-09 백엔드).
+
+    - soft deleted → 삭제 필드 clear + `needs_review` + export `pending`.
+    - `ignored` → `needs_review` + `pending`.
+    - 이미 `needs_review` → 409(복귀할 것이 없음).
+    - `matched`/`user_corrected` → 400(범위 밖 — 장소 정리 정책은 T-184).
+    """
+    try:
+        candidate, reopened_from = await place_service.reopen_candidate(
+            session, candidate_id=candidate_id
+        )
+    except place_service.CandidateReopenConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except place_service.CandidateReopenUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="candidate.reopen",
+        target_type="extracted_place_candidate",
+        target_id=str(candidate_id),
+        payload={"reopened_from": reopened_from},
+    )
+    return {
+        "status": "reopened",
+        "reopened_from": reopened_from,
+        "candidate": _candidate_payload(candidate),
+    }
+
+
 async def _video_detail_dict(
     session: AsyncSession, video_id: str | None
 ) -> dict[str, Any] | None:
@@ -1375,7 +1410,7 @@ async def get_candidate_transcript(
     RustFS에 저장된 최신 `transcript_corrected` 자산을 우선 읽고, 없으면 원본
     `transcript`로 폴백한다. 둘 다 없으면 `text`/`kind`는 null."""
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None:
+    if candidate is None or candidate.deleted_at is not None:
         raise HTTPException(status_code=404, detail="candidate not found")
     store = postprocess_service._make_media_store(get_settings())
     text = await media_store.load_latest_asset_text(
@@ -1400,9 +1435,12 @@ async def get_candidate_transcript(
 async def get_candidate_detail(
     candidate_id: int, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
-    """검수 후보 1건의 상세 정보(영상·근거·동일 영상의 다른 후보)를 반환한다."""
+    """검수 후보 1건의 상세 정보(영상·근거·동일 영상의 다른 후보)를 반환한다.
+
+    soft delete된 후보는 404다(T-160 — 삭제 후보 열람 UI는 T-184에서 다룬다).
+    """
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None:
+    if candidate is None or candidate.deleted_at is not None:
         raise HTTPException(status_code=404, detail="candidate not found")
 
     video = await _video_detail_dict(session, candidate.video_id)
@@ -1442,6 +1480,7 @@ async def get_candidate_detail(
             .where(
                 ExtractedPlaceCandidate.video_id == candidate.video_id,
                 ExtractedPlaceCandidate.id != candidate.id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
             )
             .order_by(ExtractedPlaceCandidate.id)
         )
@@ -1479,23 +1518,29 @@ async def get_candidate_detail(
 
 @router.delete("/destinations/candidates/{candidate_id}")
 async def delete_candidate(
-    candidate_id: int, session: AsyncSession = Depends(get_session)
+    candidate_id: int,
+    reason: str | None = Query(None, max_length=255),
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """검수 후보를 영구 삭제한다(확정 장소와 연결된 후보는 삭제 거부)."""
+    """검수 후보를 soft delete 한다(T-160 — 행·export ledger 보존, reopen으로 복구 가능).
+
+    확정 장소와 연결된(매핑 보유) 후보는 409로 거부한다(기존 semantics 유지).
+    이미 export된 후보는 같은 트랜잭션에서 ledger를 tombstone으로 전환해
+    downstream consumer가 `changes`로 제거를 전달받는다.
+    """
     candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None:
+    if candidate is None or candidate.deleted_at is not None:
         raise HTTPException(status_code=404, detail="candidate not found")
-    # export ledger row(feature_exports)는 검수 거부와 무관하지만 FK로 삭제를 막는다.
-    # 후보 삭제 시 먼저 정리해, 진짜 삭제 거부 사유(확정 장소 연결=video_place_mappings)만
-    # 409로 남긴다. (미확정 needs_review 후보가 영구 삭제되지 못하던 문제 해소.)
-    await session.execute(
-        sa_delete(FeatureExport).where(FeatureExport.candidate_id == candidate_id)
-    )
-    await session.delete(candidate)
+    delete_reason = (reason or "").strip() or "검수 큐에서 삭제"
     try:
-        await session.flush()
-    except IntegrityError as exc:
-        await session.rollback()
+        summary = await place_service.soft_delete_candidates(
+            session,
+            [candidate_id],
+            reason=delete_reason,
+            deleted_by="web",
+            force=False,
+        )
+    except place_service.CandidateMappingConflictError as exc:
         raise HTTPException(
             status_code=409,
             detail="확정 장소와 연결된 후보는 삭제할 수 없습니다.",
@@ -1506,6 +1551,11 @@ async def delete_candidate(
         action="candidate.delete",
         target_type="extracted_place_candidate",
         target_id=str(candidate_id),
+        payload={
+            "soft_delete": True,
+            "reason": delete_reason,
+            "tombstoned_exports": summary.tombstoned_exports,
+        },
     )
     return {"deleted": True, "id": candidate_id}
 
@@ -1732,9 +1782,9 @@ async def _database_counts(session: AsyncSession) -> dict[str, Any]:
 
     candidate_rows = (
         await session.execute(
-            select(ExtractedPlaceCandidate.match_status, func.count()).group_by(
-                ExtractedPlaceCandidate.match_status
-            )
+            select(ExtractedPlaceCandidate.match_status, func.count())
+            .where(ExtractedPlaceCandidate.deleted_at.is_(None))
+            .group_by(ExtractedPlaceCandidate.match_status)
         )
     ).all()
     run_rows = (
@@ -1983,6 +2033,7 @@ async def list_run_places(
         .where(
             ExtractedPlaceCandidate.video_id.in_(video_ids),
             ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
+            ExtractedPlaceCandidate.deleted_at.is_(None),
         )
         .order_by(ExtractedPlaceCandidate.id.desc())
     )
@@ -2040,7 +2091,10 @@ async def list_run_video_stats(
             ExtractedPlaceCandidate.match_status,
             func.count(),
         )
-        .where(ExtractedPlaceCandidate.video_id.in_(video_ids))
+        .where(
+            ExtractedPlaceCandidate.video_id.in_(video_ids),
+            ExtractedPlaceCandidate.deleted_at.is_(None),
+        )
         .group_by(
             ExtractedPlaceCandidate.video_id, ExtractedPlaceCandidate.match_status
         )

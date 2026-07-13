@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-160**: candidate soft delete 상태 모델 — `deleted_at/deletion_reason/deleted_by`+partial index, 삭제 트랜잭션에서 매핑 해제+export tombstone 전이(ledger 선삭제 코드 제거), undo/reopen 백엔드, `exclude_video` 통합, CHECK 제약. (PR-09 백엔드 선행+PR-22 선행, §10 B1, G1)
 - [ ] **T-161**: LLM async/multimodal 게이트웨이 — 전 LLM 호출 수렴(quota reservation 포함: deep research·키워드 확장·검수 의견·카테고리·video analysis의 리미터 우회 해소), timeout/retry/usage 실측/provider·model 기록, direct SDK guard, 실제 결제 티어 확인·`.env.example` 숫자는 예시 표기. (PR-23+PR-05 통합, §10 B6)
 - [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
 - [ ] **T-163**: 워커 레인 분리 — lane 컬럼+인덱스, `create_run` 호출 전수 표 기반 enqueue 매핑(restart lane 복사, run-now, `/jobs/poi-batch`, MCP harvest/deep research, transcript child 포함), parent lane·lineage 전파, 구 job id(`crawl-run-worker`) 제거. 선행: T-161·T-162 권장. (PR-04 개정판)
@@ -47,7 +46,7 @@
 - [ ] **T-181**: run-queue 폴링 통합 — 단일 endpoint(`USER_JOB_TYPES` 유지)+쿼리키 통일+mutation invalidate+staleTime 정비, attention 기반 배지, 라우트 등록 순서 주의. 선행: T-162(A). (PR-06 개정판)
 - [ ] **T-182**: 검수 목록 payload 확장 — `queue_reason` 안정 enum+우선순위 문서화, 영상 제목·채널·신뢰도·생성일 스칼라, reason·source·grounding 서버 필터(grounding 노출은 T-165 후). (PR-07 개정판)
 - [ ] **T-183**: 검수 서버 검색·정렬·cursor + URL 상태화 — envelope 기반 append, oldest 정렬, `newer_than` 새 후보 배너, page 밖 딥링크. 선행: T-177·T-182. (PR-08 개정판, G5)
-- [ ] **T-184**: undo/reopen UI + 제외 목록 뷰 — 마지막 처리 undo 토스트, IGNORED·삭제 복구, reference count 기반 장소 정리(공유 장소 보호). 선행: T-160(A). (PR-09 개정판 UI)
+- [ ] **T-184**: undo/reopen UI + 제외 목록 뷰 — 마지막 처리 undo 토스트, IGNORED·삭제 복구, reference count 기반 장소 정리(공유 장소 보호). 선행: T-160(A). (PR-09 개정판 UI) — **T-160 이연분 포함**: MATCHED/USER_CORRECTED 후보의 reopen 백엔드(현재 400 — 장소 정리 정책과 함께)와 영상 제외 undo 정책(reopen 시 `youtube_videos.is_excluded`는 별개로 잔존)
 - [ ] **T-185**: 검수 bulk — filter snapshot 서버 액션+preview count+확인 token+크기/분할·retry 계약, 해외 일괄 제외 포함. 선행: T-160(A)·T-177. (PR-10 개정판)
 - [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리, provider 요청 debounce 250~400ms+abort+identity, startTransition으로 120ms 해킹 제거. 선행: T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
@@ -61,6 +60,16 @@
 
 ## 완료
 
+- [x] **T-160**: candidate soft delete 상태 모델 — hard delete가 export tombstone·undo를 원천
+  차단하던 구조(§10 B1, FK NO ACTION + ledger 선삭제)를 해소했다. `deleted_at/deletion_reason/
+  deleted_by` 컬럼+CHECK+검수 큐 partial index 3종(migration 20260713_0016), `soft_delete_candidates`
+  helper(매핑 삭제·matched 해제·**같은 트랜잭션 tombstone 전이**, ledger DELETE 전소멸, FOR UPDATE
+  락), 후보 삭제 라우트·`exclude_video`(force) 교체, 활성 조회 `deleted_at IS NULL` 전수 적용,
+  `POST /destinations/unmatched/{id}/reopen`(deleted/ignored→NEEDS_REVIEW, MATCHED/USER_CORRECTED는
+  T-184 이연 400), sync의 tombstone freeze(재발행 소음 제거). G1 통합 테스트(export→삭제→tombstone→
+  재시작 등가→reopen→재발행→cursor 단조) 포함. 적대적 리뷰 3렌즈: BLOCKER 0, MAJOR 2·MINOR 6 전부
+  머지 전 반영. 검증: alembic up/down round-trip, backend 전체 pytest pre-existing 2건 외 실패 0.
+  (2026-07-13, 로드맵 §10 B1·PR-09 백엔드, G1)
 - [x] **T-158**: Phase -1 외부 provider 정책·데이터 권리 게이트 — `docs/provider-policy.md` 신설:
   provider 6열(YouTube/Google Places/NCP Maps/Naver Local Search/Kakao/VWorld)×8열 정책 matrix(전부
   공식 원문 확인·확인일 기재), 현행 코드 충돌 지점 C-1~C-7, ADR-15 재검토 초안(옵션 4), release

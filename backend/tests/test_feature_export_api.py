@@ -402,3 +402,289 @@ async def test_source_entity_id_stable_across_upsert_and_reject(client, session_
 
     # upsert와 reject export가 동일한 source_entity_id(= str(candidate.id))를 가져야 한다.
     assert upsert_entity_id == reject_entity_id == str(candidate_id)
+
+
+# --- T-160 G1: 삭제 정합성 (soft delete → tombstone → reopen → 재발행) ---
+
+
+async def _ledger_state(session_factory) -> list[tuple]:
+    """ledger 전체의 (export_id, operation, sequence, payload_hash, rejection_reason)."""
+    from sqlalchemy import select
+
+    from ktc.models import FeatureExport
+
+    async with session_factory() as s:
+        rows = (
+            (await s.execute(select(FeatureExport).order_by(FeatureExport.export_id)))
+            .scalars()
+            .all()
+        )
+        return [
+            (r.export_id, r.operation, r.sequence, r.payload_hash, r.rejection_reason)
+            for r in rows
+        ]
+
+
+async def _assert_full_sync_is_stable(session_factory) -> None:
+    """process 재시작 등가: 새 세션에서 전량 sync를 반복해도 ledger가 불변(golden)."""
+    from ktc.services import feature_export_service
+
+    golden = await _ledger_state(session_factory)
+    for _ in range(2):
+        async with session_factory() as s:
+            await feature_export_service.sync_feature_exports(s)
+        assert await _ledger_state(session_factory) == golden
+
+
+def _decode_cursor(cursor: str | None) -> int | None:
+    from ktc.services.feature_export_service import _decode_cursor as decode
+
+    return decode(cursor)
+
+
+async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory):
+    """G1 시나리오: export(snapshot 노출) → 삭제 → changes tombstone(새 sequence) →
+    reopen → 재확정 후 다음 sync가 upsert 재발행 → cursor 소비 일관성(유실·중복 없음)."""
+    from sqlalchemy import select
+
+    from ktc.models import ExtractedPlaceCandidate, FeatureExport
+
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory, video_id="vid-g1"
+    )
+    export_id = f"ytpc_{candidate_id}"
+
+    # 1) export: snapshot에 upsert로 노출되고 changes cursor를 소비한다.
+    snap = await client.get("/api/v1/features/snapshot")
+    assert [item["export_id"] for item in snap.json()["items"]] == [export_id]
+
+    first = await client.get("/api/v1/features/changes")
+    first_body = first.json()
+    assert [item["operation"] for item in first_body["items"]] == ["upsert"]
+    cursor = first_body["next_cursor"]
+    cursor_seqs = [_decode_cursor(cursor)]
+    consumed_ops = ["upsert"]
+
+    # 2) 검수 큐 개별 삭제(soft delete) — 행·ledger 보존 + 같은 트랜잭션 tombstone.
+    deleted = await client.delete(
+        f"/api/v1/destinations/candidates/{candidate_id}",
+        params={"reason": "G1 삭제"},
+    )
+    assert deleted.status_code == 200
+
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.deleted_at is not None
+        assert candidate.deletion_reason == "G1 삭제"
+        assert candidate.deleted_by == "web"
+        row = (
+            await s.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.operation == "tombstone"
+        assert row.rejection_reason == "G1 삭제"
+
+    # 검수 큐·상세에서 유령으로 남지 않는다.
+    unmatched = await client.get("/api/v1/destinations/unmatched")
+    assert all(item["id"] != candidate_id for item in unmatched.json())
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{candidate_id}/detail"
+    )
+    assert detail.status_code == 404
+
+    # 3) changes: cursor 이후 tombstone 1건(새 sequence).
+    second = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    second_body = second.json()
+    assert [item["operation"] for item in second_body["items"]] == ["tombstone"]
+    assert second_body["items"][0]["export_id"] == export_id
+    cursor = second_body["next_cursor"]
+    cursor_seqs.append(_decode_cursor(cursor))
+    consumed_ops.append("tombstone")
+
+    snapshot_after_delete = await client.get("/api/v1/features/snapshot")
+    assert snapshot_after_delete.json()["items"] == []
+
+    # 4) process 재시작 등가: 새 세션 전량 sync 반복에도 ledger 불변(golden).
+    await _assert_full_sync_is_stable(session_factory)
+
+    # 5) reopen: 삭제 필드 clear + needs_review + export pending.
+    reopened = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+    )
+    assert reopened.status_code == 200
+    reopened_body = reopened.json()
+    assert reopened_body["reopened_from"] == "deleted"
+    assert reopened_body["candidate"]["match_status"] == "needs_review"
+    assert reopened_body["candidate"]["feature_export_status"] == "pending"
+
+    # 이미 needs_review인 후보의 재reopen은 409.
+    again = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/reopen"
+    )
+    assert again.status_code == 409
+
+    # 재확정 전에는 아무 것도 재발행되지 않는다 — sync의 tombstone freeze 덕에
+    # reopen 직후(`needs_review`+`pending`) 재스캔도 tombstone을 재sequence하지
+    # 않는다(cursor 불변, upsert 없음).
+    interim = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    interim_body = interim.json()
+    assert interim_body["items"] == []
+    assert interim_body["next_cursor"] == cursor
+    snapshot_after_reopen = await client.get("/api/v1/features/snapshot")
+    assert snapshot_after_reopen.json()["items"] == []
+
+    # 6) 재확정(기존 장소 매칭) → 다음 sync에서 같은 export_id의 upsert 재발행.
+    resolved = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={"action": "match_existing", "place_id": place_id},
+    )
+    assert resolved.status_code == 200
+
+    reissued = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    reissued_body = reissued.json()
+    assert [item["operation"] for item in reissued_body["items"]] == ["upsert"]
+    assert reissued_body["items"][0]["export_id"] == export_id
+    cursor_seqs.append(_decode_cursor(reissued_body["next_cursor"]))
+    consumed_ops.append("upsert")
+
+    snapshot_final = await client.get("/api/v1/features/snapshot")
+    assert [item["export_id"] for item in snapshot_final.json()["items"]] == [
+        export_id
+    ]
+
+    # 7) cursor 소비 일관성: sequence가 단조 증가(유실·중복 없음), 전이 순서 보존.
+    assert cursor_seqs == sorted(cursor_seqs)
+    assert len(set(cursor_seqs)) == len(cursor_seqs)
+    assert consumed_ops[0] == "upsert"
+    assert consumed_ops[-1] == "upsert"
+    assert "tombstone" in consumed_ops
+
+    # 최종 상태도 재시작 등가.
+    await _assert_full_sync_is_stable(session_factory)
+
+
+async def test_g1_exclude_video_bulk_tombstones_exported_candidates(
+    client, session_factory
+):
+    """G1 벌크 시나리오: export된 확정 후보를 포함한 영상 제외 —
+    soft delete + 고아 장소 정리 + ledger tombstone + 재시작 등가."""
+    from sqlalchemy import select
+
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        TravelPlace,
+        VideoPlaceMapping,
+    )
+
+    candidate_id, place_id = await _seed_ready_candidate(
+        session_factory, video_id="vid-ex-bulk"
+    )
+    async with session_factory() as s:
+        s.add(
+            VideoPlaceMapping(
+                video_id="vid-ex-bulk",
+                place_id=place_id,
+                place_candidate_id=candidate_id,
+                ai_summary="언급",
+            )
+        )
+        await s.commit()
+
+    # export 노출 후 cursor를 잡는다.
+    first = await client.get("/api/v1/features/changes")
+    assert [item["operation"] for item in first.json()["items"]] == ["upsert"]
+    cursor = first.json()["next_cursor"]
+
+    # 확정 연결(매핑 보유) 후보의 개별 삭제는 여전히 409(부분 변경 없음).
+    conflict = await client.delete(
+        f"/api/v1/destinations/candidates/{candidate_id}"
+    )
+    assert conflict.status_code == 409
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate.deleted_at is None
+        assert candidate.matched_place_id == place_id
+
+    # 영상 제외(force): 후보 soft delete + 매핑 삭제 + 고아 장소 삭제 + tombstone.
+    excluded = await client.post(
+        "/api/v1/destinations/videos/vid-ex-bulk/exclude",
+        json={"reason": "관련 없는 영상"},
+    )
+    assert excluded.status_code == 200
+    summary = excluded.json()
+    assert summary["deleted_candidates"] == 1
+    assert summary["deleted_mappings"] == 1
+    assert summary["deleted_places"] == 1
+    assert summary["tombstoned_exports"] == 1
+
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.deleted_at is not None
+        assert candidate.deletion_reason == "관련 없는 영상"
+        assert candidate.matched_place_id is None
+        assert await s.get(TravelPlace, place_id) is None
+        row = (
+            await s.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.operation == "tombstone"
+        assert row.rejection_reason == "관련 없는 영상"
+
+    # downstream은 changes로 제거를 전달받는다.
+    changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    items = changes.json()["items"]
+    assert [item["operation"] for item in items] == ["tombstone"]
+    assert items[0]["export_id"] == f"ytpc_{candidate_id}"
+
+    snapshot = await client.get("/api/v1/features/snapshot")
+    assert snapshot.json()["items"] == []
+
+    # process 재시작 등가.
+    await _assert_full_sync_is_stable(session_factory)
+
+
+async def test_sync_safety_net_tombstones_soft_deleted_without_helper(
+    client, session_factory
+):
+    """이중 안전망: helper를 우회해 soft delete 표시만 된 후보도 다음
+    `sync_feature_exports`가 '후보 소멸' 분류로 tombstone 전환한다."""
+    from sqlalchemy import select
+
+    from ktc.models import ExtractedPlaceCandidate, FeatureExport, utcnow
+    from ktc.services import feature_export_service
+
+    candidate_id, _ = await _seed_ready_candidate(session_factory, video_id="vid-sn")
+
+    # 먼저 export 노출(ledger upsert 생성).
+    await client.get("/api/v1/features/snapshot")
+
+    async with session_factory() as s:
+        candidate = await s.get(ExtractedPlaceCandidate, candidate_id)
+        candidate.deleted_at = utcnow()
+        candidate.deletion_reason = "직접 표기(안전망 검증)"
+        candidate.matched_place_id = None
+        await s.commit()
+
+    async with session_factory() as s:
+        await feature_export_service.sync_feature_exports(s)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                select(FeatureExport).where(
+                    FeatureExport.candidate_id == candidate_id
+                )
+            )
+        ).scalar_one()
+        assert row.operation == "tombstone"
+
+    await _assert_full_sync_is_stable(session_factory)

@@ -459,10 +459,16 @@ async def transcript_candidates_for_video(
     session: AsyncSession,
     video_id: str,
 ) -> list[ExtractedPlaceCandidate]:
-    """영상의 transcript 기반 장소 후보를 id 순서로 조회한다."""
+    """영상의 transcript 기반 장소 후보를 id 순서로 조회한다.
+
+    soft delete된 후보는 reconcile 비교 대상에서 제외한다(T-160).
+    """
     result = await session.execute(
         select(ExtractedPlaceCandidate)
-        .where(ExtractedPlaceCandidate.video_id == video_id)
+        .where(
+            ExtractedPlaceCandidate.video_id == video_id,
+            ExtractedPlaceCandidate.deleted_at.is_(None),
+        )
         .order_by(ExtractedPlaceCandidate.id)
     )
     return list(result.scalars().all())

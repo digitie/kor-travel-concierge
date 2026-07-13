@@ -240,7 +240,9 @@ async def process_video_batch(
         raise
 
     # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 장소명) 중복은 건너뛴다(멱등성:
-    #    부분 재실행/재시작 시 중복 후보 방지).
+    #    부분 재실행/재시작 시 중복 후보 방지). soft delete된 후보는 dedup 기준에서
+    #    제외한다(T-160/로드맵 B1 절차 2 — 재추출 시 새 후보로 검수 큐에 재등장할 수
+    #    있다. 영구 억제는 `ignored` 또는 영상 제외가 담당).
     batch_video_ids = [item["video"].video_id for item in batch.values()]
     existing_pairs: set[tuple[str, str]] = set()
     if batch_video_ids:
@@ -248,7 +250,10 @@ async def process_video_batch(
             select(
                 ExtractedPlaceCandidate.video_id,
                 ExtractedPlaceCandidate.ai_place_name,
-            ).where(ExtractedPlaceCandidate.video_id.in_(batch_video_ids))
+            ).where(
+                ExtractedPlaceCandidate.video_id.in_(batch_video_ids),
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
         )
         existing_pairs = {(str(v), str(n)) for v, n in rows.all()}
     created_candidates: list[ExtractedPlaceCandidate] = []
