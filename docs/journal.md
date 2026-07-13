@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-07-13: T-162 — durable stage events + restart lineage·attention (B6)
+
+- **문제**: `status_log_json` parser가 timestamp/level/message/progress 4필드만 보존·80건 절단
+  (§1.5 C7)이라 단계별 구조화 측정을 status_log 주입으로 달성 불가. 재시작은 lineage·멱등 없이 복제.
+- **구현**: `crawl_run_stage_events`(stage/provider/attempt/item_ref/started/finished/elapsed_ms/
+  outcome/detail, monotonic 실측, 독립 세션 best-effort commit) — poi_batch 4단계 + 배치 총소요
+  경계, harvest 2단계. `crawl_runs.restart_of_run_id`(self FK, FOR UPDATE 멱등 — 원본당 active 1,
+  lane 복사는 T-163)와 `attention`(4상태, CHECK+partial index) + `acknowledge` API. run 응답 additive
+  노출(#185 envelope items·단건 양쪽). status_log parser는 불변(요약 view). migration 0018.
+- **적대적 리뷰(PR 전, 2렌즈)**: 정확성·회귀·명세 / 데이터 정합·migration·성능 — BLOCKER/MAJOR 0.
+  MINOR: G7 provider별 관측은 이 계측 범위 밖(T-164 transcript_attempts 소관)으로 docstring 정정,
+  T-172 게이트 분모 왜곡 방지용 `poi_batch_total` 경계 이벤트 추가. 전이 소유 단독성·멱등 동시성·
+  status_log 불변·envelope additive 생존 전수 확인.
+- **리베이스**: 작업 중 main이 #185(envelope)·#186(cursor)·#187(검수 자동 진행)로 전진 —
+  crawl_run_service import 블록 결합 해소, envelope items에 attention 필드 생존 회귀 어서션 추가.
+- **검증**: 격리 disposable DB backend pytest 405 passed(pre-existing 1건만 실패 —
+  `test_destinations_reflect_db`는 격리 DB에서 통과해 공유 DB fixture 경합 flake로 확정), alembic
+  0017→0018 round-trip, `test_migration_graph` 단일 head, envelope 회귀. `git diff --check` 통과.
+
 ## 2026-07-13: T-179 — 검수 자동 다음 후보와 근거 시각 링크
 
 - **연속 검수 흐름**: 저장·제외·개별 행/상세 삭제 성공 시 처리 시작 시점의 visible 후보 순서와

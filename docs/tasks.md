@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-162**: durable stage events + restart lineage·attention — `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome) + handler 계측, `crawl_runs.restart_of_run_id` lineage·재시작 멱등, attention(open|acknowledged|superseded|resolved|none)+acknowledge API. §7 지표·T-172 게이트의 데이터 원천, T-180·T-181 선행. (PR-34, §10 B6, G6·G7)
 - [ ] **T-163**: 워커 레인 분리 — lane 컬럼+인덱스, `create_run` 호출 전수 표 기반 enqueue 매핑(restart lane 복사, run-now, `/jobs/poi-batch`, MCP harvest/deep research, transcript child 포함), parent lane·lineage 전파, 구 job id(`crawl-run-worker`) 제거. 선행: T-161·T-162 권장. (PR-04 개정판)
 - [ ] **T-164**: transcript_attempts 관측 — provider별 시도·순서·시각·duration·outcome·language·tool version durable 기록(성공 전 실패 보존), `TRANSCRIPT_PROVIDER_ORDER` 연결, yt-dlp 실제 언어 기록, 절단 로그. 수율 기준선 재설정(실측: no-whisper 3/27, whisper 11/27). (PR-11 개정판, G7)
 - [ ] **T-165**: raw grounding 게이트 — `evidence_quote`+segment ID를 raw 자막 기준으로 대조, `grounding_status` enum(verified_raw|unverified|missing|not_applicable|legacy_unknown) 저장, transcript 후보는 verified_raw 아니면 자동확정·export 차단. 선행: T-164. (PR-13 개정판, §10 B3, G4)
@@ -59,6 +58,17 @@
 
 ## 완료
 
+- [x] **T-162**: durable stage events + restart lineage·attention — `status_log_json`(4필드·80건 절단,
+  UI 계약) 불변 유지하면서 `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome, monotonic
+  실측) 별도 durable 기록을 신설했다. poi_batch 4단계(transcript_fetch/correction/poi_extract/geocode)
+  + 배치 총소요(`poi_batch_total`) 경계, harvest 2단계 계측(§7 지표·T-172 게이트 원천). `crawl_runs`에
+  `restart_of_run_id`(self FK, 재시작 lineage·FOR UPDATE 멱등 — 원본당 active 1)와 `attention`
+  (open|acknowledged|superseded|resolved, CHECK+partial index, 전이는 crawl_run_service 단독 소유),
+  `POST /runs/{id}/acknowledge` API, run 목록/상세 응답에 additive 노출(#185 envelope와 결합).
+  migration 20260713_0018. stage_reporter 주입으로 ETL의 crawl_run 비의존 유지. 2렌즈 적대적 리뷰:
+  BLOCKER/MAJOR 0, MINOR(G7 역할 표기·T-172 분모 경계 이벤트) 반영. 검증: 격리 DB backend pytest
+  405 passed(pre-existing 1건만 실패 — 나머지는 공유 DB flake 확정), alembic round-trip, envelope 회귀
+  어서션. G7 provider별 관측은 T-164 소관으로 명시. (2026-07-13, 로드맵 PR-34·§10 B6, G6·G7 데이터)
 - [x] **T-161**: LLM async/multimodal 게이트웨이 — 모든 LLM 호출을 `llm_client` 단일 계약으로 수렴
   (`generate/complete_json/complete_text/generate_multimodal` + `LlmResult` usage 실측). quota 예약
   우회 6곳(deep research·키워드 확장·검수 의견·카테고리·POI 추출·video_analysis 직접 호출)을 전부
