@@ -436,6 +436,9 @@ async def mark_done(
     # 재시작 run이 done으로 완료되면 원본의 attention을 resolved로 승격한다
     # (superseded여도 승격 — lineage 추적, T-162). 원본에 attention이 없던
     # 경우(성공 run의 단순 재실행)는 해소할 실패가 없으므로 그대로 둔다.
+    # 직속 부모(restart_of_run_id)만 resolve한다 — 재시작 체인의 심층 원본은
+    # 이미 superseded(배지 비표시)라 무해하며, leaf attempt 기준(B6) 최신 상태만
+    # 관리하면 충분하다.
     if run.restart_of_run_id is not None:
         origin = await session.get(CrawlRun, run.restart_of_run_id)
         if origin is not None and origin.attention is not None:
@@ -469,6 +472,10 @@ async def create_restart_run(
     새로 만들지 않고 그 run을 `(run, False)`로 반환한다(중복 클릭 UX — 409 아님).
     원본 행을 `FOR UPDATE`로 잠가 동시 중복 클릭도 직렬화한다.
     원본의 open/acknowledged attention은 superseded로 전이한다(최신 attempt 이관).
+
+    "원본당 active 재시작 1"은 앱 로직으로 보장한다(단일 실행자 + 이 함수가 유일한
+    재시작 생성 경로 + 원본 행 FOR UPDATE 직렬화). DB partial-unique index는 두지
+    않는다 — 위 보장으로 충분하고, 인덱스는 과잉이다.
     """
     # 멱등성 판정을 직렬화하기 위해 원본 행을 잠근다(identity map 무시하고 재조회).
     origin = await session.get(CrawlRun, origin_id, with_for_update=True)

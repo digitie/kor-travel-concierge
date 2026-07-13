@@ -287,12 +287,19 @@ async def test_restart_run_lineage_attention_and_idempotency(client, session):
     assert again.json()["job_id"] == new_job_id
     assert again.json()["created"] is False
 
-    # run 응답에 lineage·attention이 additive로 노출된다.
+    # 단건 응답에 lineage·attention이 additive로 노출된다.
     origin_view = (await client.get(f"/api/v1/runs/{job_id}")).json()
     assert origin_view["attention"] == "superseded"
     restart_view = (await client.get(f"/api/v1/runs/{new_job_id}")).json()
     assert restart_view["restart_of_run_id"] == str(job_id)
     assert restart_view["attention"] is None
+
+    # #185 envelope items에서도 attention·restart_of_run_id가 살아남는다.
+    listing = (await client.get("/api/v1/runs?limit=50")).json()
+    by_id = {r["job_id"]: r for r in listing["items"]}
+    assert by_id[str(job_id)]["attention"] == "superseded"
+    assert by_id[new_job_id]["restart_of_run_id"] == str(job_id)
+    assert by_id[new_job_id]["attention"] is None
 
     missing = await client.post("/api/v1/runs/999999/restart")
     assert missing.status_code == 404

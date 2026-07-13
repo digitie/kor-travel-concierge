@@ -2,8 +2,17 @@
 
 `status_log_json`은 UI 요약용 4필드(timestamp/level/message/progress)만 보존하고
 최근 80건으로 절단되므로(C7), 단계별 구조화 측정(stage/provider/elapsed_ms/outcome)은
-이 별도 테이블에 durable하게 저장한다. §7 "poi_batch 단계별 소요" 지표와 T-172
-자막 fetch 병렬화 게이트("자막 fetch가 배치 시간 30%+")의 유일한 데이터 원천이다.
+이 별도 테이블에 durable하게 저장한다.
+
+**이 계측의 역할**: §7 "poi_batch 단계별 소요" 지표와 T-172 게이트("자막 fetch가
+배치 시간 30%+")의 데이터 원천이다. 단계 소요(elapsed_ms)와 성공/실패/보류/건너뜀
+집계가 목적이다.
+
+**G7(provider별 시도 관측)은 이 계측의 범위가 아니다**: transcript_fetch 이벤트는
+성공 provider 1개(transcript_api|yt-dlp|whisper)만 남기고 실패 시 provider=None이라,
+"각 provider 시도·latency·outcome"(어느 provider가 몇 번 시도돼 실패/성공했는지)은
+재구성할 수 없다. G7의 provider별 시도 관측은 별도 `transcript_attempts` 테이블
+(T-164) 소관이다.
 """
 
 from __future__ import annotations

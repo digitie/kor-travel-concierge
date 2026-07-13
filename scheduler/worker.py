@@ -375,19 +375,43 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         return {"video_ids": video_ids, "processed_videos": 0, "skipped_done": True}
     runtime = await settings_service.get_llm_runtime(session)
     store = postprocess_service._make_media_store(get_settings())
-    summary = await batch_poi_service.process_video_batch(
-        session,
-        store,
-        videos=videos,
-        runtime=runtime,
-        transcript_fetcher=postprocess_service._default_transcript_fetcher,
-        status_reporter=report_status,
-        # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
-        # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.
-        stage_reporter=crawl_run_service.make_stage_reporter(session, run.id),
-        start_stage=start_stage,
-        default_category_code=default_category_code,
-    )
+    # 배치 총소요 경계(T-162, T-172 게이트 분모): 4개 세부 stage(fetch/correction/
+    # poi_extract/geocode)의 elapsed 합에는 stage 사이의 RustFS 업로드·commit·dedup
+    # 시간이 안 잡힌다. 그 합을 "배치 시간"으로 쓰면 자막 fetch 비율이 과대로 읽히므로,
+    # process_video_batch 전체 벽시계를 `poi_batch_total` 1건으로 남겨 T-172가 참
+    # 분모를 쓰게 한다. try/finally로 성공·보류·예외 모든 경로에서 기록한다.
+    total_started = time.monotonic()
+    total_started_wall = utcnow()
+    total_outcome = "success"
+    try:
+        summary = await batch_poi_service.process_video_batch(
+            session,
+            store,
+            videos=videos,
+            runtime=runtime,
+            transcript_fetcher=postprocess_service._default_transcript_fetcher,
+            status_reporter=report_status,
+            # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
+            # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.
+            stage_reporter=crawl_run_service.make_stage_reporter(session, run.id),
+            start_stage=start_stage,
+            default_category_code=default_category_code,
+        )
+        if summary.get("quota_deferred"):
+            total_outcome = "deferred"
+    except BaseException:
+        total_outcome = "failure"
+        raise
+    finally:
+        await crawl_run_service.record_stage_event(
+            session,
+            run.id,
+            stage="poi_batch_total",
+            outcome=total_outcome,
+            started_at=total_started_wall,
+            elapsed_ms=int((time.monotonic() - total_started) * 1000),
+            detail=f"videos={len(videos)}",
+        )
     # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
     # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).
     if not summary.get("quota_deferred"):

@@ -139,16 +139,18 @@ async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, sess
 
     assert result["processed_videos"] == 1
     events = await crawl_run_service.list_stage_events(session, run.id)
+    # poi_batch_total은 handler가 process_video_batch 반환 뒤(finally)에 기록하므로 맨 끝.
     assert [e.stage for e in events] == [
         "transcript_fetch",
         "correction",
         "poi_extract",
         "geocode",
+        "poi_batch_total",
     ]
     assert all(e.outcome == "success" for e in events)
     assert all(e.elapsed_ms is not None and e.elapsed_ms >= 0 for e in events)
     assert all(e.started_at is not None and e.finished_at is not None for e in events)
-    fetch, correction, extract, geocode = events
+    fetch, correction, extract, geocode, total = events
     assert fetch.provider == "transcript_api"
     assert fetch.item_ref == "v1"
     assert correction.item_ref == "v1"
@@ -156,6 +158,10 @@ async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, sess
     assert extract.attempt == 1
     assert "videos=1" in (extract.detail or "")
     assert "needs_review=1" in (geocode.detail or "")
+    # T-172 분모: 배치 총소요는 세부 stage 합 이상이어야 한다(사이 RustFS/commit 포함).
+    assert "videos=1" in (total.detail or "")
+    detail_sum = sum(e.elapsed_ms for e in (fetch, correction, extract, geocode))
+    assert total.elapsed_ms >= detail_sum
 
 
 async def test_poi_batch_handler_records_deferred_on_quota(monkeypatch, session):
@@ -176,9 +182,19 @@ async def test_poi_batch_handler_records_deferred_on_quota(monkeypatch, session)
 
     assert result["quota_deferred"] is True
     events = await crawl_run_service.list_stage_events(session, run.id)
-    assert [e.stage for e in events] == ["transcript_fetch", "correction", "poi_extract"]
-    assert events[-1].outcome == "deferred"
-    assert "쿼터" in (events[-1].detail or "")
+    assert [e.stage for e in events] == [
+        "transcript_fetch",
+        "correction",
+        "poi_extract",
+        "poi_batch_total",
+    ]
+    poi_extract = next(e for e in events if e.stage == "poi_extract")
+    assert poi_extract.outcome == "deferred"
+    assert "쿼터" in (poi_extract.detail or "")
+    # 보류 배치의 총소요도 deferred outcome으로 기록된다(T-172 분모, 비성공 표시).
+    total = events[-1]
+    assert total.stage == "poi_batch_total"
+    assert total.outcome == "deferred"
 
 
 async def test_poi_batch_handler_records_transcript_failure(monkeypatch, session):
@@ -200,9 +216,13 @@ async def test_poi_batch_handler_records_transcript_failure(monkeypatch, session
 
     assert result["failed_videos"] == 1
     events = await crawl_run_service.list_stage_events(session, run.id)
-    assert [e.stage for e in events] == ["transcript_fetch"]
+    # 자막 실패로 배치가 비면 세부 stage는 fetch 실패 1건뿐이지만, 총소요 경계는
+    # 여전히 기록된다(process_video_batch가 예외 없이 조기 return하므로 success).
+    assert [e.stage for e in events] == ["transcript_fetch", "poi_batch_total"]
     assert events[0].outcome == "failure"
     assert events[0].item_ref == "v3"
+    assert events[1].stage == "poi_batch_total"
+    assert events[1].outcome == "success"
 
 
 async def _claimed_harvest_run(session, target_id: str = "부산 맛집"):
