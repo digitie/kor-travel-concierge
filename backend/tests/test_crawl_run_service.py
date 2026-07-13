@@ -8,7 +8,14 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
-from ktc.models import CrawlRun, RunAttention, RunState, utcnow
+from ktc.models import (
+    LANE_BATCH,
+    LANE_INTERACTIVE,
+    CrawlRun,
+    RunAttention,
+    RunState,
+    utcnow,
+)
 from ktc.services import crawl_run_service as svc
 
 
@@ -295,3 +302,130 @@ async def test_acknowledge_attention_transitions(session):
         await svc.acknowledge_attention(session, done_run.id)
 
     assert await svc.acknowledge_attention(session, 999_999) is None
+
+
+# ---------------------------------------------------------------------------
+# T-163: 워커 레인 분리 (대화형/배치 claim 격리·lane 전파)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_run_defaults_to_batch_lane(session):
+    run = await svc.create_run(session, job_type="harvest", source="web")
+    assert run.lane == LANE_BATCH
+
+
+async def test_create_run_accepts_interactive_lane(session):
+    run = await svc.create_run(
+        session, job_type="poi_batch", source="web", lane=LANE_INTERACTIVE
+    )
+    assert run.lane == LANE_INTERACTIVE
+
+
+async def test_claim_lane_isolation_interactive_not_blocked_by_batch(session):
+    """더 오래된 batch pending이 있어도 interactive claim은 interactive를 가져온다."""
+    batch = await svc.create_run(
+        session, job_type="harvest", source="web", lane=LANE_BATCH
+    )
+    interactive = await svc.create_run(
+        session, job_type="poi_batch", source="web", lane=LANE_INTERACTIVE
+    )
+    assert batch.id < interactive.id  # batch가 FIFO상 먼저다
+
+    claimed = await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
+    assert claimed is not None
+    assert claimed.id == interactive.id
+    assert claimed.lane == LANE_INTERACTIVE
+    assert claimed.state == RunState.RUNNING
+
+    # batch 레인 claim은 남은 batch를 가져온다.
+    claimed_batch = await svc.claim_next_pending(session, lane=LANE_BATCH)
+    assert claimed_batch is not None
+    assert claimed_batch.id == batch.id
+
+
+async def test_claim_batch_lane_skips_interactive(session):
+    """batch 워커는 interactive pending을 집지 않는다(반대 격리)."""
+    interactive = await svc.create_run(
+        session, job_type="poi_batch", source="web", lane=LANE_INTERACTIVE
+    )
+    claimed = await svc.claim_next_pending(session, lane=LANE_BATCH)
+    assert claimed is None  # interactive만 있으므로 batch 레인은 빈손
+
+    # interactive 레인은 정상 claim.
+    claimed_interactive = await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
+    assert claimed_interactive is not None
+    assert claimed_interactive.id == interactive.id
+
+
+async def test_claim_interactive_not_starved_by_batch_backlog(session):
+    """배치 백로그가 쌓여 있어도 대화형 작업은 즉시 claim된다(공정성)."""
+    for _ in range(5):
+        await svc.create_run(session, job_type="harvest", source="web", lane=LANE_BATCH)
+    interactive = await svc.create_run(
+        session, job_type="deep_research", source="web", lane=LANE_INTERACTIVE
+    )
+    claimed = await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
+    assert claimed is not None
+    assert claimed.id == interactive.id
+
+
+async def test_claim_lane_none_is_fifo_across_lanes(session):
+    """lane 미지정 claim은 레인 무관 FIFO를 유지한다(하위호환)."""
+    batch = await svc.create_run(
+        session, job_type="harvest", source="web", lane=LANE_BATCH
+    )
+    await svc.create_run(
+        session, job_type="poi_batch", source="web", lane=LANE_INTERACTIVE
+    )
+    claimed = await svc.claim_next_pending(session)
+    assert claimed is not None
+    assert claimed.id == batch.id  # 가장 오래된 것(레인 무관)
+
+
+async def test_create_restart_run_copies_interactive_lane(session):
+    """대화형 원본 재시작은 interactive 레인을 복사한다(배치로 안 떨어짐, G6)."""
+    origin = await svc.create_run(
+        session,
+        job_type="deep_research",
+        source="web",
+        target_type="place",
+        target_id="7",
+        lane=LANE_INTERACTIVE,
+    )
+    await svc.mark_failed(session, origin.id, error="boom")
+
+    restart, created = await svc.create_restart_run(session, origin.id, source="web")
+    assert created is True
+    assert restart.lane == LANE_INTERACTIVE
+
+
+async def test_create_restart_run_copies_batch_lane(session):
+    origin = await svc.create_run(
+        session, job_type="harvest", source="web", lane=LANE_BATCH
+    )
+    await svc.mark_failed(session, origin.id, error="boom")
+
+    restart, created = await svc.create_restart_run(session, origin.id, source="web")
+    assert created is True
+    assert restart.lane == LANE_BATCH
+
+
+async def test_requeue_stale_preserves_lane(session):
+    """stale 재투입은 원 lane을 보존한다(재투입은 lane 무관 공통 로직)."""
+    run = await svc.create_run(
+        session, job_type="deep_research", source="web", lane=LANE_INTERACTIVE
+    )
+    await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
+    run_db = await svc.get_run(session, run.id)
+    run_db.heartbeat_at = utcnow() - timedelta(seconds=600)
+    await session.commit()
+
+    count = await svc.requeue_stale(session, threshold_seconds=300)
+    assert count == 1
+    requeued = await svc.get_run(session, run.id)
+    assert requeued.state == RunState.PENDING
+    assert requeued.lane == LANE_INTERACTIVE
+    # 재투입된 작업은 같은 interactive 레인에서 다시 claim된다.
+    claimed = await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
+    assert claimed is not None
+    assert claimed.id == run.id

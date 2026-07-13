@@ -305,6 +305,58 @@ async def test_restart_run_lineage_attention_and_idempotency(client, session):
     assert missing.status_code == 404
 
 
+async def test_lane_mapping_across_enqueue_points(client, session_factory):
+    """T-163: enqueue 지점별 lane 매핑과 목록/상세 응답의 lane 노출."""
+    from ktc.models import TravelPlace
+    from ktc.services import crawl_run_service
+
+    # harvest(수집)는 배치 레인.
+    harvest = await client.post(
+        "/api/v1/harvest", json={"query": "부산 야경", "max_videos": 3}
+    )
+    harvest_job = harvest.json()["job_id"]
+    harvest_view = (await client.get(f"/api/v1/runs/{harvest_job}")).json()
+    assert harvest_view["lane"] == "batch"
+
+    # 검수 재처리(reprocess)는 대화형 레인.
+    reprocess = await client.post(
+        "/api/v1/destinations/reprocess",
+        json={"video_ids": ["v-lane-1"], "start_stage": "transcript"},
+    )
+    reprocess_job = reprocess.json()["job_ids"][0]
+    reprocess_view = (await client.get(f"/api/v1/runs/{reprocess_job}")).json()
+    assert reprocess_view["lane"] == "interactive"
+
+    # Deep Research(사용자 직접 트리거)는 대화형 레인.
+    async with session_factory() as s:
+        place = TravelPlace(name="광안리", latitude=35.153, longitude=129.118)
+        s.add(place)
+        await s.commit()
+        await s.refresh(place)
+        place_id = place.place_id
+
+    research = await client.post(
+        f"/api/v1/destinations/{place_id}/deep-research", json={}
+    )
+    research_job = int(research.json()["job_id"])
+    research_view = (await client.get(f"/api/v1/runs/{research_job}")).json()
+    assert research_view["lane"] == "interactive"
+
+    # 재시작은 원본 lane을 복사한다(대화형 원본 → 대화형 재시작).
+    async with session_factory() as s:
+        await crawl_run_service.mark_failed(s, research_job, error="boom")
+    restart = await client.post(f"/api/v1/runs/{research_job}/restart")
+    restart_job = restart.json()["job_id"]
+    restart_view = (await client.get(f"/api/v1/runs/{restart_job}")).json()
+    assert restart_view["lane"] == "interactive"
+
+    # #185 envelope 목록에서도 lane이 노출된다.
+    listing = (await client.get("/api/v1/runs?limit=50")).json()
+    by_id = {r["job_id"]: r["lane"] for r in listing["items"]}
+    assert by_id[harvest_job] == "batch"
+    assert by_id[str(reprocess_job)] == "interactive"
+
+
 async def test_acknowledge_run_api(client, session):
     """T-162: open→acknowledged 전이 + 멱등 재호출 + 대상 없음 400/404."""
     from ktc.services import crawl_run_service
