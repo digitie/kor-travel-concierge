@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-07-13: T-160 — candidate soft delete 상태 모델 (B1)
+
+- **문제**: `FeatureExport.candidate_id`가 non-null·unique·NO ACTION FK라 후보 삭제·영상 제외가
+  ledger 행을 먼저 지웠고, tombstone은 잔존 ledger 행에만 발행 가능해 **이미 export된 feature가
+  downstream에서 조용히 잔존**했다(§10 B1 — Codex 리뷰 확정, 코드 검증 완료).
+- **구현**: soft delete 3필드+CHECK+검수 큐 partial index 3종(20260713_0016, up/down round-trip
+  검증), `soft_delete_candidates`(FOR UPDATE, 매핑 삭제·matched 해제·같은 트랜잭션
+  `tombstone_candidate_exports` — 새 sequence, export 안 된 후보는 무동작), 후보 삭제 라우트와
+  `exclude_video`(force)를 helper로 교체(ledger DELETE 코드 전소멸), 활성 조회 10여 곳
+  `deleted_at IS NULL` 전수 적용, `reopen` 엔드포인트(deleted/ignored→NEEDS_REVIEW+pending,
+  reviewed_by/at clear), sync에 tombstone freeze 가드(재발행 소음 제거).
+- **적대적 리뷰(PR 전)**: 정확성·회귀/B1·G1 명세/데이터 정합·migration 3렌즈 — BLOCKER 0.
+  MAJOR 2(B1 절차 5 회귀 테스트 3건 공백, MATCHED/USER_CORRECTED reopen 이연의 기록 의무)와
+  MINOR 6(공백 reason 500, soft delete 무락 race, provider identity 방어 필터, reopen 메타
+  clear, tombstone 재발행 소음, downgrade 경고)을 전부 머지 전 반영. T-174 리베이스 결합·인덱스
+  대체·dedup 재등장 정책은 3렌즈 모두 무결 판정(feature-export-api.md 계약 위반 없음).
+- **이연(T-184 명문화)**: MATCHED/USER_CORRECTED reopen(장소 정리 정책 포함), 영상 제외 undo.
+- **검증**: G1 통합 테스트(export→삭제→changes tombstone→전량 sync 2회 golden 재시작 등가→
+  reopen 409 재확인→재확정 후 같은 export_id upsert 재발행→cursor 단조·중복 없음), 영향 테스트
+  40+42 passed, backend 전체 pytest pre-existing 2건 외 실패 0, `git diff --check` 통과.
+
 ## 2026-07-13: T-175 — 공개 API 키 read/admin scope 분리
 
 - **DB·인증 경계**: `public_api_keys.scope`에 `read|admin` NOT NULL·CHECK를 추가하고 기존
