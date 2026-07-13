@@ -34,7 +34,6 @@ from ktc.etl.transcript import (
 from ktc.models import (
     CrawlStatus,
     ExtractedPlaceCandidate,
-    MatchStatus,
     TravelPlace,
     YoutubeVideo,
 )
@@ -49,7 +48,7 @@ TranscriptFetcher = Callable[
 AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
 GeocodeDecider = Callable[[ExtractedPlaceCandidate], Awaitable[GeocodeDecision]]
 GeocodeApplier = Callable[
-    [AsyncSession, ExtractedPlaceCandidate, GeocodeDecision],
+    [AsyncSession, ExtractedPlaceCandidate, GeocodeDecision, int],
     Awaitable[TravelPlace | None],
 ]
 
@@ -86,6 +85,7 @@ async def process_harvest_videos(
         "created_candidates": 0,
         "matched_places": 0,
         "needs_review_candidates": 0,
+        "skipped_state_changed_candidates": 0,
         "storage_mode": _storage_mode(resolved_store),
     }
     if not videos:
@@ -185,7 +185,8 @@ async def process_harvest_videos(
             "장소 추출 후처리를 완료했습니다. "
             f"후보 {summary['created_candidates']}개, "
             f"확정 장소 {summary['matched_places']}개, "
-            f"검수 필요 {summary['needs_review_candidates']}개입니다.",
+            f"검수 필요 {summary['needs_review_candidates']}개, "
+            f"사용자 처리로 건너뜀 {summary['skipped_state_changed_candidates']}개입니다.",
             0.89,
         )
         return summary
@@ -201,7 +202,35 @@ async def _apply_geocoding(
 ) -> bool:
     geocoded_any = False
     for candidate in candidates:
+        snapshot = await geocode_service.read_candidate_geocode_snapshot(
+            session, candidate.id
+        )
+        # 후보/xmin SELECT가 연 read transaction과 connection을 provider 대기 전에 닫는다.
+        await session.commit()
+        if snapshot is None or not snapshot.eligible:
+            summary["skipped_state_changed_candidates"] = (
+                summary.get("skipped_state_changed_candidates", 0) + 1
+            )
+            await _report(
+                status_reporter,
+                f"{candidate.ai_place_name}는 이미 처리되어 지오코딩을 건너뜁니다.",
+                None,
+            )
+            continue
+
         if context.decider is None:
+            if not await geocode_service.candidate_geocode_snapshot_is_current(
+                session, candidate.id, snapshot.version
+            ):
+                summary["skipped_state_changed_candidates"] = (
+                    summary.get("skipped_state_changed_candidates", 0) + 1
+                )
+                await _report(
+                    status_reporter,
+                    f"{candidate.ai_place_name}는 이미 처리되어 지오코딩을 건너뜁니다.",
+                    None,
+                )
+                continue
             summary["needs_review_candidates"] += 1
             await _report(
                 status_reporter,
@@ -212,8 +241,23 @@ async def _apply_geocoding(
 
         query = _candidate_query(candidate)
         await _report(status_reporter, f"{candidate.ai_place_name}의 위치를 보정 중입니다.", None)
+        # reporter 구현이 같은 DB를 썼더라도 provider 호출 직전 connection을 반환한다.
+        await session.commit()
         decision = await context.decider(candidate)
-        place = await context.applier(session, candidate, decision)
+        try:
+            place = await context.applier(
+                session, candidate, decision, snapshot.version
+            )
+        except geocode_service.CandidateStateChangedError:
+            summary["skipped_state_changed_candidates"] = (
+                summary.get("skipped_state_changed_candidates", 0) + 1
+            )
+            await _report(
+                status_reporter,
+                f"{candidate.ai_place_name}는 이미 처리되어 지오코딩 적용을 건너뜁니다.",
+                None,
+            )
+            continue
         if place is None:
             summary["needs_review_candidates"] += 1
             await _report(
@@ -244,12 +288,18 @@ async def geocode_candidates(
     `process_harvest_videos`의 지오코딩 단계를 후보 목록 단독으로 재사용한다. 공급자 키가
     없으면 모두 검수 큐에 남긴다. 8자리 카테고리 코드는 후보 evidence 값을 그대로 쓴다.
     """
-    summary: dict[str, Any] = {"matched_places": 0, "needs_review_candidates": 0}
+    summary: dict[str, Any] = {
+        "matched_places": 0,
+        "needs_review_candidates": 0,
+        "skipped_state_changed_candidates": 0,
+    }
     if not candidates:
         return summary
     settings = get_settings()
     vworld_key = await settings_service.get_secret(session, "vworld_service_key")
     kakao_key = await settings_service.get_secret(session, "kakao_rest_api_key")
+    # secret SELECT가 연 transaction/connection을 provider HTTP 대기 전에 반환한다.
+    await session.commit()
     async with httpx.AsyncClient(timeout=30.0) as http_client:
         context = await _make_geocode_context(
             http_client,
@@ -453,12 +503,14 @@ def _default_geocode_applier(vworld_client: AsyncVworldClient | None) -> Geocode
         session: AsyncSession,
         candidate: ExtractedPlaceCandidate,
         decision: GeocodeDecision,
+        expected_candidate_version: int,
     ) -> TravelPlace | None:
         return await geocode_service.apply_geocode_to_candidate(
             session,
             candidate,
             decision,
             vworld=vworld_client,
+            expected_candidate_version=expected_candidate_version,
         )
 
     return apply

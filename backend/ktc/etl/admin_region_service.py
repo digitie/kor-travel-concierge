@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import BigInteger, literal_column, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ktc.core.config import Settings, get_settings
-from ktc.models import TravelPlace, utcnow
+from ktc.models import AuditLog, TravelPlace, utcnow
 
 ADMIN_CODE_SOURCE = "kor-travel-geo-v2"
+_PLACE_XMIN = literal_column("travel_places.xmin::text::bigint", type_=BigInteger)
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,192 @@ class AdminRegion:
     sigungu_name: str | None
     legal_dong_code: str | None
     legal_dong_name: str | None
+
+
+@dataclass(frozen=True)
+class AdminEnrichmentSnapshot:
+    """외부 admin 조회 요청과 늦은 응답의 안전한 적용을 잇는 장소 snapshot."""
+
+    place_id: int
+    version: int
+    latitude: float
+    longitude: float
+    sigungu_code: str | None
+    sigungu_name: str | None
+    legal_dong_code: str | None
+    legal_dong_name: str | None
+    admin_code_source: str | None
+    admin_code_updated_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AdminEnrichmentGuard:
+    """MCP pending owner만 외부 조회 결과를 적용하도록 묶는 fencing token."""
+
+    audit_log_id: int
+    pending_owner: str
+
+
+def _admin_snapshot(place: TravelPlace, version: int) -> AdminEnrichmentSnapshot:
+    return AdminEnrichmentSnapshot(
+        place_id=place.place_id,
+        version=version,
+        latitude=place.latitude,
+        longitude=place.longitude,
+        sigungu_code=place.sigungu_code,
+        sigungu_name=place.sigungu_name,
+        legal_dong_code=place.legal_dong_code,
+        legal_dong_name=place.legal_dong_name,
+        admin_code_source=place.admin_code_source,
+        admin_code_updated_at=place.admin_code_updated_at,
+    )
+
+
+async def resolve_admin_region(
+    snapshot: AdminEnrichmentSnapshot,
+    *,
+    base_url: str,
+    api_key: str,
+    http_client: httpx.AsyncClient | None = None,
+) -> AdminRegion | None:
+    """DB session 없이 장소 snapshot의 행정구역을 외부 API에서 조회한다."""
+
+    async def _fetch(client: httpx.AsyncClient) -> AdminRegion | None:
+        return await fetch_admin_region(
+            client,
+            lat=snapshot.latitude,
+            lon=snapshot.longitude,
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    if http_client is not None:
+        return await _fetch(http_client)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        return await _fetch(client)
+
+
+async def enrich_place_admin_codes_isolated(
+    session_factory: async_sessionmaker[AsyncSession],
+    place_id: int,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+    settings: Settings | None = None,
+    apply_guard: AdminEnrichmentGuard | None = None,
+) -> bool:
+    """별도 짧은 DB session들 사이에서 admin HTTP를 수행하고 조건부 적용한다.
+
+    place/secret SELECT transaction은 HTTP 전에 끝낸다. 응답 적용 시 최신 장소를
+    `FOR UPDATE`로 다시 읽어 요청 xmin·좌표·기존 admin 필드가 모두 그대로일 때만 쓴다.
+    모든 실패는 이 격리 session 안에서 흡수해 core 장소 확정과 호출자 session을 보존한다.
+    """
+    resolved_settings = settings or get_settings()
+    base_url = resolved_settings.KOR_TRAVEL_GEO_V2_BASE_URL.strip()
+    if not _configured(base_url):
+        return False
+
+    try:
+        from ktc.services import settings_service  # 지연 import: 순환 회피
+
+        async with session_factory() as read_session:
+            row = (
+                await read_session.execute(
+                    select(TravelPlace, _PLACE_XMIN).where(
+                        TravelPlace.place_id == place_id
+                    )
+                )
+            ).one_or_none()
+            if row is None:
+                await read_session.commit()
+                return False
+            place, version = row
+            snapshot = _admin_snapshot(place, int(version))
+            if snapshot.sigungu_code and snapshot.legal_dong_code:
+                await read_session.commit()
+                return False
+            if apply_guard is not None and not await _admin_guard_matches(
+                read_session,
+                apply_guard,
+            ):
+                await read_session.commit()
+                return False
+            api_key = await settings_service.get_secret(
+                read_session, "kor_travel_geo_v2_api_key"
+            )
+            # place/secret SELECT가 연 transaction과 connection을 HTTP 전에 반환한다.
+            await read_session.commit()
+        if not _configured(api_key):
+            return False
+
+        region = await resolve_admin_region(
+            snapshot,
+            base_url=base_url,
+            api_key=api_key,
+            http_client=http_client,
+        )
+        if region is None:
+            return False
+
+        async with session_factory() as write_session:
+            row = (
+                await write_session.execute(
+                    select(TravelPlace, _PLACE_XMIN)
+                    .where(TravelPlace.place_id == place_id)
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if row is None:
+                await write_session.commit()
+                return False
+            current, current_version = row
+            if _admin_snapshot(current, int(current_version)) != snapshot:
+                await write_session.commit()
+                return False
+            # finalizer와 같은 place -> audit lock 순서를 지킨다. 외부 HTTP 뒤에도
+            # pending owner가 그대로인 경우에만 늦은 응답을 실제 장소에 적용한다.
+            if apply_guard is not None and not await _admin_guard_matches(
+                write_session,
+                apply_guard,
+                for_update=True,
+            ):
+                await write_session.commit()
+                return False
+            apply_admin_region(current, region)
+            await write_session.commit()
+            return True
+    except Exception:
+        return False
+
+
+async def _admin_guard_matches(
+    session: AsyncSession,
+    guard: AdminEnrichmentGuard,
+    *,
+    for_update: bool = False,
+) -> bool:
+    stmt = (
+        select(AuditLog)
+        .where(AuditLog.id == guard.audit_log_id)
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    audit_log = (await session.execute(stmt)).scalar_one_or_none()
+    if audit_log is None or not audit_log.payload_json:
+        return False
+    try:
+        payload = json.loads(audit_log.payload_json)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return (
+        audit_log.idempotency_key is not None
+        and audit_log.idempotency_state == "pending"
+        and payload.get("idempotency_key") == audit_log.idempotency_key
+        and payload.get("idempotency_state") == audit_log.idempotency_state
+        and payload.get("pending_owner") == guard.pending_owner
+    )
 
 
 async def enrich_place_admin_codes(

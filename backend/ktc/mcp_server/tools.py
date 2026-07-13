@@ -9,15 +9,105 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Literal
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ktc.models import LANE_INTERACTIVE, MediaAsset, RunSource
+from ktc.models import AuditLog, LANE_INTERACTIVE, MediaAsset, RunSource, TravelPlace
 from ktc.services import audit_service, crawl_run_service, place_service
+
+
+_IDEMPOTENCY_PENDING = "pending"
+_IDEMPOTENCY_FINAL = "final"
+_IDEMPOTENCY_PENDING_CODE = "idempotency_pending"
+_IDEMPOTENCY_PENDING_LEASE_SECONDS = 900
+_IDEMPOTENCY_PENDING_LEASE_TOLERANCE_SECONDS = 60
+IdempotencyKey = Annotated[str, Field(min_length=8, max_length=255)]
+
+
+class _IdempotencyOwnershipLost(RuntimeError):
+    """만료된 pending을 다른 요청이 인계해 기존 owner가 확정 권한을 잃었다."""
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingIdempotencyClaim:
+    owner: str
+    postprocess_place_id: int | None
+
+
+def _new_pending_lease() -> tuple[str, str]:
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=_IDEMPOTENCY_PENDING_LEASE_SECONDS
+    )
+    return str(uuid4()), expires_at.isoformat()
+
+
+def _pending_lease_expired(payload: dict[str, Any]) -> bool:
+    """pending lease가 만료됐거나 손상돼 안전한 owner 인계가 필요한지 판정한다.
+
+    pending core write는 이미 audit과 함께 commit됐고 재시도는 owner fencing 아래
+    authoritative domain 상태만 다시 구성한다. 따라서 누락·손상 lease를 영구 active로
+    두는 것보다 새 owner에게 인계하는 편이 안전하다. 정상 생성 범위를 크게 벗어난 미래
+    시각도 손상으로 보아 clock/입력 오류가 같은 key를 영구 점유하지 못하게 한다.
+    """
+    raw_expires_at = payload.get("lease_expires_at")
+    if not isinstance(raw_expires_at, str):
+        return True
+    try:
+        expires_at = datetime.fromisoformat(raw_expires_at.replace("Z", "+00:00"))
+        if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+            return True
+        expires_at_utc = expires_at.astimezone(timezone.utc)
+        now = datetime.now(timezone.utc)
+        latest_valid_expiry = now + timedelta(
+            seconds=(
+                _IDEMPOTENCY_PENDING_LEASE_SECONDS
+                + _IDEMPOTENCY_PENDING_LEASE_TOLERANCE_SECONDS
+            )
+        )
+        return expires_at_utc <= now or expires_at_utc > latest_valid_expiry
+    except (ValueError, OverflowError, OSError):
+        return True
+
+
+def _load_audit_payload(audit_log: AuditLog) -> dict[str, Any]:
+    if not audit_log.payload_json:
+        raise ValueError("MCP idempotency audit payload가 비어 있다")
+    try:
+        payload = json.loads(audit_log.payload_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("MCP idempotency audit payload JSON이 손상됐다") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("MCP idempotency audit payload는 JSON object여야 한다")
+    return payload
+
+
+def _audit_idempotency_state(
+    audit_log: AuditLog,
+    payload: dict[str, Any],
+    *,
+    idempotency_key: str,
+) -> Literal["pending", "final"]:
+    if audit_log.idempotency_key != idempotency_key:
+        raise ValueError("MCP audit log의 idempotency_key column이 일치하지 않는다")
+    state = audit_log.idempotency_state
+    if state not in {_IDEMPOTENCY_PENDING, _IDEMPOTENCY_FINAL}:
+        raise ValueError("MCP audit log의 idempotency_state column이 올바르지 않다")
+    payload_state = payload.get("idempotency_state", _IDEMPOTENCY_FINAL)
+    if (
+        payload.get("idempotency_key") != idempotency_key
+        or payload_state != state
+    ):
+        raise ValueError("MCP audit log의 전용 column과 payload가 일치하지 않는다")
+    return (
+        _IDEMPOTENCY_PENDING
+        if state == _IDEMPOTENCY_PENDING
+        else _IDEMPOTENCY_FINAL
+    )
 
 
 READ_TOOLS: list[dict[str, str]] = [
@@ -70,7 +160,7 @@ class StrictModel(BaseModel):
 
 
 class HarvestTravelDestinationsInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     query: str | None = Field(default=None, min_length=1)
     channel_id: str | None = Field(default=None, min_length=1)
     playlist_id: str | None = Field(default=None, min_length=1)
@@ -116,7 +206,7 @@ class PlaceDetailInput(StrictModel):
 
 
 class CorrectPlaceInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     place_id: int = Field(gt=0)
     name: str | None = Field(default=None, min_length=1)
     description: str | None = None
@@ -142,7 +232,7 @@ class CorrectPlaceInput(StrictModel):
 
 
 class MergePlacesInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     source_place_id: int = Field(gt=0)
     target_place_id: int = Field(gt=0)
     review_note: str | None = None
@@ -155,14 +245,14 @@ class MergePlacesInput(StrictModel):
 
 
 class TriggerDeepResearchInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     place_id: int = Field(gt=0)
     prompt: str | None = None
     max_sources: int = Field(default=8, ge=1, le=20)
 
 
 class ReviewUnmatchedPlaceInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     candidate_id: int = Field(gt=0)
     reviewed_by: str = Field(default="mcp", min_length=1)
     review_note: str | None = None
@@ -194,7 +284,7 @@ class SelectedPlaceHitInput(StrictModel):
 
 
 class ResolvePlaceCandidateInput(StrictModel):
-    idempotency_key: str = Field(min_length=8)
+    idempotency_key: IdempotencyKey
     candidate_id: int = Field(gt=0)
     action: Literal["match_existing", "create_place", "ignore"]
     reviewed_by: str = Field(default="mcp", min_length=1)
@@ -259,6 +349,9 @@ class ToolRuntime:
         action = "harvest.create"
         request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
@@ -377,17 +470,60 @@ class ToolRuntime:
         action = "place.correct"
         request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
             if cached is not None:
+                if cached.get("code") == _IDEMPOTENCY_PENDING_CODE:
+                    if not cached.get("recoverable", False):
+                        return cached
+                    claim = await self._claim_pending_idempotency(
+                        session,
+                        audit_log_id=int(cached["audit_log_id"]),
+                        idempotency_key=payload.idempotency_key,
+                        request=request,
+                    )
+                    if isinstance(claim, dict):
+                        return claim
+                    if claim.postprocess_place_id is not None:
+                        await place_service.enrich_place_admin_codes_postcommit(
+                            session,
+                            place_id=claim.postprocess_place_id,
+                            audit_log_id=int(cached["audit_log_id"]),
+                            pending_owner=claim.owner,
+                        )
+                    try:
+                        return await self._finalize_correct_idempotency(
+                            session,
+                            audit_log_id=int(cached["audit_log_id"]),
+                            idempotency_key=payload.idempotency_key,
+                            request=request,
+                            place_id=payload.place_id,
+                            pending_owner=claim.owner,
+                            replayed=True,
+                        )
+                    except _IdempotencyOwnershipLost:
+                        return await self._result_after_ownership_loss(
+                            session,
+                            action=action,
+                            idempotency_key=payload.idempotency_key,
+                            request=request,
+                        )
                 return cached
             updates = _non_none_update_fields(payload, exclude={"idempotency_key", "place_id"})
             place = await place_service.correct_place(
                 session, place_id=payload.place_id, updates=updates, commit=False
             )
+            should_enrich_admin = (
+                ("latitude" in updates or "longitude" in updates)
+                and place.is_geocoded
+            )
+            pending_owner, lease_expires_at = _new_pending_lease()
             result = {"place": _serialize_place(place), "idempotent": False}
-            await self._record_write(
+            audit_log = await self._record_write(
                 session,
                 action=action,
                 idempotency_key=payload.idempotency_key,
@@ -395,8 +531,35 @@ class ToolRuntime:
                 target_id=str(place.place_id),
                 request=request,
                 result=result,
+                idempotency_state=_IDEMPOTENCY_PENDING,
+                pending_owner=pending_owner,
+                lease_expires_at=lease_expires_at,
+                postprocess_place_id=(place.place_id if should_enrich_admin else None),
             )
-            return result
+            if should_enrich_admin:
+                await place_service.enrich_place_admin_codes_postcommit(
+                    session,
+                    place_id=place.place_id,
+                    audit_log_id=audit_log.id,
+                    pending_owner=pending_owner,
+                )
+            try:
+                return await self._finalize_correct_idempotency(
+                    session,
+                    audit_log_id=audit_log.id,
+                    idempotency_key=payload.idempotency_key,
+                    request=request,
+                    place_id=payload.place_id,
+                    pending_owner=pending_owner,
+                    replayed=False,
+                )
+            except _IdempotencyOwnershipLost:
+                return await self._result_after_ownership_loss(
+                    session,
+                    action=action,
+                    idempotency_key=payload.idempotency_key,
+                    request=request,
+                )
 
     async def merge_places(self, **kwargs: Any) -> dict[str, Any]:
         payload = MergePlacesInput.model_validate(kwargs)
@@ -404,6 +567,9 @@ class ToolRuntime:
         action = "place.merge"
         request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
@@ -437,6 +603,9 @@ class ToolRuntime:
         action = "deep_research.create"
         request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
@@ -480,6 +649,9 @@ class ToolRuntime:
         action = "candidate.review"
         request = payload.model_dump(exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
@@ -510,10 +682,48 @@ class ToolRuntime:
         action = "candidate.resolve"
         request = payload.model_dump(mode="json", exclude_none=True)
         async with self.session_factory() as session:
+            await self._lock_idempotency_key(
+                session, action=action, idempotency_key=payload.idempotency_key
+            )
             cached = await self._idempotent_result(
                 session, action, payload.idempotency_key, request=request
             )
             if cached is not None:
+                if cached.get("code") == _IDEMPOTENCY_PENDING_CODE:
+                    if not cached.get("recoverable", False):
+                        return cached
+                    claim = await self._claim_pending_idempotency(
+                        session,
+                        audit_log_id=int(cached["audit_log_id"]),
+                        idempotency_key=payload.idempotency_key,
+                        request=request,
+                    )
+                    if isinstance(claim, dict):
+                        return claim
+                    if claim.postprocess_place_id is not None:
+                        await place_service.enrich_place_admin_codes_postcommit(
+                            session,
+                            place_id=claim.postprocess_place_id,
+                            audit_log_id=int(cached["audit_log_id"]),
+                            pending_owner=claim.owner,
+                        )
+                    try:
+                        return await self._finalize_resolve_idempotency(
+                            session,
+                            audit_log_id=int(cached["audit_log_id"]),
+                            idempotency_key=payload.idempotency_key,
+                            request=request,
+                            candidate_id=payload.candidate_id,
+                            pending_owner=claim.owner,
+                            replayed=True,
+                        )
+                    except _IdempotencyOwnershipLost:
+                        return await self._result_after_ownership_loss(
+                            session,
+                            action=action,
+                            idempotency_key=payload.idempotency_key,
+                            request=request,
+                        )
                 return cached
             place_data = None
             if payload.action == "create_place":
@@ -560,7 +770,8 @@ class ToolRuntime:
                 "mapping": _serialize_mapping(mapping, None, {}) if mapping else None,
                 "idempotent": False,
             }
-            await self._record_write(
+            pending_owner, lease_expires_at = _new_pending_lease()
+            audit_log = await self._record_write(
                 session,
                 action=action,
                 idempotency_key=payload.idempotency_key,
@@ -568,12 +779,68 @@ class ToolRuntime:
                 target_id=str(payload.candidate_id),
                 request=request,
                 result=result,
+                idempotency_state=_IDEMPOTENCY_PENDING,
+                pending_owner=pending_owner,
+                lease_expires_at=lease_expires_at,
+                postprocess_place_id=(place.place_id if place is not None else None),
             )
-            return result
+            if place is not None:
+                await place_service.enrich_place_admin_codes_postcommit(
+                    session,
+                    place_id=place.place_id,
+                    audit_log_id=audit_log.id,
+                    pending_owner=pending_owner,
+                )
+            try:
+                return await self._finalize_resolve_idempotency(
+                    session,
+                    audit_log_id=audit_log.id,
+                    idempotency_key=payload.idempotency_key,
+                    request=request,
+                    candidate_id=payload.candidate_id,
+                    pending_owner=pending_owner,
+                    replayed=False,
+                )
+            except _IdempotencyOwnershipLost:
+                return await self._result_after_ownership_loss(
+                    session,
+                    action=action,
+                    idempotency_key=payload.idempotency_key,
+                    request=request,
+                )
 
     def _ensure_write_enabled(self) -> None:
         if not self.write_enabled:
             raise PermissionError("MCP 쓰기 도구가 비활성화되어 있다")
+
+    async def _lock_idempotency_key(
+        self,
+        session: AsyncSession,
+        *,
+        action: str,
+        idempotency_key: str,
+    ) -> None:
+        """동일 action/key의 최초 조회와 audit commit 사이를 직렬화한다."""
+        lock_name = f"mcp:{action}:{idempotency_key}"
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(lock_name, 0))
+            )
+        )
+
+    @staticmethod
+    def _pending_idempotency_result(
+        audit_log_id: int,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "status": _IDEMPOTENCY_PENDING,
+            "code": _IDEMPOTENCY_PENDING_CODE,
+            "idempotent": True,
+            "audit_log_id": audit_log_id,
+            "recoverable": _pending_lease_expired(payload),
+            "lease_expires_at": payload.get("lease_expires_at"),
+        }
 
     async def _idempotent_result(
         self,
@@ -589,16 +856,103 @@ class ToolRuntime:
             action=action,
             idempotency_key=idempotency_key,
         )
-        if log is None or not log.payload_json:
+        if log is None:
             return None
-        payload = json.loads(log.payload_json)
+        payload = _load_audit_payload(log)
         previous_request = payload.get("request") or {}
         if previous_request != request:
             raise ValueError("같은 idempotency_key로 다른 요청 파라미터를 사용할 수 없다")
+        state = _audit_idempotency_state(
+            log,
+            payload,
+            idempotency_key=idempotency_key,
+        )
+        if state == _IDEMPOTENCY_PENDING:
+            return self._pending_idempotency_result(log.id, payload)
+        if state != _IDEMPOTENCY_FINAL:
+            raise ValueError("알 수 없는 MCP idempotency 상태다")
         result = dict(payload.get("result") or {})
         result["idempotent"] = True
         result["audit_log_id"] = log.id
         return result
+
+    async def _claim_pending_idempotency(
+        self,
+        session: AsyncSession,
+        *,
+        audit_log_id: int,
+        idempotency_key: str,
+        request: dict[str, Any],
+    ) -> _PendingIdempotencyClaim | dict[str, Any]:
+        """만료된 pending을 audit row lock 아래 새 owner에게 원자 인계한다."""
+        audit_log = (
+            await session.execute(
+                select(AuditLog)
+                .where(AuditLog.id == audit_log_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if audit_log is None:
+            raise ValueError("pending MCP audit log를 찾을 수 없다")
+        payload = _load_audit_payload(audit_log)
+        if (payload.get("request") or {}) != request:
+            raise ValueError("MCP audit log의 요청 파라미터가 일치하지 않는다")
+
+        state = _audit_idempotency_state(
+            audit_log,
+            payload,
+            idempotency_key=idempotency_key,
+        )
+        if state == _IDEMPOTENCY_FINAL:
+            result = dict(payload.get("result") or {})
+            result["idempotent"] = True
+            result["audit_log_id"] = audit_log.id
+            await session.commit()
+            return result
+        if state != _IDEMPOTENCY_PENDING:
+            raise ValueError("알 수 없는 MCP idempotency 상태다")
+        if not _pending_lease_expired(payload):
+            result = self._pending_idempotency_result(audit_log.id, payload)
+            await session.commit()
+            return result
+
+        postprocess_place_id = payload.get("postprocess_place_id")
+        if postprocess_place_id is not None and (
+            isinstance(postprocess_place_id, bool)
+            or not isinstance(postprocess_place_id, int)
+            or postprocess_place_id <= 0
+        ):
+            raise ValueError("pending MCP audit log의 후처리 장소 ID가 올바르지 않다")
+        pending_owner, lease_expires_at = _new_pending_lease()
+        payload["pending_owner"] = pending_owner
+        payload["lease_expires_at"] = lease_expires_at
+        audit_log.payload_json = json.dumps(payload, ensure_ascii=False)
+        await session.commit()
+        return _PendingIdempotencyClaim(
+            owner=pending_owner,
+            postprocess_place_id=postprocess_place_id,
+        )
+
+    async def _result_after_ownership_loss(
+        self,
+        session: AsyncSession,
+        *,
+        action: str,
+        idempotency_key: str,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """owner를 잃은 호출자는 현재 pending/final만 다시 읽고 fail-closed한다."""
+        await session.rollback()
+        current = await self._idempotent_result(
+            session,
+            action,
+            idempotency_key,
+            request=request,
+        )
+        if current is None:
+            raise ValueError("MCP idempotency 상태를 다시 읽을 수 없다")
+        return current
 
     async def _record_write(
         self,
@@ -610,19 +964,172 @@ class ToolRuntime:
         target_id: str,
         request: dict[str, Any],
         result: dict[str, Any],
-    ) -> None:
-        await audit_service.record(
+        idempotency_state: Literal["pending", "final"] = _IDEMPOTENCY_FINAL,
+        pending_owner: str | None = None,
+        lease_expires_at: str | None = None,
+        postprocess_place_id: int | None = None,
+    ) -> AuditLog:
+        audit_payload = {
+            "idempotency_key": idempotency_key,
+            "idempotency_state": idempotency_state,
+            "request": request,
+            "result": result,
+        }
+        if idempotency_state == _IDEMPOTENCY_PENDING:
+            if not pending_owner or not lease_expires_at:
+                raise ValueError("pending MCP audit에는 owner와 lease가 필요하다")
+            audit_payload.update(
+                {
+                    "pending_owner": pending_owner,
+                    "lease_expires_at": lease_expires_at,
+                    "postprocess_place_id": postprocess_place_id,
+                }
+            )
+        elif idempotency_state != _IDEMPOTENCY_FINAL:
+            raise ValueError("알 수 없는 MCP idempotency 상태다")
+        return await audit_service.record(
             session,
             actor_type="mcp",
             action=action,
             target_type=target_type,
             target_id=target_id,
-            payload={
-                "idempotency_key": idempotency_key,
-                "request": request,
-                "result": result,
-            },
+            payload=audit_payload,
+            idempotency_key=idempotency_key,
+            idempotency_state=idempotency_state,
         )
+
+    async def _finalize_correct_idempotency(
+        self,
+        session: AsyncSession,
+        *,
+        audit_log_id: int,
+        idempotency_key: str,
+        request: dict[str, Any],
+        place_id: int,
+        pending_owner: str,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        """최신 장소와 audit final을 같은 place -> audit transaction으로 확정한다."""
+        place = (
+            await session.execute(
+                select(TravelPlace)
+                .where(TravelPlace.place_id == place_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        result = {
+            "place": _serialize_place(place) if place else None,
+            "idempotent": False,
+        }
+        return await self._finalize_locked_idempotency_result(
+            session,
+            audit_log_id=audit_log_id,
+            idempotency_key=idempotency_key,
+            request=request,
+            result=result,
+            pending_owner=pending_owner,
+            replayed=replayed,
+        )
+
+    async def _finalize_resolve_idempotency(
+        self,
+        session: AsyncSession,
+        *,
+        audit_log_id: int,
+        idempotency_key: str,
+        request: dict[str, Any],
+        candidate_id: int,
+        pending_owner: str,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        """최신 후보 연결과 audit final을 같은 candidate -> place -> audit transaction으로 확정한다."""
+        candidate, place, mapping = (
+            await place_service.authoritative_candidate_resolution(
+                session,
+                candidate_id=candidate_id,
+                commit=False,
+            )
+        )
+        result = {
+            "candidate": _serialize_candidate(candidate),
+            "place": _serialize_place(place) if place else None,
+            "mapping": _serialize_mapping(mapping, None, {}) if mapping else None,
+            "idempotent": False,
+        }
+        return await self._finalize_locked_idempotency_result(
+            session,
+            audit_log_id=audit_log_id,
+            idempotency_key=idempotency_key,
+            request=request,
+            result=result,
+            pending_owner=pending_owner,
+            replayed=replayed,
+        )
+
+    async def _finalize_locked_idempotency_result(
+        self,
+        session: AsyncSession,
+        *,
+        audit_log_id: int,
+        idempotency_key: str,
+        request: dict[str, Any],
+        result: dict[str, Any],
+        pending_owner: str,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        """domain lock을 유지한 채 audit pending을 final로 원자 전환한다."""
+        audit_log = (
+            await session.execute(
+                select(AuditLog)
+                .where(AuditLog.id == audit_log_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if audit_log is None:
+            raise ValueError("pending MCP audit log를 찾을 수 없다")
+        payload = _load_audit_payload(audit_log)
+        if (payload.get("request") or {}) != request:
+            raise ValueError("MCP audit log의 요청 파라미터가 일치하지 않는다")
+
+        state = _audit_idempotency_state(
+            audit_log,
+            payload,
+            idempotency_key=idempotency_key,
+        )
+        if state == _IDEMPOTENCY_FINAL:
+            stored_result = dict(payload.get("result") or {})
+            effective_replayed = True
+        elif state == _IDEMPOTENCY_PENDING:
+            if payload.get("pending_owner") != pending_owner:
+                raise _IdempotencyOwnershipLost(
+                    "pending MCP audit log의 owner가 다른 요청으로 변경됐다"
+                )
+            stored_result = dict(result)
+            stored_result["idempotent"] = False
+            audit_log.payload_json = json.dumps(
+                {
+                    "idempotency_key": idempotency_key,
+                    "idempotency_state": _IDEMPOTENCY_FINAL,
+                    "request": request,
+                    "result": stored_result,
+                },
+                ensure_ascii=False,
+            )
+            audit_log.idempotency_state = _IDEMPOTENCY_FINAL
+            effective_replayed = replayed
+        else:
+            raise ValueError("알 수 없는 MCP idempotency 상태다")
+        await session.commit()
+
+        response = dict(stored_result)
+        response["idempotent"] = effective_replayed
+        if effective_replayed:
+            response["audit_log_id"] = audit_log_id
+        else:
+            response.pop("audit_log_id", None)
+        return response
 
 
 def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
@@ -671,7 +1178,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
         description="검색어, 채널, 재생목록 중 하나로 harvest 작업을 생성한다.",
     )
     async def harvest_travel_destinations(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         query: str | None = None,
         channel_id: str | None = None,
         playlist_id: str | None = None,
@@ -687,7 +1194,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
 
     @server.tool(name="correct_place", description="확정 장소 정보를 수동 보정한다.")
     async def correct_place(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         place_id: int,
         name: str | None = None,
         description: str | None = None,
@@ -719,7 +1226,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
 
     @server.tool(name="merge_places", description="중복 장소를 하나의 확정 장소로 병합한다.")
     async def merge_places(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         source_place_id: int,
         target_place_id: int,
         review_note: str | None = None,
@@ -736,7 +1243,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
         description="장소 기준 Gemini Deep Research 작업을 생성한다.",
     )
     async def trigger_deep_research(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         place_id: int,
         prompt: str | None = None,
         max_sources: int = 8,
@@ -753,7 +1260,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
         description="needs_review 후보에 검수자와 검수 메모를 기록한다.",
     )
     async def review_unmatched_place(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         candidate_id: int,
         reviewed_by: str = "mcp",
         review_note: str | None = None,
@@ -770,7 +1277,7 @@ def register_mcp_tools(server: Any, runtime: ToolRuntime) -> None:
         description="후보를 기존 장소와 매칭하거나 신규 장소로 만들거나 제외한다.",
     )
     async def resolve_place_candidate(
-        idempotency_key: str,
+        idempotency_key: IdempotencyKey,
         candidate_id: int,
         action: Literal["match_existing", "create_place", "ignore"],
         reviewed_by: str = "mcp",
@@ -865,6 +1372,12 @@ def _serialize_place(place: Any) -> dict[str, Any]:
         "api_source": place.api_source,
         "category": place.category,
         "is_geocoded": place.is_geocoded,
+        "sigungu_code": place.sigungu_code,
+        "sigungu_name": place.sigungu_name,
+        "legal_dong_code": place.legal_dong_code,
+        "legal_dong_name": place.legal_dong_name,
+        "admin_code_source": place.admin_code_source,
+        "admin_code_updated_at": _iso(place.admin_code_updated_at),
         "detailed_research_content": place.detailed_research_content,
         "last_reviewed_at": _iso(place.last_reviewed_at),
         "created_at": _iso(place.created_at),

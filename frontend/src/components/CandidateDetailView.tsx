@@ -10,6 +10,11 @@ import {
   getCandidateDetail,
   getCandidateTranscript,
 } from "@/lib/api";
+import {
+  reconcileProcessedCandidateCaches,
+  revalidateCandidateActionFailure,
+  type CandidateDetailRevalidation,
+} from "@/lib/review-candidate-cache";
 import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
 import { timestampedVideoUrl } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -67,13 +72,22 @@ export function CandidateDetailView({
   candidateId,
   onDeleted,
   onDeleteStarted,
+  onDeleteFailureRevalidated,
   onDeleteSettled,
+  onCacheRefreshFailed,
+  cacheHandledByOnDeleted = false,
   actionsDisabled = false,
 }: {
   candidateId: number;
   onDeleted?: (candidateId: number) => void | Promise<void>;
   onDeleteStarted?: (candidateId: number) => void;
+  onDeleteFailureRevalidated?: (
+    candidateId: number,
+    detailRevalidation: CandidateDetailRevalidation | undefined,
+  ) => void | Promise<void>;
   onDeleteSettled?: () => void;
+  onCacheRefreshFailed?: () => void;
+  cacheHandledByOnDeleted?: boolean;
   actionsDisabled?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -87,7 +101,14 @@ export function CandidateDetailView({
     queryFn: () => getCandidateTranscript(candidateId),
   });
   const detail = detailQuery.data;
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteCandidateId, setConfirmDeleteCandidateId] = useState<
+    number | null
+  >(null);
+  const [cacheRefreshError, setCacheRefreshError] = useState<{
+    candidateId: number;
+    message: string;
+  } | null>(null);
+  const confirmDelete = confirmDeleteCandidateId === candidateId;
   const [transcriptTab, setTranscriptTab] = useState("raw");
   const transcriptRef = useRef<HTMLPreElement>(null);
   const transcriptText = transcriptQuery.data?.text ?? "";
@@ -105,19 +126,58 @@ export function CandidateDetailView({
     element.scrollTop = Math.max(0, element.scrollHeight * ratio - 40);
   }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
-    mutationFn: () => deleteCandidate(candidateId),
-    onMutate: () => {
-      onDeleteStarted?.(candidateId);
+    mutationFn: async (targetCandidateId: number) => {
+      const latest = await getCandidateDetail(targetCandidateId);
+      queryClient.setQueryData(["candidate-detail", targetCandidateId], latest);
+      if (
+        latest.candidate.match_status.trim().toLowerCase() !== "needs_review"
+      ) {
+        throw new Error("검수 대기 상태의 후보만 삭제할 수 있습니다.");
+      }
+      return deleteCandidate(targetCandidateId);
     },
-    onSuccess: async () => {
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      queryClient.invalidateQueries({
-        queryKey: ["unmatched-candidates"],
-        refetchType: "none",
+    onMutate: (targetCandidateId) => {
+      setCacheRefreshError(null);
+      onDeleteStarted?.(targetCandidateId);
+    },
+    onSuccess: async (_data, deletedCandidateId) => {
+      if (!cacheHandledByOnDeleted) {
+        const cacheResult = await reconcileProcessedCandidateCaches(queryClient, {
+          ids: [deletedCandidateId],
+        });
+        if (cacheResult.postCommitRefreshFailed) {
+          setCacheRefreshError({
+            candidateId: deletedCandidateId,
+            message: "후보는 삭제됐지만 최신 검수 목록을 다시 확인하지 못했습니다.",
+          });
+          onCacheRefreshFailed?.();
+        }
+      }
+      await onDeleted?.(deletedCandidateId);
+      queryClient.removeQueries({
+        queryKey: ["candidate-detail", deletedCandidateId],
       });
-      queryClient.removeQueries({ queryKey: ["candidate-detail", candidateId] });
-      queryClient.removeQueries({ queryKey: ["candidate-transcript", candidateId] });
-      await onDeleted?.(candidateId);
+      queryClient.removeQueries({
+        queryKey: ["candidate-transcript", deletedCandidateId],
+      });
+    },
+    onError: async (_error, targetCandidateId) => {
+      const failureRefresh = await revalidateCandidateActionFailure(queryClient, {
+        candidateIds: [targetCandidateId],
+        fetchCandidateDetail: getCandidateDetail,
+      });
+      if (failureRefresh.refreshFailed) {
+        setCacheRefreshError({
+          candidateId: targetCandidateId,
+          message:
+            "삭제 결과를 확인하지 못했고 최신 검수 목록과 상세도 다시 확인하지 못했습니다.",
+        });
+        onCacheRefreshFailed?.();
+      }
+      await onDeleteFailureRevalidated?.(
+        targetCandidateId,
+        failureRefresh.candidateDetails.get(targetCandidateId),
+      );
     },
     onSettled: () => {
       onDeleteSettled?.();
@@ -131,21 +191,57 @@ export function CandidateDetailView({
   }, [candidateId, scrollTranscriptToEvidence, transcriptText]);
 
   if (detailQuery.isLoading) {
-    return <p className="p-2 text-sm text-muted-foreground">불러오는 중…</p>;
+    return (
+      <p role="status" className="p-2 text-sm text-muted-foreground">
+        불러오는 중…
+      </p>
+    );
   }
   if (!detail) {
     return (
-      <p className="p-2 text-sm text-destructive">
-        {detailQuery.error?.message ?? "불러오지 못했습니다."}
-      </p>
+      <div
+        role="alert"
+        className="flex flex-col items-start gap-2 p-2 text-sm text-destructive"
+      >
+        <p>{detailQuery.error?.message ?? "불러오지 못했습니다."}</p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={detailQuery.isFetching}
+          onClick={() => void detailQuery.refetch()}
+        >
+          다시 시도
+        </Button>
+      </div>
     );
   }
 
   const c = detail.candidate;
+  const destructiveActionsDisabled =
+    actionsDisabled ||
+    detailQuery.isError ||
+    c.match_status.trim().toLowerCase() !== "needs_review";
   const cleanedTranscript = transcriptText ? cleanTranscript(transcriptText) : "";
 
   return (
     <div className="flex flex-col gap-4">
+      {detailQuery.data != null && detailQuery.isError ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+          <span role="alert">
+            최신 후보 상세를 다시 확인하지 못해 이전 정보를 표시합니다.
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={detailQuery.isFetching}
+            onClick={() => void detailQuery.refetch()}
+          >
+            다시 확인
+          </Button>
+        </div>
+      ) : null}
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-semibold">{c.ai_place_name}</h3>
@@ -310,8 +406,8 @@ export function CandidateDetailView({
               type="button"
               size="sm"
               variant="destructive"
-              disabled={deleteMutation.isPending || actionsDisabled}
-              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending || destructiveActionsDisabled}
+              onClick={() => deleteMutation.mutate(candidateId)}
             >
               {deleteMutation.isPending ? (
                 <Loader2Icon data-icon="inline-start" className="animate-spin" />
@@ -322,7 +418,7 @@ export function CandidateDetailView({
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => setConfirmDelete(false)}
+              onClick={() => setConfirmDeleteCandidateId(null)}
             >
               취소
             </Button>
@@ -332,16 +428,29 @@ export function CandidateDetailView({
             type="button"
             size="sm"
             variant="outline"
-            disabled={actionsDisabled}
-            onClick={() => setConfirmDelete(true)}
+            disabled={destructiveActionsDisabled || deleteMutation.isPending}
+            onClick={() => setConfirmDeleteCandidateId(candidateId)}
           >
             <Trash2Icon data-icon="inline-start" />
             후보 삭제
           </Button>
         )}
         {deleteMutation.error ? (
-          <p className="mt-1 text-xs text-destructive">
+          <p
+            role="alert"
+            aria-live="assertive"
+            className="mt-1 text-xs text-destructive"
+          >
             {deleteMutation.error.message}
+          </p>
+        ) : null}
+        {cacheRefreshError?.candidateId === candidateId ? (
+          <p
+            role="alert"
+            aria-live="assertive"
+            className="mt-1 text-xs text-destructive"
+          >
+            {cacheRefreshError.message}
           </p>
         ) : null}
       </div>

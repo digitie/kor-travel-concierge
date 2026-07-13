@@ -61,7 +61,7 @@ describe("groupThemeItems", () => {
 });
 
 describe("listUnmatchedCandidatesPage", () => {
-  it("검수 사유와 출처를 cursor filter query로 직렬화한다", async () => {
+  it("검수 검색·정렬·국내 여부·사유·출처·grounding을 cursor filter query로 직렬화한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -82,14 +82,19 @@ describe("listUnmatchedCandidatesPage", () => {
         channelId: "channel-1",
         playlistId: "playlist-1",
         keyword: "제주 여행",
+        query: "성산일출봉",
+        sort: "oldest",
+        isDomestic: false,
+        status: "needs_review",
         queueReason: "name_mismatch",
         sourceKind: "transcript",
+        grounding: "unverified",
       },
       { limit: 10, cursor: "cursor-1", newerThanId: 7 },
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/destinations/unmatched?limit=10&cursor=cursor-1&newer_than_id=7&channel_id=channel-1&playlist_id=playlist-1&keyword=%EC%A0%9C%EC%A3%BC+%EC%97%AC%ED%96%89&reason=name_mismatch&source_kind=transcript",
+      "/api/v1/destinations/unmatched?limit=10&cursor=cursor-1&newer_than_id=7&channel_id=channel-1&playlist_id=playlist-1&keyword=%EC%A0%9C%EC%A3%BC+%EC%97%AC%ED%96%89&q=%EC%84%B1%EC%82%B0%EC%9D%BC%EC%B6%9C%EB%B4%89&sort=oldest&is_domestic=false&status=needs_review&reason=name_mismatch&source_kind=transcript&grounding=unverified",
       expect.objectContaining({
         headers: { "Content-Type": "application/json" },
       }),

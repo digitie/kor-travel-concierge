@@ -11,10 +11,10 @@ import asyncio
 import json
 import math
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +44,7 @@ from ktc.models import (
     ExtractedPlaceCandidate,
     EvidenceSourceKind,
     FeatureExport,
+    GroundingStatus,
     MatchStatus,
     MediaAsset,
     RunAttention,
@@ -79,6 +80,10 @@ router = APIRouter(prefix=API_V1_PREFIX, dependencies=[Depends(require_api_key)]
 
 EXPORT_DESTINATION_LIMIT_DEFAULT = 500
 EXPORT_DESTINATION_LIMIT_MAX = 1_000
+CandidateId = Annotated[
+    int,
+    Path(ge=1, le=list_pagination.MAX_DB_INTEGER_ID),
+]
 
 
 class HarvestRequest(BaseModel):
@@ -1363,8 +1368,19 @@ async def list_unmatched_candidates(
     channel_id: str | None = Query(default=None, max_length=128),
     playlist_id: str | None = Query(default=None, max_length=128),
     keyword: str | None = Query(default=None, max_length=255),
+    q: str | None = Query(default=None, max_length=255),
+    sort: place_service.ReviewCandidateSort = Query(
+        default=place_service.ReviewCandidateSort.NEWEST
+    ),
+    is_domestic: place_service.ReviewCandidateDomesticFilter = Query(
+        default=place_service.ReviewCandidateDomesticFilter.ALL
+    ),
+    status: place_service.ReviewCandidateStatus = Query(
+        default=place_service.ReviewCandidateStatus.NEEDS_REVIEW
+    ),
     reason: place_service.QueueReason | None = Query(default=None),
     source_kind: EvidenceSourceKind | None = Query(default=None),
+    grounding: GroundingStatus | None = Query(default=None),
     cursor: str | None = Query(
         default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
     ),
@@ -1373,7 +1389,7 @@ async def list_unmatched_candidates(
     ),
     session: AsyncSession = Depends(get_repeatable_read_session),
 ) -> dict[str, Any]:
-    """매칭 실패(`needs_review`) 후보 검수 큐. 결과 보기와 동일한 출처 필터 지원."""
+    """상태·출처·검색 조건으로 조회하는 검수 후보 목록."""
     try:
         page = await place_service.list_unmatched_candidates_page(
             session,
@@ -1381,8 +1397,17 @@ async def list_unmatched_candidates(
             channel_id=channel_id,
             playlist_id=playlist_id,
             keyword=keyword,
+            query=q,
+            sort=sort,
+            is_domestic=(
+                None
+                if is_domestic is place_service.ReviewCandidateDomesticFilter.ALL
+                else is_domestic is place_service.ReviewCandidateDomesticFilter.TRUE
+            ),
+            status=status,
             queue_reason=reason,
             source_kind=source_kind,
+            grounding_status=grounding,
             cursor=cursor,
             newer_than_id=newer_than_id,
         )
@@ -1430,6 +1455,13 @@ async def correct_destination(
         target_id=str(place.place_id),
         payload=payload.model_dump(exclude_none=True),
     )
+    if ("latitude" in updates or "longitude" in updates) and place.is_geocoded:
+        latest = await place_service.enrich_place_admin_codes_postcommit(
+            session, place_id=place.place_id
+        )
+        if latest is None:
+            raise HTTPException(status_code=404, detail="place not found")
+        place = latest
     return {"status": "updated", "place": _place_payload(place)}
 
 
@@ -1492,7 +1524,7 @@ async def match_category(q: str | None = None) -> dict[str, Any]:
 
 @router.post("/destinations/unmatched/{candidate_id}/resolve")
 async def resolve_unmatched_candidate(
-    candidate_id: int,
+    candidate_id: CandidateId,
     payload: ResolveCandidateRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -1545,6 +1577,8 @@ async def resolve_unmatched_candidate(
                 "nearby_places": exc.nearby_places,
             },
         ) from exc
+    except place_service.CandidateResolveConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     resolution = place_service.latest_candidate_resolution(candidate)
@@ -1559,6 +1593,13 @@ async def resolve_unmatched_candidate(
             "resolution": resolution,
         },
     )
+    if place is not None:
+        await place_service.enrich_place_admin_codes_postcommit(
+            session, place_id=place.place_id
+        )
+    candidate, place, mapping = await place_service.authoritative_candidate_resolution(
+        session, candidate_id=candidate_id
+    )
     return {
         "status": "resolved",
         "candidate": _candidate_payload(candidate),
@@ -1569,7 +1610,7 @@ async def resolve_unmatched_candidate(
 
 @router.post("/destinations/unmatched/{candidate_id}/reopen")
 async def reopen_unmatched_candidate(
-    candidate_id: int, session: AsyncSession = Depends(get_session)
+    candidate_id: CandidateId, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
     """soft delete/제외(`ignored`)된 후보를 검수 대기로 복귀한다(T-160, PR-09 백엔드).
 
@@ -1629,7 +1670,9 @@ async def _video_detail_dict(
         "url": video.canonical_url
         or video.url
         or f"https://www.youtube.com/watch?v={video.video_id}",
+        "channel_id": video.channel_id,
         "channel_title": channel_title or video.channel_name,
+        "source_search_query": video.source_search_query,
         "published_at": video.published_at.isoformat()
         if video.published_at
         else None,
@@ -1640,7 +1683,7 @@ async def _video_detail_dict(
 
 @router.get("/destinations/candidates/{candidate_id}/transcript")
 async def get_candidate_transcript(
-    candidate_id: int, session: AsyncSession = Depends(get_session)
+    candidate_id: CandidateId, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
     """후보의 출처 영상에 대한 보정 자막(없으면 원본 자막) 텍스트를 반환한다.
 
@@ -1670,15 +1713,16 @@ async def get_candidate_transcript(
 
 @router.get("/destinations/candidates/{candidate_id}/detail")
 async def get_candidate_detail(
-    candidate_id: int, session: AsyncSession = Depends(get_session)
+    candidate_id: CandidateId, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
     """검수 후보 1건의 상세 정보(영상·근거·동일 영상의 다른 후보)를 반환한다.
 
     soft delete된 후보는 404다(T-160 — 삭제 후보 열람 UI는 T-184에서 다룬다).
     """
-    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None or candidate.deleted_at is not None:
+    list_item = await place_service.get_candidate_list_item(session, candidate_id)
+    if list_item is None:
         raise HTTPException(status_code=404, detail="candidate not found")
+    candidate = list_item.candidate
 
     video = await _video_detail_dict(session, candidate.video_id)
 
@@ -1724,15 +1768,19 @@ async def get_candidate_detail(
     ).all()
 
     return {
+        "list_item": _candidate_list_payload(list_item),
         "candidate": {
             "id": candidate.id,
             "video_id": candidate.video_id,
+            "source_channel_id": candidate.source_channel_id,
+            "source_playlist_id": candidate.source_playlist_id,
             "ai_place_name": candidate.ai_place_name,
             "location_hint": candidate.location_hint,
             "candidate_category": candidate.candidate_category,
             "candidate_category_code": place_service.candidate_category_code(candidate),
             "match_status": candidate.match_status,
-            "confidence_score": candidate.confidence_score,
+            "confidence_score": _safe_confidence_score(candidate.confidence_score),
+            "grounding_status": candidate.grounding_status,
             "is_domestic": candidate.is_domestic,
             "speaker_note": candidate.speaker_note,
             "source_kind": candidate.source_kind,
@@ -1770,8 +1818,8 @@ async def list_audit_sample_queue(
 ) -> dict[str, Any]:
     """auto-match audit 표본 큐를 미검토 우선·최신순으로 반환한다(G9).
 
-    표본은 자동확정(MATCHED, reviewer="system") 후보이며 표시일 뿐 MATCHED·export 상태는
-    유지된다(사후 관측 — 노출 차단 아님).
+    표본은 자동확정 당시의 결정을 검토하는 역사 표본이다. 이후 별도 reopen으로 현재
+    `match_status`가 달라져도 표본과 판정 이력을 유지하며, 응답에 현재 상태를 함께 싣는다.
     """
     items = await place_service.list_audit_samples(
         session, status=status, limit=limit
@@ -1785,8 +1833,11 @@ async def list_audit_sample_queue(
                 "ai_place_name": item.candidate.ai_place_name,
                 "matched_place_id": item.candidate.matched_place_id,
                 "place_name": item.place_name,
-                "confidence_score": item.candidate.confidence_score,
+                "confidence_score": _safe_confidence_score(
+                    item.candidate.confidence_score
+                ),
                 "grounding_status": item.candidate.grounding_status,
+                "match_status": item.candidate.match_status,
                 "audit_status": item.candidate.audit_status,
                 "audit_reviewed_by": item.candidate.audit_reviewed_by,
                 "audit_reviewed_at": (
@@ -1820,7 +1871,7 @@ async def get_audit_summary(
 
 @router.post("/destinations/audit/{candidate_id}")
 async def submit_audit_result(
-    candidate_id: int,
+    candidate_id: CandidateId,
     payload: AuditResultRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -1838,8 +1889,12 @@ async def submit_audit_result(
             accurate=payload.accurate,
             reviewed_by=actor,
             note=payload.note,
+            commit=False,
         )
-    except place_service.AuditNotSampledError as exc:
+    except (
+        place_service.AuditNotSampledError,
+        place_service.AuditResultConflictError,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1904,19 +1959,18 @@ async def get_place_merge_suggestions(
 
 @router.delete("/destinations/candidates/{candidate_id}")
 async def delete_candidate(
-    candidate_id: int,
+    candidate_id: CandidateId,
     reason: str | None = Query(None, max_length=255),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """검수 후보를 soft delete 한다(T-160 — 행·export ledger 보존, reopen으로 복구 가능).
 
-    확정 장소와 연결된(매핑 보유) 후보는 409로 거부한다(기존 semantics 유지).
+    검수 대기(`needs_review`) 상태만 삭제한다. stale UI 요청이 도착하기 전
+    다른 검수자가 제외·확정한 후보는 서비스의 `FOR UPDATE` 아래서 409로
+    거부한다. 확정 장소와 연결된(매핑 보유) 후보의 409도 유지한다.
     이미 export된 후보는 같은 트랜잭션에서 ledger를 tombstone으로 전환해
     downstream consumer가 `changes`로 제거를 전달받는다.
     """
-    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
-    if candidate is None or candidate.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="candidate not found")
     delete_reason = (reason or "").strip() or "검수 큐에서 삭제"
     try:
         summary = await place_service.soft_delete_candidates(
@@ -1925,12 +1979,17 @@ async def delete_candidate(
             reason=delete_reason,
             deleted_by="web",
             force=False,
+            expected_status=MatchStatus.NEEDS_REVIEW,
         )
+    except place_service.CandidateStatusConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except place_service.CandidateMappingConflictError as exc:
         raise HTTPException(
             status_code=409,
             detail="확정 장소와 연결된 후보는 삭제할 수 없습니다.",
         ) from exc
+    if summary.deleted_candidates == 0:
+        raise HTTPException(status_code=404, detail="candidate not found")
     await audit_service.record(
         session,
         actor_type="web",
@@ -2847,18 +2906,24 @@ def _place_payload(place) -> dict[str, Any]:
     }
 
 
+def _safe_confidence_score(value: Any) -> float | None:
+    """외부 JSON에 안전한 0..1 유한 confidence만 반환한다."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(score) or not 0 <= score <= 1:
+        return None
+    return score
+
+
 def _candidate_list_payload(item: place_service.CandidateListItem) -> dict[str, Any]:
     """검수 큐 목록용 경량 payload. 리스트 UI가 쓰지 않는 무거운 필드
     (provider_evidence_json·source_text·review_note 등)를 제외하고, 파생값인
     8자리 카테고리 코드는 서버에서 계산해 넣는다(원본 evidence는 보내지 않음)."""
     candidate = item.candidate
-    confidence_score = candidate.confidence_score
-    if (
-        confidence_score is None
-        or not math.isfinite(confidence_score)
-        or not 0 <= confidence_score <= 1
-    ):
-        confidence_score = None
     return {
         "id": candidate.id,
         "video_id": candidate.video_id,
@@ -2870,8 +2935,9 @@ def _candidate_list_payload(item: place_service.CandidateListItem) -> dict[str, 
         "candidate_category": candidate.candidate_category,
         "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
-        "confidence_score": confidence_score,
+        "confidence_score": _safe_confidence_score(candidate.confidence_score),
         "source_kind": candidate.source_kind,
+        "grounding_status": candidate.grounding_status,
         "created_at": candidate.created_at.isoformat(),
         "queue_reason": item.queue_reason.value,
         "is_domestic": candidate.is_domestic,
@@ -2896,7 +2962,7 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
         "matched_place_id": candidate.matched_place_id,
-        "confidence_score": candidate.confidence_score,
+        "confidence_score": _safe_confidence_score(candidate.confidence_score),
         "grounding_status": candidate.grounding_status,
         "is_domestic": candidate.is_domestic,
         "provider_evidence_json": candidate.provider_evidence_json,

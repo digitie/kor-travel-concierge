@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import threading
@@ -533,6 +534,10 @@ async def test_destinations_reflect_db(client, session_factory):
     )
     assert detail.json()["candidate"]["source_kind"] == "transcript"
     assert (
+        detail.json()["candidate"]["grounding_status"]
+        == detail.json()["list_item"]["grounding_status"]
+    )
+    assert (
         detail.json()["candidate"]["feature_export_status"]
         == FeatureExportStatus.PENDING
     )
@@ -646,6 +651,318 @@ async def test_candidate_and_place_detail_and_delete(client, session_factory):
     assert deleted.json()["deleted"] is True
     gone = await client.get(f"/api/v1/destinations/candidates/{cand_id}/detail")
     assert gone.status_code == 404
+
+
+async def test_candidate_id_path_enforces_postgresql_integer_range(client):
+    overflow_id = 2_147_483_648
+    requests = (
+        ("GET", f"/api/v1/destinations/candidates/{overflow_id}/detail", None),
+        ("GET", f"/api/v1/destinations/candidates/{overflow_id}/transcript", None),
+        ("DELETE", f"/api/v1/destinations/candidates/{overflow_id}", None),
+        (
+            "POST",
+            f"/api/v1/destinations/unmatched/{overflow_id}/resolve",
+            {"action": "ignore"},
+        ),
+        ("POST", f"/api/v1/destinations/unmatched/{overflow_id}/reopen", None),
+        (
+            "POST",
+            f"/api/v1/destinations/audit/{overflow_id}",
+            {"accurate": True},
+        ),
+    )
+    for method, path, payload in requests:
+        response = await client.request(method, path, json=payload)
+        assert response.status_code == 422, (method, path, response.text)
+
+    # 경계값은 asyncpg int4 bind에 안전하게 들어가며 단순 미존재로 끝난다.
+    boundary = await client.get(
+        "/api/v1/destinations/candidates/2147483647/detail"
+    )
+    assert boundary.status_code == 404
+
+
+async def test_candidate_detail_and_resolve_null_unsafe_confidence_scores(
+    client,
+    session_factory,
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+
+    unsafe_scores = (
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        -0.01,
+        1.01,
+    )
+    async with session_factory() as session:
+        session.add(
+            YoutubeVideo(
+                video_id="candidate-confidence-api",
+                title="t",
+                url="u",
+                channel_id="c-confidence-api",
+            )
+        )
+        await session.commit()
+        candidates = [
+            ExtractedPlaceCandidate(
+                video_id="candidate-confidence-api",
+                source_text="s",
+                ai_place_name=f"비정상 신뢰도 {index}",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                confidence_score=score,
+            )
+            for index, score in enumerate(unsafe_scores)
+        ]
+        session.add_all(candidates)
+        await session.commit()
+        candidate_ids = [candidate.id for candidate in candidates]
+
+    for candidate_id in candidate_ids:
+        detail = await client.get(
+            f"/api/v1/destinations/candidates/{candidate_id}/detail"
+        )
+        assert detail.status_code == 200
+        assert detail.json()["candidate"]["confidence_score"] is None
+
+        resolved = await client.post(
+            f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+            json={"action": "ignore"},
+        )
+        assert resolved.status_code == 200
+        assert resolved.json()["candidate"]["confidence_score"] is None
+
+
+async def test_resolve_candidate_returns_409_after_another_reviewer_resolved_it(
+    client,
+    session_factory,
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+
+    async with session_factory() as session:
+        session.add(
+            YoutubeVideo(
+                video_id="candidate-resolve-conflict-api",
+                title="t",
+                url="u",
+                channel_id="c-resolve-conflict-api",
+            )
+        )
+        await session.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="candidate-resolve-conflict-api",
+            source_text="s",
+            ai_place_name="중복 검수 요청",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        session.add(candidate)
+        await session.commit()
+        candidate_id = candidate.id
+
+    first = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={"action": "ignore"},
+    )
+    assert first.status_code == 200
+
+    stale = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={"action": "ignore"},
+    )
+    assert stale.status_code == 409
+    assert "이미 해결" in stale.json()["detail"]
+
+
+async def test_resolve_response_rereads_force_exclude_after_audit_commit(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+    from ktc.services import place_service
+
+    video_id = "resolve-force-exclude-api"
+    async with session_factory() as session:
+        session.add(
+            YoutubeVideo(
+                video_id=video_id,
+                title="t",
+                url="u",
+                channel_id="c-resolve-force-exclude-api",
+            )
+        )
+        await session.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id=video_id,
+            source_text="s",
+            ai_place_name="응답 전 제외 API 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        session.add(candidate)
+        await session.commit()
+        candidate_id = candidate.id
+    forced: list[int] = []
+
+    async def force_exclude_after_audit(_session, *, place_id):
+        async with session_factory() as force_session:
+            summary = await place_service.exclude_video(
+                force_session,
+                video_id,
+                reason="resolve REST 응답 전 강제 제외",
+                excluded_by="concurrent-reviewer",
+            )
+        assert summary is not None
+        forced.append(place_id)
+        return None
+
+    monkeypatch.setattr(
+        place_service,
+        "enrich_place_admin_codes_postcommit",
+        force_exclude_after_audit,
+    )
+
+    response = await client.post(
+        f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+        json={
+            "action": "create_place",
+            "corrected_name": "응답 전 제외 API 장소",
+            "latitude": 35.1587,
+            "longitude": 129.1604,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(forced) == 1
+    assert response.json()["candidate"]["matched_place_id"] is None
+    assert response.json()["place"] is None
+    assert response.json()["mapping_id"] is None
+
+
+async def test_candidate_delete_requires_locked_needs_review_status(
+    client, session_factory
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+
+    async with session_factory() as s:
+        s.add(
+            YoutubeVideo(
+                video_id="v-delete-status",
+                title="t",
+                url="u",
+                channel_id="c-delete-status",
+            )
+        )
+        await s.commit()
+        ignored = ExtractedPlaceCandidate(
+            video_id="v-delete-status",
+            source_text="s",
+            ai_place_name="이미 제외된 후보",
+            match_status=MatchStatus.IGNORED,
+        )
+        matched = ExtractedPlaceCandidate(
+            video_id="v-delete-status",
+            source_text="s",
+            ai_place_name="이미 확정된 후보",
+            match_status=MatchStatus.MATCHED,
+        )
+        needs_review = ExtractedPlaceCandidate(
+            video_id="v-delete-status",
+            source_text="s",
+            ai_place_name="삭제 가능 후보",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add_all([ignored, matched, needs_review])
+        await s.commit()
+        ignored_id = ignored.id
+        matched_id = matched.id
+        needs_review_id = needs_review.id
+
+    for stale_id in (ignored_id, matched_id):
+        conflict = await client.delete(
+            f"/api/v1/destinations/candidates/{stale_id}"
+        )
+        assert conflict.status_code == 409
+        assert (
+            conflict.json()["detail"]
+            == "needs_review 상태인 후보만 삭제할 수 있습니다."
+        )
+
+    deleted = await client.delete(
+        f"/api/v1/destinations/candidates/{needs_review_id}"
+    )
+    assert deleted.status_code == 200
+    assert (
+        await client.delete(f"/api/v1/destinations/candidates/{needs_review_id}")
+    ).status_code == 404
+    assert (
+        await client.delete("/api/v1/destinations/candidates/999999")
+    ).status_code == 404
+
+    async with session_factory() as s:
+        current_ignored = await s.get(ExtractedPlaceCandidate, ignored_id)
+        current_matched = await s.get(ExtractedPlaceCandidate, matched_id)
+        current_deleted = await s.get(ExtractedPlaceCandidate, needs_review_id)
+        assert current_ignored is not None and current_ignored.deleted_at is None
+        assert current_matched is not None and current_matched.deleted_at is None
+        assert current_deleted is not None and current_deleted.deleted_at is not None
+
+
+async def test_candidate_delete_serializes_with_concurrent_ignore_api(
+    client, session_factory
+):
+    from ktc.models import ExtractedPlaceCandidate, MatchStatus, YoutubeVideo
+
+    async with session_factory() as s:
+        s.add(
+            YoutubeVideo(
+                video_id="v-delete-api-race",
+                title="t",
+                url="u",
+                channel_id="c-delete-api-race",
+            )
+        )
+        await s.commit()
+        candidate = ExtractedPlaceCandidate(
+            video_id="v-delete-api-race",
+            source_text="s",
+            ai_place_name="동시 삭제 제외 API",
+            match_status=MatchStatus.NEEDS_REVIEW,
+        )
+        s.add(candidate)
+        await s.commit()
+        candidate_id = candidate.id
+
+    delete_response, ignore_response = await asyncio.wait_for(
+        asyncio.gather(
+            client.delete(f"/api/v1/destinations/candidates/{candidate_id}"),
+            client.post(
+                f"/api/v1/destinations/unmatched/{candidate_id}/resolve",
+                json={"action": "ignore"},
+            ),
+        ),
+        timeout=5,
+    )
+
+    if delete_response.status_code == 200:
+        # 후보 행을 먼저 soft delete한 뒤 도착한 stale resolve도 다른 선처리와 같은
+        # typed conflict 계약으로 거부된다.
+        assert ignore_response.status_code == 409
+        expected_deleted = True
+    else:
+        assert delete_response.status_code == 409
+        assert ignore_response.status_code == 200
+        expected_deleted = False
+
+    async with session_factory() as s:
+        current = await s.get(ExtractedPlaceCandidate, candidate_id)
+        assert current is not None
+        if expected_deleted:
+            assert current.deleted_at is not None
+            assert current.match_status == MatchStatus.NEEDS_REVIEW.value
+        else:
+            assert current.deleted_at is None
+            assert current.match_status == MatchStatus.IGNORED.value
 
 
 async def test_destination_export_formats(client, session_factory):

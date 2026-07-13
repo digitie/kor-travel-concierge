@@ -209,6 +209,9 @@ async def process_video_batch(
         "corrected_videos": 0,
         "created_candidates": 0,
         "failed_videos": 0,
+        "matched_places": 0,
+        "needs_review_candidates": 0,
+        "skipped_state_changed_candidates": 0,
     }
     normalized_default_category = category_catalog.normalize_code(default_category_code)
     # 1) 영상별 자막 확보 → 교정 → raw/교정본 저장. (alias, video, asset_id, corrected) 수집.
@@ -734,6 +737,8 @@ async def process_video_batch(
     #    (이 서비스는 국내 여행지만 다룬다 — 기록은 남기고 사용자가 검수에서 재시도/제외).
     geocode_targets = [c for c in created_candidates if c.is_domestic is not False]
     foreign_count = len(created_candidates) - len(geocode_targets)
+    # 정상 완료 summary는 created = matched + needs_review + state_changed_skip으로 분할한다.
+    summary["needs_review_candidates"] += foreign_count
     if foreign_count:
         await _report(
             status_reporter,
@@ -756,6 +761,10 @@ async def process_video_batch(
                 detail=str(exc),
             )
             raise
+        summary["matched_places"] += geo.get("matched_places", 0)
+        summary["needs_review_candidates"] += geo.get("needs_review_candidates", 0)
+        skipped_state_changed = geo.get("skipped_state_changed_candidates", 0)
+        summary["skipped_state_changed_candidates"] += skipped_state_changed
         await _report_stage(
             stage_reporter,
             "geocode",
@@ -763,10 +772,22 @@ async def process_video_batch(
             started=geocode_started,
             detail=(
                 f"candidates={len(geocode_targets)}, "
-                f"matched={geo.get('matched_places', 0)}, "
-                f"needs_review={geo.get('needs_review_candidates', 0)}"
+                f"created_candidates={summary['created_candidates']}, "
+                f"geocode_targets={len(geocode_targets)}, "
+                f"foreign_needs_review={foreign_count}, "
+                f"matched={summary['matched_places']}, "
+                f"needs_review={summary['needs_review_candidates']}, "
+                "skipped_state_changed_candidates="
+                f"{summary['skipped_state_changed_candidates']}"
             ),
         )
-        summary["matched_places"] = geo.get("matched_places", 0)
-        summary["needs_review_candidates"] = geo.get("needs_review_candidates", 0)
+    await _report(
+        status_reporter,
+        "POI 후보 처리 집계 — "
+        f"전체 {summary['created_candidates']}개, "
+        f"확정 {summary['matched_places']}개, "
+        f"검수 필요 {summary['needs_review_candidates']}개(해외 {foreign_count}개 포함), "
+        "사용자 처리로 건너뜀 "
+        f"{summary['skipped_state_changed_candidates']}개입니다.",
+    )
     return summary
