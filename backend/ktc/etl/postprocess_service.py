@@ -13,12 +13,17 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from vworld import AsyncVworldClient
 
 from ktc.core.config import Settings, get_settings
 from ktc.etl import geocode_service, media_store, poi_extraction, summarize_service
-from ktc.etl.geocoding import GeocodeDecision, KakaoGeocoder, NaverGeocoder
+from ktc.etl.geocoding import (
+    GeocodeCacheStore,
+    GeocodeDecision,
+    KakaoGeocoder,
+    NaverGeocoder,
+)
 from ktc.etl.transcript import (
     TranscriptAttempt,
     TranscriptOutcome,
@@ -101,6 +106,7 @@ async def process_harvest_videos(
             geocode_applier=geocode_applier,
             vworld_key=vworld_key,
             kakao_key=kakao_key,
+            cache_session_factory=_cache_factory_from_session(session),
         )
 
         await _report(
@@ -252,6 +258,7 @@ async def geocode_candidates(
             geocode_applier=None,
             vworld_key=vworld_key,
             kakao_key=kakao_key,
+            cache_session_factory=_cache_factory_from_session(session),
         )
         await _apply_geocoding(
             session,
@@ -359,6 +366,33 @@ class _GeocodeContext:
         self.applier = applier
 
 
+def _cache_factory_from_session(
+    session: AsyncSession,
+) -> async_sessionmaker[AsyncSession] | None:
+    """지오코딩 캐시 전용 독립 세션 팩토리. provider HTTP 대기 중 메인 트랜잭션과 분리된다."""
+    if session.bind is None:
+        return None
+    return async_sessionmaker(session.bind, expire_on_commit=False)
+
+
+def _build_geocode_cache(
+    settings: Settings,
+    cache_session_factory: async_sessionmaker[AsyncSession] | None,
+) -> GeocodeCacheStore | None:
+    """설정이 켜져 있고 세션 팩토리가 있으면 Kakao 전용(정책 allowlist) 캐시를 만든다."""
+    if cache_session_factory is None or not settings.GEOCODE_CACHE_ENABLED:
+        return None
+    return GeocodeCacheStore(
+        cache_session_factory,
+        ttl_overrides={
+            "kakao": (
+                settings.GEOCODE_CACHE_KAKAO_POSITIVE_TTL_DAYS,
+                settings.GEOCODE_CACHE_KAKAO_NEGATIVE_TTL_DAYS,
+            )
+        },
+    )
+
+
 async def _make_geocode_context(
     http_client: httpx.AsyncClient,
     *,
@@ -367,6 +401,7 @@ async def _make_geocode_context(
     geocode_applier: GeocodeApplier | None,
     vworld_key: str | None = None,
     kakao_key: str | None = None,
+    cache_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> _GeocodeContext:
     if geocode_decider is not None:
         return _GeocodeContext(
@@ -382,8 +417,10 @@ async def _make_geocode_context(
         if _configured_secret(vworld_secret)
         else None
     )
+    # 캐시는 정책상 캐시 허용 provider(Kakao)에만 주입한다. VWorld/Naver 경로에는 개입하지 않는다.
+    geocode_cache = _build_geocode_cache(settings, cache_session_factory)
     kakao = (
-        KakaoGeocoder(kakao_secret, http_client)
+        KakaoGeocoder(kakao_secret, http_client, cache=geocode_cache)
         if _configured_secret(kakao_secret)
         else None
     )
