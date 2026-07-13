@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
 - [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
 - [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판) — **사용자 결정(2026-07-13)**: prod 자동 전사는 의도된 현행(ON) 유지, auto 기본값 결정 완료 — 수동 force·model 인자·상한만 구현
 - [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판) — **사용자 결정(2026-07-13)**: NCP Maps 결과는 캐시·저장 대상 제외 확정(`docs/provider-policy.md`)
@@ -54,6 +53,17 @@
 
 ## 완료
 
+- [x] **T-167**: 병합 제안 + auto-match audit — 신뢰성 코어 마지막 조각(§10 D6·G9). 공용
+  `place_name.py`(정규화·pairwise `names_match` 단일 출처)로 자동확정 게이트·배치 dedup·병합 제안이
+  같은 규칙 공유, 배치 dedup을 `(video_id, 정규화 이름)`으로 완화("성심당/성심당 본점" 통합, D6).
+  병합 "제안"만(자동 병합 금지) `GET /destinations/{id}/merge-suggestions`, 근접 재사용 반경
+  100→300m(이름 게이트 통과 전제). **auto-match audit 표본**(migration 0022, AUTO_MATCH_AUDIT_
+  SAMPLE_RATE·결정적 후보 id 해시 선택, 오확정률 집계 — MATCHED·export 상태는 불변, 사후 관측
+  전용) → T-166 정밀도 트레이드오프를 실측 가능하게(G9). 2렌즈 적대적 리뷰: BLOCKER/MAJOR 0, MINOR
+  다수(정밀도 정정: **`N호점` 정규화 제외** — "롯데리아 1호점/2호점"이 뭉개지는 것 방지, ADR-39로
+  PR-14 편차 기록; audit reviewed_by를 검증 proxy actor로; 결정적 표본; 병합 스캔 limit) 반영.
+  pg_trgm·자동 병합·광범위 …점 제거는 금지 준수. 검증: 격리 DB backend pytest pre-existing 1건 외 0,
+  alembic 0022 round-trip. (2026-07-13, 로드맵 PR-14 개정·§10 D6·G9, ADR-39)
 - [x] **T-166**: 자동확정 identity gate — T-165 grounding과 함께 자동확정 조건을 완성했다(§10 B3, G4).
   지오코딩 결과를 `result_kind`(poi|address|coordinate)로 구분(`GeocodeResultKind`), any-pair
   `_names_compatible`를 pairwise `_names_match`로 분리해 신규 장소 경로에 이름 게이트 강제(D2/C8 해소),
