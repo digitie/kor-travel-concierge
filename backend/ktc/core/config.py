@@ -151,6 +151,15 @@ class Settings(BaseSettings):
     POI_BATCH_MAX_VIDEOS: int = 10
     POI_BATCH_TOKEN_BUDGET: int = 180_000
 
+    # --- 자동확정 근접 병합·audit 표본 (T-167, 로드맵 PR-14 개정판, D6·G9) ---
+    # 근접 중복 재사용(병합) 반경(m). 이름·행정구역 identity 게이트(T-166) 통과 후에만 쓰이므로
+    # 100→300m 상향이 오병합을 늘리지 않는다(무검증 반경 확대 금지 원칙과 정합).
+    GEOCODE_MERGE_RADIUS_METERS: float = 300.0
+    # 자동확정(MATCHED, reviewer="system") 후보 중 auto-match audit 표본으로 표시할 비율(0~1).
+    # 표본은 오확정률(자동확정 뒤집힘 비율, §7 G9) 측정용이며, 표시일 뿐 MATCHED·export 상태는
+    # 그대로 둔다(사후 관측). 1.0=전량, 0.0=비활성.
+    AUTO_MATCH_AUDIT_SAMPLE_RATE: float = 0.1
+
     # --- YouTube Data API v3 ---
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_USE_OFFICIAL_API: bool = True

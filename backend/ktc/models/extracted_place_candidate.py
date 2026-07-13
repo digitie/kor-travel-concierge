@@ -45,6 +45,20 @@ class MatchStatus(str, Enum):
     IGNORED = "ignored"
 
 
+class AuditStatus(str, Enum):
+    """자동확정(MATCHED, reviewer="system") 후보의 사후 audit 표본 상태(T-167, G9).
+
+    컬럼 NULL = 표본 아님. 자동확정된 후보는 검수 큐에서 사라져 자동확정 정밀도(뒤집힘
+    비율)를 잴 표본이 없으므로(§7 지표), 일정 비율을 표본으로 표시해 사람이 사후에
+    정확/오확정을 기록한다. 표본이라도 자동확정 상태(MATCHED·export)는 유지한다 —
+    audit은 노출 차단이 아니라 사후 관측이다. 오확정률 = misconfirmed / (accurate + misconfirmed).
+    """
+
+    PENDING = "pending"  # 표본으로 표시됨, 사람 검토 대기.
+    ACCURATE = "accurate"  # 사람 검토 결과: 자동확정이 정확했음.
+    MISCONFIRMED = "misconfirmed"  # 사람 검토 결과: 오확정(자동확정이 틀림).
+
+
 class ExtractedPlaceCandidate(TimestampMixin, Base):
     __tablename__ = "extracted_place_candidates"
     __table_args__ = (
@@ -74,6 +88,14 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
             "match_status",
             "id",
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # auto-match audit 표본 큐·집계 access path(T-167, G9). 표본은 소수라
+        # `audit_status IS NOT NULL`만 색인해 큐 조회·오확정률 집계를 좁게 스캔한다.
+        Index(
+            "ix_epc_audit_sample",
+            "audit_status",
+            "id",
+            postgresql_where=text("audit_status IS NOT NULL"),
         ),
     )
 
@@ -159,6 +181,15 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # auto-match audit 표본 메타데이터(T-167, G9). `audit_status`가 NULL이 아니면 이 후보는
+    # 자동확정 정밀도 측정용 표본이며, 사람이 사후에 정확/오확정을 기록한다. 표본 표시·기록은
+    # 자동확정 상태(MATCHED·export)를 바꾸지 않는다(사후 관측 — 노출 차단 아님).
+    audit_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    audit_reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    audit_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    audit_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @validates("timestamp_start", "timestamp_end")
     def _clip_timestamp(self, _key: str, value: str | None) -> str | None:
