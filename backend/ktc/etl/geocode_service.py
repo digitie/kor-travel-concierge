@@ -277,9 +277,13 @@ def _evaluate_identity_gates(
             identity["name_gate"] = "name_mismatch"
             block = block or "name_mismatch"
     else:
-        # 주소·좌표 결과의 place_name은 POI명이 아니므로 POI 이름 게이트를 skip하고
-        # name_unverified로 남긴다(자동확정은 grounding·행정구역·is_domestic 신호로).
+        # 신규 장소 + 주소·좌표 결과(D2·G4): place_name이 POI명이 아니라 POI identity를
+        # 검증할 수 없다 → 자동확정 금지(needs_review). 신규 장소 자동확정 허용 경로는
+        # (a) result_kind=poi ∧ 이름 게이트 통과, (b) 근접 중복 재사용(위 분기, 기존
+        # 장소명 대조) 둘뿐이다. 근접 재사용은 kind와 무관하게 기존명으로 검증되므로
+        # 여기(nearby is None)에 도달하지 않는다.
         identity["name_gate"] = "name_unverified"
+        block = block or "name_unverified"
 
     # 2) 행정구역 게이트 (D4) — hint 시도 vs 확정 주소 시도(역지오코딩 추가 호출 없음).
     if region_gate.region_conflict(
@@ -316,15 +320,24 @@ def _result_address_texts(
 def _resolve_ambiguous_single(
     candidate: ExtractedPlaceCandidate, decision: GeocodeDecision
 ) -> GeocodeCandidate | None:
-    """다건(ambiguous) 결과에서 이름+행정구역 게이트를 모두 통과하는 후보가 정확히 1개면
-    그 후보를 반환한다(ADR-16 보강). is_domestic·grounding은 후보 단위 공통 신호라 여기서
-    보지 않고 호출부의 게이트가 처리한다."""
+    """다건(ambiguous) 결과에서 POI identity가 검증되는 후보가 정확히 1개면 반환한다
+    (ADR-16 보강). 신규 장소 자동확정은 POI 검증을 요구하므로 refined poi 결과 + 이름
+    게이트 통과 후보만 대상이다(address·coordinate·unrefined 제외). is_domestic·grounding은
+    후보 단위 공통 신호라 여기서 보지 않고 호출부의 게이트가 처리한다."""
     passed: list[GeocodeCandidate] = []
     for cand in decision.primary_candidates:
+        # unrefined VWorld echo(coordinate)는 단건 vworld_unrefined_single 차단과 대칭으로
+        # 제외한다(다건이면 재승격되던 구멍 차단, MAJOR 2).
+        if not getattr(cand, "refined", True):
+            continue
         rk = cand.result_kind or GeocodeResultKind.ADDRESS.value
-        if rk == GeocodeResultKind.POI.value and not _names_match(
-            candidate.ai_place_name, cand.place_name
-        ):
+        # 신규 장소 자동확정은 POI identity 검증을 요구한다(G4/D2). address·coordinate
+        # 결과는 place_name이 POI명이 아니라 검증 불가이므로 ambiguous 단일 통과 대상에서
+        # 제외한다(poi + 이름 게이트 통과 후보만). 근접 중복 재사용은 이후 공통 경로가
+        # 기존 장소명 대조로 별도 처리한다.
+        if rk != GeocodeResultKind.POI.value:
+            continue
+        if not _names_match(candidate.ai_place_name, cand.place_name):
             continue
         if region_gate.region_conflict(
             candidate.location_hint, *_result_address_texts(cand, rk)

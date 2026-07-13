@@ -1511,6 +1511,9 @@ def _candidate_queue_reason_expression():
             or_(
                 geocoding_reason == QueueReason.NAME_MISMATCH.value,
                 review_note.contains("name_mismatch"),
+                # 신규 장소 + 주소/좌표 결과의 POI identity 미검증 차단(T-166, G4/D2)도
+                # "장소명 확인" 검수 버킷으로 표시한다(전용 안정 enum은 늘리지 않는다).
+                review_note.contains("name_unverified"),
             ),
             QueueReason.NAME_MISMATCH.value,
         ),
