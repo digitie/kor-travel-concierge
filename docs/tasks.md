@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
 - [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판) — **사용자 결정(2026-07-13)**: prod 자동 전사는 의도된 현행(ON) 유지, auto 기본값 결정 완료 — 수동 force·model 인자·상한만 구현
 - [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판) — **사용자 결정(2026-07-13)**: NCP Maps 결과는 캐시·저장 대상 제외 확정(`docs/provider-policy.md`)
 - [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
@@ -53,6 +52,23 @@
 
 ## 완료
 
+- [x] **T-168**: description 단독 후보 경로 — 자막 전 provider 최종 실패(T-164 판정) 시 영상을
+  폐기하던 것을 막고(§1.3 D1 수율), 저장된 영상 설명(제목·태그 포함)이 `DESCRIPTION_POI_MIN_LENGTH`
+  (기본 200자) 이상이면 그 텍스트로 **검수 전용** 후보를 추출한다(`source_kind='description'`).
+  **자동확정 절대 금지**: `apply_geocode_to_candidate` 초입에서 description 후보는 게이트 통과 무관
+  needs_review·`feature_export_status=PENDING`·장소 미생성(return None) → snapshot/changes에서 자연
+  제외. grounding은 raw description 대조로 관측만(자동확정 미사용). recall은 `source_kind` 태깅으로
+  audit 분리 측정(후보 수 증가를 신뢰성 향상으로 계상 안 함). 스키마 변경 없음(기존
+  `EvidenceSourceKind.DESCRIPTION`·`QueueReason.DESCRIPTION_ONLY` 재사용). 2렌즈 적대적 리뷰:
+  **MAJOR 1 확정 수정** — 재처리 시 dedup이 `(video_id, 정규화 이름)`만 키로 써 저품질 description
+  후보가 나중 온 고품질 transcript 후보를 영구 차단(자막 우선순위 역전) → **source_kind 우선순위
+  비대칭 dedup**(transcript>description): 같은/상위 소스 존재 시 새 후보 억제, 미검수 하위(description)
+  후보만 있으면 T-160 soft delete로 supersede 후 상위 후보 생성, 사람이 손댄 후보는 보존.
+  MINOR: 200자 게이트 트레이드오프 주석, description 후보 `is_domestic` None→`review_note=
+  domestic_unverified`로 FOREIGN 버킷 보존(T-166 fail-closed 대칭), 회귀 테스트 5건(supersede 재현·
+  역방향 억제·export 제외·domestic 버킷·`_build_description_text` 경계). 검증: 격리 DB backend 전체
+  pytest 561 passed(pre-existing 1건 외 0), 신규 10 passed, migration 불필요. (2026-07-13, 로드맵
+  PR-17 개정·§10 B3·§1.3 D1)
 - [x] **T-167**: 병합 제안 + auto-match audit — 신뢰성 코어 마지막 조각(§10 D6·G9). 공용
   `place_name.py`(정규화·pairwise `names_match` 단일 출처)로 자동확정 게이트·배치 dedup·병합 제안이
   같은 규칙 공유, 배치 dedup을 `(video_id, 정규화 이름)`으로 완화("성심당/성심당 본점" 통합, D6).

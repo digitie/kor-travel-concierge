@@ -91,6 +91,53 @@ def _apply_cached_transcript_cache(video: YoutubeVideo, raw_asset: Any) -> None:
 # 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
 _MAX_TRANSCRIPT_CHARS = 350_000
 
+# description 단독 후보(T-168) evidence에 남기는 원문 발췌 상한. 검수 참고용 근거이므로
+# 전체 설명을 복사해 evidence JSON을 부풀리지 않고 앞부분만 발췌한다.
+_DESCRIPTION_EVIDENCE_EXCERPT_CHARS = 4_000
+
+
+def _build_description_text(video: YoutubeVideo) -> str:
+    """영상 설명 단독 POI 추출에 투입할 텍스트(제목+설명 원문+태그)를 조립한다(T-168).
+
+    자막이 최종 실패했을 때만 쓰는 fallback 입력이다. **저장된 `description_raw`를 재활용**
+    하며 새로 YouTube API를 호출하지 않는다 — YouTube API metadata의 refresh/delete·30일
+    보존 규칙은 metadata 저장 계층(`youtube_videos`) 소관이고(T-158 `docs/provider-policy.md`
+    C-7), 이 파생 후보는 그 규칙의 대상이 아니다(파생 POI로 확대 금지).
+    """
+    parts: list[str] = []
+    if video.title:
+        parts.append(video.title.strip())
+    if video.description_raw:
+        parts.append(video.description_raw.strip())
+    tags = video.tags_json
+    if isinstance(tags, list) and tags:
+        tag_text = " ".join(str(tag).strip() for tag in tags if str(tag).strip())
+        if tag_text:
+            parts.append(tag_text)
+    return "\n".join(part for part in parts if part)
+
+
+# recall 경로 source_kind(자막 실패 fallback으로 생성되는 저신뢰 후보). 같은 (영상, 이름)
+# pair에 자막 등 실제 소스 후보가 있으면 그것을 우선한다(자막 우선순위 역전 방지).
+_RECALL_SOURCE_KINDS = frozenset(
+    {EvidenceSourceKind.DESCRIPTION.value, EvidenceSourceKind.VISUAL.value}
+)
+
+
+def _source_kind_priority(source_kind: str | None) -> int:
+    """dedup 우선순위. 실제 소스(transcript 등)=1 > recall 소스(description/visual)=0."""
+    return 0 if source_kind in _RECALL_SOURCE_KINDS else 1
+
+
+def _is_supersedable(candidate: ExtractedPlaceCandidate) -> bool:
+    """상위 소스 후보가 대체할 수 있는 저우선 후보인지 판정한다.
+
+    사람이 손대지 않은 needs_review 후보만 대상이다 — user_corrected/ignored/matched(사람
+    확정·제외 결정)는 보존한다. 자막 복구 후 재처리에서 미검수 description 후보만 자막
+    후보로 승격 교체하고, 이미 확정·제외된 후보는 그 결정을 존중한다.
+    """
+    return candidate.match_status == MatchStatus.NEEDS_REVIEW.value
+
 
 async def _report(reporter: StatusReporter | None, message: str, progress: float | None = None) -> None:
     if reporter is not None:
@@ -276,11 +323,40 @@ async def process_video_batch(
                         item_ref=video.video_id,
                         detail=detail,
                     )
+                    # 자막 전 provider 최종 실패(T-164 판정). 영상을 폐기하는 대신 description
+                    # 단독 경로(T-168, recall)를 시도한다: 저장된 설명(제목·태그 포함)이 임계
+                    # 길이 이상이면 그 텍스트로 검수 전용 후보를 만든다(자동확정 금지). 이 경로는
+                    # 자막 최종 실패 fallback 전용이라 자막이 있으면(위 분기에서 진행) 타지 않는다.
+                    description_text = _build_description_text(video)
+                    min_length = get_settings().DESCRIPTION_POI_MIN_LENGTH
+                    if len(description_text) >= min_length:
+                        await _report(
+                            status_reporter,
+                            f"{label} 자막 최종 실패 — 영상 설명"
+                            f"({len(description_text)}자)으로 검수 전용 후보를 추출합니다. "
+                            f"자막 사유: {attempts_line or '없음'}.",
+                        )
+                        # description은 교정·자막 asset 저장을 거치지 않고(정제된 metadata라
+                        # 교정 불필요, 신규 취득 아님) 그대로 배치 POI 입력·grounding haystack이
+                        # 된다. source_kind=description으로 아래 후보 생성이 분기한다.
+                        batch[alias] = {
+                            "video": video,
+                            "transcript_source": "description",
+                            "asset_id": None,
+                            "corrected": description_text,
+                            "raw_text": description_text,
+                            "source_kind": EvidenceSourceKind.DESCRIPTION.value,
+                        }
+                        continue
+                    # description 미달: 기존대로 실패. 사유 코드 description_too_short를 남긴다
+                    # (T-164 관측 재사용 — transcript_failure_code는 실제 자막 실패 코드를 보존).
                     video.crawl_status = CrawlStatus.FAILED
                     summary["failed_videos"] += 1
                     await _report(
                         status_reporter,
-                        f"{label}의 자막을 찾지 못해 건너뜁니다. 사유: {attempts_line or '없음'}.",
+                        f"{label}의 자막을 찾지 못했고 설명도 짧아 건너뜁니다"
+                        f"(description_too_short: {len(description_text)}자<{min_length}자). "
+                        f"자막 사유: {attempts_line or '없음'}.",
                     )
                     continue
                 await _report_stage(
@@ -503,21 +579,26 @@ async def process_video_batch(
     #    영상 내 "성심당/성심당 본점" 같은 변형 표기가 별개 후보로 흩어지지 않는다(D6,
     #    로드맵 PR-14 절차 2). soft delete된 후보는 dedup 기준에서 제외한다(T-160/B1 절차 2 —
     #    재추출 시 새 후보로 검수 큐에 재등장할 수 있고 영구 억제는 `ignored`·영상 제외 담당).
+    #    dedup은 source_kind 우선순위로 **비대칭** 처리한다(자막 우선순위 역전 방지): 같은
+    #    pair에 같은/상위 우선 소스 후보가 있으면 새 후보를 억제하고, 새 상위 소스 후보(예:
+    #    자막 복구 후 transcript)가 기존 미검수 하위 소스 후보(description)만 만나면 그 하위
+    #    후보를 supersede(soft delete)하고 새 후보를 만든다. 저품질 description 후보가 고품질
+    #    transcript 후보를 영구 차단하던 문제를 막는다.
     batch_video_ids = [item["video"].video_id for item in batch.values()]
-    existing_pairs: set[tuple[str, str]] = set()
+    existing_by_pair: dict[tuple[str, str], list[ExtractedPlaceCandidate]] = {}
     if batch_video_ids:
         rows = await session.execute(
-            select(
-                ExtractedPlaceCandidate.video_id,
-                ExtractedPlaceCandidate.ai_place_name,
-            ).where(
+            select(ExtractedPlaceCandidate).where(
                 ExtractedPlaceCandidate.video_id.in_(batch_video_ids),
                 ExtractedPlaceCandidate.deleted_at.is_(None),
             )
         )
-        existing_pairs = {
-            (str(v), normalize_place_name(n)) for v, n in rows.all()
-        }
+        for existing in rows.scalars().all():
+            key = (
+                str(existing.video_id),
+                normalize_place_name(existing.ai_place_name),
+            )
+            existing_by_pair.setdefault(key, []).append(existing)
     # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
     # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
     grounding_indexes: dict[str, grounding.GroundingIndex] = {
@@ -530,10 +611,29 @@ async def process_video_batch(
         if item is None:
             continue
         video = item["video"]
+        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
         dedup_key = (video.video_id, normalize_place_name(poi.official_name))
-        if dedup_key in existing_pairs:
+        existing = existing_by_pair.get(dedup_key, [])
+        new_priority = _source_kind_priority(source_kind)
+        # 같은/상위 우선순위 후보가 이미 있으면 새 후보를 억제한다(멱등 + 자막 우선).
+        if any(_source_kind_priority(c.source_kind) >= new_priority for c in existing):
             continue
-        existing_pairs.add(dedup_key)
+        # 여기부터 existing은 전부 하위 우선순위(예: 기존 description, 신규 transcript).
+        # 사람이 손댄(needs_review 아님) 하위 후보가 있으면 그 결정을 존중해 새 후보를
+        # 만들지 않는다(확정 장소·제외 결정 보존).
+        if any(not _is_supersedable(c) for c in existing):
+            continue
+        # 하위 후보가 전부 미검수면 supersede(T-160 soft delete)하고 새 상위 소스 후보 생성.
+        if existing:
+            from ktc.services import place_service  # 지연 import(순환 회피)
+
+            await place_service.soft_delete_candidates(
+                session,
+                [c.id for c in existing],
+                reason="superseded_by_higher_priority_source",
+                deleted_by="system",
+            )
+        existing_by_pair[dedup_key] = []
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
         category_code = (
             poi.category_code
@@ -541,17 +641,61 @@ async def process_video_batch(
             or category_catalog.UNKNOWN_CATEGORY_CODE
         )
         category_label = category_catalog.label_for_or_unknown(category_code)
-        # raw 자막 대조 grounding(T-165, B3). 교정본이 아니라 원본 자막과 대조한다.
-        # 실패(unverified/missing) 후보도 폐기하지 않고 저신뢰로 마킹만 하며(사유 표시),
-        # verified_raw가 아니면 아래 지오코딩 자동확정·export가 차단된다.
+        # 원문 대조 grounding(T-165/T-168, B3). transcript 후보는 원본 자막, description
+        # 후보는 원문 설명(raw description)을 haystack으로 대조한다(grounding_indexes가
+        # 영상별 raw_text로 만들어졌으므로 source_kind에 맞는 원천이 자동 반영). 실패
+        # (unverified/missing) 후보도 폐기하지 않고 상태만 기록한다. transcript는 verified_raw가
+        # 아니면 지오코딩 자동확정·export가 차단되고, description은 grounding과 무관하게 늘
+        # 검수 전용이라(자동확정 금지) grounding_status는 관측용으로만 남는다.
         grounded = grounding.evaluate_transcript_grounding(
             poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
         )
+        # 근거(evidence) 공통 조각: 카테고리·타임스탬프·grounding. transcript/description이
+        # 같은 형태를 공유하고 producer별 출처 필드만 다르게 감싼다.
+        common_evidence = {
+            "timestamp_start": poi.timestamp_start,
+            "timestamp_end": poi.timestamp_end,
+            "speaker_note": poi.speaker_note,
+            "location_hint": poi.location_hint,
+            # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
+            "category_code": category_code,
+            "category_source": "llm"
+            if poi.category_code
+            else ("default" if normalized_default_category else "unknown"),
+            # raw grounding 근거. quote·판정·매칭 세그먼트 ref를 보존한다.
+            # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
+            "evidence_quote": grounded.evidence_quote,
+            "grounding_status": grounded.status.value,
+            "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
+            "matched_segment_index": grounded.matched_segment_index,
+            "matched_segment_start_seconds": grounded.matched_segment_start_seconds,
+            "llm_confidence": poi.confidence,
+        }
+        if source_kind == EvidenceSourceKind.DESCRIPTION.value:
+            # description 단독 후보(T-168): 원문 출처(발췌·영상 id)를 evidence에 남긴다.
+            provider_evidence: dict[str, Any] = {
+                "description": {
+                    "source": "youtube_description",
+                    "video_id": video.video_id,
+                    "excerpt": (item.get("raw_text") or "")[
+                        :_DESCRIPTION_EVIDENCE_EXCERPT_CHARS
+                    ],
+                    **common_evidence,
+                }
+            }
+        else:
+            provider_evidence = {
+                "transcript": {
+                    "source": item["transcript_source"],
+                    "asset_id": item["asset_id"],
+                    **common_evidence,
+                }
+            }
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
             source_channel_id=video.channel_id,
             source_playlist_id=playlist_id,
-            source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+            source_kind=source_kind,
             source_text=poi.speaker_note or poi.official_name,
             ai_place_name=poi.official_name,
             speaker_note=poi.speaker_note,
@@ -565,34 +709,12 @@ async def process_video_batch(
             review_note=(
                 "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
             ),
-            provider_evidence_json={
-                "transcript": {
-                    "source": item["transcript_source"],
-                    "asset_id": item["asset_id"],
-                    "timestamp_start": poi.timestamp_start,
-                    "timestamp_end": poi.timestamp_end,
-                    "speaker_note": poi.speaker_note,
-                    "location_hint": poi.location_hint,
-                    # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
-                    "category_code": category_code,
-                    "category_source": "llm"
-                    if poi.category_code
-                    else ("default" if normalized_default_category else "unknown"),
-                    # raw grounding 근거(T-165). quote·판정·매칭 세그먼트 ref를 보존한다.
-                    # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
-                    "evidence_quote": grounded.evidence_quote,
-                    "grounding_status": grounded.status.value,
-                    "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
-                    "matched_segment_index": grounded.matched_segment_index,
-                    "matched_segment_start_seconds": (
-                        grounded.matched_segment_start_seconds
-                    ),
-                    "llm_confidence": poi.confidence,
-                }
-            },
+            provider_evidence_json=provider_evidence,
             feature_export_status=FeatureExportStatus.PENDING.value,
         )
         session.add(candidate)
+        # 같은 배치 후속 poi가 방금 만든 후보를 같은 우선순위로 dedup하도록 맵에 등록한다.
+        existing_by_pair.setdefault(dedup_key, []).append(candidate)
         created_candidates.append(candidate)
         summary["created_candidates"] += 1
 

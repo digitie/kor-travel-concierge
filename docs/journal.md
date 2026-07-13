@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-07-13: T-168 — description 단독 후보 경로 (D1 recall)
+
+- **문제**: 자막 3 provider가 전부 실패한 영상은 POI 후보 없이 폐기돼 수율 손실(§1.3 D1). 자막 실패가
+  일시적 차단·비활성일 수 있는데 그 영상의 설명(제목·태그)에 이미 장소가 언급된 경우가 많다.
+- **구현**: `process_video_batch`에서 자막 최종 실패(T-164 판정: transcript None or not segments) 시
+  영상을 FAILED로 버리는 대신, `_build_description_text`(제목+`description_raw`+태그)가
+  `DESCRIPTION_POI_MIN_LENGTH`(기본 200자) 이상이면 그 텍스트를 단일 배치 아이템으로 POI 추출에 투입
+  (`source_kind='description'`, 미달이면 기존대로 FAILED+`description_too_short`). 자막 성공 시 이 경로를
+  타지 않는다(자막 우선, fallback 전용). **자동확정 절대 금지**: `apply_geocode_to_candidate` 초입에서
+  description 후보는 게이트 통과 무관 needs_review·`review_note`·`feature_export_status=PENDING`·
+  장소 미생성(return None) → feature snapshot/changes에서 자연 제외. grounding은 raw description 대조로
+  관측만. recall은 `source_kind` 태깅으로 T-182 audit 필터가 분리 측정(후보 수↑를 신뢰성↑로 계상 안 함).
+  스키마 변경 없음(기존 enum 재사용).
+- **적대적 리뷰(PR 전, 2렌즈) — MAJOR 1 확정 수정**: 재처리 시 dedup이 `(video_id, 정규화 이름)`만
+  키로 쓰고 `source_kind`를 무시 → run1 자막 실패로 만든 저품질 description 후보(영구 needs_review·export
+  제외)가 run2 자막 복구·재처리로 나온 고품질 transcript 후보를 `continue`로 영구 차단(자막 우선순위
+  역전, 스펙 위배). 수정: **source_kind 우선순위 비대칭 dedup**(`_source_kind_priority`: transcript 등
+  실제 소스=1 > description/visual=0). 같은/상위 우선순위 후보 존재 시 새 후보 억제(멱등+자막 우선),
+  미검수(`NEEDS_REVIEW`) 하위 후보만 있으면 T-160 `soft_delete_candidates`(reason=
+  `superseded_by_higher_priority_source`)로 supersede 후 상위 후보 생성, 사람이 손댄(user_corrected/
+  ignored/matched) 후보는 보존. MINOR: 200자 게이트는 신호 밀도 필터가 아닌 최소 컷임을 config 주석에
+  명시, description 후보 `is_domestic` None(미확인)은 `review_note=domestic_unverified`로 두어
+  queue_reason이 FOREIGN 버킷으로 가게(T-166 fail-closed 대칭, DESCRIPTION_ONLY가 국내여부 미확인을
+  가리지 않게), 회귀 테스트 5건 추가.
+- **금지 준수**: 자막 우선순위 역전 없음(수정으로 회복), description 후보 자동확정·export 노출 없음,
+  YouTube metadata 신규 취득 없음(저장된 `description_raw` 재활용), queue_reason 파생 로직(T-182 소유)
+  직접 변경 없음, 스키마 변경 없음.
+- **검증**: 격리 disposable DB backend 전체 pytest 561 passed(pre-existing 1건 외 0), 신규
+  `test_etl_description_path.py` 10 passed, 타깃 스위트 112 passed(pre-existing 1건 외 0), `compileall`·
+  `git diff --check` 통과, 최신 main(#197) 0 behind.
+
 ## 2026-07-13: T-167 — 병합 제안 + auto-match audit (D6/G9)
 
 - **문제**: dedup이 `(video_id, official_name)` 완전일치라 "성심당/성심당 본점"이 별개 후보(D6).
