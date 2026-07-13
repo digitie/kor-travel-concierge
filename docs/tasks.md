@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-165**: raw grounding 게이트 — `evidence_quote`+segment ID를 raw 자막 기준으로 대조, `grounding_status` enum(verified_raw|unverified|missing|not_applicable|legacy_unknown) 저장, transcript 후보는 verified_raw 아니면 자동확정·export 차단. 선행: T-164. (PR-13 개정판, §10 B3, G4)
 - [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
 - [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
 - [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
@@ -56,6 +55,18 @@
 
 ## 완료
 
+- [x] **T-165**: raw grounding 게이트 — 원 PR-13이 교정본(생성 모델 산출물)을 검사하던 것을 T-164가
+  보존한 **raw 자막 segment** 대조로 격상했다(§10 B3). batch POI 스키마에 `evidence_quote`·`confidence`
+  추가, `grounding.py`가 quote를 raw(교정 이전)와 대조해 `grounding_status` enum(verified_raw|unverified|
+  missing|not_applicable|legacy_unknown, migration 0021)으로 저장. **transcript 후보는 verified_raw
+  아니면 자동확정 차단**(geocode MATCHED 직전 게이트)·export 제외(feature_export _classify)·queue_reason
+  `ungrounded`. LLM 자가 confidence는 기록만(§2.4-3 가짜 정밀도 방지). 2렌즈 적대적 리뷰: **MAJOR 3**
+  (①기존 export된 legacy 후보의 대량 tombstone 회수 → legacy는 재처리 전까지 노출 유지, ②queue_reason
+  UNGROUNDED가 기존 사유 마스킹 → legacy 제외, ③교정본 띄어쓰기 교정으로 정상 POI 오차단 → CJK 공백
+  정규화)·MINOR 4 반영, legacy UPSERT 유지 신규 테스트 포함. 게이트 3개가 "legacy는 기존 상태 유지,
+  새 확정만 verified 요구"로 일관. 검증: 격리 DB backend pytest 505 passed(pre-existing 1건 외 0),
+  alembic round-trip. raw-vs-corrected 잔여 오차단율은 T-169 baseline live yield로 실측 후 재검토.
+  (2026-07-13, 로드맵 PR-13 개정·§10 B3·G4·§1.3 D3)
 - [x] **T-164**: transcript_attempts 관측 — 자막 3 provider가 `except Exception: return None`으로
   실패 원인을 소실하던 문제(§1.3 D1)를 해소했다. `transcript_attempts` durable 테이블(provider별
   시도·outcome 코드 8종(no_captions/blocked/rate_limited/download_error/parse_error/disabled/
