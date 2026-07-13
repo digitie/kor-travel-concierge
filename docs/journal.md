@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-07-13: T-167 — 병합 제안 + auto-match audit (D6/G9)
+
+- **문제**: dedup이 `(video_id, official_name)` 완전일치라 "성심당/성심당 본점"이 별개 후보(D6).
+  자동확정(T-165/166 게이트 통과분)은 MATCHED로 큐에서 사라져 정밀도(오확정률) 측정 표본이 없다(G9).
+- **구현**: 공용 `place_name.py`(정규화·pairwise names_match 단일 출처 — 게이트·dedup·병합 제안 공유),
+  배치 dedup `(video_id, 정규화 이름)` 완화, 병합 "제안"만(자동 병합 금지) + `merge-suggestions` API,
+  근접 재사용 반경 100→300m(이름 게이트 통과 전제). **auto-match audit 표본**(migration 0022:
+  audit_status/reviewed_by/at/note + 부분 인덱스, 결정적 후보 id 해시 표본, 오확정률 집계) — MATCHED·
+  export 상태 불변(사후 관측 전용, 되돌리기는 reopen T-160/184 위임). G9의 "auto-match audit 표본
+  오확정률"로 T-166 정밀도 트레이드오프 실측 가능.
+- **적대적 리뷰(PR 전, 2렌즈)**: BLOCKER/MAJOR 0. 정밀도 정정 — **`N호점` 정규화 제외**: 두 렌즈가
+  "롯데리아 1호점"·"2호점"이 둘 다 "롯데리아"로 정규화돼 서로 다른 번호 지점이 뭉개짐을 지적(로드맵
+  PR-14 정규식은 `[0-9]+호점` 포함했으나 정밀도를 해침). 본점/본관/직영점(같은 장소 표기)만 유지하고
+  ADR-39로 편차 기록. MINOR: audit reviewed_by를 클라이언트 body 대신 검증 proxy actor로(G9 provenance),
+  audit 표본을 결정적(후보 id 해시)으로, 병합 스캔 limit 완화, migration/import 정리.
+- **금지 준수**: pg_trgm GIN(§2.3 기각)·자동 병합 실행·광범위 …점 제거 안 함.
+- **검증**: 격리 DB backend pytest pre-existing 1건 외 0(549 passed), 타깃 5파일 전부 통과, alembic
+  0022 round-trip 단일 head, 최신 main(#195) 리베이스 0 behind, `git diff --check` 통과.
+
 ## 2026-07-13: T-166 — 자동확정 identity gate (B3/D2/D4)
 
 - **문제**: 지오코딩 자동확정이 Kakao 키워드 단일 결과면 무조건 matched/1.0, 신규 장소 생성 경로는

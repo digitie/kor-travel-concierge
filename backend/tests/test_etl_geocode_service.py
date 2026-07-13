@@ -6,9 +6,11 @@ import json
 
 from sqlalchemy import select
 
+from ktc.etl import geocode_service
 from ktc.etl.geocode_service import _names_match, apply_geocode_to_candidate
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.models import (
+    AuditStatus,
     EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -698,6 +700,132 @@ async def test_apply_ambiguous_all_unrefined_stays_review(session):
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
     assert refreshed.review_note == "ambiguous"
+
+
+# --- T-167 auto-match audit 표본 ---
+
+
+def test_audit_sample_fraction_is_deterministic_and_bounded():
+    # 같은 id는 늘 같은 값(재현성), 값은 [0,1), id 없으면 경계 밖(1.0)이라 표본화되지 않는다.
+    from ktc.etl.geocode_service import _audit_sample_fraction
+
+    frac = _audit_sample_fraction(12345)
+    assert frac == _audit_sample_fraction(12345)
+    assert 0.0 <= frac < 1.0
+    assert _audit_sample_fraction(None) == 1.0
+    # 서로 다른 id는 (일반적으로) 다른 값 — 표본이 특정 id에 고정되지 않음.
+    assert _audit_sample_fraction(1) != _audit_sample_fraction(2)
+
+
+async def _matched_poi_decision(name="월정리 카페"):
+    return GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name=name,
+            road_address="제주특별자치도 제주시",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+
+
+async def test_auto_match_flags_audit_sample_when_rate_full(session, monkeypatch):
+    # 표본율 1.0이면 자동확정 후보가 audit 표본으로 표시되되 MATCHED·export는 유지된다.
+    monkeypatch.setattr(
+        geocode_service.get_settings(), "AUTO_MATCH_AUDIT_SAMPLE_RATE", 1.0
+    )
+    candidate = await _make_candidate(session)
+    place = await apply_geocode_to_candidate(
+        session, candidate, await _matched_poi_decision()
+    )
+    assert place is not None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.audit_status == AuditStatus.PENDING.value
+    # 표본이라도 자동확정 상태·export는 그대로(사후 관측 — 노출 차단 아님).
+    assert refreshed.feature_export_status == FeatureExportStatus.READY
+
+
+async def test_auto_match_no_audit_sample_when_rate_zero(session, monkeypatch):
+    monkeypatch.setattr(
+        geocode_service.get_settings(), "AUTO_MATCH_AUDIT_SAMPLE_RATE", 0.0
+    )
+    candidate = await _make_candidate(session)
+    place = await apply_geocode_to_candidate(
+        session, candidate, await _matched_poi_decision()
+    )
+    assert place is not None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.audit_status is None
+
+
+async def test_needs_review_not_flagged_for_audit(session, monkeypatch):
+    # 자동확정되지 않은(검수 큐) 후보는 표본율이 1.0이어도 audit 표본이 아니다.
+    monkeypatch.setattr(
+        geocode_service.get_settings(), "AUTO_MATCH_AUDIT_SAMPLE_RATE", 1.0
+    )
+    candidate = await _make_candidate(session)
+    decision = GeocodeDecision("needs_review", None, 0.0, "no_result", 0)
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.audit_status is None
+
+
+# --- T-167 병합 반경 300m + 이름 게이트 결합 ---
+
+
+async def test_merge_radius_reuses_place_up_to_300m(session):
+    # 100m 밖·300m 안(~200m)의 같은 이름 기존 장소를 재사용한다(config 반경 300m).
+    existing = TravelPlace(
+        name="월정리 카페", latitude=33.5563, longitude=126.7958, is_geocoded=True
+    )
+    session.add(existing)
+    await session.commit()
+    await session.refresh(existing)
+
+    candidate = await _make_candidate(session, name="월정리 카페")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5581, longitude=126.7958  # ~약 200m 북쪽
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place.place_id == existing.place_id
+    places = (await session.execute(select(TravelPlace))).scalars().all()
+    assert len(places) == 1
+
+
+async def test_merge_radius_name_mismatch_within_300m_blocks(session):
+    # 300m 안이라도 이름 게이트가 불일치면 자동확정하지 않는다(반경 확대 ≠ 무검증 병합).
+    existing = TravelPlace(
+        name="월정리 카페", latitude=33.5563, longitude=126.7958, is_geocoded=True
+    )
+    session.add(existing)
+    await session.commit()
+
+    candidate = await _make_candidate(session, name="다른 식당")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(latitude=33.5581, longitude=126.7958),  # ~200m
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "nearby_place_name_mismatch"
 
 
 async def test_apply_ambiguous_single_pass_still_blocked_by_grounding(session):

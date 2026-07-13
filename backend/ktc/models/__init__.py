@@ -27,7 +27,11 @@ from ktc.models.crawl_run import (
     RunState,
 )
 from ktc.models.crawl_run_stage_event import CrawlRunStageEvent, StageOutcome
-from ktc.models.extracted_place_candidate import ExtractedPlaceCandidate, MatchStatus
+from ktc.models.extracted_place_candidate import (
+    AuditStatus,
+    ExtractedPlaceCandidate,
+    MatchStatus,
+)
 from ktc.models.feature_evidence import (
     EvidenceSourceKind,
     FeatureExportStatus,
@@ -96,6 +100,7 @@ __all__ = [
     "DescriptionReviewStatus",
     "ExtractedPlaceCandidate",
     "MatchStatus",
+    "AuditStatus",
     "EvidenceSourceKind",
     "FeatureExportStatus",
     "GroundingStatus",
