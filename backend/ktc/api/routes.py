@@ -36,6 +36,7 @@ from ktc.etl import (
 )
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
+    LANE_INTERACTIVE,
     AssetType,
     CrawlRun,
     CrawlStatus,
@@ -360,6 +361,8 @@ async def start_harvest(
     if canonical_video:
         run_payload["video_ids"] = [canonical_video]
 
+    # 수집(harvest)은 대량 배치 성격이라 기본 lane(batch)을 쓴다(T-163). 사용자
+    # 트리거지만 대화형 레인을 점유시키지 않는다.
     run = await crawl_run_service.create_run(
         session,
         job_type="harvest",
@@ -418,6 +421,7 @@ async def trigger_poi_batch(
             job_type="poi_batch",
             source=RunSource.WEB,
             payload={"video_ids": chunk},
+            # 미처리 영상 대량 백로그 등록 — 배치 레인(기본, T-163).
             commit=False,
         )
         job_ids.append(str(run.id))
@@ -462,6 +466,9 @@ async def reprocess_videos(
             job_type="poi_batch",
             source=RunSource.WEB,
             payload={"video_ids": chunk, "start_stage": payload.start_stage},
+            # 검수 화면의 사용자 재처리 — 대화형 레인(T-163). poi_batch job_type이지만
+            # 발원이 사용자 버튼이라 배치 수집 후속과 달리 interactive다.
+            lane=LANE_INTERACTIVE,
             commit=False,
         )
         job_ids.append(str(run.id))
@@ -556,6 +563,9 @@ async def start_transcript(
         target_type=source.target_type,
         target_id=source.target_id,
         payload=transcript_payload,
+        # 사용자 확인 후 수동 자막 후처리 트리거 — 대화형 레인(T-163). 이 transcript
+        # 작업이 낳는 poi_batch child는 배치다(_enqueue_poi_batches, splitter 정책).
+        lane=LANE_INTERACTIVE,
         commit=False,
     )
     await audit_service.record(
@@ -1338,6 +1348,8 @@ async def trigger_deep_research(
         target_type="place",
         target_id=str(place_id),
         payload=payload.model_dump(),
+        # 장소 상세에서 사용자가 직접 트리거 — 대화형 레인(T-163).
+        lane=LANE_INTERACTIVE,
         commit=False,
     )
     await audit_service.record(
@@ -2033,6 +2045,8 @@ def _run_summary_dict(run: CrawlRun, titles: dict[Any, Any]) -> dict[str, Any]:
         "job_id": str(run.id),
         "job_type": run.job_type,
         "job_type_label": _job_type_label(run.job_type),
+        # 워커 레인(T-163, additive). interactive=사용자 직접, batch=스케줄러/대량.
+        "lane": run.lane,
         "source": run.source,
         "target_type": run.target_type,
         "target_type_label": _target_type_label(run.target_type),

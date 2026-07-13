@@ -183,6 +183,7 @@ async def scan_due_targets(
                 )
                 continue
 
+            # 스케줄러 스캔 발원 harvest/video_analysis — 배치 레인(기본, T-163).
             run = await crawl_run_service.create_run(
                 session,
                 job_type=job_type,
@@ -421,6 +422,8 @@ async def run_target_now(
         await session.commit()
         return target, existing, False
 
+    # '지금 진행'/강제 재실행(run-now)은 사용자 트리거지만 수집 성격이라 배치 레인
+    # (기본, T-163) — 대화형 레인을 수집으로 점유시키지 않는다.
     run = await crawl_run_service.create_run(
         session,
         job_type=job_type,
@@ -459,6 +462,7 @@ async def ensure_source_scan_run(
         target_id="active",
     ):
         return None, False
+    # 주기 스캔 enqueue 작업 자체 — 배치 레인(기본, T-163).
     run = await crawl_run_service.create_run(
         session,
         job_type="source_scan",

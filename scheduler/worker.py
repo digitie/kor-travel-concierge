@@ -36,6 +36,8 @@ from ktc.etl import (
 from ktc.etl.pipeline import run_harvest
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
+    LANE_BATCH,
+    LANE_INTERACTIVE,
     CrawlRun,
     CrawlStatus,
     RunSource,
@@ -46,6 +48,15 @@ from ktc.models import (
     YoutubeVideoAnalysisRun,
     utcnow,
 )
+
+# 워커 레인별 interval job id(T-163). 각 레인 1 인스턴스(max_instances=1)로 등록한다.
+WORKER_JOB_IDS: dict[str, str] = {
+    LANE_INTERACTIVE: "crawl-run-worker-interactive",
+    LANE_BATCH: "crawl-run-worker-batch",
+}
+# lane 분리 이전 단일 워커 job id. persistent jobstore에 남아 lane 미지정 run_once를
+# 계속 돌릴 수 있어 기동 시 제거한다(T-163).
+LEGACY_WORKER_JOB_ID = "crawl-run-worker"
 from ktc.services import (
     crawl_run_service,
     place_service,
@@ -328,6 +339,9 @@ async def _enqueue_poi_batches(
             job_type="poi_batch",
             source=source,
             payload=payload,
+            # poi_batch child는 발원(harvest/transcript/백로그)과 무관하게 배치다
+            # (자막 fetch·LLM 추출·지오코딩의 순차 배치 작업 — T-163).
+            lane=LANE_BATCH,
             commit=False,
         )
         run_ids.append(run.id)
@@ -823,6 +837,7 @@ async def execute_run(
 async def run_once(
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     *,
+    lane: str | None = None,
     handlers: Mapping[str, JobHandler] | None = None,
     stale_threshold_seconds: int | None = None,
     max_retries: int | None = None,
@@ -830,6 +845,8 @@ async def run_once(
 ) -> int | None:
     """스케줄러 tick 1회.
 
+    `lane`이 주어지면 그 레인의 pending만 claim한다(T-163 — 대화형/배치 워커 분리).
+    stale 재투입은 lane 무관 공통이다(재투입 시 원 lane을 보존한다).
     반환값은 claim하여 실행한 `crawl_runs.id`이며, 실행할 작업이 없으면 None이다.
     """
     settings = get_settings()
@@ -845,7 +862,7 @@ async def run_once(
                 max_retries if max_retries is not None else settings.SCHEDULER_MAX_RETRIES
             ),
         )
-        run = await crawl_run_service.claim_next_pending(session)
+        run = await crawl_run_service.claim_next_pending(session, lane=lane)
 
     if run is None:
         return None
@@ -890,22 +907,63 @@ async def worker_loop(
             )
         }
     scheduler = AsyncIOScheduler(**scheduler_kwargs)
-    run_once_kwargs = (
+    # job 등록/제거는 start() 이후에 한다 — persistent SQLAlchemyJobStore는 start()
+    # 시점에 연결되므로 구 job id 제거가 실제 store 행에 반영되려면 running 상태여야
+    # 한다(T-163). start()와 register 사이에는 await가 없어 구 job이 한 tick도 못 돈다.
+    scheduler.start()
+    register_worker_jobs(
+        scheduler,
+        session_factory=session_factory,
+        handlers=handlers,
+        use_persistent_jobstore=use_persistent_jobstore,
+        settings=settings,
+    )
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def register_worker_jobs(
+    scheduler: Any,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    handlers: Mapping[str, JobHandler] | None,
+    use_persistent_jobstore: bool,
+    settings: Any,
+) -> None:
+    """워커 레인 job과 source-scan job을 (재)등록한다(T-163).
+
+    - 구 단일 워커 job id(`crawl-run-worker`, lane 미지정)를 먼저 제거한다. persistent
+      store에 잔존하면 lane 필터 없는 `run_once`를 계속 돌려 레인 격리를 무력화하기
+      때문이다. 부재/미지원은 무시한다.
+    - 레인당 interval job 1개씩(`-interactive`/`-batch`, 각 `max_instances=1`)을 등록한다.
+      persistent 분기는 kwargs가 직렬화돼야 하므로 lane만 넘기고, 비-persistent(테스트)
+      분기는 session_factory/handlers도 함께 넘긴다.
+    - scheduler는 start()된 상태여야 persistent store에서 실제 제거가 반영된다.
+    """
+    try:
+        scheduler.remove_job(LEGACY_WORKER_JOB_ID)
+    except Exception:  # noqa: BLE001 - 부재/미지원 jobstore는 정상 경로
+        pass
+    base_kwargs: dict[str, Any] = (
         {}
         if use_persistent_jobstore
         else {"session_factory": session_factory, "handlers": handlers}
     )
-    scheduler.add_job(
-        run_once,
-        "interval",
-        seconds=settings.SCHEDULER_POLL_INTERVAL_SECONDS,
-        next_run_time=datetime.now(timezone.utc),
-        kwargs=run_once_kwargs,
-        id="crawl-run-worker",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
+    for lane, job_id in WORKER_JOB_IDS.items():
+        scheduler.add_job(
+            run_once,
+            "interval",
+            seconds=settings.SCHEDULER_POLL_INTERVAL_SECONDS,
+            next_run_time=datetime.now(timezone.utc),
+            kwargs={**base_kwargs, "lane": lane},
+            id=job_id,
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     if settings.SOURCE_SCAN_ENABLED:
         source_scan_kwargs = (
             {} if use_persistent_jobstore else {"session_factory": session_factory}
@@ -921,12 +979,6 @@ async def worker_loop(
             coalesce=True,
             replace_existing=True,
         )
-    scheduler.start()
-
-    try:
-        await asyncio.Event().wait()
-    finally:
-        scheduler.shutdown(wait=False)
 
 
 async def amain() -> None:

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ktc.models import MediaAsset, RunSource
+from ktc.models import LANE_INTERACTIVE, MediaAsset, RunSource
 from ktc.services import audit_service, crawl_run_service, place_service
 
 
@@ -272,6 +272,8 @@ class ToolRuntime:
             else:
                 target_type, target_id = "keyword", payload.query
 
+            # MCP 수집은 대량 배치 성격이라 기본 lane(batch) — REST POST /harvest와 동일
+            # 매핑(T-163, 로드맵 PR-04에서 MCP도 명시 대상).
             run = await crawl_run_service.create_run(
                 session,
                 job_type="harvest",
@@ -443,6 +445,8 @@ class ToolRuntime:
             place = await place_service.get_place(session, payload.place_id)
             if place is None:
                 raise ValueError(f"place not found: {payload.place_id}")
+            # MCP Deep Research는 사용자 직접 트리거 — 대화형 레인(T-163, REST
+            # /destinations/{id}/deep-research와 동일 매핑).
             run = await crawl_run_service.create_run(
                 session,
                 job_type="deep_research",
@@ -450,6 +454,7 @@ class ToolRuntime:
                 target_type="place",
                 target_id=str(payload.place_id),
                 payload=payload.model_dump(),
+                lane=LANE_INTERACTIVE,
                 commit=False,
             )
             result = {
