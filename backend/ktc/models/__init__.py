@@ -17,7 +17,10 @@ from __future__ import annotations
 from ktc.models.audit_log import AuditLog
 from ktc.models.base import Base, TimestampMixin, utcnow
 from ktc.models.crawl_run import (
+    LANE_BATCH,
+    LANE_INTERACTIVE,
     TERMINAL_RUN_STATES,
+    VALID_LANES,
     CrawlRun,
     RunAttention,
     RunSource,
@@ -61,6 +64,9 @@ __all__ = [
     "RunSource",
     "RunAttention",
     "TERMINAL_RUN_STATES",
+    "LANE_INTERACTIVE",
+    "LANE_BATCH",
+    "VALID_LANES",
     "CrawlRunStageEvent",
     "StageOutcome",
     "AuditLog",
