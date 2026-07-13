@@ -424,6 +424,10 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
             # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
             # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.
             stage_reporter=crawl_run_service.make_stage_reporter(session, run.id),
+            # provider별 자막 시도(성공 전 실패 포함)를 transcript_attempts에 남긴다(T-164, G7).
+            attempt_recorder=crawl_run_service.make_transcript_attempt_recorder(
+                session, run.id
+            ),
             start_stage=start_stage,
             default_category_code=default_category_code,
         )

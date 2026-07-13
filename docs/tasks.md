@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-164**: transcript_attempts 관측 — provider별 시도·순서·시각·duration·outcome·language·tool version durable 기록(성공 전 실패 보존), `TRANSCRIPT_PROVIDER_ORDER` 연결, yt-dlp 실제 언어 기록, 절단 로그. 수율 기준선 재설정(실측: no-whisper 3/27, whisper 11/27). (PR-11 개정판, G7)
 - [ ] **T-165**: raw grounding 게이트 — `evidence_quote`+segment ID를 raw 자막 기준으로 대조, `grounding_status` enum(verified_raw|unverified|missing|not_applicable|legacy_unknown) 저장, transcript 후보는 verified_raw 아니면 자동확정·export 차단. 선행: T-164. (PR-13 개정판, §10 B3, G4)
 - [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
 - [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
@@ -57,6 +56,18 @@
 
 ## 완료
 
+- [x] **T-164**: transcript_attempts 관측 — 자막 3 provider가 `except Exception: return None`으로
+  실패 원인을 소실하던 문제(§1.3 D1)를 해소했다. `transcript_attempts` durable 테이블(provider별
+  시도·outcome 코드 8종(no_captions/blocked/rate_limited/download_error/parse_error/disabled/
+  not_configured/success)·language·duration·tool_version, 성공 전 실패도 전부 보존, migration 0020),
+  `fetch_transcript`가 `TranscriptResult`를 wrap한 `TranscriptOutcome` 반환(segments·timestamp 무손상),
+  예외 유형별 outcome 분류(`_classify_exception`), `TRANSCRIPT_PROVIDER_ORDER` 실제 체인 연결(사문화
+  해소), yt-dlp 실제 언어 기록·절단 로그(D7), `youtube_videos.transcript_source/failure_code` 요약
+  캐시(T-169 선별 원천, 우선순위 기반 대표 코드). 2렌즈 적대적 리뷰: MAJOR 1(yt-dlp `ignoreerrors=True`가
+  차단·429를 no_captions로 오분류 → `ignoreerrors=False` + error collector 이중 방어로 수정, D1 회복)·
+  MINOR 4(빈 segment 단락·provider 라벨 canonical 통일·캐시 자막 요약 갱신·테스트 우선순위 케이스)
+  반영. 검증: 격리 DB backend pytest 466 passed(pre-existing 1건 외 0), alembic round-trip.
+  (2026-07-13, 로드맵 PR-11 개정·§10 B3/G7·§1.3 D1)
 - [x] **T-163**: 워커 레인 분리 — 긴 배치 작업이 사용자 트리거 작업을 막던 단일 큐(§1.2 S1)를
   해소했다. `crawl_runs.lane`(interactive|batch, CHECK+`(lane,state,id)` 인덱스, migration 0019),
   enqueue 지점 기준 lane 매핑 12곳(재처리·deep research·수동 transcript=interactive / 수집·source_scan·

@@ -166,7 +166,8 @@ async def test_poi_batch_handler_records_stage_events_in_order(monkeypatch, sess
     assert all(e.elapsed_ms is not None and e.elapsed_ms >= 0 for e in events)
     assert all(e.started_at is not None and e.finished_at is not None for e in events)
     fetch, correction, extract, geocode, total = events
-    assert fetch.provider == "transcript_api"
+    # stage 이벤트 provider는 canonical로 통일됐다(transcript_attempts와 조인 가능, T-164).
+    assert fetch.provider == "youtube_transcript_api"
     assert fetch.item_ref == "v1"
     assert correction.item_ref == "v1"
     assert correction.provider  # LLM 모델명

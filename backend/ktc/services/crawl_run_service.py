@@ -12,7 +12,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,8 +24,12 @@ from ktc.models import (
     CrawlRunStageEvent,
     RunAttention,
     RunState,
+    TranscriptAttemptRecord,
     utcnow,
 )
+
+if TYPE_CHECKING:
+    from ktc.etl.transcript import TranscriptAttempt
 from ktc.services.list_pagination import (
     MAX_DB_INTEGER_ID,
     ListPage,
@@ -50,6 +54,10 @@ _MAX_STAGE_DETAIL_CHARS = 2_000
 # (stage, *, outcome, provider=None, attempt=None, item_ref=None,
 #  started_at=None, finished_at=None, elapsed_ms=None, detail=None)
 StageReporter = Callable[..., Awaitable[None]]
+
+# ETL 서비스에 주입하는 transcript 시도 기록 콜백 계약(T-164, G7):
+# (video_id, attempts) — provider별 시도 목록을 transcript_attempts에 기록한다.
+AttemptRecorder = Callable[[str, "list[TranscriptAttempt]"], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -206,6 +214,88 @@ async def list_stage_events(
         select(CrawlRunStageEvent)
         .where(CrawlRunStageEvent.run_id == run_id)
         .order_by(CrawlRunStageEvent.id.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def record_transcript_attempts(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    attempts: "list[TranscriptAttempt]",
+    run_id: int | None = None,
+) -> None:
+    """provider별 자막 시도들을 `transcript_attempts`에 durable하게 기록한다(T-164, G7).
+
+    stage event(`record_stage_event`)와 동일한 근거로 짧은 **독립 세션**에서 즉시
+    commit하고 실패는 경고만 남긴다: 성공 전 실패 시도야말로 가장 중요한 측정
+    대상인데 호출자 세션에 얹으면 handler 예외 rollback으로 함께 유실되고, 임의 시점
+    commit은 미완 도메인 변경을 부분 커밋한다. 관측 실패가 본 작업을 죽여서는 안 된다.
+
+    started/finished는 duration_ms(monotonic 실측)를 기준으로 기록 시각에 앵커해
+    시도 순서가 단조 증가하도록 배치한다(절대 시각은 근사, 소요·순서는 정확).
+    """
+    if not attempts:
+        return
+    try:
+        now = utcnow()
+        total_ms = sum(a.duration_ms or 0 for a in attempts)
+        cursor = now - timedelta(milliseconds=total_ms)
+        rows: list[TranscriptAttemptRecord] = []
+        for attempt in attempts:
+            duration = attempt.duration_ms
+            started = cursor
+            finished = started + timedelta(milliseconds=duration or 0)
+            cursor = finished
+            rows.append(
+                TranscriptAttemptRecord(
+                    video_id=(_clip(video_id, 32) or ""),
+                    run_id=run_id,
+                    provider=_clip(attempt.provider, 24) or "unknown",
+                    sequence=attempt.sequence,
+                    started_at=started,
+                    finished_at=finished,
+                    duration_ms=duration,
+                    outcome=_clip(attempt.outcome, 16) or "unknown",
+                    language=_clip(attempt.language, 16),
+                    detail=_clip(attempt.detail, _MAX_STAGE_DETAIL_CHARS),
+                    tool_version=_clip(attempt.tool_version, 32),
+                )
+            )
+        factory = async_sessionmaker(session.bind, expire_on_commit=False)
+        async with factory() as attempt_session:
+            attempt_session.add_all(rows)
+            await attempt_session.commit()
+    except Exception as exc:  # noqa: BLE001 - best-effort 관측 기록
+        logger.warning(
+            "transcript attempts 기록 실패(video_id=%s, run_id=%s): %s",
+            video_id,
+            run_id,
+            exc,
+        )
+
+
+def make_transcript_attempt_recorder(
+    session: AsyncSession, run_id: int
+) -> AttemptRecorder:
+    """run에 바인딩된 transcript 시도 기록 콜백을 만든다(ETL 서비스 주입용)."""
+
+    async def _record(video_id: str, attempts: "list[TranscriptAttempt]") -> None:
+        await record_transcript_attempts(
+            session, video_id=video_id, attempts=attempts, run_id=run_id
+        )
+
+    return _record
+
+
+async def list_transcript_attempts(
+    session: AsyncSession, video_id: str
+) -> list[TranscriptAttemptRecord]:
+    """영상의 자막 시도를 발생 순서로 조회한다(관측/디버깅)."""
+    result = await session.execute(
+        select(TranscriptAttemptRecord)
+        .where(TranscriptAttemptRecord.video_id == video_id)
+        .order_by(TranscriptAttemptRecord.id.asc())
     )
     return list(result.scalars().all())
 

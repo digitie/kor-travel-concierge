@@ -56,7 +56,8 @@ class CrawlRunStageEvent(Base):
     # 예: transcript_fetch | correction | poi_extract | geocode |
     #     harvest_search | harvest_ingest
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
-    # 자막 provider(transcript_api|yt-dlp|whisper) 또는 LLM 모델명.
+    # 자막 provider(canonical: youtube_transcript_api|yt_dlp|whisper, T-164에서
+    # transcript_attempts와 조인 위해 통일) 또는 LLM 모델명.
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # 같은 단계의 재시도/부분 실행 순번(예: poi_extract sub-batch 순번, 1부터).
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)

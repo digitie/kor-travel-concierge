@@ -19,7 +19,12 @@ from vworld import AsyncVworldClient
 from ktc.core.config import Settings, get_settings
 from ktc.etl import geocode_service, media_store, poi_extraction, summarize_service
 from ktc.etl.geocoding import GeocodeDecision, KakaoGeocoder, NaverGeocoder
-from ktc.etl.transcript import TranscriptResult, get_transcript_async
+from ktc.etl.transcript import (
+    TranscriptAttempt,
+    TranscriptOutcome,
+    TranscriptResult,
+    fetch_transcript_async,
+)
 from ktc.models import (
     CrawlStatus,
     ExtractedPlaceCandidate,
@@ -30,7 +35,12 @@ from ktc.models import (
 from ktc.services import settings_service
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
-TranscriptFetcher = Callable[[str], Awaitable[TranscriptResult | None]]
+# fetcher는 T-164 이후 `TranscriptOutcome`을 반환한다(구 계약 TranscriptResult|None도
+# `TranscriptOutcome.coerce`로 흡수 — 주입 fake 호환).
+TranscriptFetcher = Callable[
+    [str], Awaitable["TranscriptOutcome | TranscriptResult | None"]
+]
+AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
 GeocodeDecider = Callable[[ExtractedPlaceCandidate], Awaitable[GeocodeDecision]]
 GeocodeApplier = Callable[
     [AsyncSession, ExtractedPlaceCandidate, GeocodeDecision],
@@ -46,6 +56,7 @@ async def process_harvest_videos(
     store: media_store.MediaStore | None = None,
     llm: poi_extraction.LlmCallable | None = None,
     transcript_fetcher: TranscriptFetcher | None = None,
+    attempt_recorder: AttemptRecorder | None = None,
     geocode_decider: GeocodeDecider | None = None,
     geocode_applier: GeocodeApplier | None = None,
     status_reporter: StatusReporter | None = None,
@@ -112,7 +123,14 @@ async def process_harvest_videos(
                     progress,
                 )
                 existing_candidate_ids = await _candidate_ids_for_video(session, video.video_id)
-                transcript = await resolved_transcript_fetcher(video.video_id)
+                fetched = await resolved_transcript_fetcher(video.video_id)
+                # provider별 시도 기록(성공 전 실패 보존) + 요약 캐시 파생 갱신(T-164).
+                outcome = TranscriptOutcome.coerce(fetched)
+                if attempt_recorder is not None and outcome.attempts:
+                    await attempt_recorder(video.video_id, outcome.attempts)
+                video.transcript_source = outcome.success_provider
+                video.transcript_failure_code = outcome.failure_code
+                transcript = outcome.result
                 result = await summarize_service.summarize_video(
                     session,
                     resolved_store,
@@ -291,8 +309,9 @@ async def _new_candidates_for_video(
     return list(result.scalars().all())
 
 
-async def _default_transcript_fetcher(video_id: str) -> TranscriptResult | None:
-    return await get_transcript_async(video_id)
+async def _default_transcript_fetcher(video_id: str) -> TranscriptOutcome:
+    """설정된 provider 체인으로 자막을 확보하고 provider별 시도를 함께 반환한다(T-164)."""
+    return await fetch_transcript_async(video_id)
 
 
 def _make_media_store(settings: Settings) -> media_store.MediaStore:

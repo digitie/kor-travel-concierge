@@ -92,3 +92,13 @@ class YoutubeVideo(Base):
         Boolean, nullable=False, default=False, server_default="false"
     )
     exclusion_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # 자막 확보 요약 캐시(T-164, PR-11). `transcript_attempts`에서 파생 갱신한다:
+    # - transcript_source: 성공 provider(youtube_transcript_api|yt_dlp|whisper), 실패 시 None.
+    # - transcript_failure_code: 최종 실패 대표 코드(no_captions|blocked|...), 성공 시 None.
+    # 로그만으로는 SQL 선별이 불가하므로 컬럼으로 둔다 — T-168/169가 "자막 비활성 확정
+    # 영상"을 선별하고 §7 수율 지표를 집계하는 원천이다.
+    transcript_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    transcript_failure_code: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
