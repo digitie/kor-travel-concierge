@@ -514,6 +514,12 @@ async def process_video_batch(
             )
         )
         existing_pairs = {(str(v), str(n)) for v, n in rows.all()}
+    # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
+    # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
+    grounding_indexes: dict[str, grounding.GroundingIndex] = {
+        alias: grounding.build_grounding_index(it.get("raw_text"))
+        for alias, it in batch.items()
+    }
     created_candidates: list[ExtractedPlaceCandidate] = []
     for poi in pois:
         item = batch.get(poi.video_id)
@@ -534,7 +540,7 @@ async def process_video_batch(
         # 실패(unverified/missing) 후보도 폐기하지 않고 저신뢰로 마킹만 하며(사유 표시),
         # verified_raw가 아니면 아래 지오코딩 자동확정·export가 차단된다.
         grounded = grounding.evaluate_transcript_grounding(
-            poi.evidence_quote, item.get("raw_text")
+            poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
         )
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,

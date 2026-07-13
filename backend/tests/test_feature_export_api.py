@@ -291,7 +291,7 @@ async def test_snapshot_includes_human_confirmed_ungrounded_transcript(client, s
 
     candidate_id, _ = await _seed_ready_candidate(
         session_factory,
-        grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
+        grounding_status=GroundingStatus.MISSING.value,
         match_status=MatchStatus.USER_CORRECTED,
     )
     resp = await client.get("/api/v1/features/snapshot")
@@ -300,6 +300,51 @@ async def test_snapshot_includes_human_confirmed_ungrounded_transcript(client, s
     assert len(body["items"]) == 1
     assert body["items"][0]["candidate_id"] == candidate_id
     assert body["items"][0]["operation"] == "upsert"
+
+
+async def test_snapshot_preserves_legacy_auto_matched_transcript(client, session_factory):
+    # MAJOR 2(최고위험): migration이 기존 MATCHED·export 후보를 legacy_unknown으로 backfill해도
+    # export를 회수하지 않는다(기존 노출 보존 — krtour-map/PinVi 대량 inactive·POI 소실 방지).
+    from ktc.models import GroundingStatus
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory, grounding_status=GroundingStatus.LEGACY_UNKNOWN.value
+    )
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["candidate_id"] == candidate_id
+    assert body["items"][0]["operation"] == "upsert"
+
+
+async def test_changes_tombstones_legacy_after_reprocess_marks_failed(
+    client, session_factory
+):
+    # legacy_unknown 후보는 노출을 유지하다가, 재처리로 grounding이 실제 unverified로
+    # 판정되면 그때 tombstone으로 회수한다("재평가 후 회수").
+    from ktc.models import ExtractedPlaceCandidate, GroundingStatus
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory, grounding_status=GroundingStatus.LEGACY_UNKNOWN.value
+    )
+    # 최초 노출(has_row 생성) — upsert.
+    first = await client.get("/api/v1/features/changes")
+    assert first.status_code == 200
+    assert [i["operation"] for i in first.json()["items"]] == ["upsert"]
+    cursor = first.json()["next_cursor"]
+
+    # 재처리로 grounding이 unverified로 판정됨.
+    async with session_factory() as s:
+        cand = await s.get(ExtractedPlaceCandidate, candidate_id)
+        cand.grounding_status = GroundingStatus.UNVERIFIED.value
+        await s.commit()
+
+    after = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    assert after.status_code == 200
+    items = after.json()["items"]
+    assert [i["operation"] for i in items] == ["tombstone"]
+    assert items[0]["candidate_id"] == candidate_id
 
 
 async def test_changes_is_stable_without_data_change(client, session_factory):

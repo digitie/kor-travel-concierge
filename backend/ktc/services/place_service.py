@@ -1490,13 +1490,20 @@ def _candidate_queue_reason_expression():
     review_note = func.lower(func.coalesce(ExtractedPlaceCandidate.review_note, ""))
     return case(
         (
-            # raw grounding 미확인 transcript 후보(T-165, B3). 근거가 원본 자막에서
-            # 확인되지 않아 자동확정이 차단된 상태 — 지오코딩 사유보다 앞선다(최우선).
+            # 재처리로 grounding이 **실제 판정**돼 실패한(unverified/missing) transcript
+            # 후보(T-165, B3). 지오코딩 사유보다 앞선다(최우선). legacy_unknown(재처리 전
+            # 기존 후보)에는 적용하지 않는다 — 사람이 grounding을 만들 수 없는 행동 불가
+            # 사유로 원래 사유(name_mismatch/region_mismatch/foreign/reconcile)를 덮으면
+            # backlog을 가리기 때문이다(코디네이터 MAJOR 3, "재처리 전까지 건드리지 않음").
             and_(
                 ExtractedPlaceCandidate.source_kind
                 == EvidenceSourceKind.TRANSCRIPT.value,
-                ExtractedPlaceCandidate.grounding_status
-                != GroundingStatus.VERIFIED_RAW.value,
+                ExtractedPlaceCandidate.grounding_status.in_(
+                    [
+                        GroundingStatus.UNVERIFIED.value,
+                        GroundingStatus.MISSING.value,
+                    ]
+                ),
             ),
             QueueReason.UNGROUNDED.value,
         ),

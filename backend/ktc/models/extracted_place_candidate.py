@@ -105,6 +105,9 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
     # transcript 후보는 `verified_raw`가 아니면 자동확정·export를 차단한다(표시가 아닌
     # 상태 전이 게이트). 신규 ORM insert 기본값은 `missing`(근거 미확인 fail-safe)이며,
     # 이 게이트 도입 전 기존 행은 migration이 `legacy_unknown`으로 backfill한다.
+    # 향후 비-transcript producer(description=T-168, visual=T-173)는 각자의 grounding
+    # 규칙을 적용하거나, 규칙 도입 전까지 생성 시 `not_applicable`을 명시 세팅한다
+    # (현재 게이트는 transcript 전용이라 비-transcript의 `missing` 기본값은 무해).
     grounding_status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

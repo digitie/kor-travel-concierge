@@ -571,6 +571,52 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
     ).status_code == 422
 
 
+async def test_legacy_unknown_grounding_does_not_mask_queue_reason(client, session):
+    # MAJOR 3: legacy_unknown(재처리 전 기존 후보)은 UNGROUNDED로 표기하지 않고 원래 사유를
+    # 유지한다(행동 불가 사유로 backlog을 덮지 않도록). 실제 판정된 missing만 UNGROUNDED.
+    session.add(
+        YoutubeChannel(channel_id="legacy-channel", title="레거시 채널")
+    )
+    session.add(
+        YoutubeVideo(
+            video_id="legacy-video",
+            title="레거시 사유 영상",
+            url="https://example.invalid/legacy",
+            channel_id="legacy-channel",
+        )
+    )
+    await session.flush()
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="legacy-video",
+                source_kind="transcript",
+                source_text="레거시 지역 불일치",
+                ai_place_name="레거시 지역 불일치",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                review_note="region_mismatch",
+                grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="legacy-video",
+                source_kind="transcript",
+                source_text="재처리 미확인",
+                ai_place_name="재처리 미확인",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                review_note="region_mismatch",
+                grounding_status=GroundingStatus.MISSING.value,
+            ),
+        ]
+    )
+    await session.commit()
+
+    body = (await client.get("/api/v1/destinations/unmatched")).json()
+    by_name = {item["ai_place_name"]: item for item in body["items"]}
+    # legacy는 원래 사유(region_mismatch) 유지, 재처리 판정 missing은 ungrounded 최우선.
+    assert by_name["레거시 지역 불일치"]["queue_reason"] == "region_mismatch"
+    assert by_name["재처리 미확인"]["queue_reason"] == "ungrounded"
+
+
 async def test_destinations_501_stable_tie_break_and_page_outside_detail(
     client, session
 ):

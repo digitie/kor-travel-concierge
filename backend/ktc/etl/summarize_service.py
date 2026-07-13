@@ -158,6 +158,10 @@ async def summarize_video(
             timestamp_end=poi.timestamp_end,
             candidate_category=category_label,
             match_status=MatchStatus.NEEDS_REVIEW,
+            # 이 단건 요약 경로(worker 미연결 legacy — poi_batch가 실경로)는 evidence_quote를
+            # 만들지 않으므로 grounding_status는 모델 기본값 `missing`으로 남는다(자동확정
+            # 차단·UNGROUNDED 표기, T-165 fail-safe). 재활성한다면 raw 대조 grounding을
+            # batch_poi 경로처럼 함께 붙여야 자동확정이 가능해진다.
             provider_evidence_json={
                 "transcript": {
                     "source": transcript.source,

@@ -84,6 +84,30 @@ def test_no_raw_text_fails_closed_as_unverified():
     assert result.status is grounding.GroundingStatus.UNVERIFIED
 
 
+def test_corrected_spacing_quote_matches_raw_with_space():
+    # MAJOR 1: 교정본은 장소명 띄어쓰기를 붙이므로(raw `부산역 국밥집` → 교정 `부산역국밥집`)
+    # evidence_quote가 공백 없이 와도 CJK 인접 공백 정규화로 raw와 일치해 verified가 된다.
+    result = grounding.evaluate_transcript_grounding("부산역국밥집에왔습니다", RAW)
+    assert result.status is grounding.GroundingStatus.VERIFIED_RAW
+
+
+def test_latin_word_boundary_space_is_preserved():
+    # 영문 단어 사이 공백은 보존한다(CJK 인접만 제거). 붙여 쓴 인용은 raw와 불일치.
+    raw = "[00:01] We visited New Balance flagship store today"
+    joined = grounding.evaluate_transcript_grounding("NewBalance flagship store", raw)
+    assert joined.status is grounding.GroundingStatus.UNVERIFIED
+    spaced = grounding.evaluate_transcript_grounding("New Balance flagship store", raw)
+    assert spaced.status is grounding.GroundingStatus.VERIFIED_RAW
+
+
+def test_grounding_index_is_reused_across_evaluations():
+    index = grounding.build_grounding_index(RAW)
+    a = grounding.evaluate_transcript_grounding("부산역 국밥집에 왔습니다", index=index)
+    b = grounding.evaluate_transcript_grounding("이곳은 서울에서 가장 유명한 카페", index=index)
+    assert a.status is grounding.GroundingStatus.VERIFIED_RAW
+    assert b.status is grounding.GroundingStatus.UNVERIFIED
+
+
 def test_whitespace_normalization_matches_across_newlines_and_spaces():
     raw = "[00:01] 성심당    본점에서\n[00:04] 빵을 샀어요"
     result = grounding.evaluate_transcript_grounding("성심당 본점에서 빵을 샀어요", raw)
@@ -175,20 +199,32 @@ def test_autoconfirm_gate_only_applies_to_transcript():
     assert _grounding_blocks_autoconfirm(cand) is False
 
 
-def test_export_gate_blocks_auto_matched_ungrounded_transcript():
+def test_export_gate_blocks_reprocessed_failed_transcript():
+    # 재처리로 실제 판정된 unverified/missing만 export 차단(tombstone 회수 대상).
+    for status in (GroundingStatus.UNVERIFIED, GroundingStatus.MISSING):
+        cand = _candidate(
+            source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+            grounding_status=status.value,
+            match_status=MatchStatus.MATCHED,
+        )
+        assert _export_grounding_blocked(cand) is True
+
+
+def test_export_gate_preserves_legacy_matched_transcript():
+    # MAJOR 2: legacy_unknown(재처리 전 기존 노출)은 차단하지 않는다 — 기존 export 보존.
     cand = _candidate(
         source_kind=EvidenceSourceKind.TRANSCRIPT.value,
-        grounding_status=GroundingStatus.UNVERIFIED.value,
+        grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
         match_status=MatchStatus.MATCHED,
     )
-    assert _export_grounding_blocked(cand) is True
+    assert _export_grounding_blocked(cand) is False
 
 
 def test_export_gate_allows_human_confirmed_ungrounded():
     # 사람이 확정한(user_corrected) 후보는 grounding과 무관하게 export 허용.
     cand = _candidate(
         source_kind=EvidenceSourceKind.TRANSCRIPT.value,
-        grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
+        grounding_status=GroundingStatus.MISSING.value,
         match_status=MatchStatus.USER_CORRECTED,
     )
     assert _export_grounding_blocked(cand) is False

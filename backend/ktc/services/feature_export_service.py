@@ -232,20 +232,28 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return f"sha256:{digest}"
 
 
-def _export_grounding_blocked(candidate: ExtractedPlaceCandidate) -> bool:
-    """자동확정된 transcript 후보는 raw grounding(verified_raw)이 아니면 export를 막는다.
+# 재처리로 grounding이 **실제 판정**돼 실패한 상태(=근거가 원문에 없음). export 차단·
+# tombstone 회수는 이 두 상태에만 적용한다.
+_GROUNDING_EXPORT_BLOCK = frozenset(
+    {GroundingStatus.UNVERIFIED.value, GroundingStatus.MISSING.value}
+)
 
-    T-165 G4의 defense-in-depth: 지오코딩 자동확정 게이트가 verified_raw 아닌 transcript
-    후보의 MATCHED 승격을 이미 막지만, 게이트 도입 전 자동확정된 legacy MATCHED 행이
-    export되지 않도록 export 단계에서도 재확인한다. 사람이 확정한(user_corrected) 후보는
-    사람 판단이므로 grounding과 무관하게 허용한다(legacy_unknown도 사람 검수는 허용).
+
+def _export_grounding_blocked(candidate: ExtractedPlaceCandidate) -> bool:
+    """transcript 후보가 재처리로 grounding 실패(unverified/missing)로 판정되면 export를 막는다.
+
+    T-165 G4의 defense-in-depth. 단, **legacy_unknown은 차단하지 않는다**(코디네이터 MAJOR 2):
+    migration이 기존 MATCHED·export된 후보를 legacy_unknown으로 backfill하는데, 이를 차단하면
+    `_classify`가 대량 TOMBSTONE을 발행해 krtour-map/PinVi에 inactive가 쏟아지고 curated plan
+    POI가 소실된다. "재처리 전까지 기존 노출 유지, 재평가로 unverified/missing이 되면 회수"
+    원칙을 따른다. verified_raw·not_applicable도 허용, 사람 확정(user_corrected)도 허용한다.
     LLM 자가 보고 confidence는 이 판단에 쓰지 않는다.
     """
     if candidate.source_kind != EvidenceSourceKind.TRANSCRIPT.value:
         return False
     if candidate.match_status == MatchStatus.USER_CORRECTED.value:
         return False
-    return candidate.grounding_status != GroundingStatus.VERIFIED_RAW.value
+    return candidate.grounding_status in _GROUNDING_EXPORT_BLOCK
 
 
 def _classify(
