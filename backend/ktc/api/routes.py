@@ -16,7 +16,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +48,7 @@ from ktc.models import (
     GroundingStatus,
     MatchStatus,
     MediaAsset,
+    ReviewBulkAction,
     RunAttention,
     RunSource,
     SourceTarget,
@@ -226,6 +227,79 @@ class ReopenCandidateRequest(BaseModel):
     """서버가 직전 처리 응답에 발급한 opaque undo descriptor."""
 
     undo_token: str = Field(min_length=1, max_length=4096)
+
+
+class ReviewBulkFilterSnapshot(BaseModel):
+    """목록 전체 선택 시 preview가 해석할 filter snapshot."""
+
+    model_config = {"extra": "forbid"}
+
+    channel_id: str | None = Field(default=None, max_length=128)
+    playlist_id: str | None = Field(default=None, max_length=128)
+    keyword: str | None = Field(default=None, max_length=255)
+    q: str | None = Field(default=None, max_length=255)
+    is_domestic: StrictBool | None = None
+    status: place_service.ReviewCandidateStatus | None = None
+    reason: place_service.QueueReason | None = None
+    source_kind: EvidenceSourceKind | None = None
+    grounding: GroundingStatus | None = None
+
+
+class ReviewBulkSelectionScope(BaseModel):
+    """사용자가 명시적으로 고른 후보 ID scope."""
+
+    model_config = {"extra": "forbid"}
+
+    kind: Literal["selection"]
+    # 빈 배열·중복·500건 상한은 service의 domain validation으로 보내 일관된
+    # bulk 400 계약을 사용한다. 여기서는 Pydantic의 bool→int coercion만 막는다.
+    candidate_ids: list[int]
+
+    @field_validator("candidate_ids", mode="before")
+    @classmethod
+    def validate_candidate_ids(cls, values: Any) -> Any:
+        if not isinstance(values, list):
+            raise ValueError("candidate_ids는 배열이어야 한다")
+        if any(
+            type(value) is not int
+            or value < 1
+            or value > list_pagination.MAX_DB_INTEGER_ID
+            for value in values
+        ):
+            raise ValueError("candidate_ids는 양의 정수여야 한다")
+        return values
+
+
+class ReviewBulkFilterScope(BaseModel):
+    """preview 시점에 exact membership으로 동결할 서버 filter scope."""
+
+    model_config = {"extra": "forbid"}
+
+    kind: Literal["filter"]
+    filter: ReviewBulkFilterSnapshot
+
+
+class ReviewBulkPreviewRequest(BaseModel):
+    """selection XOR filter 일괄 작업 preview 요청."""
+
+    model_config = {"extra": "forbid"}
+
+    action: ReviewBulkAction
+    scope: Annotated[
+        ReviewBulkSelectionScope | ReviewBulkFilterScope,
+        Field(discriminator="kind"),
+    ]
+
+
+class ReviewBulkExecuteRequest(BaseModel):
+    """동결 operation의 다음 bounded chunk 실행 요청."""
+
+    model_config = {"extra": "forbid"}
+
+    operation_id: UUID
+    confirmation_token: str = Field(min_length=1, max_length=512)
+    cursor: str | None = Field(default=None, max_length=255)
+    request_id: UUID
 
 
 def _candidate_conflict(
@@ -1446,6 +1520,75 @@ async def list_unmatched_candidates(
             newer_than=page.newer_than,
         )
     )
+
+
+# 두 literal bulk 경로는 `/{candidate_id}`보다 먼저 등록해 FastAPI가 `bulk`를 int
+# candidate_id로 해석해 422를 내지 않도록 한다.
+@router.post("/destinations/unmatched/bulk/preview")
+async def preview_unmatched_candidates_bulk(
+    payload: ReviewBulkPreviewRequest,
+    actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """명시 ID 또는 서버 filter의 exact membership을 확인·동결한다."""
+    candidate_ids: list[int] | None = None
+    filter_values: dict[str, Any] | None = None
+    if isinstance(payload.scope, ReviewBulkSelectionScope):
+        candidate_ids = payload.scope.candidate_ids
+    else:
+        # exclude_none을 쓰지 않는다. 특히 `is_domestic=false`와 null의 의미를
+        # fingerprint와 SQL에서 정확히 구분해야 한다.
+        filter_values = payload.scope.filter.model_dump(mode="json")
+    try:
+        result = await place_service.preview_review_bulk_operation(
+            session,
+            action=payload.action,
+            actor=actor,
+            candidate_ids=candidate_ids,
+            filter_values=filter_values,
+            commit=False,
+        )
+    except place_service.ReviewBulkLimitExceededError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except place_service.ReviewBulkValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "operation_id": str(result.operation_id),
+        "confirmation_token": result.confirmation_token,
+        "expires_at": result.expires_at.isoformat(),
+        "total": result.total,
+        "chunk_size": result.chunk_size,
+    }
+
+
+@router.post("/destinations/unmatched/bulk/execute")
+async def execute_unmatched_candidates_bulk(
+    payload: ReviewBulkExecuteRequest,
+    actor: str = Depends(require_admin_proxy),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """confirmation token이 승인한 operation의 다음 100건 이하 chunk를 실행한다."""
+    try:
+        result = await place_service.execute_review_bulk_operation(
+            session,
+            operation_id=payload.operation_id,
+            confirmation_token=payload.confirmation_token,
+            actor=actor,
+            request_id=payload.request_id,
+            cursor=payload.cursor,
+            commit=False,
+        )
+    except place_service.ReviewBulkOperationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except place_service.ReviewBulkTokenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except place_service.ReviewBulkTokenExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except place_service.ReviewBulkCursorConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return result
 
 
 @router.post("/destinations/{place_id}/correct")

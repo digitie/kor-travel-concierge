@@ -14,7 +14,9 @@ import {
   reviewCandidateMatchesStatus,
   reviewListStateHasFilters,
   reviewListStateScopeKey,
+  reviewListStateToBulkFilter,
   reviewListStateToFilter,
+  reviewListStateToForeignBulkFilter,
   writeReviewListState,
 } from "./review-list-state";
 
@@ -118,6 +120,85 @@ describe("검수 목록 URL 상태", () => {
       queueReason: "name_mismatch",
       sourceKind: "transcript",
       grounding: "unverified",
+    });
+  });
+
+  it("URL membership를 pagination/sort/deep-link 없는 bulk filter로 고정한다", () => {
+    const state = {
+      ...DEFAULT_REVIEW_LIST_STATE,
+      groupDim: "playlist" as const,
+      groupValue: " playlist-1 ",
+      query: " 제주 ",
+      sort: "newest" as const,
+      isDomestic: false,
+      queueReason: "name_mismatch" as const,
+      sourceKind: "transcript" as const,
+      groundingStatus: "unverified" as const,
+      status: "removed" as const,
+    };
+
+    const filter = reviewListStateToBulkFilter(state);
+
+    expect(filter).toEqual({
+      playlist_id: "playlist-1",
+      q: "제주",
+      is_domestic: false,
+      status: "removed",
+      reason: "name_mismatch",
+      source_kind: "transcript",
+      grounding: "unverified",
+    });
+    expect(filter).not.toHaveProperty("sort");
+    expect(filter).not.toHaveProperty("cursor");
+    expect(filter).not.toHaveProperty("limit");
+    expect(filter).not.toHaveProperty("newer_than_id");
+    expect(filter).not.toHaveProperty("candidate");
+  });
+
+  it("undefined override는 현재 false를 유지하고 null override는 국내외 전체로 바꾼다", () => {
+    const state = { ...DEFAULT_REVIEW_LIST_STATE, isDomestic: false };
+
+    expect(
+      reviewListStateToBulkFilter(state, { isDomestic: undefined })
+        .is_domestic,
+    ).toBe(false);
+    expect(
+      reviewListStateToBulkFilter(state, { isDomestic: null }).is_domestic,
+    ).toBeNull();
+    expect(
+      reviewListStateToBulkFilter(DEFAULT_REVIEW_LIST_STATE),
+    ).toEqual({ is_domestic: null, status: "needs_review" });
+  });
+
+  it("값 없는 그룹 기준은 bulk membership에 포함하지 않는다", () => {
+    expect(
+      reviewListStateToBulkFilter({
+        ...DEFAULT_REVIEW_LIST_STATE,
+        groupDim: "channel",
+        groupValue: null,
+      }),
+    ).toEqual({ is_domestic: null, status: "needs_review" });
+  });
+
+  it("현재 filter의 해외 전체 helper는 국내/removed만 덮고 기존 교집합 조건을 보존한다", () => {
+    const filter = reviewListStateToForeignBulkFilter({
+      ...DEFAULT_REVIEW_LIST_STATE,
+      groupDim: "keyword",
+      groupValue: "제주 여행",
+      query: "카페",
+      isDomestic: true,
+      status: "removed",
+      queueReason: "ambiguous",
+      sourceKind: "visual",
+    });
+
+    expect(filter).toEqual({
+      keyword: "제주 여행",
+      q: "카페",
+      is_domestic: false,
+      status: "needs_review",
+      reason: "ambiguous",
+      source_kind: "visual",
     });
   });
 

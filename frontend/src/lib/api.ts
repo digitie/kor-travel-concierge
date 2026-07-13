@@ -699,6 +699,98 @@ export type ReviewCandidateFilter = Pick<
   grounding?: ReviewGroundingStatus | null;
 };
 
+export const REVIEW_BULK_SELECTION_MAX = 500;
+export const REVIEW_BULK_FILTER_MAX = 10_000;
+export const REVIEW_BULK_CHUNK_SIZE = 100;
+export const REVIEW_BULK_CANDIDATE_ID_MAX = 2_147_483_647;
+
+export type ReviewBulkAction = "ignore" | "delete" | "reopen";
+export type ReviewBulkFilterStatus = "needs_review" | "removed";
+
+/**
+ * 검수 목록 cursor와 무관한 서버 bulk membership 조건이다. `is_domestic=null`과
+ * 명시적 false를 구분하고, sort/limit/cursor/newer_than/candidate deep-link는
+ * 애초에 타입과 직렬화 대상에 포함하지 않는다.
+ */
+export type ReviewBulkFilterSnapshot<
+  Status extends ReviewBulkFilterStatus = ReviewBulkFilterStatus,
+> = {
+  channel_id?: string;
+  playlist_id?: string;
+  keyword?: string;
+  q?: string;
+  is_domestic: boolean | null;
+  status: Status;
+  reason?: ReviewQueueReason;
+  source_kind?: ReviewSourceKind;
+  grounding?: ReviewGroundingStatus;
+};
+
+export type ReviewBulkSelectionScope = {
+  kind: "selection";
+  candidateIds: number[];
+};
+
+export type ReviewBulkFilterScope<
+  Status extends ReviewBulkFilterStatus = ReviewBulkFilterStatus,
+> = {
+  kind: "filter";
+  filter: ReviewBulkFilterSnapshot<Status>;
+};
+
+export type ReviewBulkScope =
+  | ReviewBulkSelectionScope
+  | ReviewBulkFilterScope<"needs_review">
+  | ReviewBulkFilterScope<"removed">;
+
+export type ReviewBulkScopeForAction<Action extends ReviewBulkAction> =
+  Action extends "reopen"
+    ? ReviewBulkSelectionScope | ReviewBulkFilterScope<"removed">
+    : ReviewBulkSelectionScope | ReviewBulkFilterScope<"needs_review">;
+
+export type ReviewBulkPreviewInputForAction<
+  Action extends ReviewBulkAction,
+> = Action extends ReviewBulkAction
+  ? { action: Action; scope: ReviewBulkScopeForAction<Action> }
+  : never;
+
+export type ReviewBulkPreviewInput =
+  ReviewBulkPreviewInputForAction<ReviewBulkAction>;
+
+export type ReviewBulkPreview = {
+  operation_id: string;
+  confirmation_token: string;
+  expires_at: string;
+  total: number;
+  chunk_size: number;
+};
+
+export type ReviewBulkExecuteInput = {
+  operationId: string;
+  confirmationToken: string;
+  cursor: string | null;
+  requestId: string;
+};
+
+export type ReviewBulkItemIssue = {
+  candidate_id: number;
+  code: string;
+  message: string;
+};
+
+/** processed/succeeded/issues는 해당 request_id chunk의 증분 receipt다. */
+export type ReviewBulkExecuteResult = {
+  operation_id: string;
+  request_id: string;
+  processed: number;
+  succeeded: number;
+  conflicts: ReviewBulkItemIssue[];
+  failed: ReviewBulkItemIssue[];
+  remaining: number;
+  next_cursor: string | null;
+  complete: boolean;
+};
+
 export type DestinationFacets = {
   channels: { id: string; title: string; place_count: number }[];
   playlists: { id: string; title: string; place_count: number }[];
@@ -783,6 +875,105 @@ export async function listUnmatchedCandidatesPage(
   const qs = params.toString();
   return requestJson<ListEnvelope<UnmatchedCandidate>>(
     `/api/v1/destinations/unmatched${qs ? `?${qs}` : ""}`,
+  );
+}
+
+function normalizedReviewBulkCandidateIds(candidateIds: number[]): number[] {
+  const normalized: number[] = [];
+  const seen = new Set<number>();
+  for (const candidateId of candidateIds) {
+    if (
+      !Number.isSafeInteger(candidateId) ||
+      candidateId <= 0 ||
+      candidateId > REVIEW_BULK_CANDIDATE_ID_MAX
+    ) {
+      throw new Error("일괄 검수 후보 ID는 양의 정수여야 합니다.");
+    }
+    if (seen.has(candidateId)) continue;
+    seen.add(candidateId);
+    normalized.push(candidateId);
+  }
+  if (normalized.length === 0) {
+    throw new Error("일괄 검수할 후보를 한 개 이상 선택해야 합니다.");
+  }
+  if (normalized.length > REVIEW_BULK_SELECTION_MAX) {
+    throw new Error(
+      `일괄 검수 후보는 최대 ${REVIEW_BULK_SELECTION_MAX}개까지 선택할 수 있습니다.`,
+    );
+  }
+  return normalized;
+}
+
+function nonEmptyReviewBulkFilterValue(
+  value: string | null | undefined,
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+/**
+ * 호출자가 잘못 넘긴 cursor/sort/limit/deep-link 속성이 JSON spread로 새어 나가지
+ * 않도록 서버가 허용한 membership 필드만 명시적으로 열거한다.
+ */
+function reviewBulkFilterPayload(filter: ReviewBulkFilterSnapshot) {
+  return {
+    channel_id: nonEmptyReviewBulkFilterValue(filter.channel_id),
+    playlist_id: nonEmptyReviewBulkFilterValue(filter.playlist_id),
+    keyword: nonEmptyReviewBulkFilterValue(filter.keyword),
+    q: nonEmptyReviewBulkFilterValue(filter.q),
+    // null(전체)과 false(해외)를 truthy 검사로 합치지 않는다.
+    is_domestic:
+      typeof filter.is_domestic === "boolean" ? filter.is_domestic : null,
+    status: filter.status ?? "needs_review",
+    reason: filter.reason,
+    source_kind: filter.source_kind,
+    grounding: filter.grounding,
+  };
+}
+
+export async function previewReviewBulk(
+  input: ReviewBulkPreviewInput,
+  signal?: AbortSignal,
+): Promise<ReviewBulkPreview> {
+  const scope =
+    input.scope.kind === "selection"
+      ? {
+          kind: "selection" as const,
+          candidate_ids: normalizedReviewBulkCandidateIds(
+            input.scope.candidateIds,
+          ),
+        }
+      : {
+          kind: "filter" as const,
+          filter: reviewBulkFilterPayload(input.scope.filter),
+        };
+  return requestJson<ReviewBulkPreview>(
+    "/api/v1/destinations/unmatched/bulk/preview",
+    {
+      method: "POST",
+      body: JSON.stringify({ action: input.action, scope }),
+      signal,
+    },
+  );
+}
+
+/** 같은 operation/request/cursor 입력은 response-loss 재시도에서도 동일한 body다. */
+export async function executeReviewBulk(
+  input: ReviewBulkExecuteInput,
+  signal?: AbortSignal,
+): Promise<ReviewBulkExecuteResult> {
+  return requestJson<ReviewBulkExecuteResult>(
+    "/api/v1/destinations/unmatched/bulk/execute",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation_id: input.operationId,
+        confirmation_token: input.confirmationToken,
+        cursor: input.cursor,
+        request_id: input.requestId,
+      }),
+      signal,
+    },
   );
 }
 

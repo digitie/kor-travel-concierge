@@ -44,6 +44,7 @@ import {
   listUnmatchedCandidatesPage,
   reprocessVideos,
   reopenCandidate,
+  REVIEW_BULK_SELECTION_MAX,
   resolveCandidate,
   RUN_QUEUE_QUERY_KEY,
   searchPlaces,
@@ -59,6 +60,7 @@ import {
   type ReprocessStage,
   type ResolveCandidateInput,
   type ReviewGroundingStatus,
+  type ReviewBulkScope,
   type ReviewQueueReason,
   type ReviewSourceKind,
   type UnmatchedCandidate,
@@ -112,6 +114,7 @@ import {
   reviewListStateHasFilters,
   reviewListStateScopeKey,
   reviewListStateToFilter,
+  reviewListStateToForeignBulkFilter,
   writeReviewListState,
   type ReviewListState,
 } from "@/lib/review-list-state";
@@ -170,9 +173,18 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
-import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { ReviewUndoSnackbar } from "@/components/ReviewUndoSnackbar";
+import {
+  ReviewBulkPanel,
+  type ReviewBulkDialogState,
+  type ReviewBulkIntent,
+} from "@/components/ReviewBulkPanel";
 import { VWorldMap } from "@/components/VWorldMap";
+import {
+  summarizeReviewBulkProgress,
+  type ReviewBulkState,
+} from "@/lib/review-bulk";
+import { useReviewBulk } from "@/lib/use-review-bulk";
 
 const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
   google: "Google Places",
@@ -411,6 +423,120 @@ function candidateFailureShouldAdvance(
       actionableInCurrentFilter,
     ) === "advance"
   );
+}
+
+function reviewBulkIntent(
+  state: Exclude<ReviewBulkState, { status: "idle" }>,
+): ReviewBulkIntent {
+  if (state.draft.scope.kind === "filter") {
+    // 현재 UI의 filter 전체 진입점은 needs_review 해외 제외만 제공한다.
+    // 다른 filter action이 추가되면 별도 사용자 문구와 버튼 계약부터 확장한다.
+    if (state.draft.action !== "ignore") {
+      throw new Error("지원하지 않는 검수 filter 일괄 작업입니다.");
+    }
+    return { action: "ignore", scope: "foreign_filter" };
+  }
+  if (state.draft.action === "delete") {
+    return { action: "delete", scope: "selection" };
+  }
+  if (state.draft.action === "reopen") {
+    return { action: "reopen", scope: "selection" };
+  }
+  return { action: "ignore", scope: "selection" };
+}
+
+function reviewBulkDialogState(
+  state: ReviewBulkState,
+): ReviewBulkDialogState | null {
+  if (state.status === "idle") return null;
+  const intent = reviewBulkIntent(state);
+  if (state.status === "previewing") return { phase: "previewing", intent };
+  if (state.status === "confirm") {
+    return {
+      phase: "ready",
+      intent,
+      exactCount: state.preview.total,
+      expiresAtLabel: formatDateTimeShort(state.preview.expires_at),
+    };
+  }
+  if (state.status === "executing") {
+    return {
+      phase: "running",
+      intent,
+      processed: state.progress.processed,
+      total: state.progress.total,
+    };
+  }
+  if (state.status === "completed") {
+    return {
+      phase: "succeeded",
+      intent,
+      processed: state.progress.processed,
+      total: state.progress.total,
+    };
+  }
+  if (state.status === "partial") {
+    const conflictCount = state.progress.conflicts.length;
+    const failedCount = state.progress.failed.length;
+    const canRetryFailed =
+      failedCount > 0 && failedCount <= REVIEW_BULK_SELECTION_MAX;
+    const retryMessage =
+      failedCount > REVIEW_BULK_SELECTION_MAX && conflictCount > 0
+        ? `처리 실패 ${failedCount.toLocaleString("ko-KR")}건은 한 번에 다시 확인할 수 없어 목록에서 최대 ${REVIEW_BULK_SELECTION_MAX.toLocaleString("ko-KR")}건씩 나누어 선택해야 합니다. 상태 충돌 ${conflictCount.toLocaleString("ko-KR")}건도 자동 재실행하지 않습니다.`
+        : failedCount > REVIEW_BULK_SELECTION_MAX
+          ? `처리 실패 ${failedCount.toLocaleString("ko-KR")}건은 한 번에 다시 확인할 수 없습니다. 목록에서 최대 ${REVIEW_BULK_SELECTION_MAX.toLocaleString("ko-KR")}건씩 나누어 선택해 주세요.`
+          : failedCount > 0 && conflictCount > 0
+            ? `처리 실패 ${failedCount.toLocaleString("ko-KR")}건만 다시 확인할 수 있습니다. 상태 충돌 ${conflictCount.toLocaleString("ko-KR")}건은 자동 재실행하지 않으며 새 목록에서 직접 다시 선택해야 합니다.`
+            : failedCount > 0
+              ? `처리 실패 ${failedCount.toLocaleString("ko-KR")}건을 새 미리보기로 다시 확인할 수 있습니다.`
+              : `상태 충돌 ${conflictCount.toLocaleString("ko-KR")}건은 자동 재실행하지 않습니다. 새 목록에서 최신 상태를 확인한 뒤 직접 다시 선택해 주세요.`;
+    return {
+      phase: "partial",
+      intent,
+      processed: state.progress.processed,
+      total: state.progress.total,
+      conflictCount,
+      failedCount,
+      canRetryFailed,
+      message: retryMessage,
+    };
+  }
+  if (state.status === "expired") {
+    return {
+      phase: "expired",
+      intent,
+      message: state.message,
+      ...(state.progress
+        ? { progress: state.progress }
+        : {}),
+    };
+  }
+  const executeProgress =
+    state.phase === "execute"
+      ? summarizeReviewBulkProgress(state.progress)
+      : state.phase === "terminal"
+        ? state.progress
+        : undefined;
+  return {
+    phase: "failed",
+    intent,
+    message: state.message,
+    retryable: state.retryable,
+    retryMode: state.phase === "preview" ? "preview" : "execute",
+    abandonable: state.phase !== "preview",
+    failureKind:
+      state.phase === "preview"
+        ? state.retryable
+          ? "retryable"
+          : "fatal"
+        : state.phase === "execute"
+          ? "retryable"
+          : state.terminalKind,
+    ...(executeProgress ? { progress: executeProgress } : {}),
+    currentChunkOutcomeUnknown:
+      state.phase === "execute" ||
+      (state.phase === "terminal" && state.terminalKind === "contract"),
+  };
 }
 
 export default function ReviewPage() {
@@ -734,10 +860,14 @@ function ReviewPageContent() {
   });
   const deepLinkDetail = deepLinkDetailQuery.data ?? null;
   const deepLinkItem = deepLinkDetail?.list_item ?? null;
-  const actionableLoadedCandidates = useMemo(
+  const bulkSelectableLoadedCandidates = useMemo(
     () =>
       isRemovedView
-        ? []
+        ? candidates.filter(
+            (candidate) =>
+              candidate.review_state !== "needs_review" &&
+              candidate.undo?.candidate_id === candidate.id,
+          )
         : candidates.filter((candidate) =>
             isReviewCandidateActionable(
               deepLinkItem?.id === candidate.id ? deepLinkItem : candidate,
@@ -745,33 +875,47 @@ function ReviewPageContent() {
           ),
     [candidates, deepLinkItem, isRemovedView],
   );
-  const actionableLoadedCandidateIds = useMemo(
-    () => new Set(actionableLoadedCandidates.map((candidate) => candidate.id)),
-    [actionableLoadedCandidates],
+  const bulkSelectableLoadedCandidateIds = useMemo(
+    () =>
+      new Set(bulkSelectableLoadedCandidates.map((candidate) => candidate.id)),
+    [bulkSelectableLoadedCandidates],
   );
-  const selectedActionableCandidateIds = useMemo(
+  const selectedBulkCandidateIds = useMemo(
     () =>
       selectedCandidateIds.filter((candidateId) =>
-        actionableLoadedCandidateIds.has(candidateId),
+        bulkSelectableLoadedCandidateIds.has(candidateId),
       ),
-    [actionableLoadedCandidateIds, selectedCandidateIds],
+    [bulkSelectableLoadedCandidateIds, selectedCandidateIds],
   );
   const selectedCandidateSet = useMemo(
-    () => new Set(selectedActionableCandidateIds),
-    [selectedActionableCandidateIds],
+    () => new Set(selectedBulkCandidateIds),
+    [selectedBulkCandidateIds],
   );
   const allLoadedCandidatesSelected =
-    actionableLoadedCandidates.length > 0 &&
-    actionableLoadedCandidates.every((candidate) =>
+    bulkSelectableLoadedCandidates.length > 0 &&
+    bulkSelectableLoadedCandidates.every((candidate) =>
       selectedCandidateSet.has(candidate.id),
     );
-  const toggleCandidateSelection = useCallback((candidateId: number) => {
-    setSelectedCandidateIds((current) =>
-      current.includes(candidateId)
-        ? current.filter((id) => id !== candidateId)
-        : [...current, candidateId],
-    );
-  }, []);
+  const someLoadedCandidatesSelected = selectedBulkCandidateIds.length > 0;
+  const bulkSelectionLimitReached =
+    selectedBulkCandidateIds.length >= REVIEW_BULK_SELECTION_MAX;
+  const toggleCandidateSelection = useCallback(
+    (candidateId: number) => {
+      setSelectedCandidateIds((current) => {
+        if (current.includes(candidateId)) {
+          return current.filter((id) => id !== candidateId);
+        }
+        const currentSelectable = current.filter((id) =>
+          bulkSelectableLoadedCandidateIds.has(id),
+        );
+        if (currentSelectable.length >= REVIEW_BULK_SELECTION_MAX) {
+          return current;
+        }
+        return [...currentSelectable, candidateId];
+      });
+    },
+    [bulkSelectableLoadedCandidateIds],
+  );
   const removeCandidateSelections = useCallback(
     (candidateIds: readonly number[]) => {
       if (candidateIds.length === 0) return;
@@ -783,16 +927,26 @@ function ReviewPageContent() {
     [],
   );
   function toggleAllLoadedCandidates() {
-    setSelectedCandidateIds((current) =>
-      allLoadedCandidatesSelected
-        ? current.filter((id) => !actionableLoadedCandidateIds.has(id))
-        : Array.from(
-            new Set([
-              ...current,
-              ...actionableLoadedCandidates.map((candidate) => candidate.id),
-            ]),
-          ),
-    );
+    setSelectedCandidateIds((current) => {
+      const currentSelectable = current.filter((id) =>
+        bulkSelectableLoadedCandidateIds.has(id),
+      );
+      const targetCount = Math.min(
+        bulkSelectableLoadedCandidates.length,
+        REVIEW_BULK_SELECTION_MAX,
+      );
+      if (currentSelectable.length >= targetCount) {
+        return current.filter(
+          (id) => !bulkSelectableLoadedCandidateIds.has(id),
+        );
+      }
+      const selected = new Set(currentSelectable);
+      const additions = bulkSelectableLoadedCandidates
+        .map((candidate) => candidate.id)
+        .filter((candidateId) => !selected.has(candidateId))
+        .slice(0, REVIEW_BULK_SELECTION_MAX - currentSelectable.length);
+      return [...currentSelectable, ...additions];
+    });
   }
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedCandidateSnapshot, setSelectedCandidateSnapshot] =
@@ -2697,27 +2851,246 @@ function ReviewPageContent() {
 
   const restartCandidateSnapshot = useCallback(async () => {
     const restartScope = queueScopeRef.current;
+    const restartCandidatesKey = candidatesKeyRef.current;
     const cacheRefreshGeneration = candidateCacheRefreshGenerationRef.current;
     resetReviewScope();
-    await queryClient.cancelQueries({ queryKey: candidatesKey, exact: true });
+    await queryClient.cancelQueries({
+      queryKey: restartCandidatesKey,
+      exact: true,
+    });
     // resetQueries가 infinite query의 pages/pageParams를 함께 폐기해 첫 page부터
     // 새 watermark snapshot을 만든다.
-    await queryClient.resetQueries({ queryKey: candidatesKey, exact: true });
+    await queryClient.resetQueries({
+      queryKey: restartCandidatesKey,
+      exact: true,
+    });
     await queryClient.invalidateQueries({
       queryKey: ["unmatched-candidates", "newer"],
     });
     if (
       queueScopeRef.current === restartScope &&
       candidateCacheRefreshGenerationRef.current === cacheRefreshGeneration &&
-      queryClient.getQueryState(candidatesKey)?.status !== "error"
+      queryClient.getQueryState(restartCandidatesKey)?.status !== "error"
     ) {
       clearCandidateCacheRefreshError();
     }
   }, [
-    candidatesKey,
     clearCandidateCacheRefreshError,
     queryClient,
     resetReviewScope,
+  ]);
+
+  const handleReviewBulkSettled = useCallback(async () => {
+    setSelectedCandidateIds([]);
+    updateReviewUndoState(dismissReviewUndo);
+    setReviewUndoError(null);
+    // 현재 scope는 첫 page부터 다시 열고, 다른 status/filter cache도 stale로
+    // 표시해 다음 방문 때 bulk 이전 행을 재사용하지 않는다.
+    await queryClient.invalidateQueries({
+      queryKey: ["unmatched-candidates"],
+      refetchType: "none",
+    });
+    await restartCandidateSnapshot();
+  }, [queryClient, restartCandidateSnapshot, updateReviewUndoState]);
+  const {
+    state: reviewBulkState,
+    dialogOpen: reviewBulkDialogOpen,
+    setDialogOpen: setReviewBulkDialogOpen,
+    requestPreview: requestReviewBulkPreview,
+    confirm: confirmReviewBulk,
+    retry: retryReviewBulk,
+    cancelUnconfirmed: cancelUnconfirmedReviewBulk,
+    reset: resetReviewBulkWorkflow,
+  } = useReviewBulk({ onSettled: handleReviewBulkSettled });
+  const previousReviewBulkQueueScopeRef = useRef(queueScope);
+  useEffect(() => {
+    if (previousReviewBulkQueueScopeRef.current === queueScope) return;
+    previousReviewBulkQueueScopeRef.current = queueScope;
+    // 확인 전 preview만 현재 URL filter와 함께 폐기한다. 사용자가 이미 확인한
+    // operation은 서버에 고정된 membership으로 filter 이동 뒤에도 끝까지 진행한다.
+    cancelUnconfirmedReviewBulk();
+  }, [cancelUnconfirmedReviewBulk, queueScope]);
+  const bulkDialogState = useMemo(
+    () => reviewBulkDialogState(reviewBulkState),
+    [reviewBulkState],
+  );
+  const bulkBlocksCandidateActions =
+    reviewBulkState.status === "previewing" ||
+    reviewBulkState.status === "confirm" ||
+    reviewBulkState.status === "executing" ||
+    reviewBulkState.status === "expired" ||
+    reviewBulkState.status === "error";
+  const updateReviewBulkDialogOpen = useCallback(
+    (open: boolean) => {
+      if (
+        !open &&
+        (reviewBulkState.status === "previewing" ||
+          reviewBulkState.status === "confirm" ||
+          (reviewBulkState.status === "expired" &&
+            reviewBulkState.progress == null) ||
+          (reviewBulkState.status === "error" &&
+            reviewBulkState.phase === "preview"))
+      ) {
+        // 확인 전 닫기/취소는 단순히 dialog만 숨기지 않는다. old draft와 token을
+        // 폐기해야 selection 또는 URL filter를 바꾼 뒤 재시도가 옛 범위를 되살리지 않는다.
+        cancelUnconfirmedReviewBulk();
+        return;
+      }
+      if (
+        !open &&
+        reviewBulkState.status === "expired" &&
+        reviewBulkState.progress != null
+      ) {
+        resetReviewBulkWorkflow();
+        void handleReviewBulkSettled();
+        return;
+      }
+      if (
+        !open &&
+        (reviewBulkState.status === "completed" ||
+          reviewBulkState.status === "partial")
+      ) {
+        // 완료/부분 완료 결과는 닫는 즉시 폐기한다. 목록 refresh는 execute driver가
+        // 이미 시작했으므로 중복 요청하지 않고 새 선택 status가 즉시 정본이 되게 한다.
+        resetReviewBulkWorkflow();
+        return;
+      }
+      if (
+        !open &&
+        reviewBulkState.status === "error" &&
+        reviewBulkState.phase === "terminal"
+      ) {
+        resetReviewBulkWorkflow();
+        void handleReviewBulkSettled();
+        return;
+      }
+      setReviewBulkDialogOpen(open);
+    },
+    [
+      cancelUnconfirmedReviewBulk,
+      handleReviewBulkSettled,
+      reviewBulkState,
+      resetReviewBulkWorkflow,
+      setReviewBulkDialogOpen,
+    ],
+  );
+  const beginReviewBulk = useCallback(
+    (intent: ReviewBulkIntent) => {
+      setCandidateActionError(null);
+      if (intent.scope === "selection") {
+        if (selectedBulkCandidateIds.length === 0) {
+          setCandidateActionError("일괄 처리할 후보를 먼저 선택해 주세요.");
+          return;
+        }
+        if (selectedBulkCandidateIds.length > REVIEW_BULK_SELECTION_MAX) {
+          setCandidateActionError(
+            `직접 선택 작업은 최대 ${REVIEW_BULK_SELECTION_MAX}건입니다. 선택을 줄이거나 서버 필터 전체 작업을 사용해 주세요.`,
+          );
+          return;
+        }
+        try {
+          requestReviewBulkPreview(intent.action, {
+            kind: "selection",
+            candidateIds: selectedBulkCandidateIds,
+          });
+        } catch (error) {
+          setCandidateActionError(
+            error instanceof Error
+              ? error.message
+              : "일괄 처리 범위를 만들지 못했습니다.",
+          );
+        }
+        return;
+      }
+      try {
+        requestReviewBulkPreview("ignore", {
+          kind: "filter",
+          filter: reviewListStateToForeignBulkFilter(
+            reviewListStateRef.current,
+          ),
+        });
+      } catch (error) {
+        setCandidateActionError(
+          error instanceof Error
+            ? error.message
+            : "일괄 처리 범위를 만들지 못했습니다.",
+        );
+      }
+    },
+    [requestReviewBulkPreview, selectedBulkCandidateIds],
+  );
+  const startConfirmedReviewBulk = useCallback(() => {
+    updateReviewUndoState(dismissReviewUndo);
+    setReviewUndoError(null);
+    confirmReviewBulk();
+  }, [confirmReviewBulk, updateReviewUndoState]);
+  const retryVisibleReviewBulk = useCallback(() => {
+    if (
+      reviewBulkState.status === "expired" &&
+      reviewBulkState.progress != null
+    ) {
+      // 일부 chunk가 반영된 operation은 오래된 전체 scope로 되돌리지 않는다.
+      // token-free 결과만 남기고 최신 목록에서 실제 잔여 대상을 다시 고르게 한다.
+      resetReviewBulkWorkflow();
+      void handleReviewBulkSettled();
+      return;
+    }
+    if (reviewBulkState.status !== "partial") {
+      retryReviewBulk();
+      return;
+    }
+    const failedIds = Array.from(
+      new Set(
+        reviewBulkState.progress.failed.map((issue) => issue.candidate_id),
+      ),
+    );
+    if (failedIds.length === 0) {
+      // conflict는 현재 action과 이미 호환되지 않을 수 있으므로 어떤 scope에서도
+      // 자동 재실행하지 않는다. 이미 시작된 settle refresh의 새 목록에서 재선택한다.
+      resetReviewBulkWorkflow();
+      return;
+    }
+    if (failedIds.length > REVIEW_BULK_SELECTION_MAX) {
+      setCandidateActionError(
+        `처리 실패가 ${failedIds.length.toLocaleString("ko-KR")}건이라 한 번에 다시 확인할 수 없습니다. 목록을 새로고침한 뒤 ${REVIEW_BULK_SELECTION_MAX}건씩 나누어 선택해 주세요.`,
+      );
+      resetReviewBulkWorkflow();
+      return;
+    }
+    // 원래 filter 작업이어도 failed ID만 명시 selection으로 고정한다. 원래 filter를
+    // 다시 쓰면 revision conflict와 새 후보까지 자동 실행 범위에 섞일 수 있다.
+    const scope: ReviewBulkScope = {
+      kind: "selection",
+      candidateIds: failedIds,
+    };
+    try {
+      requestReviewBulkPreview(reviewBulkState.draft.action, scope);
+    } catch (error) {
+      setCandidateActionError(
+        error instanceof Error
+          ? error.message
+          : "처리되지 않은 후보의 최신 범위를 만들지 못했습니다.",
+      );
+    }
+  }, [
+    handleReviewBulkSettled,
+    requestReviewBulkPreview,
+    resetReviewBulkWorkflow,
+    retryReviewBulk,
+    reviewBulkState,
+  ]);
+  const abandonVisibleReviewBulk = useCallback(() => {
+    const needsRefresh =
+      (reviewBulkState.status === "expired" &&
+        reviewBulkState.progress != null) ||
+      (reviewBulkState.status === "error" &&
+        reviewBulkState.phase !== "preview");
+    resetReviewBulkWorkflow();
+    if (needsRefresh) void handleReviewBulkSettled();
+  }, [
+    handleReviewBulkSettled,
+    resetReviewBulkWorkflow,
+    reviewBulkState,
   ]);
 
   // 좌표 입력 검증: 숫자 여부(차단) + 대한민국 대략 범위(경고만, 저장은 허용).
@@ -2780,7 +3153,8 @@ function ReviewPageContent() {
     deleteCandidatesMutation.isPending ||
     reopenMutation.isPending ||
     detailDeletePending ||
-    deepLinkValidationPending;
+    deepLinkValidationPending ||
+    bulkBlocksCandidateActions;
   const candidateInitialLoading =
     !hasListUrlState ||
     (candidates.length === 0 && candidatesQuery.isLoading) ||
@@ -2842,7 +3216,7 @@ function ReviewPageContent() {
       viewportLocked
     >
       <div className="grid h-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-3 lg:overflow-hidden">
-        <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 border-b p-3 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
+        <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 overflow-hidden border-b p-3 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between gap-2">
             <p className="px-1 text-xs font-medium text-muted-foreground">
               {isRemovedView ? "제외·삭제된 후보" : "검수 대기 후보"}
@@ -2869,10 +3243,12 @@ function ReviewPageContent() {
               </Badge>
             </div>
           </div>
-          <ReviewQueueSearch
-            value={reviewQuery}
-            onDebouncedChange={updateReviewQuery}
-          />
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto lg:flex lg:flex-col lg:gap-2 lg:space-y-0 lg:overflow-hidden">
+              <ReviewQueueSearch
+                value={reviewQuery}
+                onDebouncedChange={updateReviewQuery}
+              />
           <div className="grid grid-cols-2 gap-1.5 pb-1">
             <Select
               value={reviewStatus}
@@ -3144,43 +3520,6 @@ function ReviewPageContent() {
               </Button>
             </div>
           ) : null}
-          {!isRemovedView && selectedActionableCandidateIds.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
-              <span className="text-xs font-medium text-destructive">
-                후보 {selectedActionableCandidateIds.length}개 선택됨
-              </span>
-              <ConfirmActionButton
-                title={`선택한 후보 ${selectedActionableCandidateIds.length}개를 삭제할까요?`}
-                description="삭제 후 제외·삭제 목록에서 개별 후보를 복구할 수 있습니다."
-                onConfirm={() =>
-                  deleteCandidatesMutation.mutate(
-                    actionableLoadedCandidates.filter((candidate) =>
-                      selectedCandidateSet.has(candidate.id),
-                    ),
-                  )
-                }
-                trigger={
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="destructive"
-                    disabled={candidateActionPending}
-                  >
-                    <Trash2Icon data-icon="inline-start" />
-                    선택 삭제
-                  </Button>
-                }
-              />
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={() => setSelectedCandidateIds([])}
-              >
-                선택 해제
-              </Button>
-            </div>
-          ) : null}
           {deleteCandidatesMutation.error ? (
             <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive" role="alert">
               {deleteCandidatesMutation.error.message}
@@ -3244,7 +3583,7 @@ function ReviewPageContent() {
               ) : null}
             </div>
           ) : null}
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 lg:flex-1 lg:overflow-y-auto">
             {candidates.length === 0 ? (
               candidateAdvancePending ? (
                 <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
@@ -3314,16 +3653,26 @@ function ReviewPageContent() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {!isRemovedView ? (
-                      <TableHead className="w-10">
-                        <Checkbox
-                          checked={allLoadedCandidatesSelected}
-                          onCheckedChange={toggleAllLoadedCandidates}
-                          disabled={actionableLoadedCandidates.length === 0}
-                          aria-label="불러온 후보 전체 선택"
-                        />
-                      </TableHead>
-                    ) : null}
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allLoadedCandidatesSelected}
+                        indeterminate={
+                          someLoadedCandidatesSelected &&
+                          !allLoadedCandidatesSelected
+                        }
+                        onCheckedChange={toggleAllLoadedCandidates}
+                        disabled={
+                          candidateActionPending ||
+                          bulkSelectableLoadedCandidates.length === 0
+                        }
+                        aria-label={
+                          bulkSelectableLoadedCandidates.length >
+                          REVIEW_BULK_SELECTION_MAX
+                            ? `불러온 후보 중 최대 ${REVIEW_BULK_SELECTION_MAX}건 선택`
+                            : "불러온 후보 전체 선택"
+                        }
+                      />
+                    </TableHead>
                     <TableHead>후보</TableHead>
                     <TableHead>출처</TableHead>
                     <TableHead>상태</TableHead>
@@ -3336,11 +3685,18 @@ function ReviewPageContent() {
                       key={candidate.id}
                       candidate={candidate}
                       actionsDisabled={
+                        candidateActionPending ||
                         !isReviewCandidateActionable(
                           deepLinkItem?.id === candidate.id
                             ? deepLinkItem
                             : candidate,
                         )
+                      }
+                      selectionDisabled={
+                        candidateActionPending ||
+                        !bulkSelectableLoadedCandidateIds.has(candidate.id) ||
+                        (bulkSelectionLimitReached &&
+                          !selectedCandidateSet.has(candidate.id))
                       }
                       removedMode={isRemovedView}
                       restoreDisabled={
@@ -3361,7 +3717,7 @@ function ReviewPageContent() {
               </Table>
             )}
             {canLoadMoreCandidates ? (
-              <div className="sticky bottom-0 border-t bg-background p-2">
+              <div className="border-t bg-background p-2 lg:sticky lg:bottom-0">
                 <Button
                   type="button"
                   size="sm"
@@ -3385,6 +3741,24 @@ function ReviewPageContent() {
                 </Button>
               </div>
             ) : null}
+          </div>
+            </div>
+            <ReviewBulkPanel
+              mode={isRemovedView ? "removed" : "review"}
+              selectedCount={selectedBulkCandidateIds.length}
+              selectionLimit={REVIEW_BULK_SELECTION_MAX}
+              actionsDisabled={candidateActionPending}
+              foreignActionDisabled={!hasListUrlState}
+              dialogState={bulkDialogState}
+              dialogOpen={reviewBulkDialogOpen}
+              className="shrink-0"
+              onClearSelection={() => setSelectedCandidateIds([])}
+              onRequestPreview={beginReviewBulk}
+              onConfirm={startConfirmedReviewBulk}
+              onRetry={retryVisibleReviewBulk}
+              onAbandon={abandonVisibleReviewBulk}
+              onDialogOpenChange={updateReviewBulkDialogOpen}
+            />
           </div>
         </aside>
 
@@ -4364,6 +4738,7 @@ function ReviewQueueSearch({
 const CandidateRow = memo(function CandidateRow({
   candidate,
   actionsDisabled,
+  selectionDisabled,
   removedMode,
   restoreDisabled,
   isCurrent,
@@ -4378,6 +4753,7 @@ const CandidateRow = memo(function CandidateRow({
 }: {
   candidate: UnmatchedCandidate;
   actionsDisabled: boolean;
+  selectionDisabled: boolean;
   removedMode: boolean;
   restoreDisabled: boolean;
   isCurrent: boolean;
@@ -4421,17 +4797,15 @@ const CandidateRow = memo(function CandidateRow({
       onClick={handleRowClick}
       onKeyDown={handleRowKeyDown}
     >
-      {!removedMode ? (
-        <TableCell>
-          <Checkbox
-            checked={isChecked}
-            disabled={actionsDisabled}
-            data-row-action="true"
-            onCheckedChange={() => onToggleSelect(candidate.id)}
-            aria-label={`${candidate.ai_place_name} 후보 선택`}
-          />
-        </TableCell>
-      ) : null}
+      <TableCell>
+        <Checkbox
+          checked={isChecked}
+          disabled={selectionDisabled}
+          data-row-action="true"
+          onCheckedChange={() => onToggleSelect(candidate.id)}
+          aria-label={`${candidate.ai_place_name} 후보 선택`}
+        />
+      </TableCell>
       <TableCell>
         <div className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left">
           <span className="font-bold leading-snug">{candidate.ai_place_name}</span>

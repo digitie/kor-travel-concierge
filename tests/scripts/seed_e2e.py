@@ -17,6 +17,9 @@ from ktc.models import (
     MatchStatus,
     MediaAsset,
     PublicApiKey,
+    ReviewBulkOperation,
+    ReviewBulkOperationItem,
+    ReviewBulkOperationReceipt,
     RunAttention,
     RunSource,
     RunState,
@@ -36,7 +39,15 @@ async def main() -> None:
         # 있다(T-184). FK 양방향을 먼저 끊지 않고 후보부터 지우면 다음 E2E seed가
         # provenance FK에서 실패한다. 참조 행/링크를 해제한 뒤 place→candidate 순으로
         # 정리해 매 테스트가 같은 빈 snapshot에서 시작하게 한다.
-        for model in (VideoPlaceMapping, MediaAsset, FeatureExport, PublicApiKey):
+        for model in (
+            VideoPlaceMapping,
+            MediaAsset,
+            FeatureExport,
+            ReviewBulkOperationItem,
+            ReviewBulkOperationReceipt,
+            ReviewBulkOperation,
+            PublicApiKey,
+        ):
             await session.execute(delete(model))
         await session.execute(
             update(ExtractedPlaceCandidate).values(matched_place_id=None)

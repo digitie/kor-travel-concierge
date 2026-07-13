@@ -49,8 +49,11 @@
   frontend lint/type-check/Vitest 159건/build, Playwright 22건 통과(live 4건 skip)를 검증했다. backend
   전체는 664건 통과, n150 optional transcript library 설치 상태와 가정이 다른 기존 2건만 실패했다.
   (2026-07-13, PR-08 개정판, G5)
-- [ ] **T-185**: 검수 bulk — filter snapshot 서버 액션+preview count+확인 token+크기/분할·retry 계약, 해외 일괄 제외 포함. 선행: T-160(A)·T-177. (PR-10 개정판)
-- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리, provider 요청 debounce 250~400ms+abort+identity, startTransition으로 120ms 해킹 제거. 선행: T-183. (PR-15 개정판)
+- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리. 현행 300ms provider
+  debounce·abort·candidate/request identity·동일 검색 재실행 `searchNonce`는 보존하고, 후보 선택 강조·
+  폼 초기화는 즉시 처리한 뒤 provider query 활성화만 `startTransition`으로 분리한다. 과거 120ms
+  workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
+  T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
 - [ ] **T-188**: `/destinations` SQL 푸시다운 — EXPLAIN(ANALYZE,BUFFERS) 검증, `source_videos` 사용처 전수→detail lazy 선배포→제거, `limit=None` 시그니처 호환. 선행: T-178. (PR-20 개정판, G8)
 - [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. 전역 export advisory lock의 빈 GET·dirty batch·전량 reconcile p95를 n150에서 측정하고, bounded dirty claim과 writer 지연 상한을 계약화한다. (PR-25 개정판, G10)
@@ -62,6 +65,23 @@
 
 ## 완료
 
+- [x] **T-185**: 검수 bulk — 로그인 BFF 전용 `preview`·`execute` 계약과 durable operation/item/receipt
+  ledger를 추가했다. 명시 선택은 최대 500건, filter snapshot은 정확한 최대 10,000건이며 10,001번째를
+  확인하면 일부를 자르지 않고 413으로 거부한다. preview는 `REPEATABLE READ`에서 revision·상태를
+  고정하고 5분 확인 token은 actor·action·scope·만료에 결합해 digest만 저장한다. execute는 100건
+  chunk, operation/cursor 잠금, `(request_id,cursor)` exact receipt 재생, stale cursor 409, item savepoint,
+  candidate별 감사와 chunk 감사·receipt 원자 commit을 적용했다. ignore/delete/reopen은 기존 lifecycle·
+  export dirty 계약을 재사용하며 상태 충돌과 처리 실패를 분리한다. UI는 선택 제외·삭제·복구, 현재
+  filter의 해외 후보 전체 제외, 정확한 건수 확인, 진행률, 응답 유실 동일 chunk 재시도, 실패 ID만 새
+  preview, 500건 상한, 0건·모바일·focus 안전 경로를 제공하고 bearer token은 메모리에만 둔다. 3개
+  적대적 검토 agent를 3회 교차 배치해 cache-key ABA, 후보 감사 누락, 잘못된 200 응답 신뢰, 문서 계약
+  불일치, lock 역순과 실제 10,000/10,001 경계 증거 공백을 수정했다. action별 filter 상태 type 계약,
+  source filter mock, delete 정산과 혼합 savepoint 회귀도 보강하고 delta 재감사에서
+  BLOCKER/MAJOR/MINOR 0건을 확인했다. n150 격리 환경에서 Alembic 단일 head
+  `20260713_0027↔20260714_0028` 왕복, T-185 backend 30건·backend 전체 761건·변경 Python Ruff,
+  frontend lint·type-check·Vitest 229건·production build, Playwright 기능 44건과 기존 timing 경로
+  production 재검증 3/3 통과(4건 live 전용 skip)를 확인했다.
+  (2026-07-14, PR-10 개정판, ADR-42, G1)
 - [x] **T-171**: export durable dirty outbox (S6/A2) — feature export GET이 매 요청 전 후보
   `sync_feature_exports`(O(후보수)) + `_read_page` `last_exported_at` write-commit 하던 것을 **DB durable
   dirty outbox**로 대체(PR-22 개정: process-local 스로틀·워터마크·플래그는 2프로세스·재시작 정본 불가).

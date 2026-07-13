@@ -1,6 +1,7 @@
 import type {
   CandidateDetail,
   DestinationGroupDim,
+  ReviewBulkFilterSnapshot,
   ReviewCandidateFilter,
   ReviewCandidateSort,
   ReviewCandidateStatus,
@@ -268,6 +269,60 @@ export function reviewListStateToFilter(
     sourceKind: state.sourceKind,
     grounding: state.groundingStatus,
   };
+}
+
+export type ReviewBulkFilterOverrides = {
+  /** undefined는 현재 목록값 유지, null은 국내외 전체, false는 해외만을 뜻한다. */
+  isDomestic?: boolean | null;
+  status?: "needs_review" | "removed";
+};
+
+/**
+ * 현재 URL 목록 조건을 cursor/page/sort/deep-link와 분리된 bulk membership
+ * snapshot으로 고정한다. optional 필드는 빈 문자열/null 대신 JSON에서 생략한다.
+ */
+export function reviewListStateToBulkFilter(
+  state: ReviewListState,
+  overrides: ReviewBulkFilterOverrides = {},
+): ReviewBulkFilterSnapshot {
+  const groupValue = state.groupValue?.trim() || undefined;
+  const query = state.query.trim() || undefined;
+  const isDomestic =
+    overrides.isDomestic === undefined
+      ? state.isDomestic
+      : overrides.isDomestic;
+  const status = overrides.status ?? state.status;
+
+  return {
+    ...(state.groupDim === "channel" && groupValue
+      ? { channel_id: groupValue }
+      : {}),
+    ...(state.groupDim === "playlist" && groupValue
+      ? { playlist_id: groupValue }
+      : {}),
+    ...(state.groupDim === "keyword" && groupValue
+      ? { keyword: groupValue }
+      : {}),
+    ...(query ? { q: query } : {}),
+    is_domestic: isDomestic,
+    status,
+    ...(state.queueReason ? { reason: state.queueReason } : {}),
+    ...(state.sourceKind ? { source_kind: state.sourceKind } : {}),
+    ...(state.groundingStatus
+      ? { grounding: state.groundingStatus }
+      : {}),
+  };
+}
+
+/** 기존 교집합은 두되 reason=foreign을 자동 주입하지 않고 boolean 해외 조건을 쓴다. */
+export function reviewListStateToForeignBulkFilter(
+  state: ReviewListState,
+): ReviewBulkFilterSnapshot<"needs_review"> {
+  const filter = reviewListStateToBulkFilter(state, {
+    isDomestic: false,
+    status: "needs_review",
+  });
+  return { ...filter, status: "needs_review" };
 }
 
 export function reviewListStateHasFilters(state: ReviewListState): boolean {
