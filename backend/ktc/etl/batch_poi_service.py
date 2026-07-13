@@ -25,7 +25,12 @@ from ktc.etl import (
     media_store,
     transcript_correction,
 )
-from ktc.etl.transcript import TranscriptAttempt, TranscriptOutcome, TranscriptResult
+from ktc.etl.transcript import (
+    TranscriptAttempt,
+    TranscriptOutcome,
+    TranscriptResult,
+    canonical_provider,
+)
 from ktc.models import (
     AssetType,
     CrawlStatus,
@@ -56,6 +61,29 @@ AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
 def _attempts_one_line(outcome: TranscriptOutcome) -> str:
     """provider별 시도 요약 1줄(작업 상태 로그용). stage 이벤트와 정합(요약 vs 상세)."""
     return ", ".join(f"{a.provider}={a.outcome}" for a in outcome.attempts)
+
+
+def _source_from_transcript_asset_key(object_key: str | None) -> str | None:
+    """저장된 자막 asset의 object_key(`{video_id}/transcript_{source}.txt`)에서
+    성공 provider(레거시 표기)를 되뽑는다. 캐시 자막 재사용 시 요약 캐시 파생용."""
+    if not object_key:
+        return None
+    name = object_key.rsplit("/", 1)[-1]
+    if name.startswith("transcript_") and name.endswith(".txt"):
+        return name[len("transcript_") : -len(".txt")] or None
+    return None
+
+
+def _apply_cached_transcript_cache(video: YoutubeVideo, raw_asset: Any) -> None:
+    """저장된 자막을 재사용해 성공적으로 진행할 때 요약 캐시를 갱신한다(리뷰 MINOR-3).
+
+    fresh fetch 경로에서만 갱신하면 캐시 재처리 시 transcript_source가 stale/NULL로
+    남아 §7 수율 지표를 왜곡한다. object_key에서 provider를 되뽑아 canonical로 세팅하고
+    (성공이므로) failure_code는 비운다. provider를 못 뽑으면 기존 값을 보존한다."""
+    source = _source_from_transcript_asset_key(getattr(raw_asset, "object_key", None))
+    if source:
+        video.transcript_source = canonical_provider(source)
+    video.transcript_failure_code = None
 
 # 단일 영상 자막이 분당 토큰 한도(TPM)를 넘지 않도록 LLM 입력에 적용하는 문자 상한.
 # 원본(raw) 자막은 전체를 RustFS에 저장하고, 교정·추출 입력만 절단한다(긴 영상 대응).
@@ -156,6 +184,8 @@ async def process_video_batch(
                     session, video_id=video.video_id, asset_type=AssetType.TRANSCRIPT
                 )
                 raw_asset_id = raw_asset.id if raw_asset is not None else None
+                # 캐시 교정본 재사용도 성공 자막 확보이므로 요약 캐시를 갱신한다(MINOR-3).
+                _apply_cached_transcript_cache(video, raw_asset)
                 await _report(
                     status_reporter,
                     f"{label} 저장된 교정본으로 POI만 다시 추출합니다.",
@@ -183,6 +213,8 @@ async def process_video_batch(
                     )
                     raw_text = raw_bytes.decode("utf-8")
                     raw_asset_id = raw_asset.id
+                    # 캐시 원본 자막 재사용도 성공 확보이므로 요약 캐시를 갱신한다(MINOR-3).
+                    _apply_cached_transcript_cache(video, raw_asset)
                     await _report(
                         status_reporter, f"{label} 저장된 자막으로 교정부터 다시 합니다."
                     )
@@ -243,7 +275,9 @@ async def process_video_batch(
                     "transcript_fetch",
                     outcome="success",
                     started=fetch_started,
-                    provider=transcript.source,
+                    # G7 조인 위해 stage 이벤트 provider도 canonical로 통일한다
+                    # (transcript_attempts·요약 캐시와 동일 어휘 — 리뷰 MINOR-2).
+                    provider=outcome.success_provider,
                     item_ref=video.video_id,
                     detail=f"segments={len(transcript.segments)}; 시도: {attempts_line}",
                 )

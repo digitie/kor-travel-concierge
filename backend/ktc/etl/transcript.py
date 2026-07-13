@@ -144,7 +144,7 @@ class TranscriptOutcome:
             if attempt.succeeded:
                 return attempt.provider
         if self.result is not None:
-            return _canonical_provider(self.result.source)
+            return canonical_provider(self.result.source)
         return None
 
     @property
@@ -177,8 +177,23 @@ class TranscriptOutcome:
         if value is None:
             return cls(result=None, attempts=[])
         if isinstance(value, TranscriptResult):
+            # segments가 없으면 성공으로 단락하지 않는다 — transcript_source=provider인데
+            # crawl_status=FAILED·failure_code=None인 불일치 캐시를 막는다(리뷰 MINOR-1).
+            if not value.segments:
+                return cls(
+                    result=None,
+                    attempts=[
+                        TranscriptAttempt(
+                            provider=canonical_provider(value.source),
+                            outcome=TranscriptOutcomeCode.NO_CAPTIONS.value,
+                            sequence=1,
+                            language=value.language,
+                            detail="빈 자막(segments 없음)",
+                        )
+                    ],
+                )
             attempt = TranscriptAttempt(
-                provider=_canonical_provider(value.source),
+                provider=canonical_provider(value.source),
                 outcome=TranscriptOutcomeCode.SUCCESS.value,
                 sequence=1,
                 result=value,
@@ -284,7 +299,55 @@ def _classify_exception(exc: BaseException) -> str:
     return TranscriptOutcomeCode.PARSE_ERROR.value
 
 
-def _canonical_provider(source: str | None) -> str:
+def _classify_captured_error_text(text: str) -> str | None:
+    """yt-dlp가 `ignoreerrors`로 삼킨 뒤 로거에 남긴 에러 문자열에서 **명확한** 실패
+    신호(blocked/rate_limited/download_error)만 뽑는다(리뷰 MAJOR).
+
+    자막 미제공(no_captions)과 구분해야 하므로, 위 세 코드가 아니면 None을 반환해
+    호출자가 no_captions 기본값을 유지하게 한다(benign 경고를 실패로 오분류 금지).
+    """
+    if not text or not text.strip():
+        return None
+    code = _classify_exception(RuntimeError(text))
+    if code in (
+        TranscriptOutcomeCode.BLOCKED.value,
+        TranscriptOutcomeCode.RATE_LIMITED.value,
+        TranscriptOutcomeCode.DOWNLOAD_ERROR.value,
+    ):
+        return code
+    return None
+
+
+class _YtdlpErrorCollector:
+    """yt-dlp `logger` 주입용 — error/warning 메시지를 모은다(분류 원천).
+
+    `ignoreerrors=True`가 아니어도 yt-dlp는 일부 실패를 예외 없이 로깅만 하고 넘어갈 수
+    있어(자막 부분 실패 등), 예외 경로와 별개로 캡처 로그가 필요하다.
+    """
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def debug(self, msg: object) -> None:  # noqa: D401 - yt-dlp logger 계약
+        # yt-dlp는 info도 debug로 보내며 접두사 '[debug]'로 구분한다. 잡음 무시.
+        text = str(msg)
+        if text.startswith("ERROR:") or text.startswith("WARNING:"):
+            self.messages.append(text)
+
+    def info(self, msg: object) -> None:
+        pass
+
+    def warning(self, msg: object) -> None:
+        self.messages.append(str(msg))
+
+    def error(self, msg: object) -> None:
+        self.messages.append(str(msg))
+
+    def captured(self) -> str:
+        return " ".join(self.messages)
+
+
+def canonical_provider(source: str | None) -> str:
     """`TranscriptResult.source`(레거시 표기)를 canonical provider 값으로 매핑."""
     mapping = {
         "transcript_api": TranscriptProviderName.YOUTUBE_TRANSCRIPT_API.value,
@@ -467,6 +530,7 @@ def fetch_via_ytdlp(
     from pathlib import Path
 
     url = f"https://www.youtube.com/watch?v={video_id}"
+    collector = _YtdlpErrorCollector()
     with tempfile.TemporaryDirectory() as tmp:
         opts = {
             "skip_download": True,
@@ -477,13 +541,27 @@ def fetch_via_ytdlp(
             "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
-            "ignoreerrors": True,
+            # 리뷰 MAJOR: ignoreerrors=True이면 yt-dlp가 차단·429·네트워크 실패의
+            # DownloadError를 내부에서 삼켜 예외가 오지 않고 vtt만 없어 no_captions로
+            # 오분류된다(T-169 "자막 비활성 확정" 선별 오염). False로 두어 실 예외를
+            # _classify_exception에 닿게 하고, 그래도 삼켜지는 경우를 대비해 error
+            # logger를 주입해 캡처 로그로 분류한다.
+            "ignoreerrors": False,
+            "logger": collector,
         }
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
         except Exception as exc:
-            return done(_classify_exception(exc), detail=_exc_detail(exc))
+            # 예외 메시지가 빈약하면(래핑 등) 캡처 로그로 보강해 분류한다.
+            code = _classify_exception(exc)
+            if code == TranscriptOutcomeCode.PARSE_ERROR.value:
+                code = _classify_captured_error_text(collector.captured()) or code
+            detail = _exc_detail(exc)
+            captured = collector.captured()
+            if captured and captured not in detail:
+                detail = f"{detail} | log: {captured}"[:2000]
+            return done(code, detail=detail)
         vtt_path: "Path | None" = None
         for lang in languages:
             matches = sorted(Path(tmp).glob(f"*.{lang}*.vtt"))
@@ -494,6 +572,13 @@ def fetch_via_ytdlp(
             any_vtt = sorted(Path(tmp).glob("*.vtt"))
             vtt_path = any_vtt[0] if any_vtt else None
         if vtt_path is None:
+            # 예외 없이 리턴했지만 vtt가 없다 → ignoreerrors 등으로 삼킨 실패일 수 있다.
+            # 캡처된 에러 로그에 blocked/rate_limited/download_error 신호가 있으면 그로
+            # 분류하고, 없으면 진짜 자막 미제공(no_captions)으로 둔다.
+            captured = collector.captured()
+            code = _classify_captured_error_text(captured)
+            if code is not None:
+                return done(code, detail=captured[:2000])
             return done(
                 TranscriptOutcomeCode.NO_CAPTIONS.value,
                 detail="자막 파일 없음(비활성/미제공)",
@@ -691,6 +776,7 @@ def _run_provider(
             raw.duration_ms = _elapsed_ms(started)
         return raw
     # 레거시 반환(TranscriptResult|None) coercion.
+    # None 또는 segments 없는 결과는 no_captions(성공 단락 금지 — 리뷰 MINOR-1).
     if raw is None:
         return TranscriptAttempt(
             provider=_provider_label(fn),
@@ -698,8 +784,17 @@ def _run_provider(
             sequence=sequence,
             duration_ms=_elapsed_ms(started),
         )
+    if not raw.segments:
+        return TranscriptAttempt(
+            provider=canonical_provider(raw.source),
+            outcome=TranscriptOutcomeCode.NO_CAPTIONS.value,
+            sequence=sequence,
+            language=raw.language,
+            detail="빈 자막(segments 없음)",
+            duration_ms=_elapsed_ms(started),
+        )
     return TranscriptAttempt(
-        provider=_canonical_provider(raw.source),
+        provider=canonical_provider(raw.source),
         outcome=TranscriptOutcomeCode.SUCCESS.value,
         sequence=sequence,
         result=raw,

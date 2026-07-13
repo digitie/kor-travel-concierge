@@ -32,7 +32,7 @@ def _ok_attempt_provider(source: str):
             ],
         )
         return TranscriptAttempt(
-            provider=transcript._canonical_provider(source),
+            provider=transcript.canonical_provider(source),
             outcome="success",
             result=result,
             language="ko",
@@ -101,9 +101,40 @@ def test_fetch_transcript_all_fail_collects_codes():
     assert not outcome.succeeded
     assert outcome.result is None
     assert [a.outcome for a in outcome.attempts] == ["rate_limited", "no_captions"]
-    # 최종 실패 대표 코드 = 마지막으로 시도된 provider의 실패 코드.
+    # 대표 실패 코드는 `_FAILURE_PRIORITY` 기준(영상 정보량 큰 것 우선)이다 —
+    # 여기선 no_captions가 rate_limited보다 우선.
     assert outcome.failure_code == "no_captions"
     assert outcome.success_provider is None
+
+
+def test_failure_code_uses_priority_not_last_attempt():
+    """대표 실패 코드는 '마지막 시도'가 아니라 우선순위로 정해진다.
+
+    마지막 시도(rate_limited)가 낮은 우선순위여도 앞선 no_captions가 대표가 되어
+    T-169 "자막 비활성 확정 영상" 선별이 일시적 실패에 가려지지 않게 한다.
+    """
+    outcome = fetch_transcript(
+        "vid",
+        providers=(
+            _fail_attempt_provider("youtube_transcript_api", "no_captions"),
+            _fail_attempt_provider("yt_dlp", "rate_limited"),
+        ),
+    )
+    assert [a.outcome for a in outcome.attempts] == ["no_captions", "rate_limited"]
+    # 마지막은 rate_limited지만 대표는 우선순위상 no_captions.
+    assert outcome.failure_code == "no_captions"
+
+
+def test_failure_code_prefers_transient_over_provider_side():
+    """provider 쪽 사정(disabled/not_configured)은 최하위 — 영상 신호를 우선."""
+    outcome = fetch_transcript(
+        "vid",
+        providers=(
+            _fail_attempt_provider("youtube_transcript_api", "blocked"),
+            _fail_attempt_provider("whisper", "disabled"),
+        ),
+    )
+    assert outcome.failure_code == "blocked"
 
 
 def test_run_provider_classifies_raised_exception():
@@ -145,6 +176,31 @@ def test_outcome_coerce_classmethod():
     assert o.success_provider == "whisper"
     existing = TranscriptOutcome(result=None, attempts=[])
     assert TranscriptOutcome.coerce(existing) is existing
+
+
+def test_coerce_empty_segments_result_is_no_captions_not_success():
+    """segments 없는 TranscriptResult는 success로 단락하지 않는다(불일치 캐시 방지).
+
+    coerce가 success로 두면 transcript_source=provider인데 result=None이라
+    crawl_status=FAILED·failure_code=None인 모순 캐시가 생긴다(리뷰 MINOR-1).
+    """
+    empty = TranscriptResult(video_id="v", source="yt-dlp", segments=[])
+    o = TranscriptOutcome.coerce(empty)
+    assert o.result is None
+    assert not o.succeeded
+    assert o.success_provider is None
+    assert o.failure_code == "no_captions"
+    assert o.attempts[0].provider == "yt_dlp"
+
+
+def test_chain_legacy_empty_segments_result_is_no_captions():
+    def legacy_empty(video_id):
+        return TranscriptResult(video_id=video_id, source="transcript_api", segments=[])
+
+    outcome = fetch_transcript("vid", providers=(legacy_empty,))
+    assert outcome.result is None
+    assert outcome.attempts[0].outcome == "no_captions"
+    assert outcome.attempts[0].provider == "youtube_transcript_api"
 
 
 # --- 얇은 result-only 래퍼 (하위 호환) ---------------------------------------
@@ -364,6 +420,48 @@ def test_ytdlp_download_error_classified(monkeypatch):
     _install_fake_ytdlp(monkeypatch, on_download=boom)
     attempt = transcript.fetch_via_ytdlp("video")
     assert attempt.outcome == "download_error"
+
+
+def test_ytdlp_swallowed_rate_limit_not_misclassified_as_no_captions(monkeypatch):
+    """리뷰 MAJOR: yt-dlp가 실패를 예외 없이 로깅만 하고 넘어가(ignoreerrors 실동작)
+    vtt가 없을 때, 캡처된 429 로그로 rate_limited 분류(no_captions 아님).
+
+    이 오분류가 남으면 일시적 차단이 transcript_failure_code=no_captions가 되어
+    T-169 '자막 비활성 확정 영상' 선별을 오염시킨다.
+    """
+
+    def swallow_and_log(opts):
+        opts["logger"].error(
+            "ERROR: [youtube] vid: HTTP Error 429: Too Many Requests"
+        )
+        # vtt는 만들지 않는다(실패이므로).
+
+    _install_fake_ytdlp(monkeypatch, on_download=swallow_and_log)
+    attempt = transcript.fetch_via_ytdlp("video")
+    assert attempt.outcome == "rate_limited"
+    assert attempt.outcome != "no_captions"
+
+
+def test_ytdlp_swallowed_block_not_misclassified_as_no_captions(monkeypatch):
+    def swallow_and_log(opts):
+        opts["logger"].error(
+            "ERROR: [youtube] Sign in to confirm you're not a bot"
+        )
+
+    _install_fake_ytdlp(monkeypatch, on_download=swallow_and_log)
+    attempt = transcript.fetch_via_ytdlp("video")
+    assert attempt.outcome == "blocked"
+
+
+def test_ytdlp_swallowed_benign_warning_stays_no_captions(monkeypatch):
+    """자막 미제공 경고 등 benign 로그는 no_captions로 유지(실패로 오분류 금지)."""
+
+    def swallow_and_log(opts):
+        opts["logger"].warning("WARNING: video doesn't have subtitles")
+
+    _install_fake_ytdlp(monkeypatch, on_download=swallow_and_log)
+    attempt = transcript.fetch_via_ytdlp("video")
+    assert attempt.outcome == "no_captions"
 
 
 def test_language_from_vtt_filename():
