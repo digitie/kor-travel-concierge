@@ -390,6 +390,8 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 > **개정(2026-07-13, §10 반영)**: timestamp 파서는 `HH:MM:SS`뿐 아니라 범위 문자열("12:34-13:00")의 첫 시각·비정상 값·기존 query/hash를 처리하고, URL 조립은 문자열 연결 대신 `URL`/`URLSearchParams`. 자동 다음 후보는 미로드 page가 있으면 prefetch 후 종료 상태를 판단(마지막 page에서만 "모두 처리"). 최초 진입 프리셀렉트의 검색 억제는 `pickCandidate(c, { autoSearch: false })` 옵션 신설로.
 
+> **구현 완료(2026-07-13, T-179)**: 저장·제외·개별 삭제는 처리 시작 visible 순서와 page 수 snapshot으로 자동 진행하고, 숨김-only page 연속 탐색·수동 선택 우선·polling page 이동 중 입력 보존·deep link/scope·상세 삭제 mutex·실패 재시도를 포함했다. 검수 화면은 `listUnmatchedCandidatesPage(limit=300)`를 직접 소비한다. 서버 검색·정렬·새 후보 배너는 예정대로 T-183 범위다.
+
 - **해결**: U1, U7(a). **가장 높은 ROI — 최우선.**
 - **변경 파일**: `frontend/src/app/review/page.tsx`, `frontend/src/lib/format.ts`(유틸), `frontend/src/lib/__tests__/`(vitest), `frontend/src/components/CandidateDetailView.tsx`.
 - **작업 절차**:

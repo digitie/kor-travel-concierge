@@ -11,7 +11,13 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
   InfoIcon,
@@ -29,7 +35,7 @@ import {
   listCategories,
   matchCategory,
   listDestinationFacets,
-  listUnmatchedCandidates,
+  listUnmatchedCandidatesPage,
   reprocessVideos,
   resolveCandidate,
   searchPlaces,
@@ -41,9 +47,11 @@ import {
   type PlaceSearchHit,
   type PlaceSearchProvider,
   type ReprocessStage,
+  type ListEnvelope,
   type UnmatchedCandidate,
 } from "@/lib/api";
 import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
+import { youtubeWatchUrl } from "@/lib/format";
 import {
   buildCreatePlaceResolution,
   isPlaceHitStorageAllowed,
@@ -104,11 +112,22 @@ const PROVIDER_LABELS: Record<PlaceSearchProvider, string> = {
 };
 const PROVIDER_ORDER = ["google", "kakao", "naver"] as const;
 const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
-const REVIEW_CANDIDATE_LIMIT_STEP = 300;
-const MAX_REVIEW_CANDIDATE_LIMIT = 2000;
+
+type ReviewCandidatesKey = readonly [
+  "unmatched-candidates",
+  "pages",
+  DestinationGroupDim,
+  string | null,
+];
 
 type ResolveCommand = {
   candidateId: number;
+  candidateName: string;
+  visibleIndex: number;
+  orderedCandidateIds: number[];
+  loadedPageCount: number;
+  queueScope: string;
+  candidatesKey: ReviewCandidatesKey;
   action: "create_place" | "ignore";
   form: ReviewResolutionForm;
   selectedHit: SelectedPlaceHit | null;
@@ -117,6 +136,36 @@ type ResolveCommand = {
     placeId?: number;
   };
 };
+
+type PendingCandidateAdvance = {
+  processedIds: number[];
+  anchorIndex: number;
+  orderedCandidateIds: number[];
+  loadedPageCount: number;
+};
+
+function removeCandidatesFromQueue(
+  data: InfiniteData<ListEnvelope<UnmatchedCandidate>> | undefined,
+  ids: number[],
+): InfiniteData<ListEnvelope<UnmatchedCandidate>> | undefined {
+  if (!data) return data;
+  const removed = new Set(ids);
+  const removedCount = new Set(
+    data.pages.flatMap((page) =>
+      page.items
+        .filter((candidate) => removed.has(candidate.id))
+        .map((candidate) => candidate.id),
+    ),
+  ).size;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.filter((candidate) => !removed.has(candidate.id)),
+      total: Math.max(0, page.total - removedCount),
+    })),
+  };
+}
 
 type NearbyConflict = {
   command: ResolveCommand;
@@ -185,9 +234,6 @@ export default function ReviewPage() {
     "ktc.review.groupValue",
     null,
   );
-  const [candidateLimit, setCandidateLimit] = useState(
-    INITIAL_REVIEW_CANDIDATE_LIMIT,
-  );
   const facetsQuery = useQuery({
     queryKey: ["destination-facets"],
     queryFn: listDestinationFacets,
@@ -206,12 +252,19 @@ export default function ReviewPage() {
     return { keyword: groupValue };
   }, [groupDim, groupValue]);
   const candidatesKey = useMemo(
-    () => ["unmatched-candidates", groupDim, groupValue, candidateLimit] as const,
-    [groupDim, groupValue, candidateLimit],
+    () => ["unmatched-candidates", "pages", groupDim, groupValue] as const,
+    [groupDim, groupValue],
   );
-  const candidatesQuery = useQuery({
+  const candidatesQuery = useInfiniteQuery({
     queryKey: candidatesKey,
-    queryFn: () => listUnmatchedCandidates(filter, candidateLimit),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      listUnmatchedCandidatesPage(filter, {
+        limit: INITIAL_REVIEW_CANDIDATE_LIMIT,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
     refetchInterval: 60_000,
   });
   // 장바구니: 선택한 영상 id를 sessionStorage에 보존 → 그룹 필터를 바꿔도(테이블 필터링)
@@ -242,12 +295,32 @@ export default function ReviewPage() {
     },
   });
   const candidates = useMemo(
-    () => candidatesQuery.data ?? [],
+    () => {
+      const orderedIds: number[] = [];
+      const latestById = new Map<number, UnmatchedCandidate>();
+      for (const page of candidatesQuery.data?.pages ?? []) {
+        for (const candidate of page.items) {
+          if (!latestById.has(candidate.id)) orderedIds.push(candidate.id);
+          latestById.set(candidate.id, candidate);
+        }
+      }
+      return orderedIds.flatMap((candidateId) => {
+        const candidate = latestById.get(candidateId);
+        return candidate ? [candidate] : [];
+      });
+    },
     [candidatesQuery.data],
   );
-  const canLoadMoreCandidates =
-    candidates.length >= candidateLimit &&
-    candidateLimit < MAX_REVIEW_CANDIDATE_LIMIT;
+  const candidatePages = useMemo(
+    () => candidatesQuery.data?.pages ?? [],
+    [candidatesQuery.data?.pages],
+  );
+  const lastCandidatePage = candidatePages[candidatePages.length - 1];
+  const candidatePaginationContractError =
+    lastCandidatePage?.has_more && !lastCandidatePage.next_cursor
+      ? "다음 후보 cursor가 없어 검수 큐의 끝을 확인할 수 없습니다."
+      : null;
+  const canLoadMoreCandidates = Boolean(candidatesQuery.hasNextPage);
   // 해외 후보 숨기기 토글 적용(장바구니/그룹 필터는 그대로 — 순수 표시 필터).
   const visibleCandidates = useMemo(
     () =>
@@ -256,6 +329,15 @@ export default function ReviewPage() {
         : candidates,
     [candidates, hideForeign],
   );
+  const queueScope = useMemo(
+    () => JSON.stringify([groupDim, groupValue, hideForeign]),
+    [groupDim, groupValue, hideForeign],
+  );
+  const queueScopeRef = useRef(queueScope);
+  const previousQueueScopeRef = useRef(queueScope);
+  useEffect(() => {
+    queueScopeRef.current = queueScope;
+  }, [queueScope]);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<number[]>([]);
   const selectedCandidateSet = useMemo(
     () => new Set(selectedCandidateIds),
@@ -283,36 +365,44 @@ export default function ReviewPage() {
     );
   }
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const deleteCandidatesMutation = useMutation({
-    mutationFn: async (ids: number[]) => {
-      await Promise.all(ids.map((id) => deleteCandidate(id)));
-      return ids;
-    },
-    onMutate: async (ids) => {
-      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
-      const previous =
-        queryClient.getQueryData<UnmatchedCandidate[]>(candidatesKey);
-      queryClient.setQueryData<UnmatchedCandidate[]>(
-        candidatesKey,
-        (old) => (old ?? []).filter((candidate) => !ids.includes(candidate.id)),
-      );
-      setSelectedCandidateIds((current) =>
-        current.filter((id) => !ids.includes(id)),
-      );
-      if (selectedId != null && ids.includes(selectedId)) {
-        setSelectedId(null);
+  const [selectedCandidateSnapshot, setSelectedCandidateSnapshot] =
+    useState<UnmatchedCandidate | null>(null);
+  const initialSelectionDoneRef = useRef(false);
+  const [deepLinkedCandidateId, setDeepLinkedCandidateId] = useState<
+    number | null
+  >(null);
+  const [deepLinkNotFound, setDeepLinkNotFound] = useState<string | null>(null);
+  const pendingCandidateAdvanceRef = useRef<PendingCandidateAdvance | null>(null);
+  const [pendingCandidateAdvance, setPendingCandidateAdvance] =
+    useState<PendingCandidateAdvance | null>(null);
+  const updatePendingCandidateAdvance = useCallback(
+    (pending: PendingCandidateAdvance | null) => {
+      const current = pendingCandidateAdvanceRef.current;
+      if (
+        current?.anchorIndex === pending?.anchorIndex &&
+        current?.loadedPageCount === pending?.loadedPageCount &&
+        current?.processedIds.length === pending?.processedIds.length &&
+        current?.processedIds.every(
+          (id, index) => id === pending?.processedIds[index],
+        ) &&
+        current?.orderedCandidateIds.length ===
+          pending?.orderedCandidateIds.length &&
+        current?.orderedCandidateIds.every(
+          (id, index) => id === pending?.orderedCandidateIds[index],
+        )
+      ) {
+        return;
       }
-      return { previous };
+      if (current == null && pending == null) return;
+      pendingCandidateAdvanceRef.current = pending;
+      setPendingCandidateAdvance(pending);
     },
-    onError: (_error, _ids, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(candidatesKey, context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
-    },
-  });
+    [],
+  );
+  const [queueCompleted, setQueueCompleted] = useState(false);
+  const [candidateActionError, setCandidateActionError] = useState<string | null>(
+    null,
+  );
 
   // 작업 상세에서 검수 대기 POI를 누르면 `?candidate=<id>`로 들어온다. 그 후보가 필터에
   // 가려지지 않도록 그룹 필터를 해제하고 해당 후보를 선택한다(딥링크, 최초 1회).
@@ -324,18 +414,24 @@ export default function ReviewPage() {
     if (!candidateParam) return;
     const candidateId = Number(candidateParam);
     if (!Number.isFinite(candidateId)) return;
+    setDeepLinkNotFound(null);
+    setDeepLinkedCandidateId(candidateId);
     setGroupDim("none");
     setGroupValue(null);
+    setHideForeign(false);
     setSelectedId(candidateId);
-  }, [setGroupDim, setGroupValue]);
+  }, [setGroupDim, setGroupValue, setHideForeign]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const selected = useMemo(
     () =>
       selectedId == null
-        ? (candidates[0] ?? null)
-        : (candidates.find((candidate) => candidate.id === selectedId) ?? null),
-    [candidates, selectedId],
+        ? null
+        : (candidates.find((candidate) => candidate.id === selectedId) ??
+          (selectedCandidateSnapshot?.id === selectedId
+            ? selectedCandidateSnapshot
+            : null)),
+    [candidates, selectedCandidateSnapshot, selectedId],
   );
 
   const [queryEdit, setQueryEdit] = useState<string | null>(null);
@@ -384,6 +480,15 @@ export default function ReviewPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailDeletePending, setDetailDeletePending] = useState(false);
+  const detailDeleteSnapshotRef = useRef<{
+    candidateId: number;
+    visibleIndex: number;
+    orderedCandidateIds: number[];
+    loadedPageCount: number;
+    queueScope: string;
+    candidatesKey: ReviewCandidatesKey;
+  } | null>(null);
   // 행 단위 삭제 확인: 2,000행에 AlertDialog를 하나씩 두면 렌더 비용이 폭증하므로
   // 페이지에 공용 다이얼로그 하나만 두고 대상 후보를 상태로 넘긴다.
   const [deleteTarget, setDeleteTarget] = useState<UnmatchedCandidate | null>(
@@ -406,6 +511,17 @@ export default function ReviewPage() {
   const categoryMatchRequestRef = useRef(0);
   const selectedCandidateIdRef = useRef<number | null>(selected?.id ?? null);
 
+  useEffect(() => {
+    if (previousQueueScopeRef.current === queueScope) return;
+    previousQueueScopeRef.current = queueScope;
+    initialSelectionDoneRef.current = false;
+    updatePendingCandidateAdvance(null);
+    selectedCandidateIdRef.current = null;
+    setQueueCompleted(false);
+    setSelectedCandidateSnapshot(null);
+    setSelectedId(null);
+  }, [queueScope, updatePendingCandidateAdvance]);
+
   const clearAutoSearchTimer = useCallback(() => {
     if (autoSearchTimerRef.current != null) {
       window.clearTimeout(autoSearchTimerRef.current);
@@ -427,8 +543,12 @@ export default function ReviewPage() {
     [cancelCategoryMatch, clearAutoSearchTimer],
   );
   useEffect(() => {
-    selectedCandidateIdRef.current = selected?.id ?? null;
-  }, [selected?.id]);
+    if (selected?.id != null) {
+      selectedCandidateIdRef.current = selected.id;
+    } else if (selectedId == null) {
+      selectedCandidateIdRef.current = null;
+    }
+  }, [selected?.id, selectedId]);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -487,17 +607,56 @@ export default function ReviewPage() {
       if (isMobile) {
         router.push(`/review/${candidateId}`);
       } else {
+        detailDeleteSnapshotRef.current = null;
         setDetailId(candidateId);
       }
     },
     [isMobile, router],
   );
+  const clearCandidateParam = useCallback(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("candidate")) {
+      url.searchParams.delete("candidate");
+      router.replace(`${url.pathname}${url.search}${url.hash}`, {
+        scroll: false,
+      });
+    }
+    setDeepLinkNotFound(null);
+    setDeepLinkedCandidateId(null);
+  }, [router]);
+  const clearProcessedCandidateParam = useCallback(
+    (candidateId: number) => {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("candidate") !== String(candidateId)) return;
+      url.searchParams.delete("candidate");
+      setDeepLinkedCandidateId(null);
+      setDeepLinkNotFound(null);
+      router.replace(`${url.pathname}${url.search}${url.hash}`, {
+        scroll: false,
+      });
+    },
+    [router],
+  );
   const pickCandidate = useCallback(
-    (candidate: UnmatchedCandidate) => {
+    (
+      candidate: UnmatchedCandidate,
+      {
+        autoSearch = true,
+        preserveWorkflow = false,
+      }: { autoSearch?: boolean; preserveWorkflow?: boolean } = {},
+    ) => {
       // 검색 취소와 새 자동 검색을 함께 조금 늦춰 후보 선택/폼 반영이 먼저 그려지게 한다.
       // 이전 검색 결과는 새 검색을 시작하기 직전에 취소해 새 후보에 매달리지 않도록 한다.
       clearAutoSearchTimer();
+      if (!preserveWorkflow) {
+        initialSelectionDoneRef.current = true;
+        updatePendingCandidateAdvance(null);
+        clearCandidateParam();
+      }
       const nextQuery = buildHintedQuery(candidate);
+      selectedCandidateIdRef.current = candidate.id;
+      setQueueCompleted(false);
+      setSelectedCandidateSnapshot(candidate);
       setSelectedId(candidate.id);
       setQueryEdit(null);
       setOpinionRequested(false);
@@ -513,6 +672,7 @@ export default function ReviewPage() {
         longitude: "",
         ...candidateCategoryForm(candidate),
       });
+      if (!autoSearch) return;
       autoSearchTimerRef.current = window.setTimeout(() => {
         autoSearchTimerRef.current = null;
         void queryClient.cancelQueries({ queryKey: ["place-search"] });
@@ -521,8 +681,308 @@ export default function ReviewPage() {
         setActiveQuery(nextQuery);
       }, 120);
     },
-    [cancelCategoryMatch, clearAutoSearchTimer, queryClient],
+    [
+      cancelCategoryMatch,
+      clearAutoSearchTimer,
+      clearCandidateParam,
+      queryClient,
+      updatePendingCandidateAdvance,
+    ],
   );
+
+  const continueCandidateAdvance = useCallback(
+    (plan: PendingCandidateAdvance) => {
+      const processedIdSet = new Set(plan.processedIds);
+      const remaining = visibleCandidates.filter(
+        (candidate) => !processedIdSet.has(candidate.id),
+      );
+      const remainingById = new Map(
+        remaining.map((candidate) => [candidate.id, candidate]),
+      );
+      const nextSnapshotId = plan.orderedCandidateIds
+        .slice(plan.anchorIndex + 1)
+        .find((candidateId) => remainingById.has(candidateId));
+      const next =
+        nextSnapshotId == null ? null : (remainingById.get(nextSnapshotId) ?? null);
+      if (next) {
+        updatePendingCandidateAdvance(null);
+        setQueueCompleted(false);
+        pickCandidate(next, { preserveWorkflow: true });
+        return;
+      }
+      const newlyLoadedCandidate = candidatePages
+        .slice(plan.loadedPageCount)
+        .flatMap((page) => page.items)
+        .find(
+          (candidate) =>
+            !processedIdSet.has(candidate.id) &&
+            (!hideForeign || candidate.is_domestic !== false),
+        );
+      if (newlyLoadedCandidate) {
+        updatePendingCandidateAdvance(null);
+        setQueueCompleted(false);
+        pickCandidate(newlyLoadedCandidate, { preserveWorkflow: true });
+        return;
+      }
+      if (candidatePaginationContractError) {
+        updatePendingCandidateAdvance(plan);
+        return;
+      }
+      if (candidatesQuery.hasNextPage) {
+        updatePendingCandidateAdvance(plan);
+        if (
+          !candidatesQuery.isFetchingNextPage &&
+          !candidatesQuery.isFetchNextPageError
+        ) {
+          void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+        }
+        return;
+      }
+      updatePendingCandidateAdvance(null);
+      const previousSnapshotId = plan.orderedCandidateIds
+        .slice(0, plan.anchorIndex)
+        .reverse()
+        .find((candidateId) => remainingById.has(candidateId));
+      const previous =
+        previousSnapshotId == null
+          ? null
+          : (remainingById.get(previousSnapshotId) ?? null);
+      if (previous) {
+        setQueueCompleted(false);
+        pickCandidate(previous, { preserveWorkflow: true });
+        return;
+      }
+      const firstRemaining = remaining[0] ?? null;
+      if (firstRemaining) {
+        setQueueCompleted(false);
+        pickCandidate(firstRemaining, { preserveWorkflow: true });
+        return;
+      }
+      clearAutoSearchTimer();
+      setSelectedCandidateSnapshot(null);
+      setSelectedId(null);
+      setQueueCompleted(true);
+    },
+    [
+      candidatesQuery,
+      candidatePaginationContractError,
+      candidatePages,
+      clearAutoSearchTimer,
+      hideForeign,
+      pickCandidate,
+      updatePendingCandidateAdvance,
+      visibleCandidates,
+    ],
+  );
+
+  const advanceAfterProcessing = useCallback(
+    (
+      processedId: number,
+      processedIds: number[] = [processedId],
+      visibleIndex?: number,
+      orderedCandidateIds: number[] = visibleCandidates.map(
+        (candidate) => candidate.id,
+      ),
+      loadedPageCount: number = candidatePages.length,
+    ) => {
+      const anchorIndex =
+        visibleIndex ??
+        orderedCandidateIds.findIndex((candidateId) => candidateId === processedId);
+      if (anchorIndex < 0) return;
+      clearProcessedCandidateParam(processedId);
+      continueCandidateAdvance({
+        processedIds,
+        anchorIndex,
+        orderedCandidateIds,
+        loadedPageCount,
+      });
+    }, [
+      candidatePages.length,
+      clearProcessedCandidateParam,
+      continueCandidateAdvance,
+      visibleCandidates,
+    ]);
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const pending = pendingCandidateAdvance;
+    if (!pending || candidatesQuery.isFetchingNextPage) return;
+    continueCandidateAdvance(pending);
+  }, [
+    candidatesQuery.isFetchingNextPage,
+    candidatesQuery.data,
+    continueCandidateAdvance,
+    pendingCandidateAdvance,
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (
+      candidatesQuery.isFetching ||
+      initialSelectionDoneRef.current ||
+      pendingCandidateAdvance
+    ) {
+      return;
+    }
+    const deepLinkedId = deepLinkedCandidateId;
+    if (deepLinkedId != null) {
+      const linked = candidates.find((candidate) => candidate.id === deepLinkedId);
+      if (linked) {
+        setDeepLinkNotFound(null);
+        initialSelectionDoneRef.current = true;
+        pickCandidate(linked, { autoSearch: false, preserveWorkflow: true });
+        return;
+      }
+      if (
+        candidatesQuery.hasNextPage &&
+        !candidatesQuery.isFetchNextPageError &&
+        !candidatePaginationContractError
+      ) {
+        void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+        return;
+      }
+      if (
+        candidatesQuery.isError ||
+        candidatesQuery.isFetchNextPageError ||
+        candidatePaginationContractError
+      ) {
+        return;
+      }
+      setDeepLinkNotFound(`검수 후보 #${deepLinkedId}을(를) 찾을 수 없습니다.`);
+      initialSelectionDoneRef.current = true;
+      return;
+    }
+    if (selectedId != null) return;
+    const first = visibleCandidates[0];
+    if (first) {
+      initialSelectionDoneRef.current = true;
+      pickCandidate(first, { autoSearch: false, preserveWorkflow: true });
+      return;
+    }
+    if (
+      candidatesQuery.hasNextPage &&
+      !candidatesQuery.isFetchNextPageError &&
+      !candidatePaginationContractError
+    ) {
+      void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+      return;
+    }
+    if (!candidatesQuery.isError && !candidatePaginationContractError) {
+      initialSelectionDoneRef.current = true;
+    }
+  }, [
+    candidates,
+    candidatePaginationContractError,
+    candidatesQuery,
+    deepLinkedCandidateId,
+    pendingCandidateAdvance,
+    pickCandidate,
+    selectedId,
+    visibleCandidates,
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (
+      !queueCompleted ||
+      candidatesQuery.isFetching ||
+      pendingCandidateAdvance ||
+      visibleCandidates.length === 0
+    ) {
+      return;
+    }
+    initialSelectionDoneRef.current = true;
+    pickCandidate(visibleCandidates[0], {
+      autoSearch: false,
+      preserveWorkflow: true,
+    });
+  }, [
+    candidatesQuery.isFetching,
+    pendingCandidateAdvance,
+    pickCandidate,
+    queueCompleted,
+    visibleCandidates,
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const deleteCandidatesMutation = useMutation({
+    mutationFn: async (ids: number[]) => {
+      await Promise.all(ids.map((id) => deleteCandidate(id)));
+      return ids;
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      const previous =
+        queryClient.getQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+          candidatesKey,
+        );
+      const focusedId = selectedCandidateIdRef.current;
+      return {
+        previous,
+        candidatesKey,
+        focusedId,
+        visibleIndex:
+          focusedId == null
+            ? -1
+            : visibleCandidates.findIndex((candidate) => candidate.id === focusedId),
+        orderedCandidateIds: visibleCandidates.map((candidate) => candidate.id),
+        loadedPageCount: candidatePages.length,
+        queueScope: queueScopeRef.current,
+      };
+    },
+    onSuccess: async (ids, _variables, context) => {
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.setQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        context.candidatesKey,
+        (old) => removeCandidatesFromQueue(old, ids),
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["unmatched-candidates"],
+        refetchType: "none",
+      });
+      setSelectedCandidateIds((current) =>
+        current.filter((id) => !ids.includes(id)),
+      );
+      ids.forEach(clearProcessedCandidateParam);
+      const focusedId = context.focusedId;
+      if (
+        focusedId != null &&
+        ids.includes(focusedId) &&
+        focusedId === selectedCandidateIdRef.current &&
+        context.queueScope === queueScopeRef.current
+      ) {
+        if (ids.length === 1) {
+          advanceAfterProcessing(
+            focusedId,
+            ids,
+            context.visibleIndex,
+            context.orderedCandidateIds,
+            context.loadedPageCount,
+          );
+        } else {
+          clearProcessedCandidateParam(focusedId);
+          clearAutoSearchTimer();
+          initialSelectionDoneRef.current = false;
+          selectedCandidateIdRef.current = null;
+          setQueueCompleted(false);
+          setSelectedCandidateSnapshot(null);
+          setSelectedId(null);
+        }
+      }
+    },
+    onError: (_error, _ids, context) => {
+      if (!context?.previous) return;
+      queryClient.setQueryData(context.candidatesKey, context.previous);
+    },
+    onSettled: (_data, error) => {
+      if (error) {
+        queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      }
+    },
+  });
+
   function selectHit(hit: PlaceSearchHit) {
     if (!selected || !isPlaceHitStorageAllowed(hit)) return;
     cancelCategoryMatch();
@@ -646,30 +1106,59 @@ export default function ReviewPage() {
     },
     onError: (error, command) => {
       const conflict = parseNearbyPlaceConflict(error);
-      if (conflict) setNearbyConflict({ command, places: conflict });
-    },
-    onSuccess: (_data, command) => {
-      // 409 중복 확인 응답은 성공이 아니므로 여기까지 오지 않는다. 실제 확정 뒤에만
-      // 큐에서 제거해 확인 다이얼로그가 뜰 때 후보가 사라졌다 복원되는 깜빡임을 막는다.
-      queryClient.setQueryData<UnmatchedCandidate[]>(
-        candidatesKey,
-        (old) => (old ?? []).filter((candidate) => candidate.id !== command.candidateId),
-      );
-      queryClient.invalidateQueries({ queryKey: ["destinations"] });
-      setNearbyConflict(null);
-      if (selectedCandidateIdRef.current === command.candidateId) {
-        cancelCategoryMatch();
-        setForm({ name: "", latitude: "", longitude: "", category: "", categoryCode: "" });
-        setCategoryEdited(false);
-        setSelectedHit(null);
-        setFormCandidateId(null);
-        setQueryEdit(null);
-        setActiveQuery("");
-        setSelectedId(null);
+      const isCurrentCommand =
+        selectedCandidateIdRef.current === command.candidateId &&
+        queueScopeRef.current === command.queueScope;
+      if (
+        conflict &&
+        isCurrentCommand
+      ) {
+        setNearbyConflict({ command, places: conflict });
+        return;
+      }
+      if (!isCurrentCommand) {
+        setCandidateActionError(
+          conflict
+            ? `${command.candidateName} 후보는 근접 장소 확인이 필요합니다. 후보를 다시 선택해 처리하세요.`
+            : `${command.candidateName} 후보 처리 실패: ${error.message}`,
+        );
       }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+    onSuccess: async (_data, command) => {
+      // 409 중복 확인 응답은 성공이 아니므로 여기까지 오지 않는다. 실제 확정 뒤에만
+      // 큐에서 제거해 확인 다이얼로그가 뜰 때 후보가 사라졌다 복원되는 깜빡임을 막는다.
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.setQueryData<InfiniteData<ListEnvelope<UnmatchedCandidate>>>(
+        command.candidatesKey,
+        (old) => removeCandidatesFromQueue(old, [command.candidateId]),
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["unmatched-candidates"],
+        refetchType: "none",
+      });
+      queryClient.invalidateQueries({ queryKey: ["destinations"] });
+      setNearbyConflict(null);
+      setCandidateActionError(null);
+      clearProcessedCandidateParam(command.candidateId);
+      if (
+        selectedCandidateIdRef.current === command.candidateId &&
+        queueScopeRef.current === command.queueScope
+      ) {
+        cancelCategoryMatch();
+        clearAutoSearchTimer();
+        advanceAfterProcessing(
+          command.candidateId,
+          [command.candidateId],
+          command.visibleIndex,
+          command.orderedCandidateIds,
+          command.loadedPageCount,
+        );
+      }
+    },
+    onSettled: (_data, error) => {
+      if (error) {
+        queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+      }
     },
   });
 
@@ -678,14 +1167,40 @@ export default function ReviewPage() {
     duplicate?: ResolveCommand["duplicate"],
   ) {
     if (!selected || formCandidateId !== selected.id) return;
+    setCandidateActionError(null);
     resolveMutation.mutate({
       candidateId: selected.id,
+      candidateName: selected.ai_place_name,
+      visibleIndex: visibleCandidates.findIndex(
+        (candidate) => candidate.id === selected.id,
+      ),
+      orderedCandidateIds: visibleCandidates.map((candidate) => candidate.id),
+      loadedPageCount: candidatePages.length,
+      queueScope,
+      candidatesKey,
       action,
       form: { ...form },
       selectedHit: activeSelectedHit,
       duplicate,
     });
   }
+
+  const resetReviewScope = useCallback(() => {
+    initialSelectionDoneRef.current = false;
+    updatePendingCandidateAdvance(null);
+    selectedCandidateIdRef.current = null;
+    clearAutoSearchTimer();
+    cancelCategoryMatch();
+    clearCandidateParam();
+    setQueueCompleted(false);
+    setSelectedCandidateSnapshot(null);
+    setSelectedId(null);
+  }, [
+    cancelCategoryMatch,
+    clearAutoSearchTimer,
+    clearCandidateParam,
+    updatePendingCandidateAdvance,
+  ]);
 
   // 좌표 입력 검증: 숫자 여부(차단) + 대한민국 대략 범위(경고만, 저장은 허용).
   const latInvalid = Boolean(form.latitude) && !Number.isFinite(Number(form.latitude));
@@ -708,6 +1223,51 @@ export default function ReviewPage() {
     Boolean(form.name.trim()) &&
     coordsFilled &&
     (activeSelectedHit == null || isPlaceHitStorageAllowed(activeSelectedHit.hit));
+  const candidateAdvancePending = pendingCandidateAdvance != null;
+  const candidateAdvanceError =
+    candidateAdvancePending
+      ? candidatePaginationContractError ??
+        (candidatesQuery.isFetchNextPageError
+          ? candidatesQuery.error?.message ?? "다음 후보를 불러오지 못했습니다."
+          : null)
+      : null;
+  const candidateLoadError =
+    deepLinkNotFound ??
+    candidatePaginationContractError ??
+    (candidatesQuery.isError || candidatesQuery.isFetchNextPageError
+      ? candidatesQuery.error?.message ?? "검수 후보를 불러오지 못했습니다."
+      : null);
+  const candidateActionPending =
+    resolveMutation.isPending || deleteCandidatesMutation.isPending;
+
+  function retryCandidateAdvance() {
+    if (candidatePaginationContractError) {
+      void candidatesQuery.refetch();
+      return;
+    }
+    if (
+      !pendingCandidateAdvance ||
+      !candidatesQuery.hasNextPage ||
+      candidatesQuery.isFetchingNextPage
+    ) {
+      return;
+    }
+    void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+  }
+
+  function retryCandidateLoad() {
+    setDeepLinkNotFound(null);
+    initialSelectionDoneRef.current = false;
+    if (
+      candidatesQuery.isFetchNextPageError &&
+      candidatesQuery.hasNextPage &&
+      !candidatesQuery.isFetchingNextPage
+    ) {
+      void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+      return;
+    }
+    void candidatesQuery.refetch();
+  }
 
   return (
     <AppShell
@@ -728,9 +1288,9 @@ export default function ReviewPage() {
             <Select
               value={groupDim}
               onValueChange={(value) => {
+                resetReviewScope();
                 setGroupDim(value as DestinationGroupDim);
                 setGroupValue(null);
-                setCandidateLimit(INITIAL_REVIEW_CANDIDATE_LIMIT);
               }}
             >
               <SelectTrigger className="w-full" aria-label="검수 그룹 기준">
@@ -749,8 +1309,8 @@ export default function ReviewPage() {
               <Select
                 value={groupValue ?? ""}
                 onValueChange={(value) => {
+                  resetReviewScope();
                   setGroupValue(value || null);
-                  setCandidateLimit(INITIAL_REVIEW_CANDIDATE_LIMIT);
                 }}
               >
                 <SelectTrigger className="w-full" aria-label="그룹 값 선택">
@@ -788,7 +1348,7 @@ export default function ReviewPage() {
                     type="button"
                     size="xs"
                     variant="destructive"
-                    disabled={deleteCandidatesMutation.isPending}
+                    disabled={candidateActionPending}
                   >
                     <Trash2Icon data-icon="inline-start" />
                     선택 삭제
@@ -804,6 +1364,16 @@ export default function ReviewPage() {
                 선택 해제
               </Button>
             </div>
+          ) : null}
+          {deleteCandidatesMutation.error ? (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive" role="alert">
+              {deleteCandidatesMutation.error.message}
+            </p>
+          ) : null}
+          {candidateActionError ? (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive" role="alert">
+              {candidateActionError}
+            </p>
           ) : null}
           {reprocessMutation.isSuccess && reprocessMutation.data ? (
             <p className="rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">
@@ -861,15 +1431,55 @@ export default function ReviewPage() {
           <label className="flex items-center gap-1.5 px-1 pb-1 text-xs text-muted-foreground">
             <Switch
               checked={hideForeign}
-              onCheckedChange={(checked) => setHideForeign(Boolean(checked))}
+              onCheckedChange={(checked) => {
+                resetReviewScope();
+                setHideForeign(Boolean(checked));
+              }}
             />
             해외(국내 아님) 후보 숨기기
           </label>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {visibleCandidates.length === 0 ? (
-              <p className="rounded-lg border p-3 text-xs text-muted-foreground">
-                검수할 후보가 없습니다.
-              </p>
+              candidateAdvancePending ? (
+                <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
+                  <p role="status">
+                    {candidateAdvanceError
+                      ? candidateAdvanceError
+                      : "다음 검수 후보를 불러오는 중…"}
+                  </p>
+                  {candidateAdvanceError ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={retryCandidateAdvance}
+                    >
+                      다시 시도
+                    </Button>
+                  ) : null}
+                </div>
+              ) : candidateLoadError ? (
+                <div className="flex flex-col gap-2 rounded-lg border border-destructive/30 p-3 text-xs text-destructive">
+                  <p role="alert">{candidateLoadError}</p>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={retryCandidateLoad}
+                  >
+                    다시 시도
+                  </Button>
+                </div>
+              ) : (
+                <p
+                  role={queueCompleted ? "status" : undefined}
+                  className="rounded-lg border p-3 text-xs text-muted-foreground"
+                >
+                  {queueCompleted
+                    ? "현재 표시 조건의 검수 후보를 모두 처리했습니다."
+                    : "검수할 후보가 없습니다."}
+                </p>
+              )
             ) : (
               <Table>
                 <TableHeader>
@@ -912,17 +1522,18 @@ export default function ReviewPage() {
                   size="sm"
                   variant="outline"
                   className="w-full"
-                  disabled={candidatesQuery.isFetching}
-                  onClick={() =>
-                    setCandidateLimit((current) =>
-                      Math.min(
-                        current + REVIEW_CANDIDATE_LIMIT_STEP,
-                        MAX_REVIEW_CANDIDATE_LIMIT,
-                      ),
-                    )
-                  }
+                  disabled={candidatesQuery.isFetchingNextPage}
+                  onClick={() => {
+                    if (
+                      !candidatesQuery.hasNextPage ||
+                      candidatesQuery.isFetchingNextPage
+                    ) {
+                      return;
+                    }
+                    void candidatesQuery.fetchNextPage({ cancelRefetch: false });
+                  }}
                 >
-                  {candidatesQuery.isFetching ? (
+                  {candidatesQuery.isFetchingNextPage ? (
                     <Loader2Icon data-icon="inline-start" className="animate-spin" />
                   ) : null}
                   후보 더 불러오기
@@ -954,7 +1565,10 @@ export default function ReviewPage() {
                 ) : null}
                 <div className="flex flex-wrap items-center gap-3">
                   <a
-                    href={`https://www.youtube.com/watch?v=${selected.video_id}`}
+                    href={youtubeWatchUrl(
+                      selected.video_id,
+                      selected.timestamp_start,
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex w-fit items-center gap-1 text-xs text-primary hover:underline"
@@ -1114,7 +1728,7 @@ export default function ReviewPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    disabled={!canSave || resolveMutation.isPending}
+                    disabled={!canSave || candidateActionPending}
                     onClick={() => resolveSelected("create_place")}
                   >
                     저장
@@ -1122,13 +1736,15 @@ export default function ReviewPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={resolveMutation.isPending}
+                    disabled={candidateActionPending}
                     onClick={() => resolveSelected("ignore")}
                   >
                     제외
                   </Button>
                 </div>
                 {resolveMutation.error &&
+                resolveMutation.variables?.candidateId === selected.id &&
+                resolveMutation.variables.queueScope === queueScope &&
                 parseNearbyPlaceConflict(resolveMutation.error) == null ? (
                   <p className="text-xs text-destructive">
                     {resolveMutation.error.message}
@@ -1194,9 +1810,44 @@ export default function ReviewPage() {
               </div>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              검수할 후보가 없습니다.
-            </p>
+            <div className="flex flex-col gap-2 text-sm text-muted-foreground">
+              <p
+                role={
+                  candidateLoadError
+                    ? "alert"
+                    : queueCompleted || candidateAdvancePending
+                      ? "status"
+                      : undefined
+                }
+              >
+                {candidateLoadError
+                  ? candidateLoadError
+                  : candidateAdvancePending
+                  ? candidateAdvanceError ?? "다음 검수 후보를 불러오는 중…"
+                  : queueCompleted
+                    ? "현재 표시 조건의 검수 후보를 모두 처리했습니다."
+                    : "검수할 후보가 없습니다."}
+              </p>
+              {candidateLoadError ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={retryCandidateLoad}
+                >
+                  검수 후보 다시 불러오기
+                </Button>
+              ) : candidateAdvanceError ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={retryCandidateAdvance}
+                >
+                  다음 후보 다시 불러오기
+                </Button>
+              ) : null}
+            </div>
           )}
         </section>
         <section className="min-h-[28rem] overflow-hidden border-t lg:min-h-0 lg:border-t-0 lg:border-l">
@@ -1213,7 +1864,9 @@ export default function ReviewPage() {
 
       <Dialog
         open={detailId != null}
-        onOpenChange={(open) => !open && setDetailId(null)}
+        onOpenChange={(open) => {
+          if (!open && !detailDeletePending) setDetailId(null);
+        }}
       >
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
@@ -1222,11 +1875,53 @@ export default function ReviewPage() {
           {detailId != null ? (
             <CandidateDetailView
               candidateId={detailId}
-              onDeleted={() => {
-                setDetailId(null);
-                if (detailId === selectedId) {
-                  setSelectedId(null);
+              actionsDisabled={candidateActionPending || detailDeletePending}
+              onDeleteStarted={(candidateId) => {
+                setDetailDeletePending(true);
+                detailDeleteSnapshotRef.current = {
+                  candidateId,
+                  visibleIndex: visibleCandidates.findIndex(
+                    (candidate) => candidate.id === candidateId,
+                  ),
+                  orderedCandidateIds: visibleCandidates.map(
+                    (candidate) => candidate.id,
+                  ),
+                  loadedPageCount: candidatePages.length,
+                  queueScope,
+                  candidatesKey,
+                };
+              }}
+              onDeleteSettled={() => setDetailDeletePending(false)}
+              onDeleted={async (deletedId) => {
+                const snapshot = detailDeleteSnapshotRef.current;
+                await queryClient.cancelQueries({
+                  queryKey: snapshot?.candidatesKey ?? candidatesKey,
+                  exact: true,
+                });
+                queryClient.setQueryData<
+                  InfiniteData<ListEnvelope<UnmatchedCandidate>>
+                >(snapshot?.candidatesKey ?? candidatesKey, (old) =>
+                  removeCandidatesFromQueue(old, [deletedId]),
+                );
+                clearProcessedCandidateParam(deletedId);
+                setDetailId((current) =>
+                  current === deletedId ? null : current,
+                );
+                if (
+                  deletedId === selectedCandidateIdRef.current &&
+                  snapshot?.candidateId === deletedId &&
+                  snapshot.visibleIndex >= 0 &&
+                  snapshot.queueScope === queueScopeRef.current
+                ) {
+                  advanceAfterProcessing(
+                    deletedId,
+                    [deletedId],
+                    snapshot.visibleIndex,
+                    snapshot.orderedCandidateIds,
+                    snapshot.loadedPageCount,
+                  );
                 }
+                detailDeleteSnapshotRef.current = null;
               }}
             />
           ) : null}
@@ -1284,7 +1979,7 @@ export default function ReviewPage() {
                   size="sm"
                   variant="outline"
                   aria-label={`${place.name} 기존 장소에 합치기`}
-                  disabled={resolveMutation.isPending}
+                  disabled={candidateActionPending}
                   onClick={() => {
                     if (!nearbyConflict) return;
                     resolveMutation.mutate({
@@ -1313,7 +2008,7 @@ export default function ReviewPage() {
             <Button
               type="button"
               size="sm"
-              disabled={resolveMutation.isPending}
+              disabled={candidateActionPending}
               onClick={() => {
                 if (!nearbyConflict) return;
                 resolveMutation.mutate({
@@ -1353,7 +2048,7 @@ export default function ReviewPage() {
               type="button"
               size="sm"
               variant="destructive"
-              disabled={deleteCandidatesMutation.isPending}
+              disabled={candidateActionPending}
               onClick={() => {
                 if (deleteTarget) {
                   deleteCandidatesMutation.mutate([deleteTarget.id]);
