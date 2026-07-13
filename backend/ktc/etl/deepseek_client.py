@@ -54,6 +54,47 @@ def post_chat_completion(
 ) -> str:
     """`/chat/completions`를 호출하고 첫 choice의 message content(문자열)를 반환한다.
 
+    `post_chat_completion_payload`의 편의 wrapper. usage 실측이 필요한 게이트웨이
+    (`llm_client`)는 payload 변형을 직접 쓴다.
+    """
+    payload = post_chat_completion_payload(
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        json_mode=json_mode,
+        system_instruction=system_instruction,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+        temperature=temperature,
+        max_attempts=max_attempts,
+        base_delay_seconds=base_delay_seconds,
+        max_delay_seconds=max_delay_seconds,
+        jitter=jitter,
+        sleep=sleep,
+        rng=rng,
+    )
+    return extract_message_content(payload, model=model)
+
+
+def post_chat_completion_payload(
+    *,
+    api_key: str,
+    model: str,
+    prompt: str,
+    json_mode: bool = False,
+    system_instruction: str | None = None,
+    base_url: str | None = None,
+    timeout_seconds: float = 120.0,
+    temperature: float | None = None,
+    max_attempts: int | None = None,
+    base_delay_seconds: float | None = None,
+    max_delay_seconds: float | None = None,
+    jitter: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: Callable[[], float] = random.random,
+) -> dict[str, Any]:
+    """`/chat/completions`를 호출하고 응답 JSON 전체(dict)를 반환한다(usage 포함).
+
     `json_mode=True`이면 `response_format={"type":"json_object"}`로 JSON 출력을 강제한다
     (DeepSeek 요구사항상 프롬프트에 "json"이라는 단어가 포함되어야 한다 — 본 프로젝트
     프롬프트는 모두 JSON 출력을 명시한다). 일시 오류는 사람 유사 백오프로 재시도한다.
@@ -111,7 +152,7 @@ def post_chat_completion(
                     model=model,
                 )
             else:
-                return _extract_message_content(response.json(), model=model)
+                return response.json()
         if not retryable or attempt == max_attempts - 1:
             break
         sleep(
@@ -130,7 +171,8 @@ def post_chat_completion(
     ) from last_exc
 
 
-def _extract_message_content(payload: dict[str, Any], *, model: str) -> str:
+def extract_message_content(payload: dict[str, Any], *, model: str) -> str:
+    """응답 payload에서 첫 choice의 message content(문자열)를 꺼낸다."""
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise DeepSeekRequestError("DeepSeek 응답에 choices가 없다", model=model)
