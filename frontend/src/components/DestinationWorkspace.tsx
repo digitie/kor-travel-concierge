@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ArrowDownUpIcon,
   DownloadIcon,
@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildDestinationExportUrl,
   listDestinationFacets,
-  listDestinations,
+  listDestinationsPage,
   type DestinationExportFormat,
   type DestinationFacets,
   type DestinationGroupDim,
@@ -43,6 +43,9 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { PanelHeader } from "@/components/panels";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { VWorldMap } from "@/components/VWorldMap";
+
+const DESTINATION_PAGE_SIZE = 100;
+const MAX_DATABASE_ID = 2_147_483_647;
 
 export function DestinationWorkspace() {
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
@@ -79,22 +82,34 @@ export function DestinationWorkspace() {
     "ktc.destinations.query",
     "",
   );
+  const router = useRouter();
+  const isMobile = useIsMobile();
+  const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
+  const deepLinkHandledRef = useRef(false);
 
-  // 작업 상세에서 확정 POI를 누르면 `?place=<id>`로 들어온다. 그 장소가 필터에 가려지지
-  // 않도록 그룹 필터를 해제하고 해당 장소를 선택한다(딥링크, 최초 1회).
+  // 작업 상세에서 `?place=<id>`로 들어오면 목록 page에 없더라도 단건 상세를 직접 연다.
+  // 현재 filter는 보존하며 모바일은 기존 상세 route, 데스크톱은 modal을 사용한다.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    if (deepLinkHandledRef.current) return;
     const placeParam = new URLSearchParams(window.location.search).get("place");
     if (!placeParam) return;
     const placeId = Number(placeParam);
-    if (!Number.isFinite(placeId)) return;
-    setGroupDim("none");
-    setGroupValue(null);
-    setCategoryFilter(null);
-    setDistrictFilter(null);
-    setTextFilter("");
+    if (
+      !Number.isInteger(placeId) ||
+      placeId <= 0 ||
+      placeId > MAX_DATABASE_ID
+    ) {
+      return;
+    }
+    deepLinkHandledRef.current = true;
     setSelectedPlaceId(placeId);
-  }, [setCategoryFilter, setDistrictFilter, setGroupDim, setGroupValue, setTextFilter]);
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      router.replace(`/place/${placeId}`);
+    } else {
+      setDetailPlaceId(placeId);
+    }
+  }, [router]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // 작업 상세에서 영상별 POI를 누르면 `?video=<id>`로 들어온다 — 그 영상이 언급한
@@ -141,23 +156,58 @@ export function DestinationWorkspace() {
     return { ...common, keyword: groupValue };
   }, [categoryFilter, districtFilter, groupDim, groupValue, textFilter, videoFilter]);
 
-  const destinationsQuery = useQuery({
+  const destinationQueryIdentity = useMemo(
+    () =>
+      JSON.stringify([
+        destinationSort,
+        groupDim,
+        groupValue,
+        videoFilter,
+        categoryFilter,
+        districtFilter,
+        textFilter.trim(),
+      ]),
+    [
+      categoryFilter,
+      destinationSort,
+      districtFilter,
+      groupDim,
+      groupValue,
+      textFilter,
+      videoFilter,
+    ],
+  );
+  const destinationsQuery = useInfiniteQuery({
     queryKey: [
       "destinations",
+      "pages",
       destinationSort,
       groupDim,
       groupValue,
       videoFilter,
       categoryFilter,
       districtFilter,
-      textFilter,
+      textFilter.trim(),
     ],
-    queryFn: () => listDestinations(destinationSort, filter),
-    refetchInterval: 10_000,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      listDestinationsPage(destinationSort, filter, {
+        limit: DESTINATION_PAGE_SIZE,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
+    // T-188 SQL pushdown 전에는 다중 page 전체 재집계를 polling으로 반복하지 않는다.
+    refetchInterval: (query) =>
+      (query.state.data?.pages.length ?? 0) <= 1 ? 60_000 : false,
   });
-  const router = useRouter();
-  const isMobile = useIsMobile();
-  const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
+  const previousIdentityRef = useRef(destinationQueryIdentity);
+  useEffect(() => {
+    if (previousIdentityRef.current === destinationQueryIdentity) return;
+    previousIdentityRef.current = destinationQueryIdentity;
+    setSelectedPlaceId(null);
+  }, [destinationQueryIdentity]);
+
   // 장소 상세: 모바일=새 페이지, PC=모달.
   function openPlaceDetail(placeId: number) {
     if (isMobile) {
@@ -167,9 +217,45 @@ export function DestinationWorkspace() {
     }
   }
 
-  const places = useMemo(() => destinationsQuery.data ?? [], [destinationsQuery.data]);
+  function closePlaceDetail() {
+    setDetailPlaceId(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("place")) {
+      url.searchParams.delete("place");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
+    }
+  }
+
+  const places = useMemo(() => {
+    const orderedIds: number[] = [];
+    const latestById = new Map<number, DestinationSummary>();
+    for (const page of destinationsQuery.data?.pages ?? []) {
+      for (const place of page.items) {
+        if (!latestById.has(place.place_id)) orderedIds.push(place.place_id);
+        latestById.set(place.place_id, place);
+      }
+    }
+    return orderedIds.flatMap((placeId) => {
+      const place = latestById.get(placeId);
+      return place ? [place] : [];
+    });
+  }, [destinationsQuery.data]);
+  const destinationPages = destinationsQuery.data?.pages ?? [];
+  const lastDestinationPage = destinationPages[destinationPages.length - 1];
+  const destinationTotal =
+    lastDestinationPage?.total ?? 0;
+  const paginationContractError =
+    lastDestinationPage?.has_more && !lastDestinationPage.next_cursor
+      ? "다음 페이지 cursor가 없어 목록을 계속 불러올 수 없습니다."
+      : null;
   const selectedPlace = useMemo(
-    () => places.find((place) => place.place_id === selectedPlaceId) ?? places[0] ?? null,
+    () =>
+      places.find((place) => place.place_id === selectedPlaceId) ??
+      (selectedPlaceId == null ? places[0] ?? null : null),
     [places, selectedPlaceId],
   );
   const visiblePlaceIds = useMemo(
@@ -197,7 +283,7 @@ export function DestinationWorkspace() {
   }
 
   function toggleAllExportSelection() {
-    // "전체 선택"은 현재 보이는 항목만 장바구니에 더하거나 뺀다(다른 필터의 선택은 보존).
+    // 현재 불러온 항목만 장바구니에 더하거나 뺀다(다른 필터의 선택은 보존).
     const visibleIds = places.map((place) => place.place_id);
     setSelectedExportIds((current) =>
       isAllSelected
@@ -245,8 +331,34 @@ export function DestinationWorkspace() {
         <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto lg:order-none lg:min-h-0 lg:overflow-hidden lg:border-r">
           <DestinationList
             places={places}
+            total={destinationTotal}
             selectedPlace={selectedPlace}
             isLoading={destinationsQuery.isLoading}
+            hasMore={Boolean(destinationsQuery.hasNextPage)}
+            isFetchingMore={destinationsQuery.isFetchingNextPage}
+            isBusy={destinationsQuery.isFetching}
+            isRefreshing={
+              destinationsQuery.isFetching && !destinationsQuery.isFetchingNextPage
+            }
+            errorMessage={
+              paginationContractError ??
+              (destinationsQuery.isError
+                ? destinationsQuery.error?.message ?? "장소를 불러오지 못했습니다."
+                : null)
+            }
+            onLoadMore={() => {
+              if (
+                !destinationsQuery.hasNextPage ||
+                destinationsQuery.isFetching
+              ) {
+                return;
+              }
+              void destinationsQuery.fetchNextPage({ cancelRefetch: false });
+            }}
+            onRefresh={() => {
+              if (destinationsQuery.isFetching) return;
+              void destinationsQuery.refetch();
+            }}
             onSelect={focusPlace}
             sort={destinationSort}
             onSortChange={setDestinationSort}
@@ -286,7 +398,10 @@ export function DestinationWorkspace() {
 
       <Dialog
         open={detailPlaceId != null}
-        onOpenChange={(open) => !open && setDetailPlaceId(null)}
+        onOpenChange={(open) => {
+          if (open) return;
+          closePlaceDetail();
+        }}
       >
         <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
           <DialogHeader>
@@ -295,7 +410,7 @@ export function DestinationWorkspace() {
           {detailPlaceId != null ? (
             <PlaceDetailView
               placeId={detailPlaceId}
-              onDeleted={() => setDetailPlaceId(null)}
+              onDeleted={closePlaceDetail}
             />
           ) : null}
         </DialogContent>
@@ -306,8 +421,16 @@ export function DestinationWorkspace() {
 
 function DestinationList({
   places,
+  total,
   selectedPlace,
   isLoading,
+  hasMore,
+  isFetchingMore,
+  isBusy,
+  isRefreshing,
+  errorMessage,
+  onLoadMore,
+  onRefresh,
   onSelect,
   sort,
   onSortChange,
@@ -332,8 +455,16 @@ function DestinationList({
   onTextFilterChange,
 }: {
   places: DestinationSummary[];
+  total: number;
   selectedPlace: DestinationSummary | null;
   isLoading: boolean;
+  hasMore: boolean;
+  isFetchingMore: boolean;
+  isBusy: boolean;
+  isRefreshing: boolean;
+  errorMessage: string | null;
+  onLoadMore: () => void;
+  onRefresh: () => void;
   onSelect: (placeId: number) => void;
   sort: DestinationSort;
   onSortChange: (sort: DestinationSort) => void;
@@ -376,7 +507,23 @@ function DestinationList({
 
   return (
     <section aria-label="장소 목록" className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1">
-      <PanelHeader title="장소" count={places.length} />
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <PanelHeader
+            title="장소"
+            count={`${places.length.toLocaleString()}개 표시 · 기준 ${total.toLocaleString()}개`}
+          />
+        </div>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          disabled={isBusy}
+          onClick={onRefresh}
+        >
+          {isRefreshing ? "새로고침 중…" : "목록 새로고침"}
+        </Button>
+      </div>
       <Input
         aria-label="장소 글자 검색"
         placeholder="장소명, 주소, 설명 검색"
@@ -506,8 +653,13 @@ function DestinationList({
         </Select>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Button type="button" variant="outline" onClick={onToggleAllExportSelection}>
-          {isAllSelected ? "선택 해제" : "전체 선택"}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={places.length === 0}
+          onClick={onToggleAllExportSelection}
+        >
+          {isAllSelected ? "표시 선택 해제" : `표시된 ${places.length}개 선택`}
         </Button>
         <Button type="button" onClick={onExport}>
           <DownloadIcon data-icon="inline-start" />
@@ -516,6 +668,9 @@ function DestinationList({
       </div>
       <div className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
+        {!isLoading && places.length === 0 && !errorMessage ? (
+          <p className="text-sm text-muted-foreground">조건에 맞는 장소가 없습니다.</p>
+        ) : null}
         {places.map((place, index) => {
           const isSelected = place.place_id === selectedPlaceId;
           // 마커 번호와 동일한 1-based 목록 행 번호(index + 1).
@@ -585,6 +740,47 @@ function DestinationList({
           </div>
           );
         })}
+        {errorMessage ? (
+          <div className="flex flex-col gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage}
+            </p>
+            {places.length === 0 ? (
+              <Button type="button" variant="outline" onClick={onRefresh}>
+                다시 시도
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {hasMore ? (
+          <div className="flex flex-col gap-2 border-t pt-2">
+            <p className="text-xs text-muted-foreground">
+              총 {total.toLocaleString()}개 중 {places.length.toLocaleString()}개 표시
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isBusy}
+              onClick={onLoadMore}
+            >
+              {isFetchingMore ? "불러오는 중…" : "장소 더 불러오기"}
+            </Button>
+          </div>
+        ) : places.length > 0 && places.length === total ? (
+          <p role="status" className="border-t pt-2 text-xs text-muted-foreground">
+            총 {total.toLocaleString()}개를 모두 불러왔습니다.
+          </p>
+        ) : places.length > 0 ? (
+          <div className="flex flex-col gap-2 border-t pt-2">
+            <p role="status" className="text-xs text-muted-foreground">
+              목록 변경이 감지되었습니다. {places.length.toLocaleString()}개 표시 · 기준{" "}
+              {total.toLocaleString()}개
+            </p>
+            <Button type="button" variant="outline" onClick={onRefresh}>
+              최신 목록 다시 불러오기
+            </Button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const backendURL = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:18080';
 const repoRoot = path.resolve(__dirname, '../..');
@@ -318,6 +318,155 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
   });
 });
 
+test.describe('장소 cursor 페이지네이션 E2E 검증', () => {
+  test.skip(
+    process.env.KTC_LIVE_E2E === '1',
+    'live 모드에서는 browser API mock 기반 스펙을 건너뛴다.',
+  );
+
+  test('100개 page를 cursor로 이어 마지막 장소까지 중복 없이 더 불러온다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installDestinationPaginationMock(page);
+
+    await loginAsAdmin(page, '/');
+
+    const placesRegion = page.getByRole('region', { name: '장소 목록' });
+    await expect(placesRegion).toBeVisible();
+    await expect.poll(() => requests.list.length).toBeGreaterThan(0);
+
+    const firstPageRequest = new URL(requests.list[0]);
+    expect(firstPageRequest.searchParams.get('limit')).toBe('100');
+    expect(firstPageRequest.searchParams.get('cursor')).toBeNull();
+
+    const marker100 = placesRegion.locator('[data-marker-number="100"]');
+    await marker100.scrollIntoViewIfNeeded();
+    await expect(marker100).toBeVisible();
+    const marker101 = placesRegion.locator('[data-marker-number="101"]');
+    await expect(marker101).toHaveCount(0);
+    await expect(
+      placesRegion.getByRole('button', {
+        name: '페이지 장소 100 상세',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      placesRegion.getByText(/총\s*501개\s*중\s*100개\s*표시|100\s*\/\s*501/),
+    ).toBeVisible();
+
+    await loadMoreDestinationPage(page, placesRegion, 'page-2');
+    await marker101.scrollIntoViewIfNeeded();
+    await expect(marker101).toBeVisible();
+    await expect(
+      placesRegion.getByRole('button', {
+        name: '페이지 장소 101 상세',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      placesRegion.getByRole('button', {
+        name: '갱신된 페이지 장소 100 상세',
+        exact: true,
+      }),
+    ).toHaveCount(1);
+    await expect(
+      placesRegion.getByRole('button', {
+        name: '페이지 장소 100 상세',
+        exact: true,
+      }),
+    ).toHaveCount(0);
+
+    for (const cursor of ['page-3', 'page-4', 'page-5', 'page-6']) {
+      await loadMoreDestinationPage(page, placesRegion, cursor);
+    }
+
+    const marker501 = placesRegion.locator('[data-marker-number="501"]');
+    await marker501.scrollIntoViewIfNeeded();
+    await expect(marker501).toBeVisible();
+    await expect(
+      placesRegion.getByRole('button', {
+        name: '페이지 장소 501 상세',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      placesRegion.getByText('총 501개를 모두 불러왔습니다.', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      placesRegion.getByRole('button', { name: '장소 더 불러오기' }),
+    ).toHaveCount(0);
+
+    const markerNumbers = await placesRegion
+      .locator('[data-marker-number]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-marker-number')),
+      );
+    expect(markerNumbers).toHaveLength(501);
+    expect(new Set(markerNumbers).size).toBe(501);
+
+    const resetRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return (
+        url.pathname === '/api/v1/destinations' &&
+        url.searchParams.get('sort') === 'latest'
+      );
+    });
+    await placesRegion.getByLabel('장소 정렬').click();
+    await page.getByRole('option', { name: '최신 등록 순' }).click();
+    const resetURL = new URL((await resetRequest).url());
+    expect(resetURL.searchParams.get('cursor')).toBeNull();
+    expect(resetURL.searchParams.get('limit')).toBe('100');
+    await expect(
+      placesRegion.locator('[data-marker-number="101"]'),
+    ).toHaveCount(0);
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('첫 page 밖 장소 deep link를 직접 열고 닫을 때 query를 제거한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installDestinationPaginationMock(
+      page,
+      destinationDetailFixture(501),
+    );
+
+    await loginAsAdminWithQuery(page, '/?place=501');
+
+    // modal이 열린 동안 배경은 접근성 tree에서 제외될 수 있으므로 DOM 경계로 확인한다.
+    const placesRegion = page.locator('section[aria-label="장소 목록"]');
+    await expect(placesRegion).toBeVisible();
+    await expect.poll(() => requests.list.length).toBeGreaterThan(0);
+    await expect(
+      placesRegion.locator('[data-marker-number="100"]'),
+    ).toHaveCount(1);
+    await expect(
+      placesRegion.locator('button[aria-label="페이지 장소 501 상세"]'),
+    ).toHaveCount(0);
+    await expect.poll(() => requests.detail.length).toBeGreaterThan(0);
+    expect(new URL(requests.detail[0]).pathname).toBe(
+      '/api/v1/destinations/501/detail',
+    );
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByText('페이지 밖 장소 501', { exact: true }),
+    ).toBeVisible();
+    await dialog.getByRole('button', { name: '닫기' }).click();
+
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.has('place'))
+      .toBe(false);
+    expect(new URL(page.url()).pathname).toBe('/');
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+});
+
 function seedE2EData() {
   const databaseUrl =
     process.env.KTC_E2E_DATABASE_URL ??
@@ -375,6 +524,166 @@ async function loginAsAdmin(page: Page, nextPath: string) {
   await page.locator('#login-password').fill(e2eAdminPassword);
   await page.getByRole('button', { name: '로그인' }).click();
   await page.waitForURL((url) => url.pathname === nextPath, { timeout: 10_000 });
+}
+
+async function loginAsAdminWithQuery(page: Page, nextPath: string) {
+  const expectedURL = new URL(nextPath, 'http://e2e.local');
+  await page.goto(`/login?next=${encodeURIComponent(nextPath)}`);
+  await page.locator('#login-username').fill(e2eAdminUsername);
+  await page.locator('#login-password').fill(e2eAdminPassword);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await page.waitForURL(
+    (url) =>
+      url.pathname === expectedURL.pathname && url.search === expectedURL.search,
+    { timeout: 10_000 },
+  );
+}
+
+async function installDestinationPaginationMock(
+  page: Page,
+  detail?: ReturnType<typeof destinationDetailFixture>,
+) {
+  const requests = { list: [] as string[], detail: [] as string[] };
+
+  await page.route('**/api/v1/destinations**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/v1/destinations') {
+      requests.list.push(url.toString());
+      const cursor = url.searchParams.get('cursor');
+      const pageNumber = cursor === null ? 1 : Number(cursor.replace('page-', ''));
+      if (Number.isInteger(pageNumber) && pageNumber >= 1 && pageNumber <= 6) {
+        const placeIds = destinationPageIds(pageNumber);
+        const items = placeIds.map((placeId) =>
+          destinationListFixture(
+            placeId,
+            pageNumber === 2 && placeId === 100
+              ? '갱신된 페이지 장소 100'
+              : undefined,
+          ),
+        );
+        const nextCursor = pageNumber < 6 ? `page-${pageNumber + 1}` : null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(destinationEnvelope(items, nextCursor)),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+      });
+      return;
+    }
+
+    if (detail && url.pathname === '/api/v1/destinations/501/detail') {
+      requests.detail.push(url.toString());
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(detail),
+      });
+      return;
+    }
+
+    await route.continue();
+  });
+
+  return requests;
+}
+
+async function loadMoreDestinationPage(
+  page: Page,
+  placesRegion: Locator,
+  cursor: string,
+) {
+  const nextPageRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      url.pathname === '/api/v1/destinations' &&
+      url.searchParams.get('cursor') === cursor
+    );
+  });
+  await placesRegion.getByRole('button', { name: '장소 더 불러오기' }).click();
+  const requestURL = new URL((await nextPageRequest).url());
+  expect(requestURL.searchParams.get('limit')).toBe('100');
+  expect(requestURL.searchParams.get('cursor')).toBe(cursor);
+}
+
+function destinationEnvelope(
+  items: ReturnType<typeof destinationListFixture>[],
+  nextCursor: string | null = null,
+) {
+  return {
+    items,
+    next_cursor: nextCursor,
+    has_more: nextCursor !== null,
+    total: 501,
+    newest_id: 501,
+    newer_than: 0,
+  };
+}
+
+function destinationPageIds(pageNumber: number): number[] {
+  if (pageNumber === 1) return Array.from({ length: 100 }, (_, index) => index + 1);
+  if (pageNumber === 2) {
+    return [100, ...Array.from({ length: 99 }, (_, index) => index + 101)];
+  }
+  const startPlaceId = (pageNumber - 1) * 100;
+  const endPlaceId = pageNumber === 6 ? 501 : startPlaceId + 99;
+  return Array.from(
+    { length: endPlaceId - startPlaceId + 1 },
+    (_, index) => startPlaceId + index,
+  );
+}
+
+function destinationListFixture(placeId: number, name?: string) {
+  return {
+    place_id: placeId,
+    name: name ?? `페이지 장소 ${placeId}`,
+    description: null,
+    gemini_enriched_description: null,
+    latitude: 33 + placeId / 10_000,
+    longitude: 126 + placeId / 10_000,
+    category: '테스트',
+    category_code_suggestion: null,
+    sigungu_code: null,
+    sigungu_name: null,
+    legal_dong_code: null,
+    legal_dong_name: null,
+    official_address: `테스트 주소 ${placeId}`,
+    road_address: null,
+    is_geocoded: true,
+    mention_count: 1,
+    source_channel_count: 0,
+    source_videos: [],
+  };
+}
+
+function destinationDetailFixture(placeId: number) {
+  return {
+    place: {
+      place_id: placeId,
+      name: `페이지 밖 장소 ${placeId}`,
+      category: '테스트',
+      category_code_suggestion: null,
+      sigungu_code: null,
+      sigungu_name: null,
+      legal_dong_code: null,
+      legal_dong_name: null,
+      official_address: `페이지 밖 테스트 주소 ${placeId}`,
+      road_address: null,
+      latitude: 33.501,
+      longitude: 126.501,
+      is_geocoded: true,
+      description: null,
+      gemini_enriched_description: null,
+      detailed_research_content: null,
+    },
+    stats: { mention_count: 1, video_count: 0, channel_count: 0 },
+    source_videos: [],
+  };
 }
 
 function resolvePython() {

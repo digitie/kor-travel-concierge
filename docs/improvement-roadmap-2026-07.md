@@ -664,6 +664,10 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 > **개정(2026-07-13, §10 반영)**: PR-20a(절차 0)는 backend 실효 상한 500 때문에 프런트 limit 확장만으론 불완전(C10) — **cursor/offset 계약을 포함**해야 501번째가 보인다(T-177 envelope과 정렬). `source_videos` 제거는 UI·서비스 호출부 사용 전수 확인 → detail lazy-load 선배포 → 제거 순. "O(전체)→O(limit)"은 count/facets/정렬 aggregate까지 `EXPLAIN (ANALYZE, BUFFERS)`로 증명(G8).
 
+> **PR-20a 완료(2026-07-13, T-178)**: 프런트가 T-177 cursor를 100개 단위로 직접 소비해
+> 101/501번째를 append하고, total·종료·retry·목록 변경 상태와 page 밖 상세를 처리한다. 501건
+> browser mock acceptance를 통과했으며 SQL pushdown·목록 payload 축소는 본 PR-20(T-188)에 남긴다.
+
 - **해결**: S5(101번째 미표시 기능 버그 포함). themes API 자동 수혜.
 - **변경 파일**: `backend/ktc/services/place_service.py`(`list_place_summaries`, `_list_mentions_by_place`), `backend/ktc/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/components/DestinationWorkspace.tsx`, `backend/tests/test_place_service.py`.
 - **작업 절차**:

@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-07-13: T-178 — 장소 101/501번째 cursor 접근과 page 밖 상세
+
+- **결과 화면 page 전환**: 기존 첫 100개 배열 조회를 `useInfiniteQuery`와
+  `listDestinationsPage(limit=100)`로 교체했다. `has_more/next_cursor`를 그대로 이어 붙이고 sort·
+  group·video·category·district·검색어를 query identity에 포함해 조건 변경 시 첫 page로 돌아간다.
+  `place_id` 중복은 첫 위치를 유지하되 뒤 page의 최신 payload로 갱신한다.
+- **완료를 거짓말하지 않는 UX**: 표시 수와 live `total`을 분리하고, 다음 page 로딩 중 중복 클릭을
+  막는다. 초기 실패는 다시 시도, page 실패는 기존 행을 보존한 재시도, 비정상 cursor는 명시적
+  오류로 표시한다. cursor가 끝나도 dedupe 수와 total이 다르면 “모두”로 단정하지 않고 목록 변경과
+  새로고침을 안내한다. `전체 선택`은 실제 동작에 맞춰 “표시된 N개 선택”으로 좁혔다.
+- **속도·신선도 절충**: 첫 paint는 100행·marker로 유지한다. 단일 page는 60초 polling, 둘 이상을
+  불러온 뒤에는 T-188 전 page별 전체 Python 재집계를 자동 반복하지 않고 명시적 새로고침을 쓴다.
+  SQL pushdown과 `source_videos` 목록 제거는 T-188에서 EXPLAIN으로 마감한다.
+- **page 밖 상세·검증**: `/?place={id}`는 현재 filter나 첫 page를 지우거나 순회하지 않고 detail
+  endpoint를 직접 열며, 데스크톱 modal을 닫으면 query를 제거한다. n150 Playwright에서 100×5+1
+  cursor chain, 101/501번째, 501개 unique, 종료, page 밖 상세를 검증한 신규 2건과 기존 5건이 모두
+  통과했다. frontend lint·type-check·Vitest 34건·production build도 n150에서 통과했다.
+
 ## 2026-07-13: T-177 — 목록 공통 envelope와 안정 cursor 계약
 
 - **공통 공급 계약**: 검수·작업·장소·테마 목록을
