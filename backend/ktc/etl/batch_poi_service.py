@@ -117,6 +117,28 @@ def _build_description_text(video: YoutubeVideo) -> str:
     return "\n".join(part for part in parts if part)
 
 
+# recall 경로 source_kind(자막 실패 fallback으로 생성되는 저신뢰 후보). 같은 (영상, 이름)
+# pair에 자막 등 실제 소스 후보가 있으면 그것을 우선한다(자막 우선순위 역전 방지).
+_RECALL_SOURCE_KINDS = frozenset(
+    {EvidenceSourceKind.DESCRIPTION.value, EvidenceSourceKind.VISUAL.value}
+)
+
+
+def _source_kind_priority(source_kind: str | None) -> int:
+    """dedup 우선순위. 실제 소스(transcript 등)=1 > recall 소스(description/visual)=0."""
+    return 0 if source_kind in _RECALL_SOURCE_KINDS else 1
+
+
+def _is_supersedable(candidate: ExtractedPlaceCandidate) -> bool:
+    """상위 소스 후보가 대체할 수 있는 저우선 후보인지 판정한다.
+
+    사람이 손대지 않은 needs_review 후보만 대상이다 — user_corrected/ignored/matched(사람
+    확정·제외 결정)는 보존한다. 자막 복구 후 재처리에서 미검수 description 후보만 자막
+    후보로 승격 교체하고, 이미 확정·제외된 후보는 그 결정을 존중한다.
+    """
+    return candidate.match_status == MatchStatus.NEEDS_REVIEW.value
+
+
 async def _report(reporter: StatusReporter | None, message: str, progress: float | None = None) -> None:
     if reporter is not None:
         await reporter(message, progress)
@@ -557,21 +579,26 @@ async def process_video_batch(
     #    영상 내 "성심당/성심당 본점" 같은 변형 표기가 별개 후보로 흩어지지 않는다(D6,
     #    로드맵 PR-14 절차 2). soft delete된 후보는 dedup 기준에서 제외한다(T-160/B1 절차 2 —
     #    재추출 시 새 후보로 검수 큐에 재등장할 수 있고 영구 억제는 `ignored`·영상 제외 담당).
+    #    dedup은 source_kind 우선순위로 **비대칭** 처리한다(자막 우선순위 역전 방지): 같은
+    #    pair에 같은/상위 우선 소스 후보가 있으면 새 후보를 억제하고, 새 상위 소스 후보(예:
+    #    자막 복구 후 transcript)가 기존 미검수 하위 소스 후보(description)만 만나면 그 하위
+    #    후보를 supersede(soft delete)하고 새 후보를 만든다. 저품질 description 후보가 고품질
+    #    transcript 후보를 영구 차단하던 문제를 막는다.
     batch_video_ids = [item["video"].video_id for item in batch.values()]
-    existing_pairs: set[tuple[str, str]] = set()
+    existing_by_pair: dict[tuple[str, str], list[ExtractedPlaceCandidate]] = {}
     if batch_video_ids:
         rows = await session.execute(
-            select(
-                ExtractedPlaceCandidate.video_id,
-                ExtractedPlaceCandidate.ai_place_name,
-            ).where(
+            select(ExtractedPlaceCandidate).where(
                 ExtractedPlaceCandidate.video_id.in_(batch_video_ids),
                 ExtractedPlaceCandidate.deleted_at.is_(None),
             )
         )
-        existing_pairs = {
-            (str(v), normalize_place_name(n)) for v, n in rows.all()
-        }
+        for existing in rows.scalars().all():
+            key = (
+                str(existing.video_id),
+                normalize_place_name(existing.ai_place_name),
+            )
+            existing_by_pair.setdefault(key, []).append(existing)
     # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
     # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
     grounding_indexes: dict[str, grounding.GroundingIndex] = {
@@ -584,10 +611,29 @@ async def process_video_batch(
         if item is None:
             continue
         video = item["video"]
+        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
         dedup_key = (video.video_id, normalize_place_name(poi.official_name))
-        if dedup_key in existing_pairs:
+        existing = existing_by_pair.get(dedup_key, [])
+        new_priority = _source_kind_priority(source_kind)
+        # 같은/상위 우선순위 후보가 이미 있으면 새 후보를 억제한다(멱등 + 자막 우선).
+        if any(_source_kind_priority(c.source_kind) >= new_priority for c in existing):
             continue
-        existing_pairs.add(dedup_key)
+        # 여기부터 existing은 전부 하위 우선순위(예: 기존 description, 신규 transcript).
+        # 사람이 손댄(needs_review 아님) 하위 후보가 있으면 그 결정을 존중해 새 후보를
+        # 만들지 않는다(확정 장소·제외 결정 보존).
+        if any(not _is_supersedable(c) for c in existing):
+            continue
+        # 하위 후보가 전부 미검수면 supersede(T-160 soft delete)하고 새 상위 소스 후보 생성.
+        if existing:
+            from ktc.services import place_service  # 지연 import(순환 회피)
+
+            await place_service.soft_delete_candidates(
+                session,
+                [c.id for c in existing],
+                reason="superseded_by_higher_priority_source",
+                deleted_by="system",
+            )
+        existing_by_pair[dedup_key] = []
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
         category_code = (
             poi.category_code
@@ -604,7 +650,6 @@ async def process_video_batch(
         grounded = grounding.evaluate_transcript_grounding(
             poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
         )
-        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
         # 근거(evidence) 공통 조각: 카테고리·타임스탬프·grounding. transcript/description이
         # 같은 형태를 공유하고 producer별 출처 필드만 다르게 감싼다.
         common_evidence = {
@@ -668,6 +713,8 @@ async def process_video_batch(
             feature_export_status=FeatureExportStatus.PENDING.value,
         )
         session.add(candidate)
+        # 같은 배치 후속 poi가 방금 만든 후보를 같은 우선순위로 dedup하도록 맵에 등록한다.
+        existing_by_pair.setdefault(dedup_key, []).append(candidate)
         created_candidates.append(candidate)
         summary["created_candidates"] += 1
 
