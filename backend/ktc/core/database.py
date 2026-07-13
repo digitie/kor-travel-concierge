@@ -37,6 +37,20 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
+async def get_repeatable_read_session() -> AsyncIterator[AsyncSession]:
+    """여러 SELECT로 한 목록 envelope를 만드는 전용 읽기 session.
+
+    인증 dependency의 `get_session`과 callable을 분리해 FastAPI request cache가 같은
+    session을 공유하지 않게 한다. 따라서 공개 API key cache가 DB를 먼저 읽더라도 목록
+    transaction은 항상 첫 statement 전 `REPEATABLE READ`로 시작한다.
+    """
+    async with async_session_factory() as session:
+        await session.connection(
+            execution_options={"isolation_level": "REPEATABLE READ"}
+        )
+        yield session
+
+
 async def init_db() -> None:
     """PostGIS 확장과 ORM 테이블을 준비한다.
 

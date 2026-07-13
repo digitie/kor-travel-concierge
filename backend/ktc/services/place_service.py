@@ -29,6 +29,14 @@ from ktc.models import (
     utcnow,
 )
 from ktc.services import feature_export_service
+from ktc.services.list_pagination import (
+    ListPage,
+    MAX_DB_INTEGER_ID,
+    decode_cursor,
+    encode_cursor,
+    ensure_repeatable_read,
+    filter_fingerprint,
+)
 
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -230,6 +238,162 @@ async def list_place_summaries(
     if limit is not None:
         return summaries[:limit]
     return summaries
+
+
+def _place_summary_cursor_key(summary: PlaceSummary, sort: str) -> tuple[Any, ...]:
+    """T-177 Python 정렬 계약과 동일한, null 없는 cursor key."""
+    return tuple(_place_summary_sort_key(sort)(summary))
+
+
+def _valid_place_cursor_keys(
+    keys: tuple[Any, ...], sort: str, *, snapshot_id: int
+) -> bool:
+    if sort == "latest":
+        valid = len(keys) == 1 and type(keys[0]) is int
+        id_key = -keys[0] if valid else 0
+        return valid and 1 <= id_key <= snapshot_id
+    if sort == "mention_count":
+        valid = (
+            len(keys) == 4
+            and type(keys[0]) is int
+            and -MAX_DB_INTEGER_ID <= keys[0] <= 0
+            and type(keys[1]) is int
+            and -MAX_DB_INTEGER_ID <= keys[1] <= 0
+            and isinstance(keys[2], str)
+            and len(keys[2]) <= 255
+            and type(keys[3]) is int
+        )
+        id_key = -keys[3] if valid else 0
+        return valid and 1 <= id_key <= snapshot_id
+    if sort == "name":
+        valid = (
+            len(keys) == 2
+            and isinstance(keys[0], str)
+            and len(keys[0]) <= 255
+            and type(keys[1]) is int
+        )
+        id_key = -keys[1] if valid else 0
+        return valid and 1 <= id_key <= snapshot_id
+    if sort == "category":
+        valid = (
+            len(keys) == 3
+            and isinstance(keys[0], str)
+            and len(keys[0]) <= 64
+            and isinstance(keys[1], str)
+            and len(keys[1]) <= 255
+            and type(keys[2]) is int
+        )
+        id_key = -keys[2] if valid else 0
+        return valid and 1 <= id_key <= snapshot_id
+    return False
+
+
+async def list_place_summaries_page(
+    session: AsyncSession,
+    *,
+    sort: str = "latest",
+    limit: int = 100,
+    channel_id: str | None = None,
+    playlist_id: str | None = None,
+    keyword: str | None = None,
+    video_id: str | None = None,
+    category: str | None = None,
+    query: str | None = None,
+    district: str | None = None,
+    cursor: str | None = None,
+    newer_than_id: int | None = None,
+) -> ListPage[PlaceSummary]:
+    """장소 집계 목록에 공통 envelope와 안정적인 복합 cursor를 적용한다.
+
+    T-188의 SQL pushdown 전까지 기존 집계·filter semantics를 그대로 재사용한다. cursor
+    scope에 버전을 넣어 T-188에서 PostgreSQL collation으로 바꿀 때 구 cursor를 명시적으로
+    거부할 수 있게 한다.
+    """
+    await ensure_repeatable_read(session)
+    normalized_query = (query or "").strip().lower() or None
+    filters = {
+        "channel_id": channel_id or None,
+        "playlist_id": playlist_id or None,
+        "keyword": keyword or None,
+        "video_id": video_id or None,
+        "category": category or None,
+        "query": normalized_query,
+        "district": district or None,
+    }
+    fingerprint = filter_fingerprint(
+        scope="destinations-python-v1", sort=sort, filters=filters
+    )
+    key_count = {
+        "latest": 1,
+        "mention_count": 4,
+        "name": 2,
+        "category": 3,
+    }[sort]
+    decoded = (
+        decode_cursor(cursor, fingerprint=fingerprint, key_count=key_count)
+        if cursor
+        else None
+    )
+    if decoded is not None and not _valid_place_cursor_keys(
+        decoded.keys, sort, snapshot_id=decoded.snapshot_id
+    ):
+        raise ValueError("유효하지 않은 장소 목록 cursor입니다")
+
+    summaries = await list_place_summaries(
+        session,
+        sort=sort,
+        limit=None,
+        channel_id=filters["channel_id"],
+        playlist_id=filters["playlist_id"],
+        keyword=filters["keyword"],
+        video_id=filters["video_id"],
+        category=filters["category"],
+        query=filters["query"],
+        district=filters["district"],
+    )
+    current_newest_id = max(
+        (summary.place.place_id for summary in summaries), default=0
+    )
+    snapshot_id = decoded.snapshot_id if decoded is not None else current_newest_id
+    snapshot_items = [
+        summary for summary in summaries if summary.place.place_id <= snapshot_id
+    ]
+    total = len(snapshot_items)
+    newer_than = (
+        sum(
+            1
+            for summary in summaries
+            if summary.place.place_id > newer_than_id
+        )
+        if newer_than_id is not None
+        else 0
+    )
+    if decoded is not None:
+        snapshot_items = [
+            summary
+            for summary in snapshot_items
+            if _place_summary_cursor_key(summary, sort) > decoded.keys
+        ]
+    page_rows = snapshot_items[: limit + 1]
+    has_more = len(page_rows) > limit
+    items = page_rows[:limit]
+    next_cursor = (
+        encode_cursor(
+            fingerprint=fingerprint,
+            snapshot_id=snapshot_id,
+            keys=_place_summary_cursor_key(items[-1], sort),
+        )
+        if has_more and items
+        else None
+    )
+    return ListPage(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=total,
+        newest_id=snapshot_id or None,
+        newer_than=newer_than,
+    )
 
 
 async def _list_mentions_by_place(
@@ -453,7 +617,11 @@ def _place_summary_sort_key(sort: str):
     if sort == "name":
         return lambda item: (item.place.name, -item.place.place_id)
     if sort == "category":
-        return lambda item: (item.place.category or "미분류", item.place.name)
+        return lambda item: (
+            item.place.category or "미분류",
+            item.place.name,
+            -item.place.place_id,
+        )
     return lambda item: (-item.place.place_id,)
 
 
@@ -1232,6 +1400,21 @@ async def list_unmatched_candidates(
     soft delete된 후보는 제외한다(T-160 — partial index `WHERE deleted_at IS NULL`과
     같은 access path).
     """
+    stmt = _unmatched_candidates_stmt(
+        channel_id=channel_id,
+        playlist_id=playlist_id,
+        keyword=keyword,
+    ).order_by(ExtractedPlaceCandidate.id.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+def _unmatched_candidates_stmt(
+    *,
+    channel_id: str | None,
+    playlist_id: str | None,
+    keyword: str | None,
+):
     stmt = select(ExtractedPlaceCandidate).where(
         ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
         ExtractedPlaceCandidate.deleted_at.is_(None),
@@ -1252,9 +1435,103 @@ async def list_unmatched_candidates(
         stmt = stmt.where(ExtractedPlaceCandidate.source_playlist_id == playlist_id)
     if keyword:
         stmt = stmt.where(YoutubeVideo.source_search_query == keyword)
-    stmt = stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit)
-    result = await session.execute(stmt)
-    return list(result.scalars().all())
+    return stmt
+
+
+async def list_unmatched_candidates_page(
+    session: AsyncSession,
+    *,
+    limit: int = 500,
+    channel_id: str | None = None,
+    playlist_id: str | None = None,
+    keyword: str | None = None,
+    cursor: str | None = None,
+    newer_than_id: int | None = None,
+) -> ListPage[ExtractedPlaceCandidate]:
+    """검수 대기 후보를 최신 ID 기준의 안정적인 keyset page로 반환한다."""
+    await ensure_repeatable_read(session)
+    normalized_filters = {
+        "channel_id": channel_id or None,
+        "playlist_id": playlist_id or None,
+        "keyword": keyword or None,
+        "match_status": MatchStatus.NEEDS_REVIEW.value,
+        "visible": "not_deleted",
+    }
+    fingerprint = filter_fingerprint(
+        scope="unmatched-v1", sort="latest", filters=normalized_filters
+    )
+    decoded = (
+        decode_cursor(cursor, fingerprint=fingerprint, key_count=1)
+        if cursor
+        else None
+    )
+    if decoded is not None and (
+        not isinstance(decoded.keys[0], int)
+        or isinstance(decoded.keys[0], bool)
+        or decoded.keys[0] < 1
+        or decoded.keys[0] > MAX_DB_INTEGER_ID
+        or decoded.keys[0] > decoded.snapshot_id
+    ):
+        raise ValueError("유효하지 않은 검수 목록 cursor입니다")
+
+    base_stmt = _unmatched_candidates_stmt(
+        channel_id=normalized_filters["channel_id"],
+        playlist_id=normalized_filters["playlist_id"],
+        keyword=normalized_filters["keyword"],
+    )
+    id_stmt = base_stmt.with_only_columns(ExtractedPlaceCandidate.id).order_by(None)
+    if decoded is None:
+        newest_id = await session.scalar(
+            select(func.max(id_stmt.subquery().c.id))
+        )
+        snapshot_id = int(newest_id or 0)
+    else:
+        snapshot_id = decoded.snapshot_id
+
+    snapshot_ids = id_stmt.where(ExtractedPlaceCandidate.id <= snapshot_id).subquery()
+    total = int(
+        await session.scalar(select(func.count()).select_from(snapshot_ids)) or 0
+    )
+    newer_than = 0
+    if newer_than_id is not None:
+        newer_ids = id_stmt.where(
+            ExtractedPlaceCandidate.id > newer_than_id
+        ).subquery()
+        newer_than = int(
+            await session.scalar(select(func.count()).select_from(newer_ids)) or 0
+        )
+
+    page_stmt = base_stmt.where(ExtractedPlaceCandidate.id <= snapshot_id)
+    if decoded is not None:
+        page_stmt = page_stmt.where(ExtractedPlaceCandidate.id < decoded.keys[0])
+    rows = list(
+        (
+            await session.execute(
+                page_stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = (
+        encode_cursor(
+            fingerprint=fingerprint,
+            snapshot_id=snapshot_id,
+            keys=(items[-1].id,),
+        )
+        if has_more and items
+        else None
+    )
+    return ListPage(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=total,
+        newest_id=snapshot_id or None,
+        newer_than=newer_than,
+    )
 
 
 @dataclass(frozen=True)
