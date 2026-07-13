@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-07-13: T-164 — transcript_attempts 관측 (D1)
+
+- **문제**: 자막 3 provider(youtube-transcript-api·yt-dlp·faster-whisper)가 전부
+  `except Exception: return None`으로 IP 차단·자막 비활성·파손을 "자막 없음" 한 가지로 뭉개
+  실패 원인이 소실됐다(§1.3 D1, 실측 수율 11~40%). 이 데이터가 T-169 선별·T-172/173 게이트의 원천.
+- **구현**: `transcript_attempts` durable 테이블(provider별 시도·outcome 8종·language·duration,
+  성공 전 실패도 보존, migration 0020), `fetch_transcript`가 `TranscriptResult`를 wrap한
+  `TranscriptOutcome` 반환(segments·`to_timestamped_text` 무손상 — 후보 timestamp 원천),
+  예외 유형별 outcome 분류, `TRANSCRIPT_PROVIDER_ORDER` 실제 연결(사문화 해소), yt-dlp 언어·절단
+  로그(D7), `youtube_videos.transcript_source/failure_code` 요약 캐시(우선순위 기반 대표 코드 —
+  whisper=disabled가 no_captions를 가리지 않게). stage 이벤트(요약)와 attempts(상세) 역할 분리.
+- **적대적 리뷰(PR 전, 2렌즈)**: 정확성·회귀·명세 / 데이터 정합·migration·성능 — segments 보존·
+  소비처 회귀·provider order·migration 정합 판정. **MAJOR**: yt-dlp `ignoreerrors=True`가 차단·429를
+  내부에서 삼켜 `no_captions`로 오분류 → T-169 선별 오염 → `ignoreerrors=False` + `_YtdlpErrorCollector`
+  logger 이중 방어(삼켜진 에러 문자열 검사해 blocked/rate_limited만 lift, benign 경고는 no_captions
+  유지)로 수정, 실동작 모사 테스트 3종. MINOR 4(빈 segment 단락→no_captions, provider 라벨 canonical
+  통일, 캐시 자막 경로 요약 갱신, 테스트 우선순위 케이스) 반영.
+- **검증**: 격리 DB backend pytest 466 passed(pre-existing 1건 외 0), transcript 단위 35 passed,
+  alembic 0020 round-trip, 최신 main(#191) 리베이스 0 behind, `git diff --check` 통과.
+- **후속 권장**: yt-dlp가 worktree에 미설치라 MAJOR 수정은 문서화 동작+모사 테스트로 검증 — 실
+  prod 컨테이너에서 실제 차단/429 로그 문자열이 분류 키워드와 맞는지 smoke 확인 권장.
+
 ## 2026-07-13: T-180 — 실패 작업 재시작·실행 중지 UX
 
 - **일관된 작업 제어**: `/status` 이력과 `/jobs/[jobId]` 헤더에 공용 `RunActionButtons`를 배선했다.
