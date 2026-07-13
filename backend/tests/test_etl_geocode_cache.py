@@ -15,6 +15,7 @@ disposable PostgreSQL(`KTC_TEST_PG_DSN`) 위 실제 `geocode_cache` 테이블을
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -406,6 +407,77 @@ async def test_force_refresh_skips_lookup_and_updates(session_factory):
 
     # 갱신 후에도 캐시 행은 여전히 1건(같은 key 덮어쓰기).
     assert await _row_count(session_factory) == 1
+
+
+# --- best-effort 캐시: 캐시 계층 예외가 지오코딩 결과를 바꾸지 않는다 ---
+
+
+class _RaisingCache:
+    """lookup/store에서 선택적으로 예외를 던지는 최소 캐시 스텁(cacheable=True)."""
+
+    def __init__(
+        self,
+        *,
+        lookup_exc: Exception | None = None,
+        store_exc: Exception | None = None,
+    ) -> None:
+        self.lookup_exc = lookup_exc
+        self.store_exc = store_exc
+        self.lookup_calls = 0
+        self.store_calls = 0
+
+    def is_cacheable(self, provider: str) -> bool:
+        return True
+
+    async def lookup(self, provider, endpoint, params):
+        self.lookup_calls += 1
+        if self.lookup_exc is not None:
+            raise self.lookup_exc
+        return None
+
+    async def store(self, provider, endpoint, params, response_class, candidates):
+        self.store_calls += 1
+        if self.store_exc is not None:
+            raise self.store_exc
+
+
+async def test_store_failure_does_not_discard_fetched_candidates(caplog):
+    cache = _RaisingCache(store_exc=RuntimeError("db pool timeout"))
+    fetched = [GeocodeCandidate(latitude=35.1, longitude=129.1, source="kakao")]
+
+    async def fetch() -> list[GeocodeCandidate]:
+        return fetched
+
+    with caplog.at_level(logging.WARNING, logger="ktc.etl.geocoding"):
+        result = await geocoding.run_with_geocode_cache(
+            cache, "kakao", "endpoint", {"query": "x"}, fetch
+        )
+
+    # store가 예외를 던져도 fetch된 후보가 그대로 반환되고 예외는 전파되지 않는다.
+    assert result == fetched
+    assert cache.store_calls == 1
+    assert "저장 실패" in caplog.text
+
+
+async def test_lookup_failure_falls_back_to_fetch(caplog):
+    cache = _RaisingCache(lookup_exc=RuntimeError("asyncpg hiccup"))
+    fetched = [GeocodeCandidate(latitude=35.1, longitude=129.1, source="kakao")]
+    calls = {"n": 0}
+
+    async def fetch() -> list[GeocodeCandidate]:
+        calls["n"] += 1
+        return fetched
+
+    with caplog.at_level(logging.WARNING, logger="ktc.etl.geocoding"):
+        result = await geocoding.run_with_geocode_cache(
+            cache, "kakao", "endpoint", {"query": "x"}, fetch
+        )
+
+    # lookup 예외는 miss로 취급 → fetch 폴백. 강등 없이 후보 반환.
+    assert result == fetched
+    assert calls["n"] == 1
+    assert cache.lookup_calls == 1
+    assert "조회 실패" in caplog.text
 
 
 # --- 캐시 비활성 플래그 ---

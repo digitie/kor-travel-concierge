@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -32,6 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from vworld import AsyncVworldClient, VworldError, VworldNoDataError
 
 from ktc.models.geocode_cache import GeocodeCache
+
+logger = logging.getLogger(__name__)
 
 # 모호 후보 좌표 일치 판정 반경(미터)과 최소 매칭 신뢰도
 DISAMBIGUATION_RADIUS_M = 150.0
@@ -474,19 +477,44 @@ async def run_with_geocode_cache(
 
     - cache 없음 또는 provider 비캐시: fetch를 그대로 실행(캐시 완전 미개입 — VWorld/Naver).
     - 히트+미만료: fetch 없이 캐시 후보 반환(외부 호출 0).
-    - 미스/만료: fetch 실행 → 성공만 분류·저장(에러는 예외 전파, 저장 안 함).
+    - 미스/만료: fetch 실행 → 성공만 분류·저장(fetch 예외는 그대로 전파, 저장 안 함).
     - force_refresh: 조회를 건너뛰고 재호출 후 갱신(재처리 훅).
+
+    **캐시는 투명한 최적화(best-effort)여야 한다**: lookup/store 계층의 어떤 예외도
+    (별도 세션의 pool timeout·asyncpg 일시 오류·DB hiccup 등) 지오코딩 결과를 절대 바꾸지
+    않는다. lookup 실패는 miss로 취급해 provider로 폴백하고, store 실패는 이미 성공적으로
+    fetch된 후보를 그대로 반환한다(둘 다 warning 로그만 남긴다). 캐시 오류가 성공 매치를
+    조용히 needs_review로 강등시키는 T-170 불변식 위반을 막는다.
     """
     if cache is None or not cache.is_cacheable(provider):
         return await fetch()
     if not force_refresh:
-        cached = await cache.lookup(provider, endpoint, params)
+        try:
+            cached = await cache.lookup(provider, endpoint, params)
+        except Exception:
+            # 조회 실패는 miss로 취급하고 provider로 폴백한다(결과 불변).
+            logger.warning(
+                "지오코딩 캐시 조회 실패 — miss로 폴백 (provider=%s, endpoint=%s)",
+                provider,
+                endpoint,
+                exc_info=True,
+            )
+            cached = None
         if cached is not None:
             return cached
     candidates = await fetch()
-    await cache.store(
-        provider, endpoint, params, classify_geocode_success(candidates), candidates
-    )
+    try:
+        await cache.store(
+            provider, endpoint, params, classify_geocode_success(candidates), candidates
+        )
+    except Exception:
+        # 저장 실패가 이미 성공한 지오코딩 결과 반환을 막지 않게 한다(best-effort).
+        logger.warning(
+            "지오코딩 캐시 저장 실패 — 결과는 그대로 반환 (provider=%s, endpoint=%s)",
+            provider,
+            endpoint,
+            exc_info=True,
+        )
     return candidates
 
 
