@@ -17,6 +17,7 @@ from ktc.etl import (
     postprocess_service,
     transcript_correction,
 )
+from ktc.etl.batch_poi_service import _build_description_text
 from ktc.etl.geocode_service import apply_geocode_to_candidate
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.etl.llm_client import LlmRuntime
@@ -32,7 +33,7 @@ from ktc.models import (
     TravelPlace,
     YoutubeVideo,
 )
-from ktc.services import place_service
+from ktc.services import feature_export_service, place_service
 from ktc.services.place_service import QueueReason
 
 # 임계 길이(기본 200자)를 넘는 실제형 여행 설명. 아래 evidence_quote들이 이 원문에
@@ -282,3 +283,234 @@ async def test_description_candidate_not_autoconfirmed_and_queue_reason(session)
     page = await place_service.list_unmatched_candidates_page(session)
     reasons = {item.candidate.id: item.queue_reason for item in page.items}
     assert reasons[candidate.id] == QueueReason.DESCRIPTION_ONLY
+
+
+async def test_none_domestic_description_candidate_uses_foreign_bucket(session):
+    # is_domestic None(미확인) description 후보는 review_note를 domestic_unverified로 두어
+    # queue_reason이 FOREIGN 버킷으로 가야 한다(국내여부 미확인 fail-closed 신호를
+    # description_only가 가리지 않도록, MINOR).
+    session.add(YoutubeVideo(video_id="nd1", title="t", url="u", channel_id="ndc1"))
+    await session.commit()
+    candidate = ExtractedPlaceCandidate(
+        video_id="nd1",
+        source_text="s",
+        ai_place_name="어딘가 카페",
+        match_status=MatchStatus.NEEDS_REVIEW,
+        source_kind=EvidenceSourceKind.DESCRIPTION.value,
+        grounding_status=GroundingStatus.UNVERIFIED.value,
+        is_domestic=None,
+    )
+    session.add(candidate)
+    await session.commit()
+    await session.refresh(candidate)
+
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=37.5,
+            longitude=127.0,
+            place_name="어딘가 카페",
+            road_address="서울 ...",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    await session.refresh(candidate)
+    assert candidate.review_note == "domestic_unverified"
+    page = await place_service.list_unmatched_candidates_page(session)
+    reasons = {item.candidate.id: item.queue_reason for item in page.items}
+    assert reasons[candidate.id] == QueueReason.FOREIGN
+
+
+async def test_description_candidate_absent_from_feature_export(session, monkeypatch):
+    # description 후보는 needs_review·PENDING·matched_place_id None이라 export ledger에
+    # 오르지 않는다 — snapshot(upsert)에도, changes(tombstone/reject)에도 새지 않아야 한다.
+    video = await _make_video(session, video_id="exp1", description=_LONG_DESCRIPTION)
+    await _run_batch(
+        session,
+        monkeypatch,
+        video,
+        transcript_ok=False,
+        pois=[
+            {
+                "official_name": "성심당 본점",
+                "category_code": "01050100",
+                "is_domestic": True,
+                "evidence_quote": "성심당 본점에서 튀김소보로를 먹고",
+            }
+        ],
+    )
+    candidate = (
+        await session.execute(select(ExtractedPlaceCandidate))
+    ).scalar_one()
+    assert candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value
+    export_id = f"ytpc_{candidate.id}"
+
+    snapshot = await feature_export_service.get_snapshot(session)
+    changes = await feature_export_service.get_changes(session)
+    assert all(item["export_id"] != export_id for item in snapshot.items)
+    assert all(item["export_id"] != export_id for item in changes.items)
+
+
+async def test_transcript_reprocess_supersedes_description_candidate(
+    session, monkeypatch
+):
+    # 자막 우선순위 역전 방지(MAJOR): run1 자막 실패→description 후보, run2 자막 복구
+    # 재처리→transcript 후보가 생성되고 기존 미검수 description 후보는 supersede(soft delete).
+    video = await _make_video(
+        session, video_id="reproc1", description=_LONG_DESCRIPTION
+    )
+    await _run_batch(
+        session,
+        monkeypatch,
+        video,
+        transcript_ok=False,
+        pois=[
+            {
+                "official_name": "성심당 본점",
+                "category_code": "01050100",
+                "is_domestic": True,
+                "evidence_quote": "성심당 본점에서 튀김소보로를 먹고",
+            }
+        ],
+    )
+    description_candidate = (
+        await session.execute(select(ExtractedPlaceCandidate))
+    ).scalar_one()
+    assert description_candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value
+
+    summary = await _run_batch(
+        session,
+        monkeypatch,
+        video,
+        transcript_ok=True,
+        pois=[
+            {
+                "official_name": "성심당 본점",
+                "category_code": "01050100",
+                "is_domestic": True,
+                "evidence_quote": "성심당 본점 빵이 맛있습니다",
+            }
+        ],
+    )
+    assert summary["created_candidates"] == 1
+
+    await session.refresh(description_candidate)
+    # 기존 description 후보는 supersede(soft delete)됨(hard delete 아님, 감사 흔적 보존).
+    assert description_candidate.deleted_at is not None
+    assert (
+        description_candidate.deletion_reason
+        == "superseded_by_higher_priority_source"
+    )
+    live = (
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(live) == 1
+    assert live[0].source_kind == EvidenceSourceKind.TRANSCRIPT.value
+
+
+async def test_description_suppressed_when_transcript_candidate_exists(
+    session, monkeypatch
+):
+    # 반대 방향(자막 우선): 기존 transcript 후보가 있으면 이후 자막 실패로 description
+    # 경로에 들어가도 새 description 후보를 만들지 않는다(상위 소스 존재 시 억제).
+    video = await _make_video(
+        session, video_id="txfirst", description=_LONG_DESCRIPTION
+    )
+    await _run_batch(
+        session,
+        monkeypatch,
+        video,
+        transcript_ok=True,
+        pois=[
+            {
+                "official_name": "성심당 본점",
+                "category_code": "01050100",
+                "is_domestic": True,
+                "evidence_quote": "성심당 본점 빵이 맛있습니다",
+            }
+        ],
+    )
+    summary = await _run_batch(
+        session,
+        monkeypatch,
+        video,
+        transcript_ok=False,
+        pois=[
+            {
+                "official_name": "성심당 본점",
+                "is_domestic": True,
+                "evidence_quote": "성심당 본점에서 튀김소보로를 먹고",
+            }
+        ],
+    )
+    assert summary["created_candidates"] == 0
+    live = (
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate).where(
+                    ExtractedPlaceCandidate.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(live) == 1
+    assert live[0].source_kind == EvidenceSourceKind.TRANSCRIPT.value
+
+
+def test_build_description_text_boundaries():
+    # description_raw=None, tags=None → 제목만.
+    assert (
+        _build_description_text(
+            YoutubeVideo(
+                video_id="b1",
+                title="제목만",
+                url="u",
+                channel_id="c",
+                description_raw=None,
+                tags_json=None,
+            )
+        )
+        == "제목만"
+    )
+    # tags가 리스트가 아니면(문자열 등) 무시하고 크래시하지 않는다.
+    text_non_list_tags = _build_description_text(
+        YoutubeVideo(
+            video_id="b2",
+            title="t",
+            url="u",
+            channel_id="c",
+            description_raw="설명 본문",
+            tags_json="notalist",
+        )
+    )
+    assert "설명 본문" in text_non_list_tags
+    assert "notalist" not in text_non_list_tags
+    # title=None·description=None·tags=None → 빈 문자열(임계 미달로 자연 실패).
+    assert (
+        _build_description_text(
+            YoutubeVideo(
+                video_id="b3",
+                title=None,
+                url="u",
+                channel_id="c",
+                description_raw=None,
+                tags_json=None,
+            )
+        )
+        == ""
+    )
