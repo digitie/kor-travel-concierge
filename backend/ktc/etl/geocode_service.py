@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from ktc.core.spatial import sync_place_geometry
 from ktc.etl.geocoding import (
+    GeocodeCandidate,
     GeocodeDecision,
+    GeocodeResultKind,
     KakaoGeocoder,
     NaverGeocoder,
     evaluate_geocode,
@@ -30,7 +32,7 @@ from ktc.models import (
     utcnow,
 )
 from ktc.services import place_service
-from ktc.etl import category_catalog
+from ktc.etl import category_catalog, region_gate
 
 _MIN_CONTAINED_NAME_LENGTH = 4
 _MIN_CONTAINED_NAME_RATIO = 0.6
@@ -106,42 +108,74 @@ async def apply_geocode_to_candidate(
         geocoding=_geocode_evidence(decision),
     )
 
-    if decision.status != "matched" or decision.candidate is None:
-        candidate.match_status = MatchStatus.NEEDS_REVIEW
-        candidate.review_note = decision.reason
-        candidate.feature_export_status = FeatureExportStatus.PENDING.value
-        await session.commit()
-        return None
+    # 확정 후보와 confidence를 정한다. 단일 matched는 그대로 쓰고, 다건(ambiguous)은
+    # 이름·행정구역 게이트를 모두 통과하는 후보가 정확히 1개면 0.7로 자동확정한다
+    # (검수량 감소, ADR-16 보강 — 무게이트 자동확정은 여전히 금지). 그 외 상태는 검수 큐로.
+    c = decision.candidate
+    confidence = decision.confidence
+    ambiguous_single_pass = False
+    if decision.status != "matched" or c is None:
+        resolved = (
+            _resolve_ambiguous_single(candidate, decision)
+            if decision.reason == "ambiguous"
+            else None
+        )
+        if resolved is None:
+            candidate.match_status = MatchStatus.NEEDS_REVIEW
+            candidate.review_note = decision.reason
+            candidate.feature_export_status = FeatureExportStatus.PENDING.value
+            await session.commit()
+            return None
+        c = resolved
+        confidence = 0.7
+        ambiguous_single_pass = True
+    candidate.confidence_score = confidence
 
     # raw grounding 게이트(T-165, 로드맵 B3·G4): transcript 후보는 근거가 raw 자막에서
     # 확인(verified_raw)되지 않으면 지오코딩이 matched여도 자동확정하지 않는다. 그럴듯한
-    # hallucination이 자동 승격돼 downstream(export)까지 전파되는 것을 막는다. 지오코딩
-    # 결정은 이미 위에서 evidence에 기록됐다. 후보는 폐기하지 않고 needs_review로 남긴다.
+    # hallucination이 자동 승격돼 downstream(export)까지 전파되는 것을 막는다. 후보는
+    # 폐기하지 않고 needs_review로 남긴다.
     if _grounding_blocks_autoconfirm(candidate):
+        candidate.provider_evidence_json = _merge_provider_evidence(
+            candidate.provider_evidence_json,
+            geocoding=_geocode_evidence(decision, selected_candidate=c),
+        )
         candidate.match_status = MatchStatus.NEEDS_REVIEW
         candidate.review_note = "ungrounded"
         candidate.feature_export_status = FeatureExportStatus.PENDING.value
         await session.commit()
         return None
 
-    c = decision.candidate
+    result_kind = c.result_kind or GeocodeResultKind.ADDRESS.value
 
     # 좌표 근접 중복 확인 (T-005 저장소 계층 재사용)
     dups = await place_service.find_duplicate_candidates(
         session, lat=c.latitude, lng=c.longitude
     )
-    if dups:
-        place = dups[0][0]
-        if not _names_compatible(
-            candidate.ai_place_name,
-            place.name,
-            c.place_name,
-        ):
-            candidate.match_status = MatchStatus.NEEDS_REVIEW
-            candidate.review_note = "nearby_place_name_mismatch"
-            candidate.feature_export_status = FeatureExportStatus.PENDING.value
-            await session.commit()
-            return None
+    nearby_place = dups[0][0] if dups else None
+
+    # identity 게이트(이름·행정구역·is_domestic). 불리언 게이트 통과 여부만 쓰고 가중 합성
+    # 점수는 만들지 않는다(§2.4-4, 가짜 정밀도 방지). 결과 코드는 evidence.geocoding.identity
+    # 에 누적해 PR-07 queue_reason 파생(review_note 기반)과 T-167 auto-match audit에서
+    # 재사용한다. grounding·이름·행정구역·is_domestic이 전부 통과해야 MATCHED가 된다.
+    identity, block_note = _evaluate_identity_gates(
+        candidate, c, result_kind, nearby_place
+    )
+    if ambiguous_single_pass:
+        identity["ambiguous_single_pass"] = True
+    candidate.provider_evidence_json = _merge_provider_evidence(
+        candidate.provider_evidence_json,
+        geocoding=_geocode_evidence(decision, selected_candidate=c, identity=identity),
+    )
+    if block_note is not None:
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.review_note = block_note
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.commit()
+        return None
+
+    if nearby_place is not None:
+        place = nearby_place
         code = place_service.candidate_category_code(candidate)
         if code and place.category_code_suggestion in (
             None,
@@ -157,7 +191,12 @@ async def apply_geocode_to_candidate(
             official = official or rev.get("parcel_address")
             candidate.provider_evidence_json = _merge_provider_evidence(
                 candidate.provider_evidence_json,
-                geocoding=_geocode_evidence(decision, reverse_vworld=rev),
+                geocoding=_geocode_evidence(
+                    decision,
+                    selected_candidate=c,
+                    reverse_vworld=rev,
+                    identity=identity,
+                ),
             )
         code = place_service.candidate_category_code(candidate)
         category_code = category_catalog.normalize_code_or_unknown(code)
@@ -204,15 +243,109 @@ def _grounding_blocks_autoconfirm(candidate: ExtractedPlaceCandidate) -> bool:
     return candidate.grounding_status != GroundingStatus.VERIFIED_RAW.value
 
 
-def _names_compatible(*values: str | None) -> bool:
-    normalized = [_normalize_name(value) for value in values if value]
-    for index, left in enumerate(normalized):
-        for right in normalized[index + 1 :]:
-            if left == right:
-                return True
-            if _is_specific_contained_name(left, right):
-                return True
-    return False
+def _evaluate_identity_gates(
+    candidate: ExtractedPlaceCandidate,
+    geocode: GeocodeCandidate,
+    result_kind: str,
+    nearby_place: TravelPlace | None,
+) -> tuple[dict, str | None]:
+    """이름·행정구역·is_domestic 게이트를 평가한다(로드맵 PR-12, D2·D4·D7).
+
+    (identity 요약 dict, 차단 사유 코드 or None)을 반환한다. 불리언 게이트만 쓰고 가중
+    합성 점수는 만들지 않는다(§2.4-4). 차단 우선순위는 이름 > 행정구역 > is_domestic이며
+    (queue_reason 선언 순서와 정합), 모든 게이트 결과는 차단 여부와 무관하게 기록한다.
+    """
+    identity: dict = {
+        "result_kind": result_kind,
+        "reused_nearby_place": nearby_place is not None,
+    }
+    block: str | None = None
+
+    # 1) 이름 게이트 (D2/C8) — 비교 목적별 pairwise. any-pair(C8) 문제를 제거한다.
+    if nearby_place is not None:
+        # 근접 중복 재사용: 후보 AI명 vs 기존 확정 장소명(둘 다 신뢰 POI명).
+        if _names_match(candidate.ai_place_name, nearby_place.name):
+            identity["name_gate"] = "nearby_match"
+        else:
+            identity["name_gate"] = "nearby_place_name_mismatch"
+            block = block or "nearby_place_name_mismatch"
+    elif result_kind == GeocodeResultKind.POI.value:
+        # 신규 장소 생성 경로(D2): 후보 AI명 vs provider POI명. 이전엔 무검증 통과였다.
+        if _names_match(candidate.ai_place_name, geocode.place_name):
+            identity["name_gate"] = "poi_match"
+        else:
+            identity["name_gate"] = "name_mismatch"
+            block = block or "name_mismatch"
+    else:
+        # 주소·좌표 결과의 place_name은 POI명이 아니므로 POI 이름 게이트를 skip하고
+        # name_unverified로 남긴다(자동확정은 grounding·행정구역·is_domestic 신호로).
+        identity["name_gate"] = "name_unverified"
+
+    # 2) 행정구역 게이트 (D4) — hint 시도 vs 확정 주소 시도(역지오코딩 추가 호출 없음).
+    if region_gate.region_conflict(
+        candidate.location_hint, *_result_address_texts(geocode, result_kind)
+    ):
+        identity["region_gate"] = "region_mismatch"
+        block = block or "region_mismatch"
+    elif region_gate.sido_of(candidate.location_hint) is not None:
+        identity["region_gate"] = "region_match"
+    else:
+        identity["region_gate"] = "region_no_signal"
+
+    # 3) is_domestic fail-closed (D7) — 미확인(None)·해외(False)는 자동확정 금지. 명시적
+    #    True만 통과한다(해외 장소가 국내 지오코딩으로 자동확정되는 FP 차단).
+    if candidate.is_domestic is True:
+        identity["is_domestic_gate"] = "verified"
+    else:
+        identity["is_domestic_gate"] = "unverified"
+        block = block or "domestic_unverified"
+
+    return identity, block
+
+
+def _result_address_texts(
+    geocode: GeocodeCandidate, result_kind: str
+) -> list[str | None]:
+    """행정구역 게이트에 넘길 확정 주소 문자열. poi 결과의 place_name은 POI명이라 제외."""
+    texts: list[str | None] = [geocode.road_address, geocode.official_address]
+    if result_kind != GeocodeResultKind.POI.value:
+        texts.append(geocode.place_name)
+    return texts
+
+
+def _resolve_ambiguous_single(
+    candidate: ExtractedPlaceCandidate, decision: GeocodeDecision
+) -> GeocodeCandidate | None:
+    """다건(ambiguous) 결과에서 이름+행정구역 게이트를 모두 통과하는 후보가 정확히 1개면
+    그 후보를 반환한다(ADR-16 보강). is_domestic·grounding은 후보 단위 공통 신호라 여기서
+    보지 않고 호출부의 게이트가 처리한다."""
+    passed: list[GeocodeCandidate] = []
+    for cand in decision.primary_candidates:
+        rk = cand.result_kind or GeocodeResultKind.ADDRESS.value
+        if rk == GeocodeResultKind.POI.value and not _names_match(
+            candidate.ai_place_name, cand.place_name
+        ):
+            continue
+        if region_gate.region_conflict(
+            candidate.location_hint, *_result_address_texts(cand, rk)
+        ):
+            continue
+        passed.append(cand)
+    return passed[0] if len(passed) == 1 else None
+
+
+def _names_match(left: str | None, right: str | None) -> bool:
+    """두 이름이 동일 장소를 가리키는지의 pairwise 판정.
+
+    C8 정정: 기존 `_names_compatible(a,b,c)`의 any-pair 통과(세 값 중 아무 한 쌍만 맞아도
+    True)를 제거하고 비교 목적별로 두 이름만 대조한다. 한쪽이 비면 검증 불가로 False.
+    """
+    a, b = _normalize_name(left), _normalize_name(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return _is_specific_contained_name(a, b)
 
 
 def _is_specific_contained_name(left: str, right: str) -> bool:
@@ -232,20 +365,26 @@ def _normalize_name(value: str | None) -> str:
 def _geocode_evidence(
     decision: GeocodeDecision,
     *,
+    selected_candidate: GeocodeCandidate | None = None,
     reverse_vworld: dict[str, str | None] | None = None,
+    identity: dict | None = None,
 ) -> dict:
+    # 실제로 확정에 쓴 후보를 우선 기록한다(ambiguous 단일 통과 시 decision.candidate는
+    # None이므로 선택된 후보를 명시로 넘긴다).
+    chosen = selected_candidate if selected_candidate is not None else decision.candidate
     selected = None
-    if decision.candidate is not None:
+    if chosen is not None:
         selected = {
-            "source": decision.candidate.source,
-            "place_name": decision.candidate.place_name,
-            "road_address": decision.candidate.road_address,
-            "official_address": decision.candidate.official_address,
-            "category": decision.candidate.category,
-            "latitude": decision.candidate.latitude,
-            "longitude": decision.candidate.longitude,
+            "source": chosen.source,
+            "result_kind": chosen.result_kind,
+            "place_name": chosen.place_name,
+            "road_address": chosen.road_address,
+            "official_address": chosen.official_address,
+            "category": chosen.category,
+            "latitude": chosen.latitude,
+            "longitude": chosen.longitude,
         }
-    return {
+    evidence: dict = {
         "decision": {
             "status": decision.status,
             "confidence": decision.confidence,
@@ -256,6 +395,9 @@ def _geocode_evidence(
         "provider_candidates": decision.provider_evidence,
         "reverse_vworld": reverse_vworld,
     }
+    if identity is not None:
+        evidence["identity"] = identity
+    return evidence
 
 
 def _merge_provider_evidence(
