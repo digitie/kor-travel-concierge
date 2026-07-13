@@ -246,6 +246,16 @@ class Settings(BaseSettings):
     # false면 /place-search가 google 결과를 빈 목록 + disabled 사유로 준다.
     GOOGLE_PLACE_SEARCH_ENABLED: bool = True
 
+    # --- 지오코딩 provider별 결과 캐시 (T-170, S7, docs/provider-policy.md) ---
+    # 같은 장소가 여러 영상에 반복 등장할 때 지오코딩 provider 재호출을 줄이는 DB 캐시.
+    # provider policy allowlist에서 캐시 허용은 Kakao뿐이며(VWorld/Naver는 정책상 제외),
+    # 이 플래그가 false면 Kakao도 조회·저장을 스킵하고 항상 라이브 호출한다.
+    GEOCODE_CACHE_ENABLED: bool = True
+    # Kakao positive/negative TTL(일). Kakao는 "최신 데이터 유지 의무"가 있어 positive TTL을
+    # 30일 이하로 보수적으로 둔다(기본 14일). 빈 성공(0건)은 짧은 negative TTL(기본 1일).
+    GEOCODE_CACHE_KAKAO_POSITIVE_TTL_DAYS: float = 14.0
+    GEOCODE_CACHE_KAKAO_NEGATIVE_TTL_DAYS: float = 1.0
+
     # --- 3. MCP 서버 ---
     MCP_WRITE_ENABLED: bool = False
     MCP_TRANSPORT: str = "stdio"
