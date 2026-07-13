@@ -698,13 +698,15 @@ class _FakeScheduler:
         self.jobs[kwargs["id"]] = {"func": func, "trigger": trigger, **kwargs}
 
 
-def _fake_settings(*, source_scan_enabled=True):
+def _fake_settings(*, source_scan_enabled=True, feature_export_reconcile_enabled=True):
     from types import SimpleNamespace
 
     return SimpleNamespace(
         SCHEDULER_POLL_INTERVAL_SECONDS=5,
         SOURCE_SCAN_ENABLED=source_scan_enabled,
         SOURCE_SCAN_INTERVAL_SECONDS=60,
+        FEATURE_EXPORT_RECONCILE_ENABLED=feature_export_reconcile_enabled,
+        FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS=3600,
     )
 
 
@@ -728,6 +730,7 @@ def test_register_worker_jobs_drops_legacy_and_registers_two_lanes():
         "crawl-run-worker-interactive",
         "crawl-run-worker-batch",
         "source-scan-enqueue",
+        "feature-export-reconcile",
     }
 
     interactive = scheduler.jobs["crawl-run-worker-interactive"]
@@ -745,6 +748,12 @@ def test_register_worker_jobs_drops_legacy_and_registers_two_lanes():
 
     source_scan = scheduler.jobs["source-scan-enqueue"]
     assert source_scan["func"] is worker.enqueue_source_scan_once
+
+    # feature export 안전망 job(T-171): 비-persistent 분기는 session_factory를 넘긴다.
+    reconcile = scheduler.jobs["feature-export-reconcile"]
+    assert reconcile["func"] is worker.reconcile_feature_exports_once
+    assert reconcile["max_instances"] == 1
+    assert reconcile["kwargs"]["session_factory"] is sentinel_factory
 
 
 def test_register_worker_jobs_legacy_absent_is_ignored():
@@ -779,6 +788,67 @@ def test_register_worker_jobs_persistent_kwargs_are_serializable():
     batch = scheduler.jobs["crawl-run-worker-batch"]
     assert batch["kwargs"] == {"lane": worker.LANE_BATCH}
     assert scheduler.jobs["source-scan-enqueue"]["kwargs"] == {}
+    # persistent 분기: 안전망 job도 직렬화 불가 인자 없이 등록된다.
+    assert scheduler.jobs["feature-export-reconcile"]["kwargs"] == {}
+
+
+async def test_reconcile_feature_exports_once_heals_unwired_candidate(session_factory):
+    """안전망 coroutine(T-171): dirty 마킹 없이 export 대상이 된 후보를 전량 sync로 보정한다."""
+    from ktc.models import (
+        ExtractedPlaceCandidate,
+        FeatureExport,
+        FeatureExportStatus,
+        GroundingStatus,
+        MatchStatus,
+    )
+
+    async with session_factory() as s:
+        channel = YoutubeChannel(channel_id="rc-chan", title="채널")
+        s.add(channel)
+        await s.flush()
+        s.add(
+            YoutubeVideo(
+                video_id="rc-vid",
+                title="영상",
+                url="https://youtu.be/rc-vid",
+                channel_id="rc-chan",
+                channel_name="채널",
+            )
+        )
+        place = TravelPlace(
+            name="성산일출봉",
+            latitude=33.458,
+            longitude=126.942,
+            is_geocoded=True,
+        )
+        s.add(place)
+        await s.commit()
+        await s.refresh(place)
+        # dirty 마킹 없이(미배선) export 대상 후보를 만든다.
+        s.add(
+            ExtractedPlaceCandidate(
+                video_id="rc-vid",
+                source_channel_id="rc-chan",
+                source_text="성산일출봉",
+                ai_place_name="성산일출봉",
+                match_status=MatchStatus.MATCHED,
+                grounding_status=GroundingStatus.VERIFIED_RAW.value,
+                matched_place_id=place.place_id,
+                feature_export_status=FeatureExportStatus.READY.value,
+            )
+        )
+        await s.commit()
+
+    changed = await worker.reconcile_feature_exports_once(session_factory)
+    assert changed == 1
+
+    async with session_factory() as s:
+        rows = (await s.execute(select(FeatureExport))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].operation == "upsert"
+
+    # 재실행은 fixpoint(추가 변경 없음).
+    assert await worker.reconcile_feature_exports_once(session_factory) == 0
 
 
 def test_register_worker_jobs_omits_source_scan_when_disabled():
@@ -792,7 +862,9 @@ def test_register_worker_jobs_omits_source_scan_when_disabled():
         settings=_fake_settings(source_scan_enabled=False),
     )
     assert "source-scan-enqueue" not in scheduler.jobs
+    # source_scan을 꺼도 feature export 안전망 job은 별도 플래그라 유지된다(T-171).
     assert set(scheduler.jobs) == {
         "crawl-run-worker-interactive",
         "crawl-run-worker-batch",
+        "feature-export-reconcile",
     }
