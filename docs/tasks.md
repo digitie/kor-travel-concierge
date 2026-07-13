@@ -62,7 +62,7 @@
 
 - [x] **T-160**: candidate soft delete 상태 모델 — hard delete가 export tombstone·undo를 원천
   차단하던 구조(§10 B1, FK NO ACTION + ledger 선삭제)를 해소했다. `deleted_at/deletion_reason/
-  deleted_by` 컬럼+CHECK+검수 큐 partial index 3종(migration 20260713_0016), `soft_delete_candidates`
+  deleted_by` 컬럼+CHECK+검수 큐 partial index 3종(migration 20260713_0017, T-175 0016 이후), `soft_delete_candidates`
   helper(매핑 삭제·matched 해제·**같은 트랜잭션 tombstone 전이**, ledger DELETE 전소멸, FOR UPDATE
   락), 후보 삭제 라우트·`exclude_video`(force) 교체, 활성 조회 `deleted_at IS NULL` 전수 적용,
   `POST /destinations/unmatched/{id}/reopen`(deleted/ignored→NEEDS_REVIEW, MATCHED/USER_CORRECTED는

@@ -358,6 +358,17 @@ T-061 이후 앱은 `DATABASE_URL`이 가리키는 PostgreSQL/PostGIS 서버에 
 ### 2. Alembic migration 실패
 초기 schema 또는 후속 migration이 실패하면 앱 시작 시 테이블이 없거나 PostGIS 함수가 동작하지 않을 수 있습니다.
 - **해결책**: `DATABASE_URL`을 확인한 뒤 `alembic upgrade head`를 실행합니다. 권한 오류가 나면 대상 DB에 `CREATE EXTENSION postgis`를 실행할 수 있는 권한 또는 사전 설치된 PostGIS extension이 필요합니다.
+- **revision 충돌 사전 점검**: `alembic heads`가 정확히 한 head만 반환해야 합니다. CI의
+  `test_migration_graph.py`는 revision ID 중복과 multiple heads를 차단합니다.
+- **과거 중복 0016 판별**: `alembic_version=20260713_0016`인 DB는
+  `public_api_keys.scope`가 있고 candidate soft delete 3컬럼은 없어야 정상 T-175 상태입니다.
+  반대(candidate 컬럼만 존재), 둘 다 존재, 둘 다 없는 상태는 자동 upgrade하지 말고 먼저 백업한 뒤
+  schema fingerprint에 맞는 수동 repair와 stamp 계획을 검토합니다.
+- **0017 운영 적용**: API·MCP·scheduler write를 멈추고 장기 transaction이 없는지 확인한 뒤 유한
+  `lock_timeout`/`statement_timeout`으로 migration을 적용합니다. 첫 soft delete write 전에는 snapshot
+  복원 또는 0016 downgrade가 가능하지만, `deleted_at IS NOT NULL` 행이 하나라도 생긴 뒤에는 구 앱이나
+  0016 schema로 rollback하지 않습니다. 이때는 maintenance/read-only를 유지하고 forward-fix하거나
+  명시적으로 migration 전 snapshot을 복원합니다.
 
 ### 3. Docker / WSL2 환경 문제
 WSL2에서 `docker` 명령을 찾지 못하거나 컨테이너가 기동하지 못할 수 있습니다.

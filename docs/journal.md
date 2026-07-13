@@ -4,12 +4,29 @@
 
 ---
 
+## 2026-07-13: T-176 선행 — Alembic 0016 revision 충돌 해소
+
+- **원인**: T-175 공개 API key scope와 뒤이어 병합된 T-160 candidate soft delete migration이
+  모두 `20260713_0016`/`down_revision=20260710_0015`를 선언해 `upgrade head`가 중복 revision과
+  multiple heads로 중단됐다. n150은 0015에서 transaction 적용 전에 안전하게 멈췄다.
+- **해결**: 먼저 병합·배포 가능한 T-175 scope migration은 0016으로 유지하고, 아직 prod에 적용되지
+  않은 T-160 migration을 `20260713_0017`/`down_revision=20260713_0016`으로 선형화했다. 이미 T-175
+  0016을 적용한 환경도 다음 upgrade에서 T-160만 적용할 수 있다.
+- **n150 검증**: prod 0015 restore point를 disposable database에 복원해 단일 head 0017,
+  0015→0016(scope)→0017(soft delete) upgrade, scope column/CHECK, soft delete 3컬럼/CHECK·partial
+  index 3종을 확인했다. 0017→0016 downgrade에서 scope는 보존되고 soft delete 컬럼만 제거되며,
+  재upgrade가 0017로 복원되는 round-trip도 통과했다. PR/CI green 후 prod에 재적용한다.
+- **재발·운영 방지**: revision ID 유일성과 single head를 검사하는 test gate를 추가했다. prod에서는
+  write 서비스 중지·장기 transaction 확인·유한 lock/statement timeout 뒤 0017을 적용한다. 첫 soft
+  delete write 뒤에는 `deleted_at`을 모르는 구 앱 또는 0016 schema로 rollback하지 않고 forward-fix나
+  migration 전 snapshot 복원만 허용한다. 과거 candidate-only 0016은 schema fingerprint로 차단한다.
+
 ## 2026-07-13: T-160 — candidate soft delete 상태 모델 (B1)
 
 - **문제**: `FeatureExport.candidate_id`가 non-null·unique·NO ACTION FK라 후보 삭제·영상 제외가
   ledger 행을 먼저 지웠고, tombstone은 잔존 ledger 행에만 발행 가능해 **이미 export된 feature가
   downstream에서 조용히 잔존**했다(§10 B1 — Codex 리뷰 확정, 코드 검증 완료).
-- **구현**: soft delete 3필드+CHECK+검수 큐 partial index 3종(20260713_0016, up/down round-trip
+- **구현**: soft delete 3필드+CHECK+검수 큐 partial index 3종(20260713_0017, up/down round-trip
   검증), `soft_delete_candidates`(FOR UPDATE, 매핑 삭제·matched 해제·같은 트랜잭션
   `tombstone_candidate_exports` — 새 sequence, export 안 된 후보는 무동작), 후보 삭제 라우트와
   `exclude_video`(force)를 helper로 교체(ledger DELETE 코드 전소멸), 활성 조회 10여 곳
