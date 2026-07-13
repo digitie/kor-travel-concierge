@@ -9,8 +9,10 @@ from sqlalchemy import select
 from ktc.etl.geocode_service import _names_compatible, apply_geocode_to_candidate
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.models import (
+    EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     TravelPlace,
     VideoPlaceMapping,
@@ -18,12 +20,23 @@ from ktc.models import (
 )
 
 
-async def _make_candidate(session, name="월정리 카페", category="카페"):
+async def _make_candidate(
+    session,
+    name="월정리 카페",
+    category="카페",
+    *,
+    # 기본은 verified_raw로 둔다: 이 파일 대부분은 grounding이 아닌 매칭 로직을 검증하며
+    # T-165 게이트에 걸리지 않아야 한다(자동확정 경로 회귀).
+    grounding_status=GroundingStatus.VERIFIED_RAW.value,
+    source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+):
     session.add(YoutubeVideo(video_id="v1", title="t", url="u", channel_id="c"))
     await session.commit()
     c = ExtractedPlaceCandidate(
         video_id="v1", source_text="s", ai_place_name=name, candidate_category=category,
         match_status=MatchStatus.NEEDS_REVIEW,
+        source_kind=source_kind,
+        grounding_status=grounding_status,
     )
     session.add(c)
     await session.commit()
@@ -173,6 +186,75 @@ async def test_apply_matched_nearby_short_partial_name_needs_review(session):
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
     assert refreshed.review_note == "nearby_place_name_mismatch"
+
+
+async def test_apply_matched_ungrounded_transcript_stays_needs_review(session):
+    # transcript 후보가 raw grounding 미확인이면 지오코딩 matched여도 자동확정하지 않는다.
+    candidate = await _make_candidate(
+        session, grounding_status=GroundingStatus.UNVERIFIED.value
+    )
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563, longitude=126.7958, road_address="제주 ...", source="kakao"
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ungrounded"
+    assert refreshed.feature_export_status == FeatureExportStatus.PENDING
+    # 폐기하지 않고 지오코딩 근거는 기록한다(사람 검수에서 재사용).
+    assert refreshed.provider_evidence_json["geocoding"]["decision"]["reason"] == "single_result"
+    # 장소는 생성되지 않는다.
+    places = (await session.execute(select(TravelPlace))).scalars().all()
+    assert places == []
+
+
+async def test_apply_matched_legacy_unknown_transcript_stays_needs_review(session):
+    # 게이트 도입 전 기존 후보(legacy_unknown)도 자동확정 금지 → 사람 검수 요구.
+    candidate = await _make_candidate(
+        session, grounding_status=GroundingStatus.LEGACY_UNKNOWN.value
+    )
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(latitude=33.5563, longitude=126.7958),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ungrounded"
+
+
+async def test_apply_matched_non_transcript_not_gated_by_grounding(session):
+    # 비-transcript 후보(예: url_summary)는 raw segment grounding 규칙 대상이 아니라
+    # grounding이 missing이어도 자동확정이 막히지 않는다(gate는 transcript 전용).
+    candidate = await _make_candidate(
+        session,
+        source_kind=EvidenceSourceKind.URL_SUMMARY.value,
+        grounding_status=GroundingStatus.MISSING.value,
+    )
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563, longitude=126.7958, road_address="제주 ...", source="kakao"
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is not None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
 
 
 def test_names_compatible_rejects_short_partial_names():

@@ -43,17 +43,25 @@ async def _seed_ready_candidate(
     source_target_type: str | None = None,
     source_target_value: str | None = None,
     source_search_query: str | None = None,
+    grounding_status: str | None = None,
+    match_status=None,
 ):
     """확정(`ready`) 후보 1건과 연결 장소/영상/채널을 시드한다."""
     from ktc.models import (
         ExtractedPlaceCandidate,
         FeatureExportStatus,
+        GroundingStatus,
         MatchStatus,
         TravelPlace,
         YoutubeChannel,
         YoutubePlaylist,
         YoutubeVideo,
     )
+
+    # 기본은 자동확정된 verified_raw transcript 후보(export 대상). T-165 게이트가
+    # 기존 export 회귀에 영향을 주지 않도록 grounding을 명시한다.
+    grounding_status = grounding_status or GroundingStatus.VERIFIED_RAW.value
+    match_status = match_status or MatchStatus.MATCHED
 
     channel_id = f"chan-{video_id}"
     async with session_factory() as s:
@@ -112,7 +120,8 @@ async def _seed_ready_candidate(
             timestamp_end="00:04:10",
             confidence_score=0.86,
             candidate_category="해변",
-            match_status=MatchStatus.MATCHED,
+            match_status=match_status,
+            grounding_status=grounding_status,
             matched_place_id=place.place_id,
             feature_export_status=FeatureExportStatus.READY.value,
             provider_evidence_json={
@@ -261,6 +270,36 @@ async def test_snapshot_excludes_pending_candidate(client, session_factory):
     resp = await client.get("/api/v1/features/snapshot")
     assert resp.status_code == 200
     assert resp.json()["items"] == []
+
+
+async def test_snapshot_excludes_ungrounded_auto_matched_transcript(client, session_factory):
+    # T-165 G4 defense-in-depth: 자동확정됐으나 raw grounding 미확인 transcript 후보는
+    # export(snapshot)에서 제외한다.
+    from ktc.models import GroundingStatus
+
+    await _seed_ready_candidate(
+        session_factory, grounding_status=GroundingStatus.UNVERIFIED.value
+    )
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+async def test_snapshot_includes_human_confirmed_ungrounded_transcript(client, session_factory):
+    # 사람이 확정한(user_corrected) 후보는 grounding 미확인이어도 사람 판단이므로 export한다.
+    from ktc.models import GroundingStatus, MatchStatus
+
+    candidate_id, _ = await _seed_ready_candidate(
+        session_factory,
+        grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
+        match_status=MatchStatus.USER_CORRECTED,
+    )
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["candidate_id"] == candidate_id
+    assert body["items"][0]["operation"] == "upsert"
 
 
 async def test_changes_is_stable_without_data_change(client, session_factory):

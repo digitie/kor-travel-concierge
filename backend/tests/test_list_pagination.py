@@ -13,6 +13,7 @@ from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.models import (
     CrawlRun,
     ExtractedPlaceCandidate,
+    GroundingStatus,
     MatchStatus,
     RunSource,
     RunState,
@@ -305,12 +306,13 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
 
     cases = [
         (
+            # raw grounding 미확인 transcript 후보(T-165) — 최우선 사유 ungrounded.
             "원문 불일치",
             "transcript",
             {"transcript": {"grounding_status": "unverified"}},
             None,
             True,
-            "extraction_only",
+            "ungrounded",
         ),
         (
             "이름 불일치",
@@ -468,6 +470,13 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
                 provider_evidence_json=evidence,
                 review_note=review_note,
                 is_domestic=is_domestic,
+                # ungrounded 사유를 테스트하는 케이스만 미확인으로 두고, 그 외 transcript
+                # 케이스는 verified_raw로 두어 각자의 의도한 사유를 격리 검증한다(T-165).
+                grounding_status=(
+                    GroundingStatus.UNVERIFIED.value
+                    if expected == "ungrounded"
+                    else GroundingStatus.VERIFIED_RAW.value
+                ),
             )
             for (
                 name,
