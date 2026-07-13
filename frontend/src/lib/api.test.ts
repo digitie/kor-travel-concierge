@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   groupThemeItems,
   listUnmatchedCandidatesPage,
+  restartRun,
+  stopRun,
+  type RestartRunResult,
+  type StopRunResult,
   type ThemeSummaryItem,
 } from "./api";
 
@@ -78,6 +82,62 @@ describe("listUnmatchedCandidatesPage", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/destinations/unmatched?limit=10&cursor=cursor-1&newer_than_id=7&channel_id=channel-1&playlist_id=playlist-1&keyword=%EC%A0%9C%EC%A3%BC+%EC%97%AC%ED%96%89&reason=name_mismatch&source_kind=transcript",
       expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+});
+
+describe("restartRun", () => {
+  it("재시작 lineage와 멱등 생성 여부를 정확한 응답 계약으로 반환한다", async () => {
+    const responseBody: RestartRunResult = {
+      job_id: "42",
+      state: "pending",
+      restart_of_run_id: "7",
+      created: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result: RestartRunResult = await restartRun("7");
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/runs/7/restart",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+});
+
+describe("stopRun", () => {
+  it("협조적 중지 응답의 실제 경량 계약을 반환한다", async () => {
+    const responseBody: StopRunResult = {
+      job_id: "42",
+      state: "running",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await stopRun("42");
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/runs/42/stop",
+      expect.objectContaining({
+        method: "POST",
         headers: { "Content-Type": "application/json" },
       }),
     );

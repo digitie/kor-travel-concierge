@@ -16,6 +16,7 @@ from ktc.models import (
     MatchStatus,
     MediaAsset,
     PublicApiKey,
+    RunAttention,
     RunSource,
     RunState,
     SystemSetting,
@@ -118,6 +119,32 @@ async def main() -> None:
             started_at=datetime.now(timezone.utc),
             heartbeat_at=datetime.now(timezone.utc),
         )
+        failed_run = CrawlRun(
+            job_type="poi_batch",
+            source=RunSource.WEB,
+            target_type="keyword",
+            target_id="실패 재시작 E2E",
+            state=RunState.FAILED,
+            attention=RunAttention.OPEN,
+            progress=0.57,
+            current_message="장소 추출 중 오류가 발생했습니다.",
+            last_error="E2E 재시작 검증 오류",
+            finished_at=datetime.now(timezone.utc),
+        )
+        quota_deferred_run = CrawlRun(
+            job_type="poi_batch",
+            source=RunSource.WEB,
+            target_type="keyword",
+            target_id="쿼터 보류 E2E",
+            state=RunState.DONE,
+            progress=1.0,
+            current_message="Gemini API 일일 쿼터가 소진되어 작업을 보류했습니다.",
+            result_json=json.dumps(
+                {"processed_videos": 0, "quota_deferred": True},
+                ensure_ascii=False,
+            ),
+            finished_at=datetime.now(timezone.utc),
+        )
         audit = AuditLog(
             actor_type="mcp",
             action="place.correct",
@@ -144,7 +171,18 @@ async def main() -> None:
             timestamp_end="00:01:20",
         )
 
-        session.add_all([candidate, run, queue_run, audit, asset, mapping])
+        session.add_all(
+            [
+                candidate,
+                run,
+                queue_run,
+                failed_run,
+                quota_deferred_run,
+                audit,
+                asset,
+                mapping,
+            ]
+        )
         await session.commit()
 
 

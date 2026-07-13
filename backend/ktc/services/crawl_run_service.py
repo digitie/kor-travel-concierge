@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -49,6 +50,15 @@ _MAX_STAGE_DETAIL_CHARS = 2_000
 # (stage, *, outcome, provider=None, attempt=None, item_ref=None,
 #  started_at=None, finished_at=None, elapsed_ms=None, detail=None)
 StageReporter = Callable[..., Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class StopRunTransition:
+    """행 잠금 안에서 확정한 중지 요청의 결정적 응답 snapshot."""
+
+    run_id: int
+    previous_state: RunState
+    accepted_state: RunState
 
 
 def _clamp_progress(progress: float) -> float:
@@ -445,16 +455,22 @@ async def mark_done(
     run.finished_at = utcnow()
     run.result_json = json.dumps(result, ensure_ascii=False) if result else None
     _append_log_to_run(run, final_message, progress=1.0, level=final_level)
-    # 재시작 run이 done으로 완료되면 원본의 attention을 resolved로 승격한다
-    # (superseded여도 승격 — lineage 추적, T-162). 원본에 attention이 없던
-    # 경우(성공 run의 단순 재실행)는 해소할 실패가 없으므로 그대로 둔다.
-    # 직속 부모(restart_of_run_id)만 resolve한다 — 재시작 체인의 심층 원본은
-    # 이미 superseded(배지 비표시)라 무해하며, leaf attempt 기준(B6) 최신 상태만
-    # 관리하면 충분하다.
-    if run.restart_of_run_id is not None:
-        origin = await session.get(CrawlRun, run.restart_of_run_id)
-        if origin is not None and origin.attention is not None:
-            origin.attention = RunAttention.RESOLVED
+    # 재시작 run이 성공 완료되면 lineage 조상의 attention을 resolved로 승격한다.
+    # quota_deferred는 state만 done인 비성공 종료이므로 원본 실패가 해소되지
+    # 않았다. 이때는 재시작 시 이관한 superseded를 보존한다. 직속 재시작이
+    # 보류된 뒤 그 run을 다시 시작하는 체인에서도 최초 실패까지 해소해야 한다.
+    quota_deferred = result is not None and result.get("quota_deferred") is True
+    if run.restart_of_run_id is not None and not quota_deferred:
+        ancestor_id = run.restart_of_run_id
+        seen = {run.id}
+        while ancestor_id is not None and ancestor_id not in seen:
+            seen.add(ancestor_id)
+            ancestor = await session.get(CrawlRun, ancestor_id)
+            if ancestor is None:
+                break
+            if ancestor.attention is not None:
+                ancestor.attention = RunAttention.RESOLVED
+            ancestor_id = ancestor.restart_of_run_id
     await session.commit()
 
 
@@ -549,6 +565,50 @@ async def acknowledge_attention(session: AsyncSession, run_id: int) -> CrawlRun 
     run.attention = RunAttention.ACKNOWLEDGED
     await session.commit()
     return run
+
+
+async def stop_run(session: AsyncSession, run_id: int) -> StopRunTransition | None:
+    """작업 상태를 잠근 뒤 대기 취소 또는 실행 중지 요청을 원자적으로 적용한다.
+
+    pending claim과 같은 행 잠금을 사용한다. 중지가 먼저 잠그면 claim은 해당 행을
+    건너뛰고, claim이 먼저 완료되면 최신 running 상태에 `cancel_requested`를 건다.
+    terminal 작업이면 `ValueError`, 대상이 없으면 `None`을 반환한다.
+    """
+    run = (
+        await session.execute(
+            select(CrawlRun)
+            .where(CrawlRun.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        return None
+    previous_state = run.state
+    if run.state == RunState.PENDING:
+        run.state = RunState.CANCELLED
+        run.finished_at = utcnow()
+        _append_log_to_run(
+            run,
+            "사용자 요청으로 대기 중 작업을 취소했습니다.",
+            level="warning",
+        )
+    elif run.state == RunState.RUNNING:
+        run.cancel_requested = True
+        _append_log_to_run(
+            run,
+            "사용자 요청으로 작업 중지를 요청했습니다. 곧 중지됩니다.",
+            level="warning",
+        )
+    else:
+        raise ValueError("이미 종료된 작업은 중지할 수 없습니다")
+    transition = StopRunTransition(
+        run_id=run.id,
+        previous_state=previous_state,
+        accepted_state=run.state,
+    )
+    await session.commit()
+    return transition
 
 
 async def cancel_pending(session: AsyncSession, run_id: int) -> CrawlRun | None:

@@ -1,3 +1,5 @@
+import type { CrawlRunSummary, RunAttention, RunOutcome } from "./api";
+
 const HIGH_PRIORITY_QUEUE_REASONS = new Set([
   "ungrounded",
   "name_mismatch",
@@ -21,6 +23,71 @@ export function runStateLabel(state: string | null | undefined): string {
   return labels[key] ?? fallbackLabel(state, "상태 없음");
 }
 
+export function isTerminalRun(state: string | null | undefined): boolean {
+  const key = normalizeKey(state);
+  return key === "done" || key === "failed" || key === "cancelled";
+}
+
+export function runOutcome(
+  run: Pick<CrawlRunSummary, "state" | "result">,
+): RunOutcome {
+  const state = normalizeKey(run.state);
+  if (state === "done") {
+    return run.result?.quota_deferred === true
+      ? "quota_deferred"
+      : "succeeded";
+  }
+  if (state === "failed") return "failed";
+  if (state === "cancelled") return "cancelled";
+  return "active";
+}
+
+export function runOutcomeLabel(
+  run: Pick<CrawlRunSummary, "state" | "result">,
+): string {
+  const labels: Record<RunOutcome, string> = {
+    active: runStateLabel(run.state),
+    succeeded: "완료",
+    quota_deferred: "쿼터 보류",
+    failed: "실패",
+    cancelled: "취소",
+  };
+  return labels[runOutcome(run)];
+}
+
+export function runOutcomeBadgeVariant(
+  run: Pick<CrawlRunSummary, "state" | "result">,
+): "outline" | "secondary" | "destructive" {
+  const outcome = runOutcome(run);
+  if (outcome === "failed" || outcome === "quota_deferred") {
+    return "destructive";
+  }
+  if (outcome === "succeeded") return "secondary";
+  return "outline";
+}
+
+export function runAttentionLabel(
+  attention: RunAttention | null | undefined,
+): string {
+  const labels: Record<RunAttention, string> = {
+    open: "확인 필요",
+    acknowledged: "확인함",
+    superseded: "재시작됨",
+    resolved: "해결됨",
+  };
+  return attention ? labels[attention] : "주의 없음";
+}
+
+export function runAttentionBadgeVariant(
+  attention: RunAttention | null | undefined,
+): "outline" | "secondary" | "destructive" {
+  if (attention === "open") return "destructive";
+  if (attention === "superseded" || attention === "resolved") {
+    return "secondary";
+  }
+  return "outline";
+}
+
 // 작업 상태 → Badge variant. 상태 색 규칙 단일 출처(CollectWorkspace/StatusDashboard/JobLog 공용).
 export function runStateBadgeVariant(
   state: string | null | undefined,
@@ -37,6 +104,15 @@ export function runProgressBarClass(state: string | null | undefined): string {
   if (key === "failed") return "h-full rounded-full bg-destructive";
   if (key === "done") return "h-full rounded-full bg-success";
   return "h-full rounded-full bg-primary";
+}
+
+export function runOutcomeProgressBarClass(
+  run: Pick<CrawlRunSummary, "state" | "result">,
+): string {
+  if (runOutcome(run) === "quota_deferred") {
+    return "h-full rounded-full bg-warning";
+  }
+  return runProgressBarClass(run.state);
 }
 
 export function candidateStatusLabel(status: string | null | undefined): string {

@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-07-13: T-180 — 실패 작업 재시작·실행 중지 UX
+
+- **일관된 작업 제어**: `/status` 이력과 `/jobs/[jobId]` 헤더에 공용 `RunActionButtons`를 배선했다.
+  terminal 작업은 확인 후 재시작하고 running 작업은 확인 후 중지를 요청하며, 요청 중에는 중복 클릭을
+  막는다. mutation 성공·실패 안내는 행 내부가 아니라 상위 `role=status` live 영역에 보존해 invalidate
+  직후 행이 큐에서 사라져도 결과를 읽을 수 있다. 재시작이 기존 active child를 돌려준 경우도 서버의
+  `created` 값을 그대로 안내하고 상세 화면은 해당 child로 이동한다.
+- **결과·주의·계보 분리**: API와 표시 helper의 상태를 exact union으로 좁히고, 실행 state와 실제
+  outcome을 분리했다. `done`이어도 `quota_deferred is true`이면 성공색 대신 경고색과 "쿼터로 처리
+  보류"를 표시한다. `attention`은 별도 badge로, `restart_of_run_id`와 `restarted_by_run_id`는 원본·
+  후속 작업 링크로 노출해 실패를 단순 성공/실패 한 칸으로 뭉개지 않는다.
+- **경쟁 조건 보강**: stop은 대상 row를 `FOR UPDATE`로 잠근 뒤 pending이면 `cancelled`, running이면
+  `cancel_requested`로 전이하고, 잠금 안에서 만든 불변 snapshot으로 응답과 audit의 이전 상태를
+  결정한다. worker claim 또는 즉시 취소 완료와 경합해도 허용된 한 가지 전이만 관측한다. restart는
+  동시 요청에서도 원본당 active child 하나만 만들며, 쿼터 보류 child를 다시 시작한 descendant가
+  성공하면 cycle-safe lineage 순회로 조상의 미해소 attention까지 정리한다. worker와 service는
+  `quota_deferred is True`만 보류로 인정한다.
+- **반복 적대 검토·검증**: backend 상태 머신/동시성, UX/접근성, 계약/E2E 세 렌즈로 2회 이상
+  재검토하고 stop snapshot, deferred lineage, strict bool, exact type, 경고색, 행 unmount 피드백,
+  동시 재시작 회귀를 보완해 최종 P0/P1 0건을 확인했다. 최신 main의 T-163 레인 분리 위로 재배치해
+  원본 lane 복사와 stop-vs-lane claim 잠금 결합을 다시 검토하고, n150에서 관련 backend 113건과 변경 파일
+  Ruff, frontend lint·type-check·Vitest 104건·production build, Playwright 11건 통과(live 4건 skip)를
+  검증했다. backend 전체는 434건 중 433건이 통과했고, 남은 1건은 기존
+  `test_process_harvest_videos_creates_place_from_summarized_poi`의 category 기대(`음식점` 대
+  `unknown`)로 T-180 변경 범위와 무관하다.
+
 ## 2026-07-13: T-163 — 워커 레인 분리 (S1)
 
 - **문제**: 단일 실행자 큐라 긴 poi_batch가 완주할 때까지 사용자가 방금 누른 재처리·deep research가

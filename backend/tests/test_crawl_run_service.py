@@ -80,6 +80,57 @@ async def test_claim_next_pending_allows_single_parallel_claim(session_factory):
         assert refreshed.state == RunState.RUNNING
 
 
+async def test_stop_run_and_pending_claim_are_atomic(session_factory):
+    async with session_factory() as session:
+        run = await svc.create_run(session, job_type="harvest", source="web")
+
+    async def stop_one():
+        async with session_factory() as stop_session:
+            return await svc.stop_run(stop_session, run.id)
+
+    async def claim_one():
+        async with session_factory() as claim_session:
+            return await svc.claim_next_pending(claim_session)
+
+    stopped, claimed = await asyncio.gather(stop_one(), claim_one())
+
+    assert stopped is not None
+    async with session_factory() as verify_session:
+        refreshed = await svc.get_run(verify_session, run.id)
+        if claimed is None:
+            assert stopped.previous_state == RunState.PENDING
+            assert stopped.accepted_state == RunState.CANCELLED
+            assert refreshed.state == RunState.CANCELLED
+            assert refreshed.cancel_requested is False
+        else:
+            assert claimed.id == run.id
+            assert stopped.previous_state == RunState.RUNNING
+            assert stopped.accepted_state == RunState.RUNNING
+            assert refreshed.state == RunState.RUNNING
+            assert refreshed.cancel_requested is True
+
+
+async def test_stop_running_response_snapshot_survives_worker_completion(session_factory):
+    async with session_factory() as session:
+        run = await svc.create_run(session, job_type="harvest", source="web")
+        await svc.claim_next_pending(session)
+        transition = await svc.stop_run(session, run.id)
+
+    assert transition is not None
+    assert transition.previous_state == RunState.RUNNING
+    assert transition.accepted_state == RunState.RUNNING
+
+    async with session_factory() as worker_session:
+        await svc.mark_cancelled(worker_session, run.id)
+    async with session_factory() as verify_session:
+        refreshed = await svc.get_run(verify_session, run.id)
+        assert refreshed.state == RunState.CANCELLED
+
+    # worker가 즉시 마감해도 API/audit가 쓰는 잠금 시점 snapshot은 변하지 않는다.
+    assert transition.previous_state == RunState.RUNNING
+    assert transition.accepted_state == RunState.RUNNING
+
+
 async def test_heartbeat_and_done(session):
     run = await svc.create_run(session, job_type="harvest", source="web")
     await svc.claim_next_pending(session)
@@ -239,11 +290,36 @@ async def test_create_restart_run_idempotent_with_lineage(session):
     assert count == 1
 
 
-async def test_restart_done_resolves_origin_attention(session):
+async def test_create_restart_run_parallel_requests_create_one_child(session_factory):
+    async with session_factory() as session:
+        origin = await _failed_run(session)
+        origin_id = origin.id
+
+    async def restart_once():
+        async with session_factory() as restart_session:
+            run, created = await svc.create_restart_run(
+                restart_session, origin_id, source="web"
+            )
+            return run.id, created
+
+    first, second = await asyncio.gather(restart_once(), restart_once())
+
+    assert first[0] == second[0]
+    assert sorted((first[1], second[1])) == [False, True]
+    async with session_factory() as verify_session:
+        count = await verify_session.scalar(
+            select(func.count())
+            .select_from(CrawlRun)
+            .where(CrawlRun.restart_of_run_id == origin_id)
+        )
+    assert count == 1
+
+
+async def test_restart_successful_done_resolves_origin_attention(session):
     origin = await _failed_run(session)
     restart, _ = await svc.create_restart_run(session, origin.id, source="web")
 
-    await svc.mark_done(session, restart.id)
+    await svc.mark_done(session, restart.id, result={"processed_videos": 3})
 
     refreshed_origin = await svc.get_run(session, origin.id)
     assert refreshed_origin.attention == RunAttention.RESOLVED
@@ -251,6 +327,46 @@ async def test_restart_done_resolves_origin_attention(session):
     third, created = await svc.create_restart_run(session, origin.id, source="web")
     assert created is True
     assert third.id != restart.id
+
+
+async def test_restart_quota_deferred_done_keeps_origin_superseded(session):
+    origin = await _failed_run(session)
+    restart, _ = await svc.create_restart_run(session, origin.id, source="web")
+
+    await svc.mark_done(
+        session,
+        restart.id,
+        result={"processed_videos": 0, "quota_deferred": True},
+        final_message="Gemini API 일일 쿼터가 소진되어 작업을 보류했습니다.",
+        final_level="warning",
+    )
+
+    refreshed_origin = await svc.get_run(session, origin.id)
+    refreshed_restart = await svc.get_run(session, restart.id)
+    assert refreshed_origin.attention == RunAttention.SUPERSEDED
+    assert refreshed_restart.state == RunState.DONE
+    assert '"quota_deferred": true' in (refreshed_restart.result_json or "")
+
+
+async def test_restart_success_after_quota_deferred_resolves_failed_ancestor(session):
+    origin = await _failed_run(session)
+    deferred, _ = await svc.create_restart_run(session, origin.id, source="web")
+    await svc.mark_done(
+        session,
+        deferred.id,
+        result={"processed_videos": 0, "quota_deferred": True},
+    )
+
+    final_attempt, created = await svc.create_restart_run(
+        session, deferred.id, source="web"
+    )
+    assert created is True
+    await svc.mark_done(session, final_attempt.id, result={"processed_videos": 2})
+
+    refreshed_origin = await svc.get_run(session, origin.id)
+    refreshed_deferred = await svc.get_run(session, deferred.id)
+    assert refreshed_origin.attention == RunAttention.RESOLVED
+    assert refreshed_deferred.attention is None
 
 
 async def test_restart_failed_leaves_origin_superseded_and_opens_leaf(session):

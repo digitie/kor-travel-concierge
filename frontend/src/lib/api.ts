@@ -77,14 +77,23 @@ export type SourceTargetSummary = {
   created_at: string | null;
 };
 
+export type RunState =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export type ActiveRunState = Extract<RunState, "pending" | "running">;
+
 export type HarvestJob = {
   job_id: string;
-  state: string;
+  state: RunState;
 };
 
 export type HarvestStatus = {
   job_id: string;
-  state: "pending" | "running" | "done" | "failed" | string;
+  state: RunState;
   progress: number;
   current_message: string | null;
   status_logs: RunStatusLog[];
@@ -98,6 +107,19 @@ export type RunStatusLog = {
   message: string;
   progress: number | null;
 };
+
+export type RunAttention =
+  | "open"
+  | "acknowledged"
+  | "superseded"
+  | "resolved";
+
+export type RunOutcome =
+  | "active"
+  | "succeeded"
+  | "quota_deferred"
+  | "failed"
+  | "cancelled";
 
 export type DestinationSummary = {
   place_id: number;
@@ -187,7 +209,7 @@ export type CrawlRunSummary = {
   target_type_label?: string | null;
   target_label?: string | null;
   job_type_label?: string | null;
-  state: string;
+  state: RunState;
   progress: number;
   current_message: string | null;
   // 입력 payload의 최대 영상 수(진행 중에도 노출). result가 아니라 payload 출처.
@@ -197,6 +219,8 @@ export type CrawlRunSummary = {
   status_logs: RunStatusLog[];
   retry_count: number;
   last_error: string | null;
+  restart_of_run_id: string | null;
+  attention: RunAttention | null;
   result: Record<string, unknown> | null;
   created_at: string;
   started_at: string | null;
@@ -848,14 +872,26 @@ export async function deleteSourceTarget(
   });
 }
 
-export async function stopRun(jobId: string): Promise<HarvestJob> {
-  return requestJson<HarvestJob>(`/api/v1/runs/${jobId}/stop`, {
+export type StopRunResult = {
+  job_id: string;
+  state: "running" | "cancelled";
+};
+
+export async function stopRun(jobId: string): Promise<StopRunResult> {
+  return requestJson<StopRunResult>(`/api/v1/runs/${jobId}/stop`, {
     method: "POST",
   });
 }
 
-export async function restartRun(jobId: string): Promise<HarvestJob> {
-  return requestJson<HarvestJob>(`/api/v1/runs/${jobId}/restart`, {
+export type RestartRunResult = {
+  job_id: string;
+  state: ActiveRunState;
+  restart_of_run_id: string;
+  created: boolean;
+};
+
+export async function restartRun(jobId: string): Promise<RestartRunResult> {
+  return requestJson<RestartRunResult>(`/api/v1/runs/${jobId}/restart`, {
     method: "POST",
   });
 }
