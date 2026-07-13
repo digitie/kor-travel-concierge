@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-07-13: T-169 — whisper 수동 재전사 액션 (D1 STT, 선별 실행)
+
+- **문제**: 자막 최종 실패 영상의 STT 보강 수단이 없다. whisper 기본 ON은 N150 CPU에서 1건 수 분~수십
+  분이라 단일 배치 레인을 장시간 독점(T-121-E)하므로 기본화 기각(§2.2 ③) — 대신 운영자 선별 실행.
+  현행 env 게이트가 `transcribe_via_whisper` 함수 내부라 provider 지정만으론 force 불가, model도 env뿐.
+- **사용자 결정(2026-07-13)**: prod 자동 전사(`TRANSCRIPT_WHISPER_ENABLED`)는 의도된 현행 ON 유지 —
+  **auto 동작·기본값 불변**, 이번 작업은 **수동 force + model 인자 + 상한(caps)만** 구현.
+- **구현**: `transcribe_via_whisper`에 `force`/`model_size`(keyword-only). `force=True`는 env 게이트 우회
+  (`if not force and os.getenv(...)`), `force=False`는 기존 동작 byte-for-byte 불변. model 미지정 시 env
+  `WHISPER_MODEL_SIZE` 기본. 체인 빌더 `whisper_forced_chain(model_size)`, `postprocess_service.
+  _whisper_forced_transcript_fetcher(model_size)` 신설. `worker.poi_batch_handler`가 payload `force_whisper`/
+  `whisper_model`을 읽어 whisper 강제 fetcher 주입(없으면 `_default_transcript_fetcher` 불변). API는 기존
+  `/destinations/reprocess` 재사용 — `ReprocessRequest`에 additive `force_whisper`/`whisper_model`, force 시
+  **batch lane**·model `small` 기본(`WHISPER_MANUAL_MODEL_SIZE`)·duration cap
+  (`TRANSCRIPT_WHISPER_FORCE_MAX_DURATION_SECONDS=1200`, 초과 시 400+위반 video_ids). 스키마 변경 없음
+  (payload 파라미터). `transcript_source='whisper'` 유지. concurrency 1은 batch 레인 단일 워커로 구조적
+  보장(하드 리미터 미구현 — 사용자 결정: 상한만).
+- **적대적 리뷰(PR 전, 2렌즈)**: 확정 BLOCKER/MAJOR 0. 정확성 렌즈 — auto 불변·force 게이트 실제 우회·
+  payload 키 정합·lane·model 전달·테스트 실효 정확 판정. 렌즈 이견 1건 **병합 전 보강**: duration cap이
+  `duration_seconds` NULL/0/음수를 상한 없이 통과 → 라이브 다시보기·프리미어(duration NULL)에 whisper
+  강제 시 wall-clock 타임아웃 없고 `to_thread` 비취소라 수 시간 단일 영상이 batch 단일 레인을 무한 점유
+  (harvest/스캔 기아, T-121-E) → **known positive duration ≤ cap만 통과, NULL/비양수는 400**(테스트 2건
+  추가). 알려진 MINOR(문서화·미수정): 요청당 whisper 건수 상한 부재(기존 reprocess `[:200]` 공통 상한),
+  검수자/운영자 역할 분리 없음(기존 admin-proxy 신뢰 모델과 동일).
+- **범위 경계**: 프런트 "whisper로 재전사" 버튼은 `frontend/*` Agent B 소유이고 codex가 `/jobs/[jobId]`를
+  활발히 수정 중이라 이번 범위에서 제외(Agent B 후속). 필요한 API 계약: `POST /api/v1/destinations/
+  reprocess {video_ids, force_whisper: true, whisper_model?}`.
+- **금지 준수**: auto whisper 동작/기본값 불변, 전 영상 무제한 whisper 없음(선별+duration cap), 기본
+  파이프라인 경로 불변(force=False), routes.py 최소 additive(Agent B 미머지 브랜치 15개와 reprocess
+  영역 미충돌 확인), 스키마 변경 없음.
+- **검증**: 격리 disposable DB backend 전체 pytest 571 passed(pre-existing 1건 외 0), whisper-force
+  테스트 10 passed, `compileall`·`git diff --check` 통과, migration 불필요, 최신 origin/main(#198) 0 behind.
+
 ## 2026-07-13: T-168 — description 단독 후보 경로 (D1 recall)
 
 - **문제**: 자막 3 provider가 전부 실패한 영상은 POI 후보 없이 폐기돼 수율 손실(§1.3 D1). 자막 실패가
