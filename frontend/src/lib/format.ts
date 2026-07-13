@@ -74,6 +74,47 @@ export function durationLabel(seconds: number | null | undefined): string {
   return m > 0 ? `${m}분 ${s}초` : `${s}초`;
 }
 
+/** `MM:SS`·`HH:MM:SS`·범위 문자열의 첫 시각을 YouTube 초 단위로 변환한다. */
+export function timestampToSeconds(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = value.trim().match(
+    /^(?:\[(\d{1,4}):([0-5]\d)(?::([0-5]\d))?\]|(\d{1,4}):([0-5]\d)(?::([0-5]\d))?)(?=\s*(?:$|[-~–—]))/,
+  );
+  if (!match) return null;
+  const first = Number(match[1] ?? match[4]);
+  const second = Number(match[2] ?? match[5]);
+  const thirdValue = match[3] ?? match[6];
+  const third = thirdValue == null ? null : Number(thirdValue);
+  return third == null ? first * 60 + second : first * 3600 + second * 60 + third;
+}
+
+/** video ID를 query parameter로 안전하게 넣은 canonical YouTube watch URL. */
+export function youtubeWatchUrl(
+  videoId: string,
+  timestamp?: string | null,
+): string {
+  const url = new URL("https://www.youtube.com/watch");
+  url.searchParams.set("v", videoId);
+  return timestampedVideoUrl(url.toString(), timestamp);
+}
+
+/** 기존 query/hash를 보존하면서 유효한 근거 시각을 `t=<초>s`로 넣는다. */
+export function timestampedVideoUrl(
+  videoUrl: string,
+  timestamp: string | null | undefined,
+): string {
+  const seconds = timestampToSeconds(timestamp);
+  if (seconds == null) return videoUrl;
+  try {
+    const url = new URL(videoUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return videoUrl;
+    url.searchParams.set("t", `${seconds}s`);
+    return url.toString();
+  } catch {
+    return videoUrl;
+  }
+}
+
 export function asNum(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }

@@ -11,6 +11,7 @@ import {
   getCandidateTranscript,
 } from "@/lib/api";
 import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
+import { timestampedVideoUrl } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -65,9 +66,15 @@ function siblingHref(sibling: {
 export function CandidateDetailView({
   candidateId,
   onDeleted,
+  onDeleteStarted,
+  onDeleteSettled,
+  actionsDisabled = false,
 }: {
   candidateId: number;
-  onDeleted?: () => void;
+  onDeleted?: (candidateId: number) => void | Promise<void>;
+  onDeleteStarted?: (candidateId: number) => void;
+  onDeleteSettled?: () => void;
+  actionsDisabled?: boolean;
 }) {
   const queryClient = useQueryClient();
   const detailQuery = useQuery({
@@ -99,18 +106,21 @@ export function CandidateDetailView({
   }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
     mutationFn: () => deleteCandidate(candidateId),
-    onSuccess: () => {
-      queryClient.setQueriesData(
-        { queryKey: ["unmatched-candidates"] },
-        (old: unknown) =>
-          Array.isArray(old)
-            ? old.filter((item: { id?: number }) => item.id !== candidateId)
-            : old,
-      );
-      queryClient.invalidateQueries({ queryKey: ["unmatched-candidates"] });
+    onMutate: () => {
+      onDeleteStarted?.(candidateId);
+    },
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: ["unmatched-candidates"] });
+      queryClient.invalidateQueries({
+        queryKey: ["unmatched-candidates"],
+        refetchType: "none",
+      });
       queryClient.removeQueries({ queryKey: ["candidate-detail", candidateId] });
       queryClient.removeQueries({ queryKey: ["candidate-transcript", candidateId] });
-      onDeleted?.();
+      await onDeleted?.(candidateId);
+    },
+    onSettled: () => {
+      onDeleteSettled?.();
     },
   });
 
@@ -178,7 +188,7 @@ export function CandidateDetailView({
       {detail.video ? (
         <DetailSection title="동영상">
           <a
-            href={detail.video.url}
+            href={timestampedVideoUrl(detail.video.url, c.timestamp_start)}
             target="_blank"
             rel="noreferrer"
             className="flex max-w-full items-start gap-1 font-medium text-primary hover:underline"
@@ -300,7 +310,7 @@ export function CandidateDetailView({
               type="button"
               size="sm"
               variant="destructive"
-              disabled={deleteMutation.isPending}
+              disabled={deleteMutation.isPending || actionsDisabled}
               onClick={() => deleteMutation.mutate()}
             >
               {deleteMutation.isPending ? (
@@ -322,6 +332,7 @@ export function CandidateDetailView({
             type="button"
             size="sm"
             variant="outline"
+            disabled={actionsDisabled}
             onClick={() => setConfirmDelete(true)}
           >
             <Trash2Icon data-icon="inline-start" />
@@ -337,4 +348,3 @@ export function CandidateDetailView({
     </div>
   );
 }
-

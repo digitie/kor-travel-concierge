@@ -467,6 +467,133 @@ test.describe('장소 cursor 페이지네이션 E2E 검증', () => {
   });
 });
 
+test.describe('검수 큐 자동 진행 E2E 검증', () => {
+  test.skip(
+    process.env.KTC_LIVE_E2E === '1',
+    'live 모드에서는 browser API mock 기반 스펙을 건너뛴다.',
+  );
+
+  test('저장·제외·개별 삭제 뒤 visible 다음 후보를 검색하고 마지막 page에서 완료한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page);
+
+    await loginAsAdmin(page, '/review');
+
+    const searchInput = page.getByPlaceholder(
+      '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
+    );
+    await expect(searchInput).toHaveValue('자동 후보 1');
+    for (const name of ['자동 후보 1', '자동 후보 2', '자동 후보 3']) {
+      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+    }
+    await page.waitForTimeout(250);
+    expect(requests.searchQueries).toEqual([]);
+
+    await expect(page.getByRole('link', { name: /영상 보기/ })).toHaveAttribute(
+      'href',
+      'https://www.youtube.com/watch?v=review-video-1&t=754s',
+    );
+
+    const hideForeign = page.getByRole('switch', {
+      name: '해외(국내 아님) 후보 숨기기',
+    });
+    await hideForeign.click();
+    await expect(hideForeign).toBeChecked();
+    await expect(searchInput).toHaveValue('자동 후보 1');
+
+    const firstRow = page.getByRole('row', { name: /자동 후보 1/ });
+    await expect(firstRow).toHaveAttribute('aria-selected', 'true');
+    await firstRow.click();
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 1');
+    await page
+      .getByRole('button', { name: /^검색 결과 자동 후보 1/ })
+      .click();
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+
+    await expect.poll(() => requests.resolveBodies.length).toBe(1);
+    expect(requests.resolveBodies[0]).toMatchObject({ action: 'create_place' });
+    await expect(searchInput).toHaveValue('자동 후보 2');
+    await expect(page.getByRole('row', { name: /자동 후보 2/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 2');
+
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await expect.poll(() => requests.resolveBodies.length).toBe(2);
+    expect(requests.resolveBodies[1]).toMatchObject({ action: 'ignore' });
+    await expect(searchInput).toHaveValue('자동 후보 3');
+    await expect(page.getByRole('row', { name: /자동 후보 3/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 3');
+
+    await page
+      .getByRole('button', { name: '자동 후보 3 후보 삭제', exact: true })
+      .click();
+    await page.getByRole('button', { name: '삭제', exact: true }).click();
+    await expect.poll(() => requests.deleteCandidateIds).toEqual([3]);
+
+    await expect.poll(() => requests.listCursors).toContain('review-page-2');
+    await expect.poll(() => requests.listCursors).toContain('review-page-3');
+    await expect(searchInput).toHaveValue('자동 후보 4');
+    await expect.poll(() => requests.searchQueries).toContain('자동 후보 4');
+    await expect(
+      page.getByRole('row', { name: /해외 숨김 후보/ }),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: '제외', exact: true }).click();
+    await expect.poll(() => requests.resolveBodies.length).toBe(3);
+    expect(requests.resolveBodies.map((body) => body.action)).toEqual([
+      'create_place',
+      'ignore',
+      'ignore',
+    ]);
+    expect(requests.resolveCandidateIds).toEqual([1, 2, 4]);
+    await expect(
+      page
+        .getByRole('status')
+        .filter({ hasText: '현재 표시 조건의 검수 후보를 모두 처리했습니다.' })
+        .first(),
+    ).toBeVisible();
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('첫 page가 숨김 후보뿐이면 국내 후보가 나올 때까지 자동 탐색한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      initialHiddenOnly: true,
+    });
+
+    await loginAsAdmin(page, '/review');
+
+    const hideForeign = page.getByRole('switch', {
+      name: '해외(국내 아님) 후보 숨기기',
+    });
+    await hideForeign.click();
+    await expect(hideForeign).toBeChecked();
+    await expect.poll(() => requests.listCursors).toContain(
+      'review-initial-page-2',
+    );
+    await expect(page.getByRole('row', { name: /뒤 page 국내 후보/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(
+      page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
+    ).toHaveValue('뒤 page 국내 후보');
+    await page.waitForTimeout(250);
+    expect(requests.searchQueries).toEqual([]);
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+});
+
 function seedE2EData() {
   const databaseUrl =
     process.env.KTC_E2E_DATABASE_URL ??
@@ -537,6 +664,174 @@ async function loginAsAdminWithQuery(page: Page, nextPath: string) {
       url.pathname === expectedURL.pathname && url.search === expectedURL.search,
     { timeout: 10_000 },
   );
+}
+
+async function installReviewQueueMock(
+  page: Page,
+  options: { initialHiddenOnly?: boolean } = {},
+) {
+  const requests = {
+    listCursors: [] as Array<string | null>,
+    searchQueries: [] as string[],
+    resolveBodies: [] as Array<Record<string, unknown>>,
+    resolveCandidateIds: [] as number[],
+    deleteCandidateIds: [] as number[],
+  };
+
+  await page.route('**/api/v1/destinations/unmatched**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === '/api/v1/destinations/unmatched') {
+      const cursor = url.searchParams.get('cursor');
+      requests.listCursors.push(cursor);
+      const envelope = options.initialHiddenOnly
+        ? cursor === null
+          ? reviewQueueEnvelope(
+              [reviewCandidateFixture(91, '첫 page 해외 후보', false)],
+              'review-initial-page-2',
+            )
+          : cursor === 'review-initial-page-2'
+            ? reviewQueueEnvelope([
+                reviewCandidateFixture(5, '뒤 page 국내 후보'),
+              ])
+            : null
+        : cursor === null
+          ? reviewQueueEnvelope(
+              [
+                reviewCandidateFixture(1, '자동 후보 1', true, '12:34-13:00'),
+                reviewCandidateFixture(2, '자동 후보 2'),
+                reviewCandidateFixture(3, '자동 후보 3'),
+              ],
+              'review-page-2',
+            )
+          : cursor === 'review-page-2'
+            ? reviewQueueEnvelope(
+                [reviewCandidateFixture(90, '해외 숨김 후보', false)],
+                'review-page-3',
+              )
+            : cursor === 'review-page-3'
+              ? reviewQueueEnvelope([reviewCandidateFixture(4, '자동 후보 4')])
+              : null;
+      if (!envelope) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(envelope),
+      });
+      return;
+    }
+
+    const resolveMatch = url.pathname.match(
+      /^\/api\/v1\/destinations\/unmatched\/(\d+)\/resolve$/,
+    );
+    if (resolveMatch && request.method() === 'POST') {
+      requests.resolveCandidateIds.push(Number(resolveMatch[1]));
+      requests.resolveBodies.push(
+        request.postDataJSON() as Record<string, unknown>,
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'resolved' }),
+      });
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.route('**/api/v1/destinations/candidates/*', async (route) => {
+    const request = route.request();
+    const deleteMatch = new URL(request.url()).pathname.match(
+      /^\/api\/v1\/destinations\/candidates\/(\d+)$/,
+    );
+    if (deleteMatch && request.method() === 'DELETE') {
+      requests.deleteCandidateIds.push(Number(deleteMatch[1]));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ deleted: true, id: Number(deleteMatch[1]) }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.route('**/api/v1/place-search?**', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q') ?? '';
+    requests.searchQueries.push(query);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(reviewSearchResult(query)),
+    });
+  });
+
+  return requests;
+}
+
+function reviewQueueEnvelope(
+  items: ReturnType<typeof reviewCandidateFixture>[],
+  nextCursor: string | null = null,
+) {
+  return {
+    items,
+    next_cursor: nextCursor,
+    has_more: nextCursor !== null,
+    total: 5,
+    newest_id: 90,
+    newer_than: 0,
+  };
+}
+
+function reviewCandidateFixture(
+  id: number,
+  name: string,
+  isDomestic = true,
+  timestampStart = '00:10',
+) {
+  return {
+    id,
+    video_id: `review-video-${id}`,
+    ai_place_name: name,
+    location_hint: null,
+    candidate_category: '카페',
+    candidate_category_code: '0',
+    match_status: 'needs_review',
+    timestamp_start: timestampStart,
+    is_domestic: isDomestic,
+  };
+}
+
+function reviewSearchResult(query: string) {
+  return {
+    query,
+    searched_at: '2026-07-13T03:00:00Z',
+    google: [],
+    kakao: [
+      {
+        provider: 'kakao',
+        native_id: `review-${query}`,
+        name: `검색 결과 ${query}`,
+        address: `테스트 주소 ${query}`,
+        road_address: null,
+        latitude: 33.45,
+        longitude: 126.55,
+        category: null,
+        storage_allowed: true,
+        storage_block_reason: null,
+      },
+    ],
+    naver: [],
+    errors: {},
+  };
 }
 
 async function installDestinationPaginationMock(

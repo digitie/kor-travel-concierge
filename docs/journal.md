@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-13: T-179 — 검수 자동 다음 후보와 근거 시각 링크
+
+- **연속 검수 흐름**: 저장·제외·개별 행/상세 삭제 성공 시 처리 시작 시점의 visible 후보 순서와
+  로드된 page 수를 snapshot으로 보존한다. 같은 인덱스의 다음 후보, 없으면 이전 후보를 고르고,
+  미로드 page가 있으면 숨김 후보만 있는 page도 건너뛰어 첫 visible 후보 또는 마지막 page까지
+  자동 탐색한다. 마지막 page의 현재 표시 조건에 후보가 없을 때만 완료로 표시한다.
+- **사용자 조작 우선**: 최초·딥링크 프리셀렉트는 `autoSearch: false`, 처리 성공 뒤 이동은 자동
+  검색으로 구분했다. 사용자가 행을 직접 고르면 진행 중 page 탐색과 과거 `?candidate=`를 취소해
+  늦은 응답이 입력을 덮지 않는다. polling이 선택 후보를 현재 page 밖으로 밀어도 후보·폼·검색
+  근거 snapshot을 유지하고, scope 변경·대량 삭제·완료 시에만 명시적으로 해제한다.
+- **경쟁 조건·실패 복구**: resolve/delete 성공 전에 검수 query의 in-flight 응답을 취소하고 scope·
+  candidate identity를 확인한다. 상세 삭제는 시작 시 snapshot을 잡고 pending 동안 modal close와
+  다른 상세 action을 잠근다. 첫 page·다음 page·cursor 계약·딥링크 탐색 실패는 빈 큐로 숨기지
+  않고 오류와 재시도를 제공하며, 늦은 실패는 후보 이름과 함께 queue 수준에 귀속한다.
+- **근거 링크·검증**: `MM:SS`, `HH:MM:SS`, 범위 문자열의 첫 시각만 엄격히 파싱하고 잘못된 분·초·
+  괄호·prefix는 거절한다. 목록과 상세 YouTube URL은 기존 query/hash를 보존한 채 `t=<초>s`를
+  `URLSearchParams`로 넣는다. 적대적 검토를 세 차례 반복해 최종 P0/P1 0건을 확인했고, n150에서
+  frontend lint·type-check·Vitest·production build와 Playwright 저장·제외·개별 삭제·숨김 page
+  자동 탐색 시나리오를 검증했다.
+
 ## 2026-07-13: T-178 — 장소 101/501번째 cursor 접근과 page 밖 상세
 
 - **결과 화면 page 전환**: 기존 첫 100개 배열 조회를 `useInfiniteQuery`와
