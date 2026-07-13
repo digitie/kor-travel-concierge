@@ -561,6 +561,11 @@ async def apply_geocode_to_candidate(
         ):
             place.category_code_suggestion = code
             place.category = category_catalog.label_for_or_unknown(code)
+            # 재사용 place의 카테고리가 실제 채워지면 그 place의 co-매칭 후보 export도
+            # stale해지므로 전부 dirty로 표시한다(golden 불변식, T-171).
+            await feature_export_service.mark_place_candidates_dirty(
+                session, place.place_id, reason="geocode_reuse_backfill"
+            )
     else:
         road, official = c.road_address, c.official_address
         if (

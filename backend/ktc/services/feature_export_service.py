@@ -325,6 +325,31 @@ async def mark_candidates_dirty(
     await session.execute(stmt)
 
 
+async def mark_place_candidates_dirty(
+    session: AsyncSession, place_id: int | None, reason: str
+) -> None:
+    """`place_id`에 매칭된(soft delete 안 된) **모든** 후보를 dirty outbox에 표시한다(T-171).
+
+    한 확정 장소에는 여러 후보가 co-매칭될 수 있고, export payload의 place_block은 그 장소
+    필드에서 만들어진다. 따라서 장소의 payload 관련 필드(이름·설명·주소·카테고리·좌표 등)를
+    바꾸는 mutation은 현재 후보만이 아니라 **그 장소에 매칭된 후보 전부**를 dirty로 표시해야
+    dirty sync 결과가 전량 sync와 같아진다(golden 불변식). 그렇지 않으면 co-매칭 후보의
+    export가 안전망 reconcile 전까지 stale해진다. 변경이 실제로 있을 때만 호출하는 것은
+    호출자 책임이다(불필요 churn 방지). 같은 트랜잭션에서 호출하고 commit은 호출자 몫이다.
+    """
+    if place_id is None:
+        return
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.matched_place_id == place_id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    await mark_candidates_dirty(session, list(ids), reason)
+
+
 async def _next_sequence(session: AsyncSession) -> int:
     value = await session.scalar(select(feature_export_sequence.next_value()))
     return int(value)

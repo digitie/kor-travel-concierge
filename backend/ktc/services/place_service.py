@@ -1048,17 +1048,9 @@ async def correct_place(
         place.legal_dong_name = None
     place.last_reviewed_at = utcnow()
     # 확정 장소 보정이 export payload(이름·좌표·주소·카테고리·설명)를 바꾸므로, 이 장소를
-    # 매칭한 후보를 dirty로 표시해 다음 공급 GET에 반영한다(T-171).
-    matched_candidate_ids = (
-        await session.execute(
-            select(ExtractedPlaceCandidate.id).where(
-                ExtractedPlaceCandidate.matched_place_id == place.place_id,
-                ExtractedPlaceCandidate.deleted_at.is_(None),
-            )
-        )
-    ).scalars().all()
-    await feature_export_service.mark_candidates_dirty(
-        session, list(matched_candidate_ids), reason="correct_place"
+    # 매칭한 후보 전부를 dirty로 표시해 다음 공급 GET에 반영한다(T-171, 공용 헬퍼).
+    await feature_export_service.mark_place_candidates_dirty(
+        session, place.place_id, reason="correct_place"
     )
     if commit:
         corrected_place_id = place.place_id
@@ -1146,6 +1138,7 @@ async def merge_places(
     for asset in moved_assets:
         asset.place_id = target_place_id
 
+    target_backfilled = False
     for field in (
         "description",
         "gemini_enriched_description",
@@ -1157,6 +1150,7 @@ async def merge_places(
     ):
         if not getattr(target, field) and getattr(source, field):
             setattr(target, field, getattr(source, field))
+            target_backfilled = True
     target.last_reviewed_at = utcnow()
     await session.delete(source)
     # source→target으로 재배치된 후보의 export payload(place 이름·좌표·주소)가 바뀌므로
@@ -1166,6 +1160,12 @@ async def merge_places(
         [candidate.id for candidate in moved_candidates],
         reason="merge_places",
     )
+    # target place 필드가 backfill로 실제 바뀌면, target에 이미 매칭돼 있던 co-매칭 후보들의
+    # export payload도 바뀌므로 그 후보 전부를 dirty로 표시한다(golden 불변식, T-171).
+    if target_backfilled:
+        await feature_export_service.mark_place_candidates_dirty(
+            session, target_place_id, reason="merge_target_backfill"
+        )
     if commit:
         await session.commit()
         await session.refresh(target)
@@ -1493,6 +1493,9 @@ async def resolve_candidate(
     mapping: VideoPlaceMapping | None = None
     nearby_decision: str | None = None
     nearby_place_ids: list[int] = []
+    # 재사용(기존) place의 payload 필드가 실제로 바뀌었는지. 바뀌면 그 place의 co-매칭 후보
+    # 전부를 dirty로 표시해야 golden 불변식을 지킨다(T-171).
+    reused_place_field_changed = False
     if action == "ignore":
         candidate.match_status = MatchStatus.IGNORED
         candidate.feature_export_status = FeatureExportStatus.REJECTED.value
@@ -1515,6 +1518,8 @@ async def resolve_candidate(
             None,
             category_catalog.UNKNOWN_CATEGORY_CODE,
         ):
+            if place.category_code_suggestion != code:
+                reused_place_field_changed = True
             place.category_code_suggestion = code
             place.category = category_catalog.label_for_or_unknown(code)
         candidate.match_status = MatchStatus.USER_CORRECTED
@@ -1589,6 +1594,11 @@ async def resolve_candidate(
                 or place.category_code_suggestion
                 in (None, category_catalog.UNKNOWN_CATEGORY_CODE)
             ):
+                if (
+                    place.category_code_suggestion != selected_code
+                    or place.category != selected_label
+                ):
+                    reused_place_field_changed = True
                 place.category_code_suggestion = selected_code
                 place.category = selected_label
         else:
@@ -1639,6 +1649,12 @@ async def resolve_candidate(
     await feature_export_service.mark_candidates_dirty(
         session, [candidate.id], reason=f"resolve:{action}"
     )
+    # 재사용 place의 카테고리 필드가 실제 바뀌면 그 place의 co-매칭 후보 전부도 stale해지므로
+    # 함께 dirty로 표시한다(golden 불변식, T-171).
+    if reused_place_field_changed and place is not None:
+        await feature_export_service.mark_place_candidates_dirty(
+            session, place.place_id, reason="resolve_reuse_backfill"
+        )
     if commit:
         resolved_place_id = place.place_id if place is not None else None
         await session.commit()
