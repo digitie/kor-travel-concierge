@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
 - [ ] **T-167**: 중복 병합 제안 + auto-match audit 표본 — 자동 병합 금지(provider ID·주소 일치의 좁은 경우만 후속), 병합 제안 큐, 오병합률 수동 표본, auto-match audit 큐(자동확정 정밀도 지표). 선행: T-166. (PR-14 개정판, G9)
 - [ ] **T-168**: description 단독 후보 경로 — 자막 최종 실패 시 검수 전용 후보 생성(자동확정 금지), 승인율·중복률·처리시간 별도 측정, Phase -1 정합. 선행: T-164. (PR-17 개정판)
 - [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판) — **사용자 결정(2026-07-13)**: prod 자동 전사는 의도된 현행(ON) 유지, auto 기본값 결정 완료 — 수동 force·model 인자·상한만 구현
@@ -55,6 +54,18 @@
 
 ## 완료
 
+- [x] **T-166**: 자동확정 identity gate — T-165 grounding과 함께 자동확정 조건을 완성했다(§10 B3, G4).
+  지오코딩 결과를 `result_kind`(poi|address|coordinate)로 구분(`GeocodeResultKind`), any-pair
+  `_names_compatible`를 pairwise `_names_match`로 분리해 신규 장소 경로에 이름 게이트 강제(D2/C8 해소),
+  행정구역 게이트(`region_gate.py` — 17개 시도 명시 alias, 최장 surface 우선 매칭, 역지오코딩 추가
+  호출 없음, D4 해소), `is_domestic` None/False fail-closed(D7), 게이트 통과 후보 정확히 1개면
+  ambiguous 자동확정(ADR-38로 ADR-16 경계 좁힘). **자동확정 = grounding + 이름 + 행정구역 + is_domestic
+  네 불리언 게이트 AND** — 가중 합성 점수 미도입(§2.4-4). 2렌즈 적대적 리뷰: **MAJOR 2**(① VWorld
+  주경로의 address kind가 이름 무검증 자동확정 → G4 위반 → **address/coordinate 신규 장소는 identity
+  검증 불가로 needs_review 격상**; ② ambiguous 경로가 unrefined 좌표 echo 재승격 → 단건 가드와 대칭
+  차단)·MINOR 반영. 검증: 격리 DB backend pytest pre-existing 1건 외 0, 타깃 73 passed. **동작 변화**:
+  VWorld address 결과 신규 장소가 needs_review로 가 검수 큐가 늘 수 있음(의도된 정밀도 우선, 근본
+  수리=POI 검색 경로 우선순위화는 백로그, 자동확정률은 T-169 실측). (2026-07-13, 로드맵 PR-12 개정·§10 B3·G4·§1.3 D2/D4, ADR-38)
 - [x] **T-165**: raw grounding 게이트 — 원 PR-13이 교정본(생성 모델 산출물)을 검사하던 것을 T-164가
   보존한 **raw 자막 segment** 대조로 격상했다(§10 B3). batch POI 스키마에 `evidence_quote`·`confidence`
   추가, `grounding.py`가 quote를 raw(교정 이전)와 대조해 `grounding_status` enum(verified_raw|unverified|

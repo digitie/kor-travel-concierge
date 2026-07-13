@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-13: T-166 — 자동확정 identity gate (B3/D2/D4)
+
+- **문제**: 지오코딩 자동확정이 Kakao 키워드 단일 결과면 무조건 matched/1.0, 신규 장소 생성 경로는
+  이름 무검증 통과(D2), `_names_compatible`가 any-pair true(C8), 좌표-행정구역 교차검증 없음(D4),
+  is_domestic None→true 간주(D7). T-113 라이브 점검에서 쓰레기 POI 자동확정 대량 발견 전력.
+- **구현**: result_kind(poi|address|coordinate) 구분, pairwise 이름 게이트(신규 장소 강제),
+  행정구역 게이트(region_gate.py 17개 시도 명시 alias·최장 surface 우선·reverse 추가 호출 없음),
+  is_domestic fail-closed, ambiguous 단일 게이트 통과 자동확정. **자동확정 = grounding(T-165) + 이름 +
+  행정구역 + is_domestic 네 불리언 AND**, 합성 점수 없음(§2.4-4). ADR-38로 ADR-16 경계 좁힘 명문화.
+- **적대적 리뷰(PR 전, 2렌즈) — MAJOR 2건**: ① VWorld(최우선 지오코더)가 정제 **주소**(address kind)를
+  반환하는데 address kind가 이름 게이트를 skip해 이름 무검증으로 confidence 1.0 자동확정 → G4 위반·D2
+  부분 해소. 수정: **신규 장소 자동확정은 POI identity 검증(poi kind 이름 통과 또는 근접 재사용 기존명
+  대조)을 요구**하고, address/coordinate 신규 결과는 needs_review(name_unverified)로 격상. ② ambiguous
+  경로가 `refined` 미확인으로 VWorld unrefined 좌표 echo를 재승격(단건은 vworld_unrefined_single로 차단)
+  → poi-only 제한 + 명시 refined 가드로 대칭 차단. MINOR(FOREIGN 라벨 vs 벌크 제외 대상 불일치는
+  ADR-38 인지 기록, 벌크는 PR-10 Agent B 소유라 보류) 반영.
+- **소급 없음**: 게이트는 apply_geocode_to_candidate(신규 지오코딩 시점)에만 적용, 기존 MATCHED 재평가
+  sweep 없음(T-165 legacy 보존 원칙 준수).
+- **검증**: 격리 DB backend pytest pre-existing 1건 외 0, 타깃 73 passed, `git diff --check` 통과.
+- **동작 변화·후속**: VWorld address 결과 신규 장소가 needs_review로 가 검수 큐가 늘 수 있음(의도된
+  정밀도 우선 트레이드오프). 근본 수리(VWorld get_coord 주소 전용 API에 장소명 질의를 넣는 설계
+  부정합 → POI 검색 경로 우선순위화)는 로드맵 백로그, 자동확정률 하락 폭은 T-169 baseline live yield로 실측.
+
 ## 2026-07-13: T-165 — raw grounding 게이트 (B3)
 
 - **문제**: 원 PR-13은 `evidence_quote`를 LLM 교정 자막에서 검사했으나 교정본도 생성 모델 산출물이라

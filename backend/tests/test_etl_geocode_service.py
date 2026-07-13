@@ -6,7 +6,7 @@ import json
 
 from sqlalchemy import select
 
-from ktc.etl.geocode_service import _names_compatible, apply_geocode_to_candidate
+from ktc.etl.geocode_service import _names_match, apply_geocode_to_candidate
 from ktc.etl.geocoding import GeocodeCandidate, GeocodeDecision
 from ktc.models import (
     EvidenceSourceKind,
@@ -29,6 +29,10 @@ async def _make_candidate(
     # T-165 게이트에 걸리지 않아야 한다(자동확정 경로 회귀).
     grounding_status=GroundingStatus.VERIFIED_RAW.value,
     source_kind=EvidenceSourceKind.TRANSCRIPT.value,
+    # T-166 is_domestic fail-closed 게이트가 매칭 로직 회귀 테스트를 막지 않도록 기본은
+    # 명시적 국내(True)로 둔다. None fail-closed는 전용 테스트에서만 검증한다.
+    is_domestic=True,
+    location_hint=None,
 ):
     session.add(YoutubeVideo(video_id="v1", title="t", url="u", channel_id="c"))
     await session.commit()
@@ -37,6 +41,8 @@ async def _make_candidate(
         match_status=MatchStatus.NEEDS_REVIEW,
         source_kind=source_kind,
         grounding_status=grounding_status,
+        is_domestic=is_domestic,
+        location_hint=location_hint,
     )
     session.add(c)
     await session.commit()
@@ -45,11 +51,16 @@ async def _make_candidate(
 
 
 async def test_apply_matched_creates_place(session):
+    # 신규 장소 자동확정은 POI identity 검증을 요구한다(G4/D2). poi 결과 + 이름 일치.
     candidate = await _make_candidate(session)
     decision = GeocodeDecision(
         status="matched",
         candidate=GeocodeCandidate(
-            latitude=33.5563, longitude=126.7958, road_address="제주 구좌읍 ...", source="kakao"
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",
+            road_address="제주 구좌읍 ...",
+            source="kakao_keyword",
         ),
         confidence=1.0,
         reason="single_result",
@@ -67,7 +78,8 @@ async def test_apply_matched_creates_place(session):
     assert refreshed.reviewed_at is not None
     assert refreshed.feature_export_status == FeatureExportStatus.READY
     assert refreshed.provider_evidence_json["geocoding"]["decision"]["reason"] == "single_result"
-    assert refreshed.provider_evidence_json["geocoding"]["selected_candidate"]["source"] == "kakao"
+    assert refreshed.provider_evidence_json["geocoding"]["selected_candidate"]["source"] == "kakao_keyword"
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["name_gate"] == "poi_match"
     mapping = (await session.execute(select(VideoPlaceMapping))).scalars().one()
     assert mapping.video_id == candidate.video_id
     assert mapping.place_id == place.place_id
@@ -83,7 +95,11 @@ async def test_apply_matched_copies_category_code_from_evidence(session):
     decision = GeocodeDecision(
         status="matched",
         candidate=GeocodeCandidate(
-            latitude=33.5563, longitude=126.7958, road_address="제주 구좌읍", source="kakao"
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 해변",
+            road_address="제주 구좌읍",
+            source="kakao_keyword",
         ),
         confidence=1.0,
         reason="single_result",
@@ -97,7 +113,12 @@ async def test_apply_matched_uses_unknown_when_evidence_missing(session):
     candidate = await _make_candidate(session)  # evidence에 category_code 없음
     decision = GeocodeDecision(
         status="matched",
-        candidate=GeocodeCandidate(latitude=33.5563, longitude=126.7958, source="kakao"),
+        candidate=GeocodeCandidate(
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",
+            source="kakao_keyword",
+        ),
         confidence=1.0,
         reason="single_result",
         candidate_count=1,
@@ -245,7 +266,11 @@ async def test_apply_matched_non_transcript_not_gated_by_grounding(session):
     decision = GeocodeDecision(
         status="matched",
         candidate=GeocodeCandidate(
-            latitude=33.5563, longitude=126.7958, road_address="제주 ...", source="kakao"
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",
+            road_address="제주 ...",
+            source="kakao_keyword",
         ),
         confidence=1.0,
         reason="single_result",
@@ -257,22 +282,34 @@ async def test_apply_matched_non_transcript_not_gated_by_grounding(session):
     assert refreshed.match_status == MatchStatus.MATCHED
 
 
-def test_names_compatible_rejects_short_partial_names():
-    assert _names_compatible("월정리 카페", "월정리카페")
-    assert not _names_compatible("카페", "월정리카페")
-    assert not _names_compatible("성산", "성산일출봉")
+def test_names_match_rejects_short_partial_names():
+    assert _names_match("월정리 카페", "월정리카페")
+    assert not _names_match("카페", "월정리카페")
+    assert not _names_match("성산", "성산일출봉")
 
 
-def test_names_compatible_allows_specific_contained_aliases():
-    assert _names_compatible("월정리 카페", "월정리 카페 본점")
-    assert _names_compatible("감천문화마을", "부산 감천문화마을")
+def test_names_match_allows_specific_contained_aliases():
+    assert _names_match("월정리 카페", "월정리 카페 본점")
+    assert _names_match("감천문화마을", "부산 감천문화마을")
+
+
+def test_names_match_requires_both_names():
+    # pairwise: 한쪽이 비면 검증 불가 → False (any-pair 문제 C8 제거).
+    assert not _names_match("월정리 카페", None)
+    assert not _names_match(None, "월정리 카페")
+    assert not _names_match("", "월정리 카페")
 
 
 async def test_apply_uses_vworld_for_address_enrichment(session):
     candidate = await _make_candidate(session)
     decision = GeocodeDecision(
         status="matched",
-        candidate=GeocodeCandidate(latitude=33.5563, longitude=126.7958),  # 주소 없음
+        candidate=GeocodeCandidate(
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",  # poi 결과(주소는 아래 vworld reverse로 보강)
+            source="kakao_keyword",
+        ),
         confidence=1.0,
         reason="single_result",
         candidate_count=1,
@@ -289,3 +326,409 @@ async def test_apply_uses_vworld_for_address_enrichment(session):
     )
     assert place.road_address == "도로명주소"
     assert place.official_address == "지번주소"
+
+
+# --- T-166 identity 게이트: 이름(result_kind별) ---
+
+
+async def test_apply_new_place_poi_name_mismatch_blocks(session):
+    # 신규 장소 생성 경로(D2)에서도 poi 결과의 provider명이 AI명과 다르면 자동확정 금지.
+    candidate = await _make_candidate(session, name="스타벅스 강남점")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=37.4979,
+            longitude=127.0276,
+            place_name="투썸플레이스 강남점",  # 다른 상호
+            source="kakao_keyword",  # → result_kind=poi
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "name_mismatch"
+    identity = refreshed.provider_evidence_json["geocoding"]["identity"]
+    assert identity["result_kind"] == "poi"
+    assert identity["name_gate"] == "name_mismatch"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_apply_new_place_poi_name_match_creates_place(session):
+    candidate = await _make_candidate(session, name="스타벅스 강남점")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=37.4979,
+            longitude=127.0276,
+            place_name="스타벅스 강남점",
+            road_address="서울특별시 강남구 강남대로",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is not None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["name_gate"] == "poi_match"
+
+
+async def test_apply_address_result_new_place_blocks_as_unverified(session):
+    # 신규 장소 + 주소 결과(place_name이 주소): POI identity 검증 불가 → 자동확정 금지
+    # (G4/D2). place_name이 POI명이 아니므로 name_unverified를 차단 사유로 격상한다.
+    candidate = await _make_candidate(session, name="부산역 국밥집")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=35.1151,
+            longitude=129.0423,
+            place_name="부산광역시 동구 중앙대로 206",  # POI명이 아니라 주소
+            road_address="부산광역시 동구 중앙대로 206",
+            source="kakao",  # → result_kind=address
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "name_unverified"
+    assert refreshed.feature_export_status == FeatureExportStatus.PENDING
+    identity = refreshed.provider_evidence_json["geocoding"]["identity"]
+    assert identity["result_kind"] == "address"
+    assert identity["name_gate"] == "name_unverified"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_apply_address_result_reuses_nearby_without_poi_name(session):
+    # 근접 중복 재사용 경로는 기존 장소명으로 검증되므로 address 결과라도 자동확정된다
+    # (G4/D2 예외 — POI 이름 게이트가 아니라 기존명 대조로 identity가 검증됨).
+    existing = TravelPlace(
+        name="부산역 국밥집", latitude=35.1151, longitude=129.0423, is_geocoded=True
+    )
+    session.add(existing)
+    await session.commit()
+    candidate = await _make_candidate(session, name="부산역 국밥집")
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=35.11512,
+            longitude=129.04232,  # ~약 3m
+            place_name="부산광역시 동구 중앙대로 206",
+            road_address="부산광역시 동구 중앙대로 206",
+            source="kakao",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is not None
+    assert place.place_id == existing.place_id
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["name_gate"] == "nearby_match"
+
+
+# --- T-166 identity 게이트: 행정구역 ---
+
+
+async def test_apply_region_mismatch_blocks(session):
+    # hint는 대구인데 확정 주소가 서울 → region_mismatch로 검수 큐. poi 결과 + 이름 일치로
+    # 이름 게이트를 통과시켜 행정구역 게이트가 실제 차단 사유가 되게 한다.
+    candidate = await _make_candidate(
+        session, name="어떤 맛집", location_hint="대구 동성로"
+    )
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=37.5665,
+            longitude=126.9780,
+            place_name="어떤 맛집",  # AI명과 일치(이름 게이트 통과)
+            road_address="서울특별시 중구 세종대로",  # 시도는 서울
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "region_mismatch"
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["region_gate"] == "region_mismatch"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_apply_region_match_with_alias_creates_place(session):
+    # hint "대구"와 확정 주소 "대구광역시"는 별칭이므로 일치 → 자동확정(poi + 이름 일치).
+    candidate = await _make_candidate(
+        session, name="근대골목단팥빵", location_hint="대구 중구"
+    )
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=35.8688,
+            longitude=128.5940,
+            place_name="근대골목단팥빵",
+            road_address="대구광역시 중구 남성로",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is not None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["region_gate"] == "region_match"
+
+
+# --- T-166 is_domestic fail-closed ---
+
+
+async def test_apply_is_domestic_none_fail_closed(session):
+    # 국내 여부 미확인(None)은 지오코딩 matched여도 자동확정하지 않는다(해외 가능성).
+    # poi + 이름 일치로 이름 게이트를 통과시켜 is_domestic이 실제 차단 사유가 되게 한다.
+    candidate = await _make_candidate(session, name="월정리 카페", is_domestic=None)
+    decision = GeocodeDecision(
+        status="matched",
+        candidate=GeocodeCandidate(
+            latitude=33.5563,
+            longitude=126.7958,
+            place_name="월정리 카페",
+            road_address="제주특별자치도 제주시",
+            source="kakao_keyword",
+        ),
+        confidence=1.0,
+        reason="single_result",
+        candidate_count=1,
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "domestic_unverified"
+    assert refreshed.provider_evidence_json["geocoding"]["identity"]["is_domestic_gate"] == "unverified"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+# --- T-166 ambiguous 단일 게이트 통과 자동확정 ---
+
+
+async def test_apply_ambiguous_single_gate_pass_autoconfirms(session):
+    # 다건 결과에서 이름 게이트를 통과하는 후보가 정확히 1개면 0.7로 자동확정한다.
+    candidate = await _make_candidate(session, name="스타벅스 제주점")
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=33.4996,
+                longitude=126.5312,
+                place_name="스타벅스 제주점",
+                road_address="제주특별자치도 제주시",
+                source="kakao_keyword",
+            ),
+            GeocodeCandidate(
+                latitude=35.1796,
+                longitude=129.0756,
+                place_name="스타벅스 부산점",
+                road_address="부산광역시",
+                source="kakao_keyword",
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is not None
+    assert place.latitude == 33.4996
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+    assert refreshed.confidence_score == 0.7
+    identity = refreshed.provider_evidence_json["geocoding"]["identity"]
+    assert identity["ambiguous_single_pass"] is True
+    assert identity["name_gate"] == "poi_match"
+
+
+async def test_apply_ambiguous_multiple_pass_stays_review(session):
+    # 이름 게이트를 통과하는 poi 후보가 2개 이상이면 자동확정하지 않고 검수 큐로 남긴다.
+    candidate = await _make_candidate(session, name="스타벅스")  # location_hint 없음
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=33.4996,
+                longitude=126.5312,
+                place_name="스타벅스",
+                road_address="제주특별자치도 제주시",
+                source="kakao_keyword",
+            ),
+            GeocodeCandidate(
+                latitude=35.1796,
+                longitude=129.0756,
+                place_name="스타벅스",
+                road_address="부산광역시",
+                source="kakao_keyword",
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ambiguous"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_apply_ambiguous_address_kind_not_autoconfirmed(session):
+    # address 후보만 있는 ambiguous는 POI identity 검증 불가라 단일이어도 자동확정하지 않는다
+    # (신규 장소 자동확정은 poi + 이름 게이트만 — G4/D2).
+    candidate = await _make_candidate(session, name="부산역 국밥집", location_hint="부산")
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=35.1151,
+                longitude=129.0423,
+                place_name="부산광역시 동구 중앙대로 206",
+                road_address="부산광역시 동구 중앙대로 206",
+                source="kakao",  # address kind → ambiguous 자동확정 제외
+            ),
+            GeocodeCandidate(
+                latitude=37.5665,
+                longitude=126.9780,
+                place_name="서울특별시 중구 세종대로",
+                road_address="서울특별시 중구 세종대로",
+                source="kakao",
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ambiguous"
+    assert (await session.execute(select(TravelPlace))).scalars().all() == []
+
+
+async def test_apply_ambiguous_unrefined_echo_not_repromoted(session):
+    # MAJOR 2: unrefined VWorld echo(coordinate)는 단건 vworld_unrefined_single 차단과 대칭으로
+    # 다건(ambiguous)에서도 자동확정 제외. refined poi 1건과 섞여도 poi만 단일 통과해 확정된다.
+    candidate = await _make_candidate(session, name="스타벅스 제주점", location_hint="제주")
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=33.4996,
+                longitude=126.5312,
+                place_name="스타벅스 제주점",  # 질의 echo(정제 주소 아님)
+                source="vworld",
+                refined=False,  # → coordinate kind, 자동확정 제외
+            ),
+            GeocodeCandidate(
+                latitude=33.4997,
+                longitude=126.5313,
+                place_name="스타벅스 제주점",
+                road_address="제주특별자치도 제주시",
+                source="kakao_keyword",  # refined poi, 이름 일치
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    # unrefined echo는 제외되고 refined poi 1건만 통과 → 자동확정.
+    assert place is not None
+    assert place.latitude == 33.4997
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.MATCHED
+
+
+async def test_apply_ambiguous_all_unrefined_stays_review(session):
+    # unrefined echo만 여럿이면(단건이면 vworld_unrefined_single) 다건에서도 자동확정 안 됨.
+    candidate = await _make_candidate(session, name="스타벅스 제주점")
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=33.4996,
+                longitude=126.5312,
+                place_name="스타벅스 제주점",
+                source="vworld",
+                refined=False,
+            ),
+            GeocodeCandidate(
+                latitude=35.1796,
+                longitude=129.0756,
+                place_name="스타벅스 제주점",
+                source="vworld",
+                refined=False,
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ambiguous"
+
+
+async def test_apply_ambiguous_single_pass_still_blocked_by_grounding(session):
+    # grounding 게이트(T-165)와 결합: ambiguous 단일 통과라도 transcript 후보가 raw grounding
+    # 미확인이면 자동확정하지 않는다(grounding 실패면 identity 무관하게 차단).
+    candidate = await _make_candidate(
+        session, name="스타벅스 제주점", grounding_status=GroundingStatus.UNVERIFIED.value
+    )
+    decision = GeocodeDecision(
+        status="needs_review",
+        candidate=None,
+        confidence=0.5,
+        reason="ambiguous",
+        candidate_count=2,
+        primary_candidates=[
+            GeocodeCandidate(
+                latitude=33.4996,
+                longitude=126.5312,
+                place_name="스타벅스 제주점",
+                source="kakao_keyword",
+            ),
+            GeocodeCandidate(
+                latitude=35.1796,
+                longitude=129.0756,
+                place_name="스타벅스 부산점",
+                source="kakao_keyword",
+            ),
+        ],
+    )
+    place = await apply_geocode_to_candidate(session, candidate, decision)
+    assert place is None
+    refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
+    assert refreshed.match_status == MatchStatus.NEEDS_REVIEW
+    assert refreshed.review_note == "ungrounded"

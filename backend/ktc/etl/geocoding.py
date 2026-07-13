@@ -20,6 +20,7 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 import httpx
@@ -28,6 +29,36 @@ from vworld import AsyncVworldClient, VworldError, VworldNoDataError
 # 모호 후보 좌표 일치 판정 반경(미터)과 최소 매칭 신뢰도
 DISAMBIGUATION_RADIUS_M = 150.0
 MIN_MATCH_CONFIDENCE = 0.5
+
+
+class GeocodeResultKind(str, Enum):
+    """provider 지오코딩 결과의 성격(로드맵 PR-12, B3).
+
+    `place_name` 필드의 의미가 kind마다 다르므로 이름 게이트를 kind별로 다르게 적용한다.
+    Kakao 주소검색·VWorld 정제 결과의 `place_name`은 POI명이 아니라 주소일 수 있어,
+    POI 이름 게이트를 그대로 걸면 오판한다.
+    """
+
+    # place_name이 실제 POI 상호명(Kakao 키워드 장소 검색). 이름 게이트 대상.
+    POI = "poi"
+    # place_name이 주소 문자열(Kakao 주소검색·VWorld 정제·Naver). POI 이름 게이트 skip.
+    ADDRESS = "address"
+    # 정제 주소 없이 좌표에 snap된 echo(VWorld unrefined). POI 이름 게이트 skip.
+    COORDINATE = "coordinate"
+
+
+def derive_result_kind(source: str, refined: bool) -> str:
+    """provider source·refined 여부로 result_kind를 판별한다.
+
+    - `kakao_keyword`: 키워드 장소 검색 → place_name이 POI명 → poi.
+    - `vworld` + not refined: 정제 주소 없이 좌표 snap → coordinate.
+    - 그 외(kakao 주소검색, vworld 정제, naver): place_name이 주소 → address.
+    """
+    if source == "kakao_keyword":
+        return GeocodeResultKind.POI.value
+    if source == "vworld" and not refined:
+        return GeocodeResultKind.COORDINATE.value
+    return GeocodeResultKind.ADDRESS.value
 
 
 @dataclass
@@ -42,6 +73,12 @@ class GeocodeCandidate:
     # VWorld get_coord가 실제 정제 주소(refined.text)를 반환했는지 여부. False면 질의를
     # 임의 좌표에 snap하고 입력을 echo만 한 것 → 자동 확정 금지(검수 큐로).
     refined: bool = True
+    # 결과 성격(poi|address|coordinate). None이면 source·refined에서 파생한다(단일 규칙).
+    result_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.result_kind is None:
+            self.result_kind = derive_result_kind(self.source, self.refined)
 
 
 @dataclass
@@ -54,6 +91,9 @@ class GeocodeDecision:
     reason: str
     candidate_count: int
     provider_evidence: dict[str, Any] = field(default_factory=dict)
+    # 1차 공급자 후보 원본(ambiguous 단일 게이트 통과 자동확정에서 재평가용, 로드맵 PR-12).
+    # 다건(ambiguous)일 때만 채운다 — 이름·행정구역 게이트를 후보별로 다시 적용한다.
+    primary_candidates: list[GeocodeCandidate] = field(default_factory=list)
 
 
 # --- 좌표 정규화 ---
@@ -417,12 +457,21 @@ def evaluate_geocode(
             )
 
     confidence = 1.0 / count
-    return GeocodeDecision("needs_review", None, confidence, "ambiguous", count, evidence)
+    return GeocodeDecision(
+        "needs_review",
+        None,
+        confidence,
+        "ambiguous",
+        count,
+        evidence,
+        primary_candidates=list(primary),
+    )
 
 
 def _candidate_to_evidence(candidate: GeocodeCandidate) -> dict[str, Any]:
     return {
         "source": candidate.source,
+        "result_kind": candidate.result_kind,
         "place_name": candidate.place_name,
         "road_address": candidate.road_address,
         "official_address": candidate.official_address,

@@ -1511,6 +1511,9 @@ def _candidate_queue_reason_expression():
             or_(
                 geocoding_reason == QueueReason.NAME_MISMATCH.value,
                 review_note.contains("name_mismatch"),
+                # 신규 장소 + 주소/좌표 결과의 POI identity 미검증 차단(T-166, G4/D2)도
+                # "장소명 확인" 검수 버킷으로 표시한다(전용 안정 enum은 늘리지 않는다).
+                review_note.contains("name_unverified"),
             ),
             QueueReason.NAME_MISMATCH.value,
         ),
@@ -1550,7 +1553,13 @@ def _candidate_queue_reason_expression():
             QueueReason.VWORLD_UNREFINED_SINGLE.value,
         ),
         (
-            ExtractedPlaceCandidate.is_domestic.is_(False),
+            # 해외 확정(is_domestic=False)과 국내 여부 미확인 fail-closed(T-166, D7)를 함께
+            # "해외 후보"로 표시한다. None은 "해외 가능성"이라 별도 안정 enum을 늘리지 않고
+            # 기존 FOREIGN 사유에 합류시킨다(자동확정 게이트가 review_note로 표식).
+            or_(
+                ExtractedPlaceCandidate.is_domestic.is_(False),
+                review_note.contains("domestic_unverified"),
+            ),
             QueueReason.FOREIGN.value,
         ),
         (
