@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-07-14: T-171 — feature export durable dirty outbox (S6/A2)
+
+- **문제**: `get_snapshot`/`get_changes`가 매 GET마다 전 후보 `sync_feature_exports`(O(후보수)) 호출 +
+  `_read_page`가 `last_exported_at`를 매 GET write-commit. 소비자 폴링 비용이 후보 수에 비례하고 GET이
+  상시 쓰기. 원 PR-22의 process-local 스로틀·워터마크·플래그는 API/scheduler 2프로세스·재시작에서 정본
+  불가(개정).
+- **구현(durable outbox)**: `export_dirty_outbox`(candidate_id BIGINT PK·reason·marked_at, FK ondelete
+  CASCADE, migration 0025). `mark_candidates_dirty(session, ids, reason)`=변경과 **같은 트랜잭션**에서
+  `on_conflict_do_update` upsert(last-reason-wins). 배선: resolve/reject/reopen·soft_delete(tombstone,
+  기존 동기 tombstone 위 이중안전)·apply_geocode(자동확정/needs_review)·merge_places·correct_place·batch
+  신규 후보·delete_place(삭제 전 후보 id 수집)·exclude_video(soft_delete 경유). `sync_dirty`가 outbox를
+  `DELETE...RETURNING`으로 원자 claim→그 후보만 `_sync_scope`(전량 sync와 **동일** 분류·upsert·후보소멸
+  tombstone 로직 공유→golden)→consume(빈 outbox면 쓰기 0). GET은 sync_dirty(순수 읽기), 안전망은 process
+  시작 1회 + scheduler 시간당 전량 `sync_feature_exports`(`FEATURE_EXPORT_RECONCILE_ENABLED/INTERVAL`,
+  기본 3600s). `_read_page`의 last_exported_at write 제거(소비처 진단뿐 확인). 응답 스키마·base64 cursor·
+  operation(upsert/reject/tombstone) 계약 불변.
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 결함 1클래스(3지점) 수정**: place의 payload 관련 필드(description·
+  gemini_enriched_description·official/road_address·category·category_code_suggestion·detailed_research)를
+  바꾸는 mutation이 **그 place에 이미 매칭된 co-후보**를 dirty로 표시하지 않아, 그 후보들의 export가
+  payload_hash 변경에도 안전망(≤1h) 전까지 stale → **golden 불변식(dirty sync == full sync) 위반**. ①
+  MAJOR `merge_places`: target 필드 backfill 후 moved(source) 후보만 dirty, target co-후보 누락. ②③ MINOR
+  `apply_geocode_to_candidate`·`resolve_candidate`: 근접 재사용 place category 채울 때 현재 후보만 dirty.
+  → 공용 헬퍼 `mark_place_candidates_dirty(place_id)`(`matched_place_id==place_id AND deleted_at IS NULL`
+  후보 전부)를 세 지점 + `correct_place`(기존 인라인 패턴)에 일원화, **실제 필드 변경 시에만**(churn 방지).
+  golden 테스트 2건(merge target-resident 후보·resolve 재사용 co-후보 → 병합/확정 직후 전량 sync
+  changed==0 fixpoint). 리뷰의 나머지 probe(consume 원자성·트랜잭션 순서·FK cascade·GET 순수읽기)는 결함
+  없음 판정.
+- **rebase 코디네이션**: 착수 중 origin/main이 T-183(#196)로 전진해 alembic head가 `0023`(down_revision
+  0024)이 됨. T-183 위 rebase(무텍스트충돌 auto-merge, geocode/place 배선 지점 함수 단위 검증으로 T-171/
+  T-183 양쪽 보존 확인)·migration `0025` down_revision을 `0024`→`0023`으로 reparent(체인 0022→0024→0023→
+  0025, 단일 head). T-183가 xmin fencing·개별삭제 needs_review 선행조건을 추가해 golden 테스트의 tombstone
+  생성 수단을 장소 삭제로 교체(불변식 불변).
+- **금지 준수**: 응답 스키마·payload 불변, 자동확정 게이트(T-165/166)·soft delete tombstone(T-160)·
+  grounding export 게이트 로직 불변(outbox 배선만 추가).
+- **검증**: 격리 disposable DB backend 전체 pytest 675 passed(실패 0), migration upgrade/downgrade
+  round-trip 단일 head, `test_migration_graph` 통과, origin/main(#196) 0 behind.
+
 ## 2026-07-13: T-170 — 지오코딩 provider별 캐시 (S7)
 
 - **문제**: 같은 장소가 여러 영상에 반복 등장하면 VWorld/Kakao/Naver를 매번 재호출(S7). 100m 반경
