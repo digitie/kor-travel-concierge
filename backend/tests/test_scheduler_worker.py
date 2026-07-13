@@ -372,6 +372,11 @@ async def test_transcript_handler_enqueues_poi_batch(session):
         )
     ).scalars().all()
     assert len(poi_runs) == 1
+    # T-163: transcript splitter가 낳는 poi_batch child는 배치 레인이고
+    # payload에 부모 job_id(source_job_id) lineage가 실린다.
+    child = poi_runs[0]
+    assert child.lane == worker.LANE_BATCH
+    assert json.loads(child.payload_json)["source_job_id"] == claimed.id
 
 
 async def test_run_once_executes_deep_research_default_handler(
@@ -662,3 +667,132 @@ async def test_load_payload_rejects_invalid_json(session):
 
     with pytest.raises(ValueError, match="payload_json"):
         worker.load_payload(run)
+
+
+# ---------------------------------------------------------------------------
+# T-163: 워커 레인 job 등록 (구 job id 제거·레인당 1 job)
+# ---------------------------------------------------------------------------
+
+
+class _FakeScheduler:
+    """add_job/remove_job 호출만 기록하는 경량 스케줄러 더블(APScheduler 미설치 환경).
+
+    실제 AsyncIOScheduler는 이벤트 루프·apscheduler 의존이 필요하므로, 등록 로직만
+    검증하려고 호출을 캡처한다. remove_job은 없는 id면 실제처럼 예외를 던진다.
+    """
+
+    def __init__(self, existing_job_ids=()):
+        self.jobs: dict[str, dict] = {}
+        self.removed: list[str] = []
+        self._existing = set(existing_job_ids)
+
+    def remove_job(self, job_id, jobstore=None):
+        if job_id in self.jobs or job_id in self._existing:
+            self.removed.append(job_id)
+            self.jobs.pop(job_id, None)
+            self._existing.discard(job_id)
+            return
+        raise LookupError(f"job not found: {job_id}")
+
+    def add_job(self, func, trigger=None, **kwargs):
+        self.jobs[kwargs["id"]] = {"func": func, "trigger": trigger, **kwargs}
+
+
+def _fake_settings(*, source_scan_enabled=True):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        SCHEDULER_POLL_INTERVAL_SECONDS=5,
+        SOURCE_SCAN_ENABLED=source_scan_enabled,
+        SOURCE_SCAN_INTERVAL_SECONDS=60,
+    )
+
+
+def test_register_worker_jobs_drops_legacy_and_registers_two_lanes():
+    sentinel_factory = object()
+    scheduler = _FakeScheduler(existing_job_ids={worker.LEGACY_WORKER_JOB_ID})
+
+    worker.register_worker_jobs(
+        scheduler,
+        session_factory=sentinel_factory,
+        handlers={},
+        use_persistent_jobstore=False,
+        settings=_fake_settings(),
+    )
+
+    # 구 단일 워커 job은 제거된다(lane 미지정 run_once 잔존 방지).
+    assert worker.LEGACY_WORKER_JOB_ID in scheduler.removed
+    assert worker.LEGACY_WORKER_JOB_ID not in scheduler.jobs
+
+    assert set(scheduler.jobs) == {
+        "crawl-run-worker-interactive",
+        "crawl-run-worker-batch",
+        "source-scan-enqueue",
+    }
+
+    interactive = scheduler.jobs["crawl-run-worker-interactive"]
+    batch = scheduler.jobs["crawl-run-worker-batch"]
+    assert interactive["func"] is worker.run_once
+    assert batch["func"] is worker.run_once
+    assert interactive["kwargs"]["lane"] == worker.LANE_INTERACTIVE
+    assert batch["kwargs"]["lane"] == worker.LANE_BATCH
+    # 각 레인 1 인스턴스.
+    assert interactive["max_instances"] == 1
+    assert batch["max_instances"] == 1
+    # 비-persistent 분기는 session_factory/handlers도 함께 넘긴다.
+    assert interactive["kwargs"]["session_factory"] is sentinel_factory
+    assert "handlers" in interactive["kwargs"]
+
+    source_scan = scheduler.jobs["source-scan-enqueue"]
+    assert source_scan["func"] is worker.enqueue_source_scan_once
+
+
+def test_register_worker_jobs_legacy_absent_is_ignored():
+    scheduler = _FakeScheduler()  # 구 job 없음
+
+    # remove_job이 LookupError를 던져도 등록은 계속된다.
+    worker.register_worker_jobs(
+        scheduler,
+        session_factory=object(),
+        handlers=None,
+        use_persistent_jobstore=False,
+        settings=_fake_settings(),
+    )
+    assert "crawl-run-worker-interactive" in scheduler.jobs
+    assert "crawl-run-worker-batch" in scheduler.jobs
+
+
+def test_register_worker_jobs_persistent_kwargs_are_serializable():
+    scheduler = _FakeScheduler()
+
+    worker.register_worker_jobs(
+        scheduler,
+        session_factory=object(),
+        handlers=None,
+        use_persistent_jobstore=True,
+        settings=_fake_settings(),
+    )
+
+    # persistent 분기: 직렬화 불가한 session_factory/handlers 없이 lane만 넘긴다.
+    interactive = scheduler.jobs["crawl-run-worker-interactive"]
+    assert interactive["kwargs"] == {"lane": worker.LANE_INTERACTIVE}
+    batch = scheduler.jobs["crawl-run-worker-batch"]
+    assert batch["kwargs"] == {"lane": worker.LANE_BATCH}
+    assert scheduler.jobs["source-scan-enqueue"]["kwargs"] == {}
+
+
+def test_register_worker_jobs_omits_source_scan_when_disabled():
+    scheduler = _FakeScheduler()
+
+    worker.register_worker_jobs(
+        scheduler,
+        session_factory=object(),
+        handlers={},
+        use_persistent_jobstore=False,
+        settings=_fake_settings(source_scan_enabled=False),
+    )
+    assert "source-scan-enqueue" not in scheduler.jobs
+    assert set(scheduler.jobs) == {
+        "crawl-run-worker-interactive",
+        "crawl-run-worker-batch",
+    }

@@ -17,6 +17,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ktc.models import (
+    LANE_BATCH,
     TERMINAL_RUN_STATES,
     CrawlRun,
     CrawlRunStageEvent,
@@ -208,13 +209,19 @@ async def create_run(
     target_id: str | None = None,
     payload: dict[str, Any] | None = None,
     restart_of_run_id: int | None = None,
+    lane: str = LANE_BATCH,
     commit: bool = True,
 ) -> CrawlRun:
-    """새 작업을 `pending` 상태로 생성한다."""
+    """새 작업을 `pending` 상태로 생성한다.
+
+    `lane`은 워커 레인(T-163)이며 **enqueue 지점 기준**으로 지정한다(job_type 아님).
+    사용자 직접 트리거는 `LANE_INTERACTIVE`, 스케줄러/대량 발원은 기본 `LANE_BATCH`.
+    """
     initial_message = "작업이 대기열에 등록되었습니다."
     run = CrawlRun(
         job_type=job_type,
         source=source,
+        lane=lane,
         target_type=target_type,
         target_id=target_id,
         state=RunState.PENDING,
@@ -354,15 +361,20 @@ async def list_runs_page(
     )
 
 
-async def claim_next_pending(session: AsyncSession) -> CrawlRun | None:
+async def claim_next_pending(
+    session: AsyncSession, *, lane: str | None = None
+) -> CrawlRun | None:
     """가장 오래된 `pending` 작업 1건을 claim해 `running`으로 전이한다.
 
-    PostgreSQL `FOR UPDATE SKIP LOCKED`로 후보를 잠근 뒤 전이한다.
+    PostgreSQL `FOR UPDATE SKIP LOCKED`로 후보를 잠근 뒤 전이한다. `lane`이 주어지면
+    해당 레인의 작업만 claim한다(T-163 — 대화형/배치 워커 분리). `lane=None`이면
+    레인 무관 전체에서 가장 오래된 pending을 claim한다(하위호환).
     """
+    stmt = select(CrawlRun).where(CrawlRun.state == RunState.PENDING)
+    if lane is not None:
+        stmt = stmt.where(CrawlRun.lane == lane)
     stmt = (
-        select(CrawlRun)
-        .where(CrawlRun.state == RunState.PENDING)
-        .order_by(CrawlRun.id.asc())
+        stmt.order_by(CrawlRun.id.asc())
         .with_for_update(skip_locked=True)
         .limit(1)
     )
@@ -509,10 +521,11 @@ async def create_restart_run(
         target_id=origin.target_id,
         payload=payload,
         restart_of_run_id=origin.id,
+        # 원본 lane을 복사한다(T-163, G6). 기본값(batch)으로 두면 대화형 작업의
+        # 재시작이 배치 레인으로 떨어져 목적이 훼손된다(로드맵 PR-04).
+        lane=origin.lane,
         commit=False,
     )
-    # T-163: lane 컬럼 도입 시 여기서 원본 lane을 복사한다(현재 lane 컬럼 없음 —
-    # 기본값으로 두면 대화형 재시작이 배치 레인으로 떨어지는 문제, 로드맵 PR-04).
     if origin.attention in (RunAttention.OPEN, RunAttention.ACKNOWLEDGED):
         origin.attention = RunAttention.SUPERSEDED
     await session.commit()
@@ -601,12 +614,20 @@ async def requeue_stale(
 
     재시도 여유가 있으면 `pending`으로 되돌리고 `retry_count`를 증가시킨다.
     최대 재시도를 초과하면 `failed`로 격리한다. 처리한 작업 수를 반환한다.
+
+    2개 lane 워커가 매 tick 이 함수를 동시에 실행하므로(lane 무관 공통), stale 대상
+    select에 `FOR UPDATE SKIP LOCKED`를 걸어 두 워커가 같은 stale run을 중복 재투입하지
+    않게 한다(각자 disjoint 집합만 처리). lane 보존·재투입 semantics는 불변(T-163).
     """
     cutoff = utcnow() - timedelta(seconds=threshold_seconds)
-    stmt = select(CrawlRun).where(
-        CrawlRun.state == RunState.RUNNING,
-        CrawlRun.heartbeat_at.is_not(None),
-        CrawlRun.heartbeat_at < cutoff,
+    stmt = (
+        select(CrawlRun)
+        .where(
+            CrawlRun.state == RunState.RUNNING,
+            CrawlRun.heartbeat_at.is_not(None),
+            CrawlRun.heartbeat_at < cutoff,
+        )
+        .with_for_update(skip_locked=True)
     )
     result = await session.execute(stmt)
     stale_runs = list(result.scalars().all())

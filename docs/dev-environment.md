@@ -247,14 +247,16 @@ SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES=10080
 SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES=15
 ```
 
-검증 시 API/MCP가 직접 장시간 작업을 실행하지 않고 `job_id`만 반환하는지 확인합니다. scheduler는 APScheduler interval job으로 `crawl_runs.pending` 작업을 claim하며, handler 예외나 지원하지 않는 job type은 `failed` 상태와 `last_error`로 남겨야 합니다.
+검증 시 API/MCP가 직접 장시간 작업을 실행하지 않고 `job_id`만 반환하는지 확인합니다. scheduler는 레인별 APScheduler interval job 2개(`crawl-run-worker-interactive`, `crawl-run-worker-batch`)로 `crawl_runs.pending` 작업을 lane별로 claim하며(T-163), handler 예외나 지원하지 않는 job type은 `failed` 상태와 `last_error`로 남겨야 합니다.
 
 `SCHEDULER_JOBSTORE_ENABLED=true`이면 APScheduler의 interval job 정의를 PostgreSQL
 `apscheduler_jobs` 테이블에 저장합니다. `SCHEDULER_JOBSTORE_URL`을 비워 두면
 `DATABASE_URL`의 `postgresql+asyncpg://` 값을 `postgresql+psycopg://`로 변환해 같은
-DB를 사용합니다. 이 job store는 scheduler 재시작 시 `crawl-run-worker`와
-`source-scan-enqueue`의 next run time을 유지하기 위한 것이며, 실제 수집 작업의
-상태·payload·재시도 이력은 계속 `crawl_runs`에 저장합니다.
+DB를 사용합니다. 이 job store는 scheduler 재시작 시 `crawl-run-worker-interactive`,
+`crawl-run-worker-batch`, `source-scan-enqueue`의 next run time을 유지하기 위한
+것이며, 실제 수집 작업의 상태·payload·재시도 이력은 계속 `crawl_runs`에 저장합니다.
+scheduler 기동 시 lane 분리 이전의 구 단일 `crawl-run-worker` job id는 자동 제거되어
+jobstore에 잔존한 lane 미지정 워커가 계속 실행되지 않습니다.
 
 `SOURCE_SCAN_ENABLED=true`이면 `source-scan-enqueue` job이 주기적으로 중복 없는
 `source_scan` crawl_run을 만들고, 해당 handler가 due `source_targets`를

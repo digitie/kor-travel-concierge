@@ -453,6 +453,7 @@ RustFS에 저장한 동영상, 자막, 전사 결과, 대표 프레임의 메타
 - `id` (Integer, PK)
 - `job_type` (String)
 - `source` (String) - `web`, `mcp`, `scheduler`
+- `lane` (String) - 워커 레인 `interactive`|`batch`(기본 `batch`, T-163). enqueue 지점 기준으로 지정한다(job_type이 아님). 사용자 직접 트리거(재처리·deep research·수동 transcript)는 `interactive`, 스케줄러·수집·대량 발원은 `batch`.
 - `target_type` (String, Nullable)
 - `target_id` (String, Nullable)
 - `state` (String) - `pending`, `running`, `done`, `failed`
@@ -465,8 +466,14 @@ RustFS에 저장한 동영상, 자막, 전사 결과, 대표 프레임의 메타
 - `retry_count` (Integer)
 - `last_error` (Text, Nullable)
 
-APScheduler는 `crawl-run-worker` interval job으로 pending `crawl_runs`를 claim하고,
-`source-scan-enqueue` interval job으로 active source target scan 작업을 중복 없이
+APScheduler는 레인별 interval job 2개(`crawl-run-worker-interactive`,
+`crawl-run-worker-batch`, 각 `max_instances=1`)로 각 lane의 pending `crawl_runs`를
+claim한다(T-163, `claim_next_pending(lane=…)` = `WHERE lane=… … FOR UPDATE SKIP
+LOCKED`). 대화형 작업이 배치 백로그에 굶지 않도록 레인을 분리하되, 레인당 1
+인스턴스는 운영 단순성·N150 사유로 유지한다. 구 단일 `crawl-run-worker` job id는
+기동 시(start 이후) 제거해 persistent store 잔존 행이 lane 미지정 claim을 돌리지
+못하게 한다. stale 재투입·heartbeat는 lane 무관 공통이며 재투입 시 원 lane을 보존한다.
+`source-scan-enqueue` interval job은 active source target scan 작업을 중복 없이
 enqueue한다. APScheduler의 persistent job store는 job 정의와 next run time을
 `apscheduler_jobs`에 저장하지만, 작업 payload, heartbeat, 재시도, 완료/실패 이력은
 항상 `crawl_runs`에 남긴다.

@@ -45,6 +45,14 @@ TERMINAL_RUN_STATES: tuple[RunState, ...] = (
     RunState.CANCELLED,
 )
 
+# 워커 레인(T-163, 로드맵 PR-04/§10 B6). claim/실행을 레인별로 분리해 배치 작업이
+# 대화형 작업을 굶기지 않게 한다. lane은 **job_type이 아니라 enqueue 지점 기준**으로
+# 지정한다(같은 job_type이라도 발원에 따라 다르다 — 예: poi_batch는 재처리면 대화형,
+# 수집 후속이면 배치). 기본은 batch(스케줄러 발원이 다수).
+LANE_INTERACTIVE = "interactive"
+LANE_BATCH = "batch"
+VALID_LANES: tuple[str, ...] = (LANE_INTERACTIVE, LANE_BATCH)
+
 
 class RunAttention(str, Enum):
     """실패 작업 주의(attention) 상태 (T-162, 로드맵 B6). NULL이면 해당 없음(none).
@@ -73,6 +81,9 @@ class CrawlRun(TimestampMixin, Base):
     __tablename__ = "crawl_runs"
     __table_args__ = (
         Index("ix_crawl_runs_claim_pending", "state", "id"),
+        # 레인별 claim 조회용(T-163). 선두 컬럼 lane으로 레인 필터를 좁힌 뒤
+        # state='pending' ORDER BY id를 커버한다.
+        Index("ix_crawl_runs_lane_claim", "lane", "state", "id"),
         # attention 배지/필터 조회용(T-181). 대부분의 행은 NULL이므로 partial index.
         Index(
             "ix_crawl_runs_attention",
@@ -83,10 +94,19 @@ class CrawlRun(TimestampMixin, Base):
             "attention IN ('open', 'acknowledged', 'superseded', 'resolved')",
             name="ck_crawl_runs_attention_valid",
         ),
+        CheckConstraint(
+            "lane IN ('interactive', 'batch')",
+            name="ck_crawl_runs_lane_valid",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 워커 레인(T-163). interactive=사용자 직접 트리거, batch=스케줄러/대량 발원.
+    # enqueue 지점 기준으로 지정한다(create_run lane 인자). 기본 batch.
+    lane: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=LANE_BATCH, server_default=LANE_BATCH
+    )
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -117,7 +137,7 @@ class CrawlRun(TimestampMixin, Base):
     )
     # 재시작 lineage: 이 run이 어느 run의 재시작인지(self FK, T-162). 같은 원본의
     # active(pending/running) 재시작은 1개만 허용한다(중복 클릭 멱등).
-    # 원본 lane 복사는 T-163 소관(lane 컬럼 도입 시 create_restart_run에서 처리).
+    # 재시작 run은 원본 lane을 복사한다(create_restart_run, T-163).
     restart_of_run_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("crawl_runs.id", ondelete="SET NULL"),

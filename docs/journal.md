@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-07-13: T-163 — 워커 레인 분리 (S1)
+
+- **문제**: 단일 실행자 큐라 긴 poi_batch가 완주할 때까지 사용자가 방금 누른 재처리·deep research가
+  전부 뒤에 줄 섰다(§1.2 S1). claim은 이미 `FOR UPDATE SKIP LOCKED`인데 컨슈머가 1개였다.
+- **구현**: `crawl_runs.lane`(interactive|batch, CHECK+`(lane,state,id)` 인덱스, migration 0019).
+  lane은 job_type이 아니라 **enqueue 지점 기준**(같은 poi_batch라도 사용자 재처리=interactive,
+  harvest splitter child=batch) — 12지점 매핑, restart는 원본 lane 복사(G6). `claim_next_pending(lane)`
+  격리, 스케줄러 레인당 interval job 2개(`-interactive`/`-batch`, 각 max_instances=1) + 구
+  `crawl-run-worker` 제거(start() 후 register). stale 재투입 lane 보존.
+- **적대적 리뷰(PR 전, 2렌즈)**: 정확성·회귀·명세 / 데이터 정합·migration·성능 — BLOCKER/MAJOR 0.
+  lane 매핑 12지점·claim 격리·restart 복사·stale 보존·구 job 제거 전부 정확 판정. MINOR:
+  2 워커 동시 requeue_stale 경합 방지 `skip_locked` 하드닝, child payload `source_job_id` lineage,
+  단일 워커를 서술하던 문서 3종(architecture/decisions ADR-13/dev-environment) 갱신.
+- **핵심 목적 검증**: 긴 batch 백로그가 있어도 interactive 워커가 batch 행을 술어에서 제외해 즉시
+  claim — 테스트로 확인.
+- **검증**: 격리 DB backend pytest 421 passed(pre-existing 1건 외 0), alembic 0019 round-trip 단일
+  head, 최신 main(#189) 리베이스 0 behind, `git diff --check` 통과.
+
 ## 2026-07-13: T-182 — 검수 행 판단 정보와 안정 대기 사유
 
 - **경량 목록 보강**: 검수 후보를 `youtube_videos`·`youtube_channels`와 항상 outer join해 영상 제목,

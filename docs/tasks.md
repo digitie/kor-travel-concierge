@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-163**: 워커 레인 분리 — lane 컬럼+인덱스, `create_run` 호출 전수 표 기반 enqueue 매핑(restart lane 복사, run-now, `/jobs/poi-batch`, MCP harvest/deep research, transcript child 포함), parent lane·lineage 전파, 구 job id(`crawl-run-worker`) 제거. 선행: T-161·T-162 권장. (PR-04 개정판)
 - [ ] **T-164**: transcript_attempts 관측 — provider별 시도·순서·시각·duration·outcome·language·tool version durable 기록(성공 전 실패 보존), `TRANSCRIPT_PROVIDER_ORDER` 연결, yt-dlp 실제 언어 기록, 절단 로그. 수율 기준선 재설정(실측: no-whisper 3/27, whisper 11/27). (PR-11 개정판, G7)
 - [ ] **T-165**: raw grounding 게이트 — `evidence_quote`+segment ID를 raw 자막 기준으로 대조, `grounding_status` enum(verified_raw|unverified|missing|not_applicable|legacy_unknown) 저장, transcript 후보는 verified_raw 아니면 자동확정·export 차단. 선행: T-164. (PR-13 개정판, §10 B3, G4)
 - [ ] **T-166**: 자동확정 identity gate — `result_kind`(poi|address|coordinate) 구분, pairwise name gate(_names_compatible any-pair 문제 해소), 행정구역 gate(명시 alias asset+fixture), `is_domestic` fail-closed, ambiguous 단일 통과 자동확정 + ADR-16 보강 ADR 작성. 선행: T-165. (PR-12 개정판, G4)
@@ -58,6 +57,16 @@
 
 ## 완료
 
+- [x] **T-163**: 워커 레인 분리 — 긴 배치 작업이 사용자 트리거 작업을 막던 단일 큐(§1.2 S1)를
+  해소했다. `crawl_runs.lane`(interactive|batch, CHECK+`(lane,state,id)` 인덱스, migration 0019),
+  enqueue 지점 기준 lane 매핑 12곳(재처리·deep research·수동 transcript=interactive / 수집·source_scan·
+  poi_batch child·run-now·MCP harvest=batch / restart=원본 lane 복사 — G6), `claim_next_pending(lane)`
+  격리(`FOR UPDATE SKIP LOCKED`), 스케줄러 레인당 interval job 1개씩 2개(`-interactive`/`-batch`,
+  각 max_instances=1) + 구 `crawl-run-worker` job 제거. stale 재투입은 lane 무관·원 lane 보존.
+  2렌즈 적대적 리뷰: BLOCKER/MAJOR 0, MINOR(requeue_stale skip_locked 하드닝·child payload
+  source_job_id lineage·문서 3종 갱신) 반영. 핵심 목적(긴 배치 중 interactive 즉시 claim) 테스트
+  검증. 검증: 격리 DB backend pytest 421 passed(pre-existing 1건 외 0), alembic round-trip 단일 head.
+  (2026-07-13, 로드맵 PR-04 개정·§10 B6)
 - [x] **T-162**: durable stage events + restart lineage·attention — `status_log_json`(4필드·80건 절단,
   UI 계약) 불변 유지하면서 `crawl_run_stage_events`(stage/provider/attempt/elapsed_ms/outcome, monotonic
   실측) 별도 durable 기록을 신설했다. poi_batch 4단계(transcript_fetch/correction/poi_extract/geocode)
