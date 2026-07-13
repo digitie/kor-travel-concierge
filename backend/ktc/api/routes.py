@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -39,6 +40,7 @@ from ktc.models import (
     CrawlRun,
     CrawlStatus,
     ExtractedPlaceCandidate,
+    EvidenceSourceKind,
     FeatureExport,
     MatchStatus,
     MediaAsset,
@@ -1249,6 +1251,8 @@ async def list_unmatched_candidates(
     channel_id: str | None = Query(default=None, max_length=128),
     playlist_id: str | None = Query(default=None, max_length=128),
     keyword: str | None = Query(default=None, max_length=255),
+    reason: place_service.QueueReason | None = Query(default=None),
+    source_kind: EvidenceSourceKind | None = Query(default=None),
     cursor: str | None = Query(
         default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
     ),
@@ -1265,6 +1269,8 @@ async def list_unmatched_candidates(
             channel_id=channel_id,
             playlist_id=playlist_id,
             keyword=keyword,
+            queue_reason=reason,
+            source_kind=source_kind,
             cursor=cursor,
             newer_than_id=newer_than_id,
         )
@@ -2569,19 +2575,33 @@ def _place_payload(place) -> dict[str, Any]:
     }
 
 
-def _candidate_list_payload(candidate) -> dict[str, Any]:
+def _candidate_list_payload(item: place_service.CandidateListItem) -> dict[str, Any]:
     """검수 큐 목록용 경량 payload. 리스트 UI가 쓰지 않는 무거운 필드
     (provider_evidence_json·source_text·review_note 등)를 제외하고, 파생값인
     8자리 카테고리 코드는 서버에서 계산해 넣는다(원본 evidence는 보내지 않음)."""
+    candidate = item.candidate
+    confidence_score = candidate.confidence_score
+    if (
+        confidence_score is None
+        or not math.isfinite(confidence_score)
+        or not 0 <= confidence_score <= 1
+    ):
+        confidence_score = None
     return {
         "id": candidate.id,
         "video_id": candidate.video_id,
+        "video_title": item.video_title,
+        "channel_title": item.channel_title,
         "ai_place_name": candidate.ai_place_name,
         "location_hint": candidate.location_hint,
         "timestamp_start": candidate.timestamp_start,
         "candidate_category": candidate.candidate_category,
         "candidate_category_code": place_service.candidate_category_code(candidate),
         "match_status": candidate.match_status,
+        "confidence_score": confidence_score,
+        "source_kind": candidate.source_kind,
+        "created_at": candidate.created_at.isoformat(),
+        "queue_reason": item.queue_reason.value,
         "is_domestic": candidate.is_domestic,
     }
 

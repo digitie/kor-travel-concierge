@@ -1,3 +1,12 @@
+const HIGH_PRIORITY_QUEUE_REASONS = new Set([
+  "ungrounded",
+  "name_mismatch",
+  "region_mismatch",
+  "source_conflict",
+  "source_low_confidence",
+  "source_uncertain",
+]);
+
 export function runStateLabel(state: string | null | undefined): string {
   const key = normalizeKey(state);
   const labels: Record<string, string> = {
@@ -44,6 +53,49 @@ export function candidateStatusLabel(status: string | null | undefined): string 
     deleted: "삭제",
   };
   return labels[key] ?? fallbackLabel(status, "상태 없음");
+}
+
+export function queueReasonLabel(reason: string | null | undefined): string {
+  const key = normalizeKey(reason);
+  const labels: Record<string, string> = {
+    ungrounded: "원문 근거 미확인",
+    name_mismatch: "장소명 불일치",
+    region_mismatch: "지역 불일치",
+    source_conflict: "출처 간 충돌",
+    source_low_confidence: "출처 대조 신뢰도 낮음",
+    source_uncertain: "출처 대조 불확실",
+    ambiguous: "후보 모호",
+    no_result: "검색 결과 없음",
+    vworld_unrefined_single: "VWorld 미정제 단일 결과",
+    foreign: "해외 후보",
+    description_only: "설명문 전용",
+    visual_only: "시각 근거 전용",
+    provider_missing: "provider 근거 누락",
+    extraction_only: "추출 직후",
+  };
+  return labels[key] ?? fallbackLabel(reason, "사유 없음");
+}
+
+export function queueReasonBadgeVariant(
+  reason: string | null | undefined,
+): "secondary" | "destructive" {
+  return HIGH_PRIORITY_QUEUE_REASONS.has(normalizeKey(reason))
+    ? "destructive"
+    : "secondary";
+}
+
+export function sourceKindLabel(source: string | null | undefined): string {
+  const key = normalizeKey(source);
+  const labels: Record<string, string> = {
+    transcript: "자막",
+    url_summary: "영상 URL 요약",
+    reconcile: "출처 대조",
+    manual: "사용자 입력",
+    geocoding: "지오코딩",
+    description: "영상 설명",
+    visual: "영상 프레임",
+  };
+  return labels[key] ?? fallbackLabel(source, "출처 없음");
 }
 
 export function categoryDisplayLabel(value: string | null | undefined): string {

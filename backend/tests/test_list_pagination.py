@@ -286,6 +286,282 @@ async def test_unmatched_301_keyset_filter_guard_and_page_outside_detail(
     assert detail.json()["candidate"]["id"] == 1
 
 
+async def test_unmatched_lightweight_payload_reason_priority_and_filters(
+    client, session
+):
+    session.add(
+        YoutubeChannel(channel_id="reason-channel", title="정규 검수 채널")
+    )
+    session.add(
+        YoutubeVideo(
+            video_id="reason-video",
+            title="사유 판정 검수 영상",
+            url="https://example.invalid/reason",
+            channel_id="reason-channel",
+            channel_name="레거시 채널명",
+        )
+    )
+    await session.flush()
+
+    cases = [
+        (
+            "원문 불일치",
+            "transcript",
+            {"transcript": {"grounding_status": "unverified"}},
+            None,
+            True,
+            "extraction_only",
+        ),
+        (
+            "이름 불일치",
+            "transcript",
+            {"geocoding": {"decision": {"reason": "ambiguous"}}},
+            "nearby_place_name_mismatch",
+            True,
+            "name_mismatch",
+        ),
+        (
+            "지역 불일치",
+            "transcript",
+            None,
+            "region_mismatch",
+            True,
+            "region_mismatch",
+        ),
+        (
+            "출처 충돌",
+            "reconcile",
+            {"reconcile": {"decision": " Conflict "}},
+            None,
+            True,
+            "source_conflict",
+        ),
+        (
+            "출처 신뢰도 낮음",
+            "reconcile",
+            {"reconcile": {"decision": "LOW_CONFIDENCE"}},
+            None,
+            True,
+            "source_low_confidence",
+        ),
+        (
+            "출처 판정 불확실",
+            "reconcile",
+            {
+                "reconcile": {
+                    "decision": "matched",
+                    "needs_review_reason": "출처 근거를 다시 확인해야 함",
+                }
+            },
+            None,
+            True,
+            "source_uncertain",
+        ),
+        (
+            "출처 점수 불확실",
+            "reconcile",
+            {"reconcile": {"decision": "matched", "confidence_score": 0.4}},
+            None,
+            True,
+            "source_uncertain",
+        ),
+        (
+            "손상된 출처 점수",
+            "reconcile",
+            {"reconcile": {"decision": "matched", "confidence_score": "bad"}},
+            None,
+            True,
+            "extraction_only",
+        ),
+        (
+            "객체 출처 점수",
+            "reconcile",
+            {
+                "reconcile": {
+                    "decision": "matched",
+                    "confidence_score": {"invalid": True},
+                }
+            },
+            None,
+            True,
+            "extraction_only",
+        ),
+        (
+            "거대 출처 점수",
+            "reconcile",
+            {
+                "reconcile": {
+                    "decision": "matched",
+                    "confidence_score": 10**1000,
+                }
+            },
+            None,
+            True,
+            "extraction_only",
+        ),
+        (
+            "모호한 해외 후보",
+            "transcript",
+            {"geocoding": {"decision": {"reason": "ambiguous"}}},
+            None,
+            False,
+            "ambiguous",
+        ),
+        (
+            "결과 없는 설명 후보",
+            "description",
+            {"geocoding": {"decision": {"reason": "no_result"}}},
+            None,
+            True,
+            "no_result",
+        ),
+        (
+            "미정제 단일 후보",
+            "transcript",
+            {
+                "geocoding": {
+                    "decision": {"reason": "vworld_unrefined_single"}
+                }
+            },
+            None,
+            True,
+            "vworld_unrefined_single",
+        ),
+        ("해외 후보", "transcript", None, None, False, "foreign"),
+        ("설명 후보", "description", None, None, True, "description_only"),
+        ("시각 후보", "visual", None, None, True, "visual_only"),
+        (
+            "provider 누락",
+            "transcript",
+            {"geocoding": {}, "large_blob": "x" * 100_000},
+            None,
+            True,
+            "provider_missing",
+        ),
+        (
+            "정상 지오코딩 근거",
+            "transcript",
+            {"geocoding": {"decision": {"reason": "single_result"}}},
+            None,
+            True,
+            "extraction_only",
+        ),
+        (
+            "미래 지오코딩 근거",
+            "transcript",
+            {"geocoding": {"decision": {"reason": "future_reason"}}},
+            None,
+            True,
+            "extraction_only",
+        ),
+        ("추출 후보", "transcript", None, None, True, "extraction_only"),
+    ]
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="reason-video",
+                source_kind=source_kind,
+                source_text=f"긴 목록 제외 근거 {name}",
+                ai_place_name=name,
+                match_status=MatchStatus.NEEDS_REVIEW,
+                confidence_score=0.83 if expected == "extraction_only" else None,
+                provider_evidence_json=evidence,
+                review_note=review_note,
+                is_domestic=is_domestic,
+            )
+            for (
+                name,
+                source_kind,
+                evidence,
+                review_note,
+                is_domestic,
+                expected,
+            ) in cases
+        ]
+    )
+    invalid_scores = {
+        "NaN 신뢰도": float("nan"),
+        "무한 신뢰도": float("inf"),
+        "음수 신뢰도": -0.1,
+        "초과 신뢰도": 1.1,
+    }
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="reason-video",
+                source_text=name,
+                ai_place_name=name,
+                match_status=MatchStatus.NEEDS_REVIEW,
+                confidence_score=score,
+            )
+            for name, score in invalid_scores.items()
+        ]
+    )
+    await session.commit()
+
+    response = await client.get("/api/v1/destinations/unmatched")
+    assert response.status_code == 200
+    body = response.json()
+    by_name = {item["ai_place_name"]: item for item in body["items"]}
+    assert {
+        name: by_name[name]["queue_reason"]
+        for name, *_rest in cases
+    } == {name: expected for name, *_middle, expected in cases}
+    extraction = by_name["추출 후보"]
+    assert extraction["video_title"] == "사유 판정 검수 영상"
+    assert extraction["channel_title"] == "정규 검수 채널"
+    assert extraction["confidence_score"] == 0.83
+    assert extraction["source_kind"] == "transcript"
+    assert extraction["created_at"].endswith("+00:00")
+    assert "provider_evidence_json" not in extraction
+    assert "source_text" not in extraction
+    assert len(response.content) < 30_000
+    assert all(by_name[name]["confidence_score"] is None for name in invalid_scores)
+
+    reason_filtered = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={"reason": "name_mismatch"},
+    )
+    assert reason_filtered.status_code == 200
+    assert reason_filtered.json()["total"] == 1
+    assert [item["ai_place_name"] for item in reason_filtered.json()["items"]] == [
+        "이름 불일치"
+    ]
+
+    combined = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={"reason": "no_result", "source_kind": "description"},
+    )
+    assert combined.status_code == 200
+    assert combined.json()["total"] == 1
+    assert combined.json()["items"][0]["ai_place_name"] == "결과 없는 설명 후보"
+
+    first_transcript = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={"limit": 1, "source_kind": "transcript"},
+    )
+    assert first_transcript.json()["has_more"] is True
+    mismatched_cursor = await client.get(
+        "/api/v1/destinations/unmatched",
+        params={
+            "limit": 1,
+            "source_kind": "visual",
+            "cursor": first_transcript.json()["next_cursor"],
+        },
+    )
+    assert mismatched_cursor.status_code == 400
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"reason": "not-a-reason"}
+        )
+    ).status_code == 422
+    assert (
+        await client.get(
+            "/api/v1/destinations/unmatched", params={"source_kind": "unknown"}
+        )
+    ).status_code == 422
+
+
 async def test_destinations_501_stable_tie_break_and_page_outside_detail(
     client, session
 ):

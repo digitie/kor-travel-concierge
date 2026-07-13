@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-13: T-182 — 검수 행 판단 정보와 안정 대기 사유
+
+- **경량 목록 보강**: 검수 후보를 `youtube_videos`·`youtube_channels`와 항상 outer join해 영상 제목,
+  정규 채널 제목, 매칭 신뢰도, 출처, 생성 시각을 짧은 scalar로 반환한다. `source_text`,
+  `review_note`, `provider_evidence_json`은 계속 상세 API에만 둔다. 300건 n150 fixture에서 기존 필드
+  환산 64,456 byte 대비 122,656 byte로 항목당 약 194 byte만 늘었고, 후보 evidence에 100KB 문자열이
+  있어도 목록 응답에 포함되지 않았다.
+- **신뢰 가능한 사유 계약**: `queue_reason`을 저장 컬럼으로 중복하지 않고 evidence에서 파생한다.
+  장소명·지역 불일치, URL/자막 대조의 충돌·저신뢰·불확실, 지오코딩 모호·무결과·미정제, 해외,
+  설명/시각 전용, provider 구조 누락, 추출 대기의 우선순위를 정본 문서에 고정했다. reason·source
+  filter는 items·total·newer_than과 cursor fingerprint에 동일 적용하며 scope를 `unmatched-v2`로
+  올렸다. grounding은 T-165 raw 근거 저장 전에는 산출·filter하지 않는다.
+- **오염 데이터 fail-safe**: 별도 confidence 컬럼은 유한한 0..1만 JSON으로 내보내고 NaN·Infinity·
+  범위 밖은 `null`로 바꾼다. schema 없는 reconcile JSONB 점수는 JSON number일 때만 PostgreSQL
+  `NUMERIC`으로 변환해 문자열·객체·거대 숫자 한 건이 목록 전체를 실패시키지 않게 했다. 정상·미래
+  geocoding reason도 `provider_missing`으로 오분류하지 않는다.
+- **행 UX·검증**: 후보명 옆에 매칭 신뢰도와 사유 badge, 출처 칸에 영상 제목·채널·위치, 상태 칸에
+  출처와 등록 시각을 표시하고 raw video ID는 tooltip/detail로 강등했다. 적대적 검토를 세 단계로
+  반복해 최종 P0/P1 0건을 확인했다. n150에서 PostgreSQL 타깃 8건·변경 파일 Ruff, backend 전체
+  385건(기존 postprocess category 기대 1건 실패), frontend lint·type-check·전체 Vitest·production
+  build, Playwright 9건을 검증했다. 전체 Ruff의 기존 미사용 import/변수 12건은 변경 범위 밖으로
+  분리했다.
+
 ## 2026-07-13: T-162 — durable stage events + restart lineage·attention (B6)
 
 - **문제**: `status_log_json` parser가 timestamp/level/message/progress 4필드만 보존·80건 절단
