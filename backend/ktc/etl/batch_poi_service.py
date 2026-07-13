@@ -26,6 +26,7 @@ from ktc.etl import (
     media_store,
     transcript_correction,
 )
+from ktc.etl.place_name import normalize_place_name
 from ktc.etl.transcript import (
     TranscriptAttempt,
     TranscriptOutcome,
@@ -497,10 +498,11 @@ async def process_video_batch(
         )
         raise
 
-    # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 장소명) 중복은 건너뛴다(멱등성:
-    #    부분 재실행/재시작 시 중복 후보 방지). soft delete된 후보는 dedup 기준에서
-    #    제외한다(T-160/로드맵 B1 절차 2 — 재추출 시 새 후보로 검수 큐에 재등장할 수
-    #    있다. 영구 억제는 `ignored` 또는 영상 제외가 담당).
+    # 3) 결과를 영상별 needs_review 후보로 생성. (영상, 정규화 장소명) 중복은 건너뛴다.
+    #    멱등성(부분 재실행/재시작 시 중복 후보 방지)에 더해, 정규화 이름 기준이라 같은
+    #    영상 내 "성심당/성심당 본점" 같은 변형 표기가 별개 후보로 흩어지지 않는다(D6,
+    #    로드맵 PR-14 절차 2). soft delete된 후보는 dedup 기준에서 제외한다(T-160/B1 절차 2 —
+    #    재추출 시 새 후보로 검수 큐에 재등장할 수 있고 영구 억제는 `ignored`·영상 제외 담당).
     batch_video_ids = [item["video"].video_id for item in batch.values()]
     existing_pairs: set[tuple[str, str]] = set()
     if batch_video_ids:
@@ -513,7 +515,9 @@ async def process_video_batch(
                 ExtractedPlaceCandidate.deleted_at.is_(None),
             )
         )
-        existing_pairs = {(str(v), str(n)) for v, n in rows.all()}
+        existing_pairs = {
+            (str(v), normalize_place_name(n)) for v, n in rows.all()
+        }
     # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
     # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
     grounding_indexes: dict[str, grounding.GroundingIndex] = {
@@ -526,9 +530,10 @@ async def process_video_batch(
         if item is None:
             continue
         video = item["video"]
-        if (video.video_id, poi.official_name) in existing_pairs:
+        dedup_key = (video.video_id, normalize_place_name(poi.official_name))
+        if dedup_key in existing_pairs:
             continue
-        existing_pairs.add((video.video_id, poi.official_name))
+        existing_pairs.add(dedup_key)
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
         category_code = (
             poi.category_code
