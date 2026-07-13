@@ -1090,6 +1090,634 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
+  test('선택 일괄 제외는 개별 mutation 없이 preview와 execute 한 번으로 처리한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page);
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
+    await firstRow.getByRole('checkbox').click();
+    await secondRow.getByRole('checkbox').click();
+    await expect(page.getByText('현재 후보 2건 선택됨')).toBeVisible();
+
+    await page.getByRole('button', { name: '선택 제외', exact: true }).click();
+    await expect.poll(() => requests.bulkPreviewBodies.length).toBe(1);
+    const dialog = page.getByRole('alertdialog');
+    await expect(
+      dialog.getByText('선택한 후보 2건을 제외할까요?', { exact: true }),
+    ).toBeVisible();
+    expect(requests.bulkExecuteBodies).toEqual([]);
+    expect(requests.resolveCandidateIds).toEqual([]);
+    expect(requests.deleteCandidateIds).toEqual([]);
+
+    await dialog
+      .getByRole('button', { name: '2건 제외 시작', exact: true })
+      .click();
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(1);
+    await expect(
+      dialog.getByText('선택한 후보 제외 완료', { exact: true }),
+    ).toBeVisible();
+
+    expect(requests.bulkPreviewBodies).toEqual([
+      {
+        action: 'ignore',
+        scope: { kind: 'selection', candidate_ids: [1, 2] },
+      },
+    ]);
+    expect(requests.bulkPreviewCandidateIds).toEqual([[1, 2]]);
+    expect(requests.bulkExecuteBodies).toHaveLength(1);
+    expect(requests.bulkExecuteBodies[0]).toMatchObject({
+      operation_id: '10000000-0000-4000-8000-000000000001',
+      confirmation_token:
+        'rbulk1.10000000-0000-4000-8000-000000000001.mock_secret_1',
+      cursor: null,
+    });
+    expect(requests.bulkCommittedReceipts[0]).toMatchObject({
+      processed: 2,
+      succeeded: 2,
+      remaining: 0,
+      next_cursor: null,
+      complete: true,
+    });
+    expect(requests.resolveCandidateIds).toEqual([]);
+    expect(requests.deleteCandidateIds).toEqual([]);
+    expect([...requests.processedCandidateIds].sort((a, b) => a - b)).toEqual([
+      1,
+      2,
+    ]);
+
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('선택 일괄 삭제는 execute 정산 뒤 대기 목록에서 빠지고 삭제 목록에 남는다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page);
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
+    await firstRow.getByRole('checkbox').click();
+    await secondRow.getByRole('checkbox').click();
+
+    await page.getByRole('button', { name: '선택 삭제', exact: true }).click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(
+      dialog.getByText('선택한 후보 2건을 삭제할까요?', { exact: true }),
+    ).toBeVisible();
+    await dialog
+      .getByRole('button', { name: '2건 삭제 시작', exact: true })
+      .click();
+
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(1);
+    await expect(
+      dialog.getByText('선택한 후보 삭제 완료', { exact: true }),
+    ).toBeVisible();
+    await expect(dialog.getByText('2 / 2건 처리됨', { exact: true })).toBeVisible();
+    expect(requests.bulkPreviewBodies).toEqual([
+      {
+        action: 'delete',
+        scope: { kind: 'selection', candidate_ids: [1, 2] },
+      },
+    ]);
+    expect(requests.bulkExecuteBodies).toHaveLength(1);
+    expect(requests.bulkCommittedCandidateIds).toEqual([[1, 2]]);
+    expect(requests.bulkCommittedReceipts[0]).toMatchObject({
+      processed: 2,
+      succeeded: 2,
+      conflicts: [],
+      failed: [],
+      remaining: 0,
+      next_cursor: null,
+      complete: true,
+    });
+    expect(requests.resolveCandidateIds).toEqual([]);
+    expect(requests.deleteCandidateIds).toEqual([]);
+
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    await expect(firstRow).toHaveCount(0);
+    await expect(secondRow).toHaveCount(0);
+
+    const statusFilter = page.getByRole('combobox', {
+      name: '검수 후보 상태',
+    });
+    await statusFilter.click();
+    await page.getByRole('option', { name: '제외·삭제됨' }).click();
+    const deletedFirstRow = page.getByRole('row', {
+      name: /자동 후보 1(?!\d)/,
+    });
+    const deletedSecondRow = page.getByRole('row', {
+      name: /자동 후보 2(?!\d)/,
+    });
+    await expect(deletedFirstRow).toContainText('삭제됨');
+    await expect(deletedSecondRow).toContainText('삭제됨');
+    expect([...requests.processedCandidateIds].sort((a, b) => a - b)).toEqual([
+      1,
+      2,
+    ]);
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('확인 전 취소는 이전 scope와 token을 폐기하고 새 선택 preview만 연다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page);
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
+    const firstCheckbox = firstRow.getByRole('checkbox');
+    const secondCheckbox = secondRow.getByRole('checkbox');
+    const selectionIgnore = page.getByRole('button', {
+      name: '선택 제외',
+      exact: true,
+    });
+    const selectionDelete = page.getByRole('button', {
+      name: '선택 삭제',
+      exact: true,
+    });
+
+    await firstCheckbox.click();
+    await selectionIgnore.click();
+    await expect.poll(() => requests.bulkPreviewResults.length).toBe(1);
+    const dialog = page.getByRole('alertdialog');
+    await expect(
+      dialog.getByText('선택한 후보 1건을 제외할까요?', { exact: true }),
+    ).toBeVisible();
+    const firstPreviewIdentity = requests.bulkPreviewResults[0];
+    await dialog.getByRole('button', { name: '취소', exact: true }).click();
+
+    await expect(dialog).toBeHidden();
+    await expect(firstCheckbox).toBeEnabled();
+    await expect(selectionIgnore).toBeEnabled();
+    await firstCheckbox.click();
+    await secondCheckbox.click();
+    await expect(firstCheckbox).not.toBeChecked();
+    await expect(secondCheckbox).toBeChecked();
+    await expect(selectionDelete).toBeEnabled();
+
+    await selectionDelete.click();
+    await expect.poll(() => requests.bulkPreviewResults.length).toBe(2);
+    await expect(
+      dialog.getByText('선택한 후보 1건을 삭제할까요?', { exact: true }),
+    ).toBeVisible();
+    expect(requests.bulkPreviewBodies).toEqual([
+      {
+        action: 'ignore',
+        scope: { kind: 'selection', candidate_ids: [1] },
+      },
+      {
+        action: 'delete',
+        scope: { kind: 'selection', candidate_ids: [2] },
+      },
+    ]);
+    expect(requests.bulkPreviewCandidateIds).toEqual([[1], [2]]);
+    expect(requests.bulkPreviewResults[1].operation_id).not.toBe(
+      firstPreviewIdentity.operation_id,
+    );
+    expect(requests.bulkPreviewResults[1].confirmation_token).not.toBe(
+      firstPreviewIdentity.confirmation_token,
+    );
+    expect(requests.bulkExecuteBodies).toEqual([]);
+    expect(requests.resolveCandidateIds).toEqual([]);
+    expect(requests.deleteCandidateIds).toEqual([]);
+
+    await dialog.getByRole('button', { name: '취소', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(secondCheckbox).toBeEnabled();
+    await expect(selectionDelete).toBeEnabled();
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('현재 필터의 해외 701건을 100건씩 처리하고 응답 유실 chunk receipt를 exact replay한다', async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      bulkForeignCandidateCount: 701,
+      includeNullDomesticBulkCandidate: true,
+      firstBulkExecuteCommitsThenFails: true,
+    });
+
+    await loginAsAdminWithQuery(
+      page,
+      '/review?sort=oldest&group=channel&group_value=review-source-channel-foreign&q=%ED%95%B4%EC%99%B8+%EC%A7%80%EC%97%AD+%ED%9E%8C%ED%8A%B8&grounding=verified_raw',
+    );
+    await page
+      .getByRole('button', {
+        name: '현재 필터의 해외 판정 후보 모두 제외',
+        exact: true,
+      })
+      .click();
+    await expect.poll(() => requests.bulkPreviewBodies.length).toBe(1);
+    const dialog = page.getByRole('alertdialog');
+    await expect(
+      dialog.getByText(
+        '현재 필터의 해외 판정 후보 701건을 제외할까요?',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(/is_domestic=false.*LLM 판정 결과/),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(/페이지를 새로고침하거나 탭을 닫으면 현재 진행 정보를 잃습니다/),
+    ).toBeVisible();
+
+    expect(requests.bulkPreviewBodies).toEqual([
+      {
+        action: 'ignore',
+        scope: {
+          kind: 'filter',
+          filter: {
+            channel_id: 'review-source-channel-foreign',
+            q: '해외 지역 힌트',
+            is_domestic: false,
+            status: 'needs_review',
+            grounding: 'verified_raw',
+          },
+        },
+      },
+    ]);
+    expect(requests.bulkPreviewCandidateIds[0]).toHaveLength(701);
+    expect(requests.nullDomesticCandidateId).not.toBeNull();
+    expect(requests.bulkPreviewCandidateIds[0]).not.toContain(
+      requests.nullDomesticCandidateId,
+    );
+
+    await dialog
+      .getByRole('button', { name: '701건 제외 시작', exact: true })
+      .click();
+    await expect(
+      dialog.getByRole('button', { name: '같은 묶음 다시 시도' }),
+    ).toBeVisible();
+    expect(requests.bulkExecuteBodies).toHaveLength(1);
+    expect(requests.bulkCommittedCandidateIds).toHaveLength(1);
+    expect(requests.bulkCommittedCandidateIds[0]).toHaveLength(100);
+    expect(requests.bulkReceiptReplays).toEqual([]);
+    await dialog
+      .getByRole('button', { name: '같은 묶음 다시 시도' })
+      .click();
+
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(8);
+    await expect(
+      dialog.getByText('현재 필터의 해외 판정 후보 제외 완료', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(dialog.getByText('701 / 701건 처리됨')).toBeVisible();
+
+    expect(requests.bulkExecuteBodies).toHaveLength(9);
+    expect(requests.bulkExecuteBodies[1]).toEqual(
+      requests.bulkExecuteBodies[0],
+    );
+    expect(requests.bulkExecuteBodies[0].cursor).toBeNull();
+    expect(requests.bulkExecuteBodies[2].cursor).toBe(
+      'bulk-cursor:10000000-0000-4000-8000-000000000001:100',
+    );
+    expect(requests.bulkReceiptReplays).toEqual([
+      requests.bulkCommittedReceipts[0],
+    ]);
+    expect(
+      requests.bulkCommittedCandidateIds.map((candidateIds) =>
+        candidateIds.length,
+      ),
+    ).toEqual([100, 100, 100, 100, 100, 100, 100, 1]);
+    const committedIds = requests.bulkCommittedCandidateIds.flat();
+    expect(committedIds).toHaveLength(701);
+    expect(new Set(committedIds).size).toBe(701);
+    expect(committedIds).not.toContain(requests.nullDomesticCandidateId);
+    expect(requests.processedCandidateIds.size).toBe(701);
+    expect(requests.processedCandidateIds.has(1)).toBe(false);
+    expect(
+      requests.nullDomesticCandidateId == null
+        ? false
+        : requests.processedCandidateIds.has(
+            requests.nullDomesticCandidateId,
+          ),
+    ).toBe(false);
+    expect(
+      new Set(requests.bulkExecuteBodies.map((body) => body.request_id)).size,
+    ).toBe(8);
+    expect(requests.resolveCandidateIds).toEqual([]);
+    expect(requests.deleteCandidateIds).toEqual([]);
+    expect(requests.reopenCandidateIds).toEqual([]);
+
+    const expectedResourceErrors = errors.filter(
+      (message) =>
+        message.includes('Failed to load resource') &&
+        message.includes('500 (Internal Server Error)'),
+    );
+    expect(expectedResourceErrors).toHaveLength(1);
+    expectRelevantConsoleErrors(
+      errors.filter((message) => !expectedResourceErrors.includes(message)),
+    ).toEqual([]);
+  });
+
+  test('실행 중 filter가 바뀌면 settlement가 최신 scope 목록을 다시 불러온다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    const requests = await installReviewQueueMock(page, {
+      bulkForeignCandidateCount: 1,
+      holdFirstBulkExecuteResponse: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=newest');
+    const targetName = '해외 일괄 후보 1';
+    const targetRow = page.getByRole('row', {
+      name: new RegExp(`${targetName}(?!\\d)`),
+    });
+    await expect(targetRow).toBeVisible();
+
+    await page
+      .getByRole('button', {
+        name: '현재 필터의 해외 판정 후보 모두 제외',
+        exact: true,
+      })
+      .click();
+    const dialog = page.getByRole('alertdialog');
+    await dialog
+      .getByRole('button', { name: '1건 제외 시작', exact: true })
+      .click();
+    await expect.poll(() => requests.bulkExecuteBodies.length).toBe(1);
+    await dialog
+      .getByRole('button', { name: '창 닫기 · 작업은 계속됨' })
+      .click();
+
+    const searchInput = page.getByRole('textbox', {
+      name: '검수 후보 검색',
+    });
+    await searchInput.fill(targetName);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('q'))
+      .toBe(targetName);
+    await expect(targetRow).toBeVisible();
+    const currentScopeRequestCount = () =>
+      requests.mainListRequests.filter(
+        (url) => url.searchParams.get('q') === targetName,
+      ).length;
+    await expect.poll(currentScopeRequestCount).toBeGreaterThan(0);
+    const requestsBeforeCommit = currentScopeRequestCount();
+
+    requests.releaseBulkExecuteResponse();
+
+    await expect
+      .poll(currentScopeRequestCount)
+      .toBeGreaterThan(requestsBeforeCommit);
+    await expect(targetRow).toHaveCount(0);
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('혼합 partial은 실패 ID만 다시 확인하고 느린 목록 정리 뒤 새 operation을 이어서 실행한다', async ({
+    page,
+  }) => {
+    const requests = await installReviewQueueMock(page, {
+      firstBulkMixedPartial: true,
+      holdBulkSettlementList: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    for (const candidateId of [1, 2, 3]) {
+      await page
+        .getByRole('row', {
+          name: new RegExp(`자동 후보 ${candidateId}(?!\\d)`),
+        })
+        .getByRole('checkbox')
+        .click();
+    }
+    await page.getByRole('button', { name: '선택 제외', exact: true }).click();
+    const dialog = page.getByRole('alertdialog');
+    await dialog
+      .getByRole('button', { name: '3건 제외 시작', exact: true })
+      .click();
+
+    await expect(
+      dialog.getByText('선택한 후보 제외가 일부 완료되었습니다', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(/처리 실패 1건만 다시 확인.*상태 충돌 1건.*직접 다시 선택/),
+    ).toBeVisible();
+    expect(requests.bulkCommittedReceipts[0]).toMatchObject({
+      processed: 3,
+      succeeded: 1,
+      conflicts: [{ candidate_id: 2 }],
+      failed: [{ candidate_id: 3 }],
+    });
+
+    await dialog
+      .getByRole('button', { name: '처리 실패 1건 다시 확인', exact: true })
+      .click();
+    await expect.poll(() => requests.bulkPreviewCandidateIds.length).toBe(2);
+    expect(requests.bulkPreviewCandidateIds[1]).toEqual([3]);
+    expect(requests.bulkPreviewCandidateIds[1]).not.toContain(2);
+    await dialog
+      .getByRole('button', { name: '1건 제외 시작', exact: true })
+      .click();
+
+    // 첫 operation의 onSettled 목록 요청이 끝나기 전에는 old driver가 잠겨 있다.
+    expect(requests.bulkExecuteBodies).toHaveLength(1);
+    requests.releaseBulkSettlementList();
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(2);
+    await expect(
+      dialog.getByText('선택한 후보 제외 완료', { exact: true }),
+    ).toBeVisible();
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+
+    await expect(
+      page.getByRole('row', { name: /자동 후보 2(?!\d)/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('row', { name: /자동 후보 3(?!\d)/ }),
+    ).toHaveCount(0);
+    expect(requests.processedCandidateIds.has(1)).toBe(true);
+    expect(requests.processedCandidateIds.has(2)).toBe(false);
+    expect(requests.processedCandidateIds.has(3)).toBe(true);
+  });
+
+  test('390x667에서 후보와 2열 toolbar를 함께 쓰고 실행 dialog를 닫아도 재열기 focus를 보존한다', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 667 });
+    const requests = await installReviewQueueMock(page, {
+      holdFirstBulkExecuteResponse: true,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
+    await firstRow.scrollIntoViewIfNeeded();
+    await expect(firstRow).toBeVisible();
+    const bulkRegion = page.getByRole('region', { name: '일괄 검수 도구' });
+    const bulkBox = await bulkRegion.boundingBox();
+    expect(bulkBox).not.toBeNull();
+    expect((bulkBox?.y ?? 0) + (bulkBox?.height ?? 0)).toBeLessThanOrEqual(667);
+
+    await firstRow.getByRole('checkbox').click();
+    await page.getByRole('button', { name: '선택 제외', exact: true }).click();
+    const dialog = page.getByRole('alertdialog');
+    await dialog
+      .getByRole('button', { name: '1건 제외 시작', exact: true })
+      .click();
+    await expect(
+      dialog.getByRole('button', { name: '창 닫기 · 작업은 계속됨' }),
+    ).toBeVisible();
+    await dialog
+      .getByRole('button', { name: '창 닫기 · 작업은 계속됨' })
+      .click();
+
+    const reopen = page.getByRole('button', { name: '진행 상황 보기' });
+    await expect(reopen).toBeFocused();
+    await reopen.click();
+    await dialog
+      .getByRole('button', { name: '창 닫기 · 작업은 계속됨' })
+      .click();
+    await expect(page.getByRole('button', { name: '진행 상황 보기' })).toBeFocused();
+
+    requests.releaseBulkExecuteResponse();
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(1);
+    await page.getByRole('button', { name: '일괄 처리 결과 보기' }).click();
+    await expect(
+      dialog.getByText('선택한 후보 제외 완료', { exact: true }),
+    ).toBeVisible();
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    await expect(bulkRegion).toBeFocused();
+  });
+
+  const bulkTerminalScenarios = [
+    {
+      failure: 'expired' as const,
+      title: '확인 시간이 만료되었습니다',
+      escape: '목록 새로고침',
+    },
+    {
+      failure: 'stale' as const,
+      title: '일괄 처리 진행 상태가 변경되었습니다',
+      escape: '목록 새로고침',
+    },
+    {
+      failure: 'fatal' as const,
+      title: '현재 필터의 해외 판정 후보 제외에 실패했습니다',
+      escape: '목록 새로고침',
+    },
+    {
+      failure: 'contract' as const,
+      title: '일괄 처리 결과를 신뢰할 수 없습니다',
+      escape: '목록 새로고침',
+    },
+  ];
+
+  for (const scenario of bulkTerminalScenarios) {
+    test(`일괄 실행 ${scenario.failure} 오류는 확인된 progress와 안전한 탈출 경로를 표시한다`, async ({
+      page,
+    }) => {
+      const requests = await installReviewQueueMock(page, {
+        bulkForeignCandidateCount: 201,
+        secondBulkExecuteFailure: scenario.failure,
+      });
+
+      await loginAsAdminWithQuery(page, '/review?sort=oldest');
+      await page
+        .getByRole('button', {
+          name: '현재 필터의 해외 판정 후보 모두 제외',
+          exact: true,
+        })
+        .click();
+      const dialog = page.getByRole('alertdialog');
+      await dialog
+        .getByRole('button', { name: '201건 제외 시작', exact: true })
+        .click();
+
+      await expect(dialog.getByText(scenario.title, { exact: true })).toBeVisible();
+      await expect(dialog.getByText('100 / 201건 처리됨')).toBeVisible();
+      await expect(
+        dialog.getByText(/성공 100건.*충돌 0건.*실패 0건.*남음 101건/),
+      ).toBeVisible();
+      expect(requests.bulkCommittedReceipts).toHaveLength(1);
+
+      await dialog
+        .getByRole('button', { name: scenario.escape, exact: true })
+        .click();
+      await expect(dialog).toBeHidden();
+      expect(requests.bulkPreviewResults).toHaveLength(1);
+    });
+  }
+
+  test('직접 선택은 불러온 501건 중 500건에서 멈추고 preview 범위도 500건이다', async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+    const requests = await installReviewQueueMock(page, {
+      standardDomesticCandidateCount: 501,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await page.getByRole('button', { name: '후보 더 불러오기' }).click();
+    await expect(page.getByText('501/501개 불러옴').first()).toBeVisible();
+    await page
+      .getByRole('checkbox', { name: '불러온 후보 중 최대 500건 선택' })
+      .click();
+    await expect(
+      page.getByText('현재 후보 500건 선택됨 · 직접 선택 상한', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('row', { name: /자동 후보 501(?!\d)/ })
+        .getByRole('checkbox'),
+    ).toBeDisabled();
+
+    await page.getByRole('button', { name: '선택 삭제', exact: true }).click();
+    await expect.poll(() => requests.bulkPreviewCandidateIds.length).toBe(1);
+    expect(requests.bulkPreviewCandidateIds[0]).toHaveLength(500);
+    await expect(
+      page
+        .getByRole('alertdialog')
+        .getByText('선택한 후보 500건을 삭제할까요?', { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: '취소', exact: true })
+      .click();
+  });
+
+  test('필터 preview가 0건이면 실행 버튼 없이 취소하고 execute를 보내지 않는다', async ({
+    page,
+  }) => {
+    const requests = await installReviewQueueMock(page, {
+      bulkForeignCandidateCount: 0,
+    });
+
+    await loginAsAdminWithQuery(page, '/review?sort=oldest');
+    await page
+      .getByRole('button', {
+        name: '현재 필터의 해외 판정 후보 모두 제외',
+        exact: true,
+      })
+      .click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(
+      dialog.getByText('현재 필터의 해외 판정 후보 0건을 제외할까요?', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: /제외 시작/ }),
+    ).toHaveCount(0);
+    expect(requests.bulkExecuteBodies).toEqual([]);
+    await dialog.getByRole('button', { name: '취소', exact: true }).click();
+    await expect(dialog).toBeHidden();
+  });
+
   test('마지막 단건 제외를 snackbar에서 되돌리고 같은 후보를 다시 선택한다', async ({
     page,
   }) => {
@@ -1250,7 +1878,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
-  test('제외·삭제 목록은 외부 검색 없이 두 상태를 보여주고 삭제 후보를 복구한다', async ({
+  test('제외·삭제 목록은 외부 검색 없이 두 상태를 보여주고 선택 후보를 일괄 복구한다', async ({
     page,
   }) => {
     const errors = collectConsoleErrors(page);
@@ -1285,8 +1913,10 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const deletedRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
     await expect(ignoredRow).toContainText('제외됨');
     await expect(deletedRow).toContainText('삭제됨');
-    await expect(ignoredRow.getByRole('checkbox')).toHaveCount(0);
-    await expect(deletedRow.getByRole('checkbox')).toHaveCount(0);
+    const ignoredCheckbox = ignoredRow.getByRole('checkbox');
+    const deletedCheckbox = deletedRow.getByRole('checkbox');
+    await expect(ignoredCheckbox).toBeEnabled();
+    await expect(deletedCheckbox).toBeEnabled();
     await expect(
       page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
     ).toHaveCount(0);
@@ -1312,17 +1942,58 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await deletedRow.click();
     await expect(page.getByText(/출처 영상은 제외 상태입니다/)).toBeVisible();
-    await deletedRow
-      .getByRole('button', { name: '자동 후보 2 후보 복구' })
-      .click();
-    await expect.poll(() => requests.reopenCandidateIds).toEqual([2]);
-    await expect(statusFilter).toContainText('검수 대기');
-    await expect
-      .poll(() => new URL(page.url()).searchParams.get('candidate'))
-      .toBe('2');
+    await ignoredCheckbox.click();
+    await deletedCheckbox.click();
+    await expect(page.getByText('현재 후보 2건 선택됨')).toBeVisible();
+    await page.getByRole('button', { name: '선택 복구', exact: true }).click();
+
+    await expect.poll(() => requests.bulkPreviewBodies.length).toBe(1);
+    const bulkDialog = page.getByRole('alertdialog');
     await expect(
-      page.getByText(/후보를 복구하거나 다시 확정해도 영상 제외는 유지됩니다/),
+      bulkDialog.getByText('선택한 후보 2건을 복구할까요?', {
+        exact: true,
+      }),
     ).toBeVisible();
+    expect(requests.bulkPreviewBodies).toEqual([
+      {
+        action: 'reopen',
+        scope: { kind: 'selection', candidate_ids: [1, 2] },
+      },
+    ]);
+    expect(requests.reopenCandidateIds).toEqual([]);
+
+    await bulkDialog
+      .getByRole('button', { name: '2건 복구 시작', exact: true })
+      .click();
+    await expect.poll(() => requests.bulkCommittedReceipts.length).toBe(1);
+    await expect(
+      bulkDialog.getByText('선택한 후보 복구 완료', { exact: true }),
+    ).toBeVisible();
+    expect(requests.bulkCommittedCandidateIds).toEqual([[1, 2]]);
+    expect(requests.bulkCommittedReceipts[0]).toMatchObject({
+      processed: 2,
+      succeeded: 2,
+      remaining: 0,
+      complete: true,
+    });
+    expect(requests.reopenCandidateIds).toEqual([]);
+    expect(requests.resolveCandidateIds).toEqual([1]);
+    expect(requests.deleteCandidateIds).toEqual([2]);
+    expect([...requests.processedCandidateIds]).toEqual([]);
+    // modal AlertDialog가 열린 동안 배경은 aria-hidden이다. 완료 내용을 확인한 뒤
+    // 닫고 목록 settlement 결과를 접근성 role로 검증한다.
+    await bulkDialog.getByRole('button', { name: '닫기', exact: true }).click();
+    await expect(statusFilter).toContainText('제외·삭제됨');
+    await expect(ignoredRow).toHaveCount(0);
+    await expect(deletedRow).toHaveCount(0);
+
+    await statusFilter.click();
+    await page.getByRole('option', { name: '검수 대기' }).click();
+    const reopenedExcludedVideoRow = page.getByRole('row', {
+      name: /자동 후보 2(?!\d)/,
+    });
+    await expect(reopenedExcludedVideoRow).toBeVisible();
+    await expect(reopenedExcludedVideoRow).toContainText('출처 영상 제외 유지');
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
@@ -2310,6 +2981,59 @@ type ReviewQueueMockCursor = {
   lastId: number;
 };
 
+type ReviewBulkMockAction = 'ignore' | 'delete' | 'reopen';
+
+type ReviewBulkMockPreviewBody = {
+  action: ReviewBulkMockAction;
+  scope:
+    | { kind: 'selection'; candidate_ids: number[] }
+    | { kind: 'filter'; filter: Record<string, unknown> };
+};
+
+type ReviewBulkMockExecuteBody = {
+  operation_id: string;
+  confirmation_token: string;
+  cursor: string | null;
+  request_id: string;
+};
+
+type ReviewBulkMockReceipt = {
+  operation_id: string;
+  request_id: string;
+  processed: number;
+  succeeded: number;
+  conflicts: Array<{
+    candidate_id: number;
+    code: string;
+    message: string;
+  }>;
+  failed: Array<{
+    candidate_id: number;
+    code: string;
+    message: string;
+  }>;
+  remaining: number;
+  next_cursor: string | null;
+  complete: boolean;
+};
+
+type ReviewBulkMockOperation = {
+  operationId: string;
+  confirmationToken: string;
+  action: ReviewBulkMockAction;
+  candidateIds: number[];
+  candidateRevisions: Map<number, number>;
+  offset: number;
+  expectedCursor: string | null;
+  receipts: Map<
+    string,
+    {
+      request: ReviewBulkMockExecuteBody;
+      receipt: ReviewBulkMockReceipt;
+    }
+  >;
+};
+
 const BASE64URL_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
@@ -2454,6 +3178,14 @@ async function installReviewQueueMock(
     firstReopenFailsWithoutProcessing?: boolean;
     firstReopenStale?: boolean;
     videoExcludedCandidateId?: number;
+    standardDomesticCandidateCount?: number;
+    bulkForeignCandidateCount?: number;
+    includeNullDomesticBulkCandidate?: boolean;
+    firstBulkExecuteCommitsThenFails?: boolean;
+    firstBulkMixedPartial?: boolean;
+    holdBulkSettlementList?: boolean;
+    holdFirstBulkExecuteResponse?: boolean;
+    secondBulkExecuteFailure?: 'expired' | 'stale' | 'fatal' | 'contract';
   } = {},
 ) {
   if (options.holdOpinionUntilCancelled) {
@@ -2488,25 +3220,66 @@ async function installReviewQueueMock(
       };
     });
   }
-  const standardDomesticCandidates = Array.from({ length: 301 }, (_, index) => {
-    const candidate = reviewCandidateFixture(
-      index + 1,
-      `자동 후보 ${index + 1}`,
-      true,
-      index === 0 ? '12:34-13:00' : '00:10',
-    );
-    return candidate.id === options.videoExcludedCandidateId
-      ? { ...candidate, video_is_excluded: true }
-      : candidate;
-  });
+  const standardDomesticCandidates = Array.from(
+    { length: options.standardDomesticCandidateCount ?? 301 },
+    (_, index) => {
+      const candidate = reviewCandidateFixture(
+        index + 1,
+        `자동 후보 ${index + 1}`,
+        true,
+        index === 0 ? '12:34-13:00' : '00:10',
+      );
+      return candidate.id === options.videoExcludedCandidateId
+        ? { ...candidate, video_is_excluded: true }
+        : candidate;
+    },
+  );
+  const bulkForeignCandidateCount = options.bulkForeignCandidateCount ?? 1;
+  const foreignCandidates =
+    options.bulkForeignCandidateCount == null
+      ? [
+          reviewCandidateFixture(
+            400,
+            '해외 숨김 후보',
+            false,
+            '00:10',
+            'verified_raw',
+            '해외 지역 힌트',
+          ),
+        ]
+      : Array.from({ length: bulkForeignCandidateCount }, (_, index) =>
+          reviewCandidateFixture(
+            1_000 + index,
+            `해외 일괄 후보 ${index + 1}`,
+            false,
+            '00:10',
+            'verified_raw',
+            '해외 지역 힌트',
+          ),
+        );
+  const nullDomesticCandidateId = options.includeNullDomesticBulkCandidate
+    ? 1_000 + bulkForeignCandidateCount
+    : null;
   const standardAllCandidates = [
     ...standardDomesticCandidates,
-    reviewCandidateFixture(400, '해외 숨김 후보', false),
+    ...foreignCandidates,
+    ...(nullDomesticCandidateId == null
+      ? []
+      : [
+          reviewCandidateFixture(
+            nullDomesticCandidateId,
+            '국내 여부 미판정 후보',
+            null,
+          ),
+        ]),
   ];
   const initialHiddenCandidates = [
     reviewCandidateFixture(1, '첫 page 해외 후보', false),
     reviewCandidateFixture(5, '뒤 page 국내 후보'),
   ];
+  const sourceCandidates = options.initialHiddenOnly
+    ? initialHiddenCandidates
+    : standardAllCandidates;
   const processedCandidateIds = new Set<number>();
   const resolvedCandidateStatuses = new Map<number, string>();
   const deletedCandidateIds = new Set<number>();
@@ -2538,6 +3311,177 @@ async function installReviewQueueMock(
       },
     };
   };
+  const candidateById = new Map(
+    sourceCandidates.map((candidate) => [candidate.id, candidate]),
+  );
+  const candidateProvenance = (candidateId: number) => {
+    const candidate = candidateById.get(candidateId);
+    const cohort =
+      candidate?.is_domestic === false
+        ? 'foreign'
+        : candidateId % 2 === 0
+          ? 'even'
+          : 'odd';
+    const channelId = `review-source-channel-${cohort}`;
+    return {
+      sourceChannelId: channelId,
+      videoChannelId: channelId,
+      sourcePlaylistId: `review-source-playlist-${cohort}`,
+      sourceSearchQuery: `review-source-keyword-${cohort}`,
+    };
+  };
+  const normalizedFilterText = (value: unknown) =>
+    typeof value === 'string' ? value.trim() || null : null;
+  const candidateMatchesQueueMembership = (
+    candidate: ReturnType<typeof reviewCandidateFixture>,
+    filter: {
+      query: string | null;
+      channelId: string | null;
+      playlistId: string | null;
+      keyword: string | null;
+      isDomestic: boolean | null;
+      queueReason: string | null;
+      sourceKind: string | null;
+      grounding: string | null;
+    },
+  ) => {
+    const provenance = candidateProvenance(candidate.id);
+    if (
+      filter.channelId &&
+      provenance.sourceChannelId !== filter.channelId &&
+      provenance.videoChannelId !== filter.channelId
+    ) {
+      return false;
+    }
+    if (
+      filter.playlistId &&
+      provenance.sourcePlaylistId !== filter.playlistId
+    ) {
+      return false;
+    }
+    if (filter.keyword && provenance.sourceSearchQuery !== filter.keyword) {
+      return false;
+    }
+    if (
+      filter.isDomestic !== null &&
+      candidate.is_domestic !== filter.isDomestic
+    ) {
+      return false;
+    }
+    if (filter.queueReason && candidate.queue_reason !== filter.queueReason) {
+      return false;
+    }
+    if (filter.sourceKind && candidate.source_kind !== filter.sourceKind) {
+      return false;
+    }
+    if (filter.grounding && candidate.grounding_status !== filter.grounding) {
+      return false;
+    }
+    if (filter.query) {
+      const query = filter.query.toLocaleLowerCase();
+      if (
+        !candidate.ai_place_name.toLocaleLowerCase().includes(query) &&
+        !(candidate.location_hint ?? '').toLocaleLowerCase().includes(query)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const candidateReviewState = (candidateId: number) =>
+    deletedCandidateIds.has(candidateId)
+      ? 'deleted'
+      : (resolvedCandidateStatuses.get(candidateId) ?? 'needs_review');
+  const candidateMatchesBulkAction = (
+    candidateId: number,
+    action: ReviewBulkMockAction,
+  ) =>
+    action === 'reopen'
+      ? candidateReviewState(candidateId) !== 'needs_review'
+      : candidateReviewState(candidateId) === 'needs_review';
+  const candidatesForBulkFilter = (
+    action: ReviewBulkMockAction,
+    filter: Record<string, unknown>,
+  ) => {
+    const membershipFilter = {
+      query: normalizedFilterText(filter.q),
+      channelId: normalizedFilterText(filter.channel_id),
+      playlistId: normalizedFilterText(filter.playlist_id),
+      keyword: normalizedFilterText(filter.keyword),
+      isDomestic:
+        typeof filter.is_domestic === 'boolean' ? filter.is_domestic : null,
+      queueReason: normalizedFilterText(filter.reason),
+      sourceKind: normalizedFilterText(filter.source_kind),
+      grounding: normalizedFilterText(filter.grounding),
+    };
+    return sourceCandidates
+      .filter((candidate) => candidateMatchesBulkAction(candidate.id, action))
+      .filter((candidate) => {
+        if (
+          typeof filter.status === 'string' &&
+          filter.status !==
+            (candidateReviewState(candidate.id) === 'needs_review'
+              ? 'needs_review'
+              : 'removed')
+        ) {
+          return false;
+        }
+        return candidateMatchesQueueMembership(candidate, membershipFilter);
+      })
+      .map((candidate) => candidate.id)
+      .sort((left, right) => left - right);
+  };
+  const applyBulkAction = (
+    action: ReviewBulkMockAction,
+    candidateId: number,
+  ): { candidate_id: number; code: string; message: string } | null => {
+    if (!candidateById.has(candidateId)) {
+      return {
+        candidate_id: candidateId,
+        code: 'candidate_not_found',
+        message: '후보를 찾을 수 없습니다.',
+      };
+    }
+    if (!candidateMatchesBulkAction(candidateId, action)) {
+      return {
+        candidate_id: candidateId,
+        code: 'candidate_revision_conflict',
+        message: '후보 상태가 변경되었습니다.',
+      };
+    }
+    if (action === 'reopen') {
+      processedCandidateIds.delete(candidateId);
+      deletedCandidateIds.delete(candidateId);
+      resolvedCandidateStatuses.delete(candidateId);
+      lastClientOperationIds.delete(candidateId);
+    } else {
+      processedCandidateIds.add(candidateId);
+      if (action === 'delete') {
+        deletedCandidateIds.add(candidateId);
+        resolvedCandidateStatuses.delete(candidateId);
+      } else {
+        deletedCandidateIds.delete(candidateId);
+        resolvedCandidateStatuses.set(candidateId, 'ignored');
+      }
+    }
+    candidateRevisions.set(candidateId, candidateRevision(candidateId) + 1);
+    return null;
+  };
+  const bulkOperations = new Map<string, ReviewBulkMockOperation>();
+  let bulkOperationSequence = 0;
+  let firstBulkExecuteFailureSent = false;
+  let mixedBulkPartialSent = false;
+  let secondBulkExecuteFailureSent = false;
+  let bulkSettlementListHeld = false;
+  let firstBulkExecuteHeld = false;
+  let releaseHeldBulkExecute: () => void = () => undefined;
+  const heldBulkExecuteResponse = new Promise<void>((resolve) => {
+    releaseHeldBulkExecute = () => resolve();
+  });
+  let releaseHeldBulkSettlementList: () => void = () => undefined;
+  const heldBulkSettlementList = new Promise<void>((resolve) => {
+    releaseHeldBulkSettlementList = () => resolve();
+  });
   let releaseHeldResolve: () => void = () => undefined;
   const heldResolveResponse = new Promise<void>((resolve) => {
     releaseHeldResolve = () => resolve();
@@ -2560,6 +3504,19 @@ async function installReviewQueueMock(
     resolveCandidateIds: [] as number[],
     deleteCandidateIds: [] as number[],
     reopenCandidateIds: [] as number[],
+    bulkPreviewBodies: [] as ReviewBulkMockPreviewBody[],
+    bulkPreviewCandidateIds: [] as number[][],
+    bulkPreviewResults: [] as Array<{
+      operation_id: string;
+      confirmation_token: string;
+      total: number;
+      chunk_size: number;
+    }>,
+    bulkExecuteBodies: [] as ReviewBulkMockExecuteBody[],
+    bulkCommittedCandidateIds: [] as number[][],
+    bulkCommittedReceipts: [] as ReviewBulkMockReceipt[],
+    bulkReceiptReplays: [] as ReviewBulkMockReceipt[],
+    nullDomesticCandidateId,
     detailResponses: [] as Array<{
       candidateId: number;
       status: 200 | 404;
@@ -2568,6 +3525,8 @@ async function installReviewQueueMock(
     processedCandidateIds,
     releaseFirstResolveResponse: () => releaseHeldResolve(),
     releaseOpinionResponse: () => releaseHeldOpinion(),
+    releaseBulkExecuteResponse: () => releaseHeldBulkExecute(),
+    releaseBulkSettlementList: () => releaseHeldBulkSettlementList(),
   };
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -2583,144 +3542,470 @@ async function installReviewQueueMock(
   await page.route('**/api/v1/destinations/unmatched**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === '/api/v1/destinations/unmatched') {
+    // literal bulk 경로는 목록 wildcard와 candidate ID 경로보다 먼저 판정한다.
+    if (
+      url.pathname === '/api/v1/destinations/unmatched/bulk/preview' &&
+      request.method() === 'POST'
+    ) {
       try {
-      const cursor = url.searchParams.get('cursor');
-      const domestic = url.searchParams.get('is_domestic');
-      const grounding = url.searchParams.get('grounding');
-      const newerThanId = url.searchParams.get('newer_than_id');
-      const isNewProbe = newerThanId !== null;
-      const requestedStatus = url.searchParams.get('status');
-      const contractMismatch =
-        url.searchParams.get('limit') !== (isNewProbe ? '1' : '300') ||
-        url.searchParams.get('sort') !== 'oldest' ||
-        (requestedStatus !== 'needs_review' && requestedStatus !== 'removed') ||
-        url.searchParams.get('q') !== null ||
-        url.searchParams.get('channel_id') !== null ||
-        url.searchParams.get('playlist_id') !== null ||
-        url.searchParams.get('keyword') !== null ||
-        url.searchParams.get('reason') !== null ||
-        url.searchParams.get('source_kind') !== null ||
-        (grounding !== null &&
-          !REVIEW_QUEUE_MOCK_GROUNDING_STATUSES.has(grounding)) ||
-        (domestic !== null && domestic !== 'true' && domestic !== 'false') ||
-        (isNewProbe && cursor !== null);
-      if (contractMismatch) {
+        const body = request.postDataJSON() as ReviewBulkMockPreviewBody;
+        if (
+          !body ||
+          (body.action !== 'ignore' &&
+            body.action !== 'delete' &&
+            body.action !== 'reopen') ||
+          !body.scope ||
+          (body.scope.kind !== 'selection' && body.scope.kind !== 'filter')
+        ) {
+          throw new Error('유효하지 않은 bulk preview body');
+        }
+        let candidateIds: number[];
+        if (body.scope.kind === 'selection') {
+          const ids = body.scope.candidate_ids;
+          if (
+            !Array.isArray(ids) ||
+            ids.length === 0 ||
+            ids.length > 500 ||
+            ids.some(
+              (candidateId) =>
+                !Number.isSafeInteger(candidateId) || candidateId <= 0,
+            ) ||
+            new Set(ids).size !== ids.length ||
+            ids.some(
+              (candidateId) =>
+                !candidateById.has(candidateId) ||
+                !candidateMatchesBulkAction(candidateId, body.action),
+            )
+          ) {
+            throw new Error('유효하지 않은 selection bulk membership');
+          }
+          candidateIds = [...ids].sort((left, right) => left - right);
+        } else {
+          const filter = body.scope.filter;
+          if (
+            !filter ||
+            typeof filter !== 'object' ||
+            Array.isArray(filter) ||
+            !Object.prototype.hasOwnProperty.call(filter, 'is_domestic') ||
+            (filter.is_domestic !== null &&
+              typeof filter.is_domestic !== 'boolean') ||
+            (filter.status !== 'needs_review' && filter.status !== 'removed')
+          ) {
+            throw new Error('유효하지 않은 filter bulk membership');
+          }
+          candidateIds = candidatesForBulkFilter(body.action, filter);
+        }
+        requests.bulkPreviewBodies.push(body);
+        requests.bulkPreviewCandidateIds.push(candidateIds);
+        bulkOperationSequence += 1;
+        const operationId = `10000000-0000-4000-8000-${String(
+          bulkOperationSequence,
+        ).padStart(12, '0')}`;
+        const confirmationToken = `rbulk1.${operationId}.mock_secret_${bulkOperationSequence}`;
+        bulkOperations.set(operationId, {
+          operationId,
+          confirmationToken,
+          action: body.action,
+          candidateIds,
+          candidateRevisions: new Map(
+            candidateIds.map((candidateId) => [
+              candidateId,
+              candidateRevision(candidateId),
+            ]),
+          ),
+          offset: 0,
+          expectedCursor: null,
+          receipts: new Map(),
+        });
+        const previewResult = {
+          operation_id: operationId,
+          confirmation_token: confirmationToken,
+          total: candidateIds.length,
+          chunk_size: 100,
+        };
+        requests.bulkPreviewResults.push(previewResult);
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ...previewResult,
+            expires_at: '2099-01-01T00:00:00Z',
+          }),
+        });
+      } catch (error) {
         await route.fulfill({
           status: 400,
           contentType: 'application/json',
-          body: JSON.stringify({ detail: `검수 mock 계약 불일치: ${url.search}` }),
+          body: JSON.stringify({
+            detail: `bulk preview mock 계약 불일치: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          }),
         });
-        return;
       }
+      return;
+    }
 
-      const sourceCandidates = options.initialHiddenOnly
-        ? initialHiddenCandidates
-        : standardAllCandidates;
-      const allCandidates = sourceCandidates
-        .filter((candidate) =>
-          requestedStatus === 'removed'
-            ? processedCandidateIds.has(candidate.id) &&
-              (deletedCandidateIds.has(candidate.id) ||
-                resolvedCandidateStatuses.get(candidate.id) === 'ignored')
-            : !processedCandidateIds.has(candidate.id),
-        )
-        .map(removedCandidate);
-      const domesticCandidates =
-        domestic === 'true'
-          ? allCandidates.filter((candidate) => candidate.is_domestic === true)
-          : domestic === 'false'
-            ? allCandidates.filter((candidate) => candidate.is_domestic === false)
-            : allCandidates;
-      const filteredCandidates = domesticCandidates
-        .filter(
-          (candidate) =>
-            grounding === null || candidate.grounding_status === grounding,
-        )
-        .sort((left, right) => left.id - right.id);
-      const newestId = filteredCandidates.at(-1)?.id ?? null;
-      let envelope: ReturnType<typeof reviewQueueEnvelope> | null = null;
-
-      if (isNewProbe) {
-        requests.newerProbeRequests.push(url);
-        const baseline = Number(newerThanId);
+    if (
+      url.pathname === '/api/v1/destinations/unmatched/bulk/execute' &&
+      request.method() === 'POST'
+    ) {
+      try {
+        const body = request.postDataJSON() as ReviewBulkMockExecuteBody;
+        requests.bulkExecuteBodies.push(body);
+        const operation = bulkOperations.get(body.operation_id);
         if (
-          newerThanId === null ||
-          !/^\d+$/.test(newerThanId) ||
-          !Number.isSafeInteger(baseline)
+          !operation ||
+          body.confirmation_token !== operation.confirmationToken ||
+          (body.cursor !== null && typeof body.cursor !== 'string') ||
+          typeof body.request_id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            body.request_id,
+          )
+        ) {
+          throw new Error('유효하지 않은 bulk execute body');
+        }
+
+        const priorReceipt = operation.receipts.get(body.request_id);
+        if (priorReceipt) {
+          if (JSON.stringify(priorReceipt.request) !== JSON.stringify(body)) {
+            await route.fulfill({
+              status: 409,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                detail: '같은 request_id에 다른 cursor 또는 token을 사용했습니다.',
+              }),
+            });
+            return;
+          }
+          requests.bulkReceiptReplays.push(priorReceipt.receipt);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(priorReceipt.receipt),
+          });
+          return;
+        }
+
+        if (
+          body.cursor !== operation.expectedCursor ||
+          operation.offset >= operation.candidateIds.length
         ) {
           await route.fulfill({
-            status: 400,
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({ detail: 'stale bulk execute cursor' }),
+          });
+          return;
+        }
+
+        if (options.holdFirstBulkExecuteResponse && !firstBulkExecuteHeld) {
+          firstBulkExecuteHeld = true;
+          await heldBulkExecuteResponse;
+        }
+
+        if (
+          options.secondBulkExecuteFailure &&
+          operation.offset > 0 &&
+          !secondBulkExecuteFailureSent
+        ) {
+          secondBulkExecuteFailureSent = true;
+          if (options.secondBulkExecuteFailure === 'contract') {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                operation_id: operation.operationId,
+                request_id: body.request_id,
+                malformed: true,
+              }),
+            });
+          } else {
+            const failure = options.secondBulkExecuteFailure;
+            await route.fulfill({
+              status:
+                failure === 'expired' ? 410 : failure === 'stale' ? 409 : 403,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                detail:
+                  failure === 'expired'
+                    ? '실행 operation 확인 시간이 만료되었습니다.'
+                    : failure === 'stale'
+                      ? 'stale bulk execute cursor'
+                      : '이 operation을 실행할 권한이 없습니다.',
+              }),
+            });
+          }
+          return;
+        }
+
+        const chunkCandidateIds = operation.candidateIds.slice(
+          operation.offset,
+          operation.offset + 100,
+        );
+        const injectMixedPartial =
+          options.firstBulkMixedPartial &&
+          !mixedBulkPartialSent &&
+          chunkCandidateIds.length >= 3;
+        const conflicts: Array<{
+          candidate_id: number;
+          code: string;
+          message: string;
+        }> = [];
+        const failed: Array<{
+          candidate_id: number;
+          code: string;
+          message: string;
+        }> = [];
+        chunkCandidateIds.forEach((candidateId, index) => {
+          if (injectMixedPartial && index === 1) {
+            conflicts.push({
+              candidate_id: candidateId,
+              code: 'candidate_revision_conflict',
+              message: 'preview 이후 후보 revision이 변경되었습니다.',
+            });
+            return;
+          }
+          if (injectMixedPartial && index === 2) {
+            failed.push({
+              candidate_id: candidateId,
+              code: 'provider_write_failed',
+              message: '후보 처리에 실패했습니다.',
+            });
+            return;
+          }
+          if (
+            operation.candidateRevisions.get(candidateId) !==
+            candidateRevision(candidateId)
+          ) {
+            conflicts.push({
+              candidate_id: candidateId,
+              code: 'candidate_revision_conflict',
+              message: 'preview 이후 후보 revision이 변경되었습니다.',
+            });
+            return;
+          }
+          const issue = applyBulkAction(operation.action, candidateId);
+          if (issue) conflicts.push(issue);
+        });
+        if (injectMixedPartial) mixedBulkPartialSent = true;
+        operation.offset += chunkCandidateIds.length;
+        const remaining = operation.candidateIds.length - operation.offset;
+        const nextCursor =
+          remaining === 0
+            ? null
+            : `bulk-cursor:${operation.operationId}:${operation.offset}`;
+        operation.expectedCursor = nextCursor;
+        const receipt: ReviewBulkMockReceipt = {
+          operation_id: operation.operationId,
+          request_id: body.request_id,
+          processed: chunkCandidateIds.length,
+          succeeded:
+            chunkCandidateIds.length - conflicts.length - failed.length,
+          conflicts,
+          failed,
+          remaining,
+          next_cursor: nextCursor,
+          complete: remaining === 0,
+        };
+        operation.receipts.set(body.request_id, {
+          request: body,
+          receipt,
+        });
+        requests.bulkCommittedCandidateIds.push(chunkCandidateIds);
+        requests.bulkCommittedReceipts.push(receipt);
+
+        if (
+          options.firstBulkExecuteCommitsThenFails &&
+          !firstBulkExecuteFailureSent
+        ) {
+          firstBulkExecuteFailureSent = true;
+          await route.fulfill({
+            status: 500,
             contentType: 'application/json',
             body: JSON.stringify({
-              detail: `유효하지 않은 신규 probe baseline: ${newerThanId}`,
+              detail: 'bulk chunk commit 뒤 응답 유실',
             }),
           });
           return;
         }
-        const probeItems = filteredCandidates.slice(0, 1);
-        const probeCursor =
-          filteredCandidates.length > 1 && newestId != null && probeItems[0]
-            ? encodeReviewQueueMockCursor(url, newestId, probeItems[0].id)
-            : null;
-        envelope = reviewQueueEnvelope(probeItems, probeCursor, {
-          total: filteredCandidates.length,
-          newestId,
-          newerThan: filteredCandidates.filter(
-            (candidate) => candidate.id > baseline,
-          ).length,
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(receipt),
         });
-      } else {
-        requests.mainListRequests.push(url);
-        requests.domesticFilters.push(domestic);
-        requests.groundingFilters.push(grounding);
-        const decodedCursor =
-          cursor === null ? null : decodeReviewQueueMockCursor(cursor, url);
-        if (cursor !== null && decodedCursor === null) {
+      } catch (error) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: `bulk execute mock 계약 불일치: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          }),
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/v1/destinations/unmatched') {
+      try {
+        const cursor = url.searchParams.get('cursor');
+        const domestic = url.searchParams.get('is_domestic');
+        const grounding = url.searchParams.get('grounding');
+        const requestedSort = url.searchParams.get('sort');
+        const newerThanId = url.searchParams.get('newer_than_id');
+        const isNewProbe = newerThanId !== null;
+        const requestedStatus = url.searchParams.get('status');
+        const contractMismatch =
+          url.searchParams.get('limit') !== (isNewProbe ? '1' : '300') ||
+          (requestedSort !== 'oldest' && requestedSort !== 'newest') ||
+          (requestedStatus !== 'needs_review' &&
+            requestedStatus !== 'removed') ||
+          (grounding !== null &&
+            !REVIEW_QUEUE_MOCK_GROUNDING_STATUSES.has(grounding)) ||
+          (domestic !== null && domestic !== 'true' && domestic !== 'false') ||
+          (isNewProbe && cursor !== null);
+        if (contractMismatch) {
           await route.fulfill({
             status: 400,
             contentType: 'application/json',
             body: JSON.stringify({
-              detail: `현재 필터에 사용할 수 없는 cursor: ${cursor}`,
+              detail: `검수 mock 계약 불일치: ${url.search}`,
             }),
           });
           return;
         }
-        if (decodedCursor) requests.listCursorPayloads.push(decodedCursor);
 
-        const snapshotId = decodedCursor?.snapshotId ?? newestId ?? 0;
-        const snapshotCandidates = filteredCandidates.filter(
-          (candidate) => candidate.id <= snapshotId,
+        const allCandidates = sourceCandidates
+          .filter((candidate) =>
+            requestedStatus === 'removed'
+              ? processedCandidateIds.has(candidate.id) &&
+                (deletedCandidateIds.has(candidate.id) ||
+                  resolvedCandidateStatuses.get(candidate.id) === 'ignored')
+              : !processedCandidateIds.has(candidate.id),
+          )
+          .map(removedCandidate);
+        const membershipFilter = {
+          query: normalizedFilterText(url.searchParams.get('q')),
+          channelId: normalizedFilterText(url.searchParams.get('channel_id')),
+          playlistId: normalizedFilterText(
+            url.searchParams.get('playlist_id'),
+          ),
+          keyword: normalizedFilterText(url.searchParams.get('keyword')),
+          isDomestic:
+            domestic === 'true' ? true : domestic === 'false' ? false : null,
+          queueReason: normalizedFilterText(url.searchParams.get('reason')),
+          sourceKind: normalizedFilterText(url.searchParams.get('source_kind')),
+          grounding: normalizedFilterText(grounding),
+        };
+        const filteredCandidates = allCandidates
+          .filter((candidate) =>
+            candidateMatchesQueueMembership(candidate, membershipFilter),
+          )
+          .sort((left, right) =>
+            requestedSort === 'newest'
+              ? right.id - left.id
+              : left.id - right.id,
+          );
+        const newestId = filteredCandidates.reduce<number | null>(
+          (current, candidate) =>
+            current == null ? candidate.id : Math.max(current, candidate.id),
+          null,
         );
-        const pageCandidates = snapshotCandidates.filter((candidate) =>
-          decodedCursor ? candidate.id > decodedCursor.lastId : true,
-        );
-        const pageItems = pageCandidates.slice(0, 300);
-        const lastPageItem = pageItems.at(-1);
-        const nextCursor =
-          pageCandidates.length > pageItems.length && lastPageItem
-            ? encodeReviewQueueMockCursor(url, snapshotId, lastPageItem.id)
-            : null;
-        envelope = reviewQueueEnvelope(pageItems, nextCursor, {
-          total: snapshotCandidates.length,
-          newestId: snapshotId || null,
-          newerThan: 0,
-        });
-      }
-      if (!envelope) {
+        let envelope: ReturnType<typeof reviewQueueEnvelope> | null = null;
+
+        if (isNewProbe) {
+          requests.newerProbeRequests.push(url);
+          const baseline = Number(newerThanId);
+          if (
+            newerThanId === null ||
+            !/^\d+$/.test(newerThanId) ||
+            !Number.isSafeInteger(baseline)
+          ) {
+            await route.fulfill({
+              status: 400,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                detail: `유효하지 않은 신규 probe baseline: ${newerThanId}`,
+              }),
+            });
+            return;
+          }
+          const probeItems = filteredCandidates.slice(0, 1);
+          const probeCursor =
+            filteredCandidates.length > 1 && newestId != null && probeItems[0]
+              ? encodeReviewQueueMockCursor(url, newestId, probeItems[0].id)
+              : null;
+          envelope = reviewQueueEnvelope(probeItems, probeCursor, {
+            total: filteredCandidates.length,
+            newestId,
+            newerThan: filteredCandidates.filter(
+              (candidate) => candidate.id > baseline,
+            ).length,
+          });
+        } else {
+          requests.mainListRequests.push(url);
+          if (
+            options.holdBulkSettlementList &&
+            requests.bulkCommittedReceipts.length > 0 &&
+            !bulkSettlementListHeld
+          ) {
+            bulkSettlementListHeld = true;
+            await heldBulkSettlementList;
+          }
+          requests.domesticFilters.push(domestic);
+          requests.groundingFilters.push(grounding);
+          const decodedCursor =
+            cursor === null ? null : decodeReviewQueueMockCursor(cursor, url);
+          if (cursor !== null && decodedCursor === null) {
+            await route.fulfill({
+              status: 400,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                detail: `현재 필터에 사용할 수 없는 cursor: ${cursor}`,
+              }),
+            });
+            return;
+          }
+          if (decodedCursor) requests.listCursorPayloads.push(decodedCursor);
+
+          const snapshotId = decodedCursor?.snapshotId ?? newestId ?? 0;
+          const snapshotCandidates = filteredCandidates.filter(
+            (candidate) => candidate.id <= snapshotId,
+          );
+          const pageCandidates = snapshotCandidates.filter((candidate) => {
+            if (!decodedCursor) return true;
+            return requestedSort === 'newest'
+              ? candidate.id < decodedCursor.lastId
+              : candidate.id > decodedCursor.lastId;
+          });
+          const pageItems = pageCandidates.slice(0, 300);
+          const lastPageItem = pageItems.at(-1);
+          const nextCursor =
+            pageCandidates.length > pageItems.length && lastPageItem
+              ? encodeReviewQueueMockCursor(url, snapshotId, lastPageItem.id)
+              : null;
+          envelope = reviewQueueEnvelope(pageItems, nextCursor, {
+            total: snapshotCandidates.length,
+            newestId: snapshotId || null,
+            newerThan: 0,
+          });
+        }
+        if (!envelope) {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+          });
+          return;
+        }
         await route.fulfill({
-          status: 400,
+          status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ detail: `예상하지 않은 cursor: ${cursor}` }),
+          body: JSON.stringify(envelope),
         });
         return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(envelope),
-      });
-      return;
       } catch (error) {
         await route.fulfill({
           status: 500,
@@ -2897,9 +4182,6 @@ async function installReviewQueueMock(
     if (reopenMatch && request.method() === 'POST') {
       const candidateId = Number(reopenMatch[1]);
       requests.reopenCandidateIds.push(candidateId);
-      const sourceCandidates = options.initialHiddenOnly
-        ? initialHiddenCandidates
-        : standardAllCandidates;
       const candidate = sourceCandidates.find((item) => item.id === candidateId);
       const current = candidate ? removedCandidate(candidate) : null;
       const body = request.postDataJSON() as { undo_token?: unknown };
@@ -3106,9 +4388,6 @@ async function installReviewQueueMock(
         return;
       }
       const candidateId = Number(detailMatch[1]);
-      const sourceCandidates = options.initialHiddenOnly
-        ? initialHiddenCandidates
-        : standardAllCandidates;
       const candidate = sourceCandidates.find((item) => item.id === candidateId);
       const priorDetailCount = requests.detailResponses.filter(
         (entry) => entry.candidateId === candidateId,
@@ -3149,7 +4428,7 @@ async function installReviewQueueMock(
         body: JSON.stringify(
           reviewCandidateDetailFixture(
             latestCandidate,
-            {},
+            candidateProvenance(candidateId),
             options.includeDetailSiblings
               ? [
                   {
@@ -3226,9 +4505,10 @@ function reviewQueueEnvelope(
 function reviewCandidateFixture(
   id: number,
   name: string,
-  isDomestic = true,
+  isDomestic: boolean | null = true,
   timestampStart = '00:10',
   groundingStatus: ReviewQueueMockGroundingStatus = 'verified_raw',
+  locationHint: string | null = null,
 ) {
   return {
     id,
@@ -3236,7 +4516,7 @@ function reviewCandidateFixture(
     video_title: `자동 검수 영상 ${id}`,
     channel_title: '자동 검수 채널',
     ai_place_name: name,
-    location_hint: null,
+    location_hint: locationHint,
     candidate_category: '카페',
     candidate_category_code: '0',
     match_status: 'needs_review',
@@ -3249,7 +4529,7 @@ function reviewCandidateFixture(
     source_kind: 'transcript',
     grounding_status: groundingStatus,
     created_at: '2026-07-13T03:00:00Z',
-    queue_reason: isDomestic ? 'extraction_only' : 'foreign',
+    queue_reason: isDomestic === false ? 'foreign' : 'extraction_only',
     timestamp_start: timestampStart,
     is_domestic: isDomestic,
   };

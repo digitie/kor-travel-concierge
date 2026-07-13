@@ -202,6 +202,27 @@ append하되, snapshot이 열린 동안 행을 자동 재배치하지 않는다.
 재조회로만 기다리며, 409·4xx·preflight 실패·다른 operation·revision 불일치는 다른 작업의 결과로
 보고 undo를 만들지 않는다.
 
+검수 일괄 처리는 브라우저가 현재 불러온 ID를 모아 단건 API를 반복 호출하지 않는다. 먼저 서버에
+명시 선택(최대 500건) 또는 검수 목록 filter snapshot을 보내 preview를 만들고, 서버는 그 시점의
+대상 ID와 candidate revision을 durable operation item으로 고정한다. filter snapshot은 최대
+10,000건이며 10,001번째 대상이 확인되면 일부를 자르지 않고 HTTP 413으로 전체 preview를 거부한다.
+filter snapshot에는 검색·출처·국내 여부·queue reason·source kind·grounding·상태만 들어가며
+cursor·page limit·정렬·딥링크 ID는 membership에 영향을 주지 않는다. 특히 해외 일괄 제외는
+queue reason이 아니라
+`is_domestic=false`를 사용해 국내 여부 미확인 후보를 함께 제외하지 않는다. preview 응답은 정확한
+대상 수와 짧은 만료 시각, 확인용 opaque token을 한 번만 반환하고 DB에는 token hash만 저장한다.
+두 bulk endpoint는 `/api/v1/admin/*` 밖에 있지만 로그인한 same-origin BFF가 actor와
+`KTC_ADMIN_PROXY_SECRET`을 주입한 요청만 허용하며, 외부 read/static admin key의 직접 호출은 거부한다.
+
+확인 뒤 실행은 operation에 저장된 순서와 revision을 기준으로 최대 100건씩 짧은 transaction으로
+처리한다. 각 chunk는 `cursor`와 `request_id`로 식별하며 같은 요청 재전송은 저장된 receipt를 그대로
+반환하고, 이전 cursor로 다음 chunk를 우발 실행하지 않는다. 새 후보가 filter에 들어와도 이미 만든
+operation에는 합류하지 않으며, 다른 작업으로 revision·상태가 바뀐 item은 conflict로 남겨 나머지
+item과 구분한다. 브라우저는 token을 메모리에만 보관하고 실행 완료 뒤 목록 snapshot을 처음부터
+다시 열어 서버 total과 선택 상태를 재조정한다. 이 계약은 대량 작업 동안 candidate/place/export
+잠금을 한 transaction에 오래 보유하지 않으면서도 응답 유실 retry가 중복 상태 전이를 만들지 않게
+한다.
+
 ### 3.2 MCP 서버 읽기/쓰기 UX
 
 MCP는 에이전트용 UX다. REST API의 세분 CRUD를 그대로 노출하지 않고, 에이전트가 한 번에 사용할 수 있는 굵은 단위 도구를 제공한다.
@@ -618,6 +639,28 @@ Full snapshot API와 incremental changes API는 `/api/v1/features/*` 아래에
 plan은 feature row 자체가 아니라 그 POI row들의 모음이다. 따라서 export item은 이름,
 좌표, 8자리 카테고리 제안, YouTube 영상·채널·재생목록 근거와 confidence를 빠짐없이
 포함해야 한다.
+
+### 6.13 검수 일괄 처리 상태
+
+`review_bulk_operations`는 preview가 동결한 action·scope와 실행 진행 상태를 보존한다.
+주요 필드는 UUID `operation_id`, 관리자 `actor`, `action`, `scope_kind`, canonical
+`scope_json`과 SHA-256 `scope_fingerprint`, confirmation token hash·만료 시각, 전체·처리·
+성공·충돌·실패 건수, 다음 cursor, 시작·완료 시각이다. 평문 confirmation token은 저장하지
+않는다. 건수 CHECK는
+`processed = succeeded + conflict + failed`와 `processed <= total`을 DB에서도 강제한다.
+
+`review_bulk_operation_receipts`는 `(operation_id, request_id)`를 PK로 하고 nullable 요청
+cursor, JSONB object 응답, 생성 시각을 보존한다. operation row를 먼저 잠근 뒤 이 ledger를
+조회하므로 이후 chunk가 진행되거나 작업이 완료된 뒤 지연 도착한 과거 요청도 동일 응답을
+정확히 재생한다. 같은 request ID를 다른 cursor와 함께 재사용하면 conflict로 거부한다.
+
+`review_bulk_operation_items`는 `(operation_id, candidate_id)`를 PK로 하며 preview 당시의
+candidate revision·사용자 관점 상태·연결 장소 ID/revision, reopen snapshot descriptor,
+`pending|succeeded|conflict|failed` 상태와 오류 코드를 저장한다. 실행기는
+`status='pending'` partial index를 사용해 candidate ID 순서로 최대 100건만 잠근다. 후보 FK는
+일괄 이력이 남아 있는 동안 hard delete를 막는다. 현재는 검수 감사·응답 유실 판정을 위해
+operation, receipt, item을 자동 삭제하지 않는다. operation을 명시적으로 삭제하면 receipt와
+item은 함께 cascade한다.
 
 ---
 

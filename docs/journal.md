@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-07-14: T-185 — 검수 bulk filter snapshot·receipt ledger
+
+- **서버 계약**: 로그인한 same-origin BFF 전용
+  `POST /api/v1/destinations/unmatched/bulk/preview|execute`를 추가했다. preview는 명시 선택 최대 500건
+  또는 cursor·sort·딥링크를 제외한 canonical filter를 `REPEATABLE READ`에서 고정한다. filter는
+  `LIMIT 10001`로 초과를 판별해 최대 10,000건만 허용하며 절대 일부를 잘라 실행하지 않는다.
+  operation/item/receipt ledger와 migration `20260714_0028`을 추가하고, 확인 token은 actor·action·scope·
+  만료 시각에 결합해 SHA-256 digest만 저장한다.
+- **실행·멱등·원자성**: execute는 candidate ID 순서로 최대 100건씩 처리한다. 같은
+  `(operation_id, request_id, cursor)`는 저장 receipt를 그대로 재생하고, 소비된 cursor나 request ID
+  변조는 409로 거부한다. 최초 실행 전 5분 TTL을 통과하면 이후 chunk는 계속할 수 있다. item savepoint가
+  성공·revision/상태 충돌·실패를 분리하며, 후보 mutation·후보별 감사·item 결과·chunk 감사·receipt를
+  같은 transaction에서 commit한다. lifecycle→export→candidate 잠금 순서를 유지하고 ignore/delete/reopen의
+  기존 장소 정리·RustFS 보존·dirty outbox 계약을 재사용한다.
+- **검수 UX**: 불러온 후보의 선택 제외·삭제, removed 후보 선택 복구, 현재 URL filter의
+  `is_domestic=false` 후보 전체 제외를 정확한 preview 건수와 확인 dialog로 제공한다. 선택은 500건에서
+  멈추고 filter action은 10,000건까지 서버 snapshot을 사용한다. 100건 chunk 진행률, 응답 유실의 동일
+  request/cursor 재전송, conflict 자동 재실행 금지, failed ID만 새 selection preview, 0건 취소, 실행 중
+  dialog 닫기/재열기와 390×667 focus를 처리한다. 확인 bearer는 메모리에만 존재하며 hard reload 뒤에는
+  최신 목록을 다시 확인하도록 안내한다.
+- **적대적 검토 1차(backend·상태 머신·성능/모바일 3개 agent)**: 단일 receipt slot의 동시성 결함,
+  filter 공백 정규화 편차, timer overflow, 실행 driver 세대 인계, partial 재시도 범위, 701건 실규모와
+  hard reload 안내 누락을 찾아 operation별 receipt ledger·canonical filter·분할 timer·driver resume·
+  failed-only preview·규모/E2E 테스트로 보강했다.
+- **적대적 검토 2차(담당 교차 배치)**: filter A→B settlement가 이전 query key를 갱신할 수 있는 ABA,
+  bulk 성공 후보별 감사 누락, schema가 어긋난 HTTP 200을 성공 건수로 표시할 위험, 로드맵의 구 단일
+  transaction/500건 계약, lifecycle/export lock 역순을 확인했다. 최신 key ref, 후보 감사 savepoint,
+  응답 UUID/token/chunk/total runtime 검증, 문서 정합화, 잠금 순서 통일과 회귀 테스트를 반영했다.
+- **적대적 검토 3차와 delta 재감사**: 문서가 요구한 실제 PostgreSQL 10,000/10,001 경계를 축소 상수
+  테스트만으로 완료 처리한 증거 공백을 MAJOR로 확인했다. 실제 10,001건을 seed해 10,000건 operation/item
+  전체 집합과 10,001건 413·무생성을 검증하고, 첫 item savepoint 실패 뒤 다음 item 성공, source/q mock
+  membership, delete execute 정산, action별 filter status 판별 union과 `tsc` 포함 type contract를 보강했다.
+  최종 delta 재감사는 BLOCKER 0·MAJOR 0·MINOR 0이었다.
+- **n150 검증**: 전용 Docker network·PostGIS·API·UI와 비충돌 host port만 사용했다. Alembic 단일 head와
+  `upgrade head → downgrade 20260713_0027 → upgrade head`, T-185 backend 30건, backend 전체 761건,
+  변경 Python Ruff를 통과했다. frontend lint·type-check·Vitest 229건·Next.js production build가
+  통과했다. Playwright는 격리 backend URL을 명시한 전체 CI 실행에서 기능 44건을 완료했다(41건 즉시,
+  기존 T-184 timing 경로 3건 retry, live 전용 4건 skip). 해당 3건은 n150 production build 서버에서
+  별도 실행해 재시도 없이 3/3 통과했고, 신규 T-185 경로는 전체 실행에서 모두 첫 시도에 통과했다.
+
 ## 2026-07-14: T-171 — feature export durable dirty outbox (S6/A2)
 
 - **문제**: `get_snapshot`/`get_changes`가 매 GET마다 전 후보 `sync_feature_exports`(O(후보수)) 호출 +

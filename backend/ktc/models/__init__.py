@@ -48,6 +48,14 @@ from ktc.models.geocode_cache import GeocodeCache
 from ktc.models.login_event import LoginEvent
 from ktc.models.media_asset import AssetType, MediaAsset
 from ktc.models.public_api_key import PublicApiKey
+from ktc.models.review_bulk_operation import (
+    ReviewBulkAction,
+    ReviewBulkItemStatus,
+    ReviewBulkOperation,
+    ReviewBulkOperationItem,
+    ReviewBulkOperationReceipt,
+    ReviewBulkOperationStatus,
+)
 from ktc.models.search_keyword import SearchKeyword
 from ktc.models.source_target import SourceTarget, TargetType
 from ktc.models.system_setting import SystemSetting
@@ -91,6 +99,12 @@ __all__ = [
     "GeocodeCache",
     "LoginEvent",
     "PublicApiKey",
+    "ReviewBulkAction",
+    "ReviewBulkItemStatus",
+    "ReviewBulkOperation",
+    "ReviewBulkOperationItem",
+    "ReviewBulkOperationReceipt",
+    "ReviewBulkOperationStatus",
     # 도메인/공간
     "SearchKeyword",
     "SourceTarget",

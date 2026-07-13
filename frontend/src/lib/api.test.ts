@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteCandidate,
+  executeReviewBulk,
   groupThemeItems,
   listRunQueue,
   listUnmatchedCandidatesPage,
+  previewReviewBulk,
+  REVIEW_BULK_CANDIDATE_ID_MAX,
+  REVIEW_BULK_SELECTION_MAX,
   reopenCandidate,
   resolveCandidate,
   restartRun,
@@ -18,6 +22,10 @@ import {
   stopRun,
   type RunQueueSnapshot,
   type RestartRunResult,
+  type ReviewBulkExecuteResult,
+  type ReviewBulkFilterSnapshot,
+  type ReviewBulkPreview,
+  type ReviewBulkPreviewInput,
   type StopRunResult,
   type ThemeSummaryItem,
 } from "./api";
@@ -127,6 +135,229 @@ describe("listUnmatchedCandidatesPage", () => {
       expect.objectContaining({
         headers: { "Content-Type": "application/json" },
       }),
+    );
+  });
+});
+
+describe("검수 후보 bulk API", () => {
+  const previewResponse: ReviewBulkPreview = {
+    operation_id: "operation-1",
+    confirmation_token: "opaque-confirmation-token",
+    expires_at: "2026-07-14T12:10:00Z",
+    total: 2,
+    chunk_size: 100,
+  };
+
+  it("유효한 filter 상태와 action 조합을 보존한다", () => {
+    const ignoreInput = {
+      action: "ignore",
+      scope: {
+        kind: "filter",
+        filter: { is_domestic: false, status: "needs_review" },
+      },
+    } satisfies ReviewBulkPreviewInput;
+    const reopenInput = {
+      action: "reopen",
+      scope: {
+        kind: "filter",
+        filter: { is_domestic: null, status: "removed" },
+      },
+    } satisfies ReviewBulkPreviewInput;
+    expect([
+      ignoreInput.scope.filter.status,
+      reopenInput.scope.filter.status,
+    ]).toEqual(["needs_review", "removed"]);
+  });
+
+  it("선택 범위의 중복 ID를 제거하고 서버 snake_case 계약으로 보낸다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(previewResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await previewReviewBulk({
+      action: "delete",
+      scope: { kind: "selection", candidateIds: [42, 7, 42] },
+    });
+
+    expect(result).toEqual(previewResponse);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched/bulk/preview",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "delete",
+          scope: { kind: "selection", candidate_ids: [42, 7] },
+        }),
+      }),
+    );
+  });
+
+  it("filter membership만 열거해 false를 보존하고 목록 cursor/sort를 차단한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(previewResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const runtimeFilter = {
+      channel_id: " channel-1 ",
+      q: " 제주 ",
+      is_domestic: false,
+      status: "needs_review",
+      reason: "foreign",
+      sort: "newest",
+      cursor: "cursor-must-not-leak",
+      newer_than_id: 99,
+      limit: 200,
+      candidate: 42,
+    } as ReviewBulkFilterSnapshot<"needs_review"> & Record<string, unknown>;
+
+    await previewReviewBulk({
+      action: "ignore",
+      scope: { kind: "filter", filter: runtimeFilter },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched/bulk/preview",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "ignore",
+          scope: {
+            kind: "filter",
+            filter: {
+              channel_id: "channel-1",
+              q: "제주",
+              is_domestic: false,
+              status: "needs_review",
+              reason: "foreign",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("국내외 전체 filter는 is_domestic null을 누락하지 않고 보낸다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(previewResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await previewReviewBulk({
+      action: "ignore",
+      scope: {
+        kind: "filter",
+        filter: { is_domestic: null, status: "needs_review" },
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/destinations/unmatched/bulk/preview",
+      expect.objectContaining({
+        body: JSON.stringify({
+          action: "ignore",
+          scope: {
+            kind: "filter",
+            filter: { is_domestic: null, status: "needs_review" },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("빈 선택, 잘못된 ID, 500개 초과 선택은 fetch 전에 거부한다", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const oversized = Array.from(
+      { length: REVIEW_BULK_SELECTION_MAX + 1 },
+      (_, index) => index + 1,
+    );
+
+    await expect(
+      previewReviewBulk({
+        action: "delete",
+        scope: { kind: "selection", candidateIds: [] },
+      }),
+    ).rejects.toThrow("한 개 이상");
+    await expect(
+      previewReviewBulk({
+        action: "delete",
+        scope: { kind: "selection", candidateIds: [0] },
+      }),
+    ).rejects.toThrow("양의 정수");
+    await expect(
+      previewReviewBulk({
+        action: "delete",
+        scope: {
+          kind: "selection",
+          candidateIds: [REVIEW_BULK_CANDIDATE_ID_MAX + 1],
+        },
+      }),
+    ).rejects.toThrow("양의 정수");
+    await expect(
+      previewReviewBulk({
+        action: "delete",
+        scope: { kind: "selection", candidateIds: oversized },
+      }),
+    ).rejects.toThrow(`최대 ${REVIEW_BULK_SELECTION_MAX}개`);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("response-loss 재시도는 같은 operation/request/cursor body를 바꾸지 않는다", async () => {
+    const executeResponse: ReviewBulkExecuteResult = {
+      operation_id: "operation-1",
+      request_id: "11111111-1111-4111-8111-111111111111",
+      processed: 2,
+      succeeded: 2,
+      conflicts: [],
+      failed: [],
+      remaining: 0,
+      next_cursor: null,
+      complete: true,
+    };
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify(executeResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      operationId: "operation-1",
+      confirmationToken: "opaque-confirmation-token",
+      cursor: "cursor-1",
+      requestId: "11111111-1111-4111-8111-111111111111",
+    };
+
+    await executeReviewBulk(input);
+    await executeReviewBulk(input);
+
+    const expectedBody = JSON.stringify({
+      operation_id: "operation-1",
+      confirmation_token: "opaque-confirmation-token",
+      cursor: "cursor-1",
+      request_id: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/destinations/unmatched/bulk/execute",
+      expect.objectContaining({ method: "POST", body: expectedBody }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/destinations/unmatched/bulk/execute",
+      expect.objectContaining({ method: "POST", body: expectedBody }),
     );
   });
 });

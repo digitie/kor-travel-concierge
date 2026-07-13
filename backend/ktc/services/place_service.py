@@ -4,20 +4,36 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import json
 import math
 import re
+import secrets
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
 from geoalchemy2 import Geography
-from sqlalchemy import Numeric, and_, case, cast, delete, distinct, func, or_, select
+from sqlalchemy import (
+    Numeric,
+    and_,
+    case,
+    cast,
+    delete,
+    distinct,
+    func,
+    insert,
+    or_,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import load_only
 
 from ktc.core.config import get_settings
 from ktc.core.spatial import sync_place_geometry
@@ -32,6 +48,12 @@ from ktc.models import (
     MatchStatus,
     MediaAsset,
     PlaceLifecycleOrigin,
+    ReviewBulkAction,
+    ReviewBulkItemStatus,
+    ReviewBulkOperation,
+    ReviewBulkOperationItem,
+    ReviewBulkOperationReceipt,
+    ReviewBulkOperationStatus,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeChannel,
@@ -39,7 +61,7 @@ from ktc.models import (
     YoutubeVideo,
     utcnow,
 )
-from ktc.services import feature_export_service
+from ktc.services import audit_service, feature_export_service
 from ktc.services.list_pagination import (
     ListPage,
     MAX_DB_INTEGER_ID,
@@ -150,9 +172,21 @@ class CandidateUndoToken:
 
 def candidate_review_state(candidate: ExtractedPlaceCandidate) -> str:
     """soft delete를 우선하는 사용자 관점 후보 상태를 반환한다."""
-    if candidate.deleted_at is not None:
+    return _candidate_review_state_from_values(
+        match_status=candidate.match_status,
+        deleted_at=candidate.deleted_at,
+    )
+
+
+def _candidate_review_state_from_values(
+    *,
+    match_status: MatchStatus | str,
+    deleted_at: datetime | None,
+) -> str:
+    """ORM entity 없이도 같은 사용자 관점 상태를 계산한다."""
+    if deleted_at is not None:
         return "deleted"
-    return str(getattr(candidate.match_status, "value", candidate.match_status))
+    return str(getattr(match_status, "value", match_status))
 
 
 def _positive_int(value: Any, *, maximum: int) -> bool:
@@ -168,22 +202,53 @@ def _candidate_undo_payload(
     *,
     matched_place_revision: int | None,
 ) -> dict[str, Any]:
-    matched_place_id = candidate.matched_place_id
+    return _candidate_undo_payload_from_values(
+        candidate_id=candidate.id,
+        candidate_revision=candidate.state_revision,
+        match_status=candidate.match_status,
+        deleted_at=candidate.deleted_at,
+        matched_place_id=candidate.matched_place_id,
+        matched_place_revision=matched_place_revision,
+    )
+
+
+def _candidate_undo_payload_from_values(
+    *,
+    candidate_id: int,
+    candidate_revision: int,
+    match_status: MatchStatus | str,
+    deleted_at: datetime | None,
+    matched_place_id: int | None,
+    matched_place_revision: int | None,
+) -> dict[str, Any]:
+    """단건 ORM과 bulk scalar snapshot이 공유하는 canonical undo payload다."""
     if (matched_place_id is None) != (matched_place_revision is None):
         raise ValueError("undo token의 장소 ID와 revision은 함께 있어야 합니다")
     return {
         "version": _CANDIDATE_UNDO_VERSION,
-        "candidate_id": candidate.id,
-        "candidate_revision": candidate.state_revision,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
         # underlying match_status와 soft-delete 우선 effective state를 모두 넣어
         # `deleted(needs_review)`와 live `needs_review`를 구분한다.
-        "prior_state": str(
-            getattr(candidate.match_status, "value", candidate.match_status)
+        "prior_state": str(getattr(match_status, "value", match_status)),
+        "effective_state": _candidate_review_state_from_values(
+            match_status=match_status,
+            deleted_at=deleted_at,
         ),
-        "effective_state": candidate_review_state(candidate),
         "matched_place_id": matched_place_id,
         "matched_place_revision": matched_place_revision,
     }
+
+
+def _encode_candidate_undo_payload(payload: dict[str, Any]) -> str:
+    """candidate-undo-v1 payload를 canonical base64url 문자열로 직렬화한다."""
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def encode_candidate_undo_token(
@@ -196,13 +261,7 @@ def encode_candidate_undo_token(
         candidate,
         matched_place_revision=matched_place_revision,
     )
-    raw = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return _encode_candidate_undo_payload(payload)
 
 
 def candidate_undo_descriptor(
@@ -350,6 +409,84 @@ class ReviewCandidateDomesticFilter(str, Enum):
     ALL = "all"
     TRUE = "true"
     FALSE = "false"
+
+
+# T-185 일괄 검수 계약. selection은 실수로 거대한 요청을 만들지 못하게 500건으로
+# 제한하고, filter는 preview에서 정확한 멤버십을 item 행으로 동결하되 운영 안전 상한을
+# 넘으면 일부만 처리하지 않고 명시적으로 거부한다.
+REVIEW_BULK_SELECTION_LIMIT = 500
+REVIEW_BULK_FILTER_LIMIT = 10_000
+REVIEW_BULK_CHUNK_SIZE = 100
+REVIEW_BULK_ITEM_INSERT_BATCH_SIZE = 1_000
+REVIEW_BULK_CONFIRMATION_TTL = timedelta(minutes=5)
+_REVIEW_BULK_TOKEN_VERSION = "rbulk1"
+_REVIEW_BULK_CURSOR_VERSION = "rbc1"
+
+
+class ReviewBulkValidationError(ValueError):
+    """일괄 검수 scope/action 조합이 유효하지 않다(라우트 400)."""
+
+
+class ReviewBulkLimitExceededError(ValueError):
+    """필터 결과가 안전 상한을 초과했다(라우트 413, 자동 truncation 금지)."""
+
+
+class ReviewBulkOperationNotFoundError(ValueError):
+    """operation이 없거나 요청 actor가 소유하지 않는다(라우트 404)."""
+
+
+class ReviewBulkTokenError(ValueError):
+    """confirmation token이 위조·변조됐거나 다른 operation에 속한다(라우트 403)."""
+
+
+class ReviewBulkTokenExpiredError(ValueError):
+    """아직 시작하지 않은 preview의 confirmation token이 만료됐다(라우트 410)."""
+
+
+class ReviewBulkCursorConflictError(ValueError):
+    """execute cursor/request receipt가 현재 operation 진행 위치와 충돌한다(라우트 409)."""
+
+
+@dataclass(frozen=True)
+class ReviewBulkPreviewResult:
+    """평문 token은 이 응답에서만 노출하고 DB에는 hash만 저장한다."""
+
+    operation_id: UUID
+    confirmation_token: str
+    expires_at: datetime
+    total: int
+    chunk_size: int
+
+
+@dataclass(frozen=True)
+class ReviewBulkCandidateSnapshot:
+    """preview item에 필요한 candidate/place scalar만 담은 경량 snapshot."""
+
+    candidate_id: int
+    candidate_revision: int
+    match_status: str
+    deleted_at: datetime | None
+    matched_place_id: int | None
+    matched_place_revision: int | None
+
+    @property
+    def review_state(self) -> str:
+        return _candidate_review_state_from_values(
+            match_status=self.match_status,
+            deleted_at=self.deleted_at,
+        )
+
+    def undo_token(self) -> str:
+        return _encode_candidate_undo_payload(
+            _candidate_undo_payload_from_values(
+                candidate_id=self.candidate_id,
+                candidate_revision=self.candidate_revision,
+                match_status=self.match_status,
+                deleted_at=self.deleted_at,
+                matched_place_id=self.matched_place_id,
+                matched_place_revision=self.matched_place_revision,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -2326,6 +2463,16 @@ def _normalize_candidate_search(query: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_optional_filter_text(value: str | None) -> str | None:
+    """목록과 bulk snapshot이 공유하는 공백 정규화 규칙."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("필터 문자열 형식이 올바르지 않습니다.")
+    normalized = value.strip()
+    return normalized or None
+
+
 def _literal_ilike_pattern(value: str) -> str:
     """사용자 `%`/`_`/`\\`를 wildcard·escape가 아닌 문자 그대로 취급한다."""
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -2584,9 +2731,9 @@ async def list_unmatched_candidates_page(
         raise ValueError("is_domestic는 true 또는 false여야 합니다")
     normalized_query = _normalize_candidate_search(query)
     normalized_filters = {
-        "channel_id": channel_id or None,
-        "playlist_id": playlist_id or None,
-        "keyword": keyword or None,
+        "channel_id": _normalize_optional_filter_text(channel_id),
+        "playlist_id": _normalize_optional_filter_text(playlist_id),
+        "keyword": _normalize_optional_filter_text(keyword),
         "q": normalized_query,
         "is_domestic": is_domestic,
         "status": status_value.value,
@@ -2726,6 +2873,857 @@ async def get_candidate_list_item(
             else None
         ),
     )
+
+
+def _review_bulk_canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _review_bulk_scope_fingerprint(scope: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        _review_bulk_canonical_json(scope).encode("utf-8")
+    ).hexdigest()
+
+
+def _review_bulk_confirmation_digest(
+    token: str,
+    *,
+    operation_id: UUID,
+    actor: str,
+    action: str,
+    scope_fingerprint: str,
+    expires_at: datetime,
+) -> str:
+    """평문 token과 immutable operation 경계를 함께 hash한다."""
+    if expires_at.tzinfo is None:
+        raise ReviewBulkTokenError("confirmation 만료 시각에 timezone이 없습니다.")
+    material = {
+        "version": _REVIEW_BULK_TOKEN_VERSION,
+        "operation_id": str(operation_id),
+        "actor": actor,
+        "action": action,
+        "scope_fingerprint": scope_fingerprint,
+        # PostgreSQL TIMESTAMPTZ는 같은 instant를 session timezone에 따라 다른
+        # offset으로 돌려줄 수 있다. UTC microsecond 표현으로 고정해 새 session에서도
+        # 동일 token digest를 계산한다.
+        "expires_at": expires_at.astimezone(timezone.utc).isoformat(
+            timespec="microseconds"
+        ),
+        "token": token,
+    }
+    return hashlib.sha256(
+        _review_bulk_canonical_json(material).encode("utf-8")
+    ).hexdigest()
+
+
+def _normalize_review_bulk_text(value: Any, *, maximum: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ReviewBulkValidationError("필터 문자열 형식이 올바르지 않습니다.")
+    normalized = _normalize_optional_filter_text(value)
+    if normalized is not None and len(normalized) > maximum:
+        raise ReviewBulkValidationError("필터 문자열이 허용 길이를 초과했습니다.")
+    return normalized
+
+
+def _normalize_review_bulk_filter(
+    action: ReviewBulkAction,
+    values: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """JSON filter를 목록 SQL과 fingerprint가 공유하는 canonical 값으로 만든다."""
+    allowed = {
+        "channel_id",
+        "playlist_id",
+        "keyword",
+        "q",
+        "is_domestic",
+        "status",
+        "reason",
+        "source_kind",
+        "grounding",
+    }
+    unknown = set(values) - allowed
+    if unknown:
+        raise ReviewBulkValidationError("지원하지 않는 일괄 검수 필터가 있습니다.")
+
+    status_default = (
+        ReviewCandidateStatus.REMOVED
+        if action is ReviewBulkAction.REOPEN
+        else ReviewCandidateStatus.NEEDS_REVIEW
+    )
+    try:
+        status = ReviewCandidateStatus(values.get("status") or status_default)
+        reason = (
+            QueueReason(values["reason"])
+            if values.get("reason") is not None
+            else None
+        )
+        source_kind = (
+            EvidenceSourceKind(values["source_kind"])
+            if values.get("source_kind") is not None
+            else None
+        )
+        grounding = (
+            GroundingStatus(values["grounding"])
+            if values.get("grounding") is not None
+            else None
+        )
+    except ValueError as exc:
+        raise ReviewBulkValidationError("유효하지 않은 일괄 검수 필터입니다.") from exc
+
+    if action is ReviewBulkAction.REOPEN:
+        if status is not ReviewCandidateStatus.REMOVED:
+            raise ReviewBulkValidationError(
+                "reopen 필터 작업은 removed 상태에서만 실행할 수 있습니다."
+            )
+    elif status is not ReviewCandidateStatus.NEEDS_REVIEW:
+        raise ReviewBulkValidationError(
+            "ignore/delete 필터 작업은 needs_review 상태에서만 실행할 수 있습니다."
+        )
+
+    is_domestic = values.get("is_domestic")
+    if is_domestic is not None and type(is_domestic) is not bool:
+        raise ReviewBulkValidationError("is_domestic는 boolean 또는 null이어야 합니다.")
+    if reason is QueueReason.FOREIGN and is_domestic is not False:
+        raise ReviewBulkValidationError(
+            "해외 후보 일괄 작업은 reason이 아니라 is_domestic=false로 범위를 고정해야 합니다."
+        )
+
+    canonical = {
+        "channel_id": _normalize_review_bulk_text(
+            values.get("channel_id"), maximum=128
+        ),
+        "playlist_id": _normalize_review_bulk_text(
+            values.get("playlist_id"), maximum=128
+        ),
+        "keyword": _normalize_review_bulk_text(
+            values.get("keyword"), maximum=255
+        ),
+        "q": _normalize_review_bulk_text(values.get("q"), maximum=255),
+        # false와 null을 truthiness로 합치지 않는다.
+        "is_domestic": is_domestic,
+        "status": status.value,
+        "reason": reason.value if reason else None,
+        "source_kind": source_kind.value if source_kind else None,
+        "grounding": grounding.value if grounding else None,
+    }
+    query_args = {
+        "channel_id": canonical["channel_id"],
+        "playlist_id": canonical["playlist_id"],
+        "keyword": canonical["keyword"],
+        "query": canonical["q"],
+        "is_domestic": is_domestic,
+        "status": status,
+        "queue_reason": reason,
+        "source_kind": source_kind,
+        "grounding_status": grounding,
+    }
+    return canonical, query_args
+
+
+def _review_bulk_candidate_snapshot_stmt(base_stmt):
+    """목록 filter SQL에서 preview에 필요한 scalar만 SELECT한다.
+
+    `maintain_column_froms=True`로 channel/video 기반 filter JOIN은 유지하되 목록 표시용
+    제목·queue reason·영상 상태와 candidate의 TOAST JSON/Text는 결과 row에 싣지 않는다.
+    """
+    return base_stmt.with_only_columns(
+        ExtractedPlaceCandidate.id.label("candidate_id"),
+        ExtractedPlaceCandidate.state_revision.label("candidate_revision"),
+        ExtractedPlaceCandidate.match_status.label("match_status"),
+        ExtractedPlaceCandidate.deleted_at.label("deleted_at"),
+        ExtractedPlaceCandidate.matched_place_id.label("matched_place_id"),
+        TravelPlace.state_revision.label("matched_place_revision"),
+        maintain_column_froms=True,
+    ).order_by(None)
+
+
+async def _load_review_bulk_candidate_snapshots(
+    session: AsyncSession,
+    base_stmt,
+    *,
+    limit: int | None = None,
+) -> list[ReviewBulkCandidateSnapshot]:
+    stmt = _review_bulk_candidate_snapshot_stmt(base_stmt).order_by(
+        ExtractedPlaceCandidate.id.asc()
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    rows = (await session.execute(stmt)).mappings().all()
+    return [
+        ReviewBulkCandidateSnapshot(
+            candidate_id=int(row["candidate_id"]),
+            candidate_revision=int(row["candidate_revision"]),
+            match_status=str(
+                getattr(row["match_status"], "value", row["match_status"])
+            ),
+            deleted_at=row["deleted_at"],
+            matched_place_id=(
+                int(row["matched_place_id"])
+                if row["matched_place_id"] is not None
+                else None
+            ),
+            matched_place_revision=(
+                int(row["matched_place_revision"])
+                if row["matched_place_revision"] is not None
+                else None
+            ),
+        )
+        for row in rows
+    ]
+
+
+def _validate_review_bulk_candidate_states(
+    action: ReviewBulkAction,
+    snapshots: Sequence[ReviewBulkCandidateSnapshot],
+) -> None:
+    invalid: list[int] = []
+    for snapshot in snapshots:
+        state = snapshot.review_state
+        if action is ReviewBulkAction.REOPEN:
+            valid = state != MatchStatus.NEEDS_REVIEW.value
+        else:
+            valid = state == MatchStatus.NEEDS_REVIEW.value
+        if not valid:
+            invalid.append(snapshot.candidate_id)
+    if invalid:
+        sample = ", ".join(str(value) for value in invalid[:10])
+        raise ReviewBulkValidationError(
+            f"{action.value}할 수 없는 상태의 후보가 포함되어 있습니다: {sample}"
+        )
+
+
+async def preview_review_bulk_operation(
+    session: AsyncSession,
+    *,
+    action: ReviewBulkAction | str,
+    actor: str,
+    candidate_ids: Sequence[int] | None = None,
+    filter_values: dict[str, Any] | None = None,
+    commit: bool = True,
+) -> ReviewBulkPreviewResult:
+    """selection 또는 filter의 정확한 멤버십/revision을 durable item으로 동결한다."""
+    await ensure_repeatable_read(session)
+    try:
+        action_value = ReviewBulkAction(action)
+    except ValueError as exc:
+        raise ReviewBulkValidationError("유효하지 않은 일괄 검수 action입니다.") from exc
+    actor_value = (actor or "").strip()
+    if not 1 <= len(actor_value) <= 64:
+        raise ReviewBulkValidationError("검수 actor 길이가 올바르지 않습니다.")
+    if (candidate_ids is None) == (filter_values is None):
+        raise ReviewBulkValidationError(
+            "selection과 filter scope 중 정확히 하나가 필요합니다."
+        )
+
+    snapshots: list[ReviewBulkCandidateSnapshot]
+    if candidate_ids is not None:
+        ids = list(candidate_ids)
+        if not ids or len(ids) > REVIEW_BULK_SELECTION_LIMIT:
+            raise ReviewBulkValidationError(
+                f"selection은 1~{REVIEW_BULK_SELECTION_LIMIT}건이어야 합니다."
+            )
+        if any(
+            not _positive_int(value, maximum=MAX_DB_INTEGER_ID) for value in ids
+        ):
+            raise ReviewBulkValidationError("candidate_ids는 양의 정수여야 합니다.")
+        if len(set(ids)) != len(ids):
+            raise ReviewBulkValidationError("candidate_ids에 중복이 있습니다.")
+        normalized_ids = sorted(ids)
+        snapshots = await _load_review_bulk_candidate_snapshots(
+            session,
+            select(ExtractedPlaceCandidate)
+            .outerjoin(
+                TravelPlace,
+                TravelPlace.place_id == ExtractedPlaceCandidate.matched_place_id,
+            )
+            .where(ExtractedPlaceCandidate.id.in_(normalized_ids)),
+        )
+        found = {snapshot.candidate_id for snapshot in snapshots}
+        missing = [value for value in normalized_ids if value not in found]
+        if missing:
+            sample = ", ".join(str(value) for value in missing[:10])
+            raise ReviewBulkValidationError(
+                f"존재하지 않는 후보가 포함되어 있습니다: {sample}"
+            )
+        scope = {"kind": "selection", "candidate_ids": normalized_ids}
+    else:
+        canonical_filter, query_args = _normalize_review_bulk_filter(
+            action_value, filter_values or {}
+        )
+        # 상한+1개만 읽어 초과 여부와 exact membership을 한 snapshot query로 판정한다.
+        # 초과 시 일부 10,000개를 operation으로 만들지 않고 transaction을 거부한다.
+        snapshots = await _load_review_bulk_candidate_snapshots(
+            session,
+            _unmatched_candidates_stmt(**query_args),
+            limit=REVIEW_BULK_FILTER_LIMIT + 1,
+        )
+        if len(snapshots) > REVIEW_BULK_FILTER_LIMIT:
+            raise ReviewBulkLimitExceededError(
+                f"필터 결과가 상한 {REVIEW_BULK_FILTER_LIMIT}건을 초과했습니다. "
+                "필터를 더 좁혀 주세요."
+            )
+        scope = {"kind": "filter", "filter": canonical_filter}
+
+    _validate_review_bulk_candidate_states(action_value, snapshots)
+    operation_id = uuid4()
+    expires_at = utcnow() + REVIEW_BULK_CONFIRMATION_TTL
+    scope_fingerprint = _review_bulk_scope_fingerprint(scope)
+    token = (
+        f"{_REVIEW_BULK_TOKEN_VERSION}.{operation_id}."
+        f"{secrets.token_urlsafe(32)}"
+    )
+    token_hash = _review_bulk_confirmation_digest(
+        token,
+        operation_id=operation_id,
+        actor=actor_value,
+        action=action_value.value,
+        scope_fingerprint=scope_fingerprint,
+        expires_at=expires_at,
+    )
+    operation = ReviewBulkOperation(
+        operation_id=operation_id,
+        actor=actor_value,
+        action=action_value.value,
+        scope_kind=scope["kind"],
+        scope_json=scope,
+        scope_fingerprint=scope_fingerprint,
+        confirmation_token_hash=token_hash,
+        confirmation_expires_at=expires_at,
+        total_count=len(snapshots),
+    )
+    session.add(operation)
+    # item Core insert의 FK parent를 먼저 materialize한다. transaction commit은 여전히
+    # route/service 마지막 한 번뿐이라 preview operation/items/audit은 함께 rollback된다.
+    await session.flush([operation])
+    item_insert = insert(ReviewBulkOperationItem.__table__)
+    for offset in range(0, len(snapshots), REVIEW_BULK_ITEM_INSERT_BATCH_SIZE):
+        batch = snapshots[offset : offset + REVIEW_BULK_ITEM_INSERT_BATCH_SIZE]
+        await session.execute(
+            item_insert,
+            [
+                {
+                    "operation_id": operation_id,
+                    "candidate_id": snapshot.candidate_id,
+                    "snapshot_revision": snapshot.candidate_revision,
+                    "snapshot_review_state": snapshot.review_state,
+                    "snapshot_matched_place_id": snapshot.matched_place_id,
+                    "snapshot_matched_place_revision": (
+                        snapshot.matched_place_revision
+                    ),
+                    "reopen_token": (
+                        snapshot.undo_token()
+                        if action_value is ReviewBulkAction.REOPEN
+                        else None
+                    ),
+                    "status": ReviewBulkItemStatus.PENDING.value,
+                    "attempt_count": 0,
+                }
+                for snapshot in batch
+            ],
+        )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="candidate.bulk_preview",
+        target_type="review_bulk_operation",
+        target_id=str(operation_id),
+        payload={
+            "operation_id": str(operation_id),
+            "action": action_value.value,
+            "scope_kind": scope["kind"],
+            "scope_fingerprint": scope_fingerprint,
+            "total": len(snapshots),
+            "actor": actor_value,
+        },
+        commit=False,
+    )
+    await session.flush()
+    if commit:
+        await session.commit()
+    return ReviewBulkPreviewResult(
+        operation_id=operation_id,
+        confirmation_token=token,
+        expires_at=expires_at,
+        total=len(snapshots),
+        chunk_size=REVIEW_BULK_CHUNK_SIZE,
+    )
+
+
+def _verify_review_bulk_token(
+    operation: ReviewBulkOperation,
+    *,
+    actor: str,
+    token: str,
+) -> None:
+    if operation.actor != actor:
+        # operation 존재 여부와 소유 actor를 외부에 구분해 노출하지 않는다.
+        raise ReviewBulkOperationNotFoundError("일괄 검수 operation을 찾을 수 없습니다.")
+    if (
+        not isinstance(token, str)
+        or not 1 <= len(token) <= 512
+        or re.fullmatch(r"rbulk1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]+", token)
+        is None
+    ):
+        raise ReviewBulkTokenError("유효하지 않은 confirmation token입니다.")
+    parts = token.split(".", 2)
+    if parts[0] != _REVIEW_BULK_TOKEN_VERSION or parts[1] != str(
+        operation.operation_id
+    ):
+        raise ReviewBulkTokenError("유효하지 않은 confirmation token입니다.")
+    if (
+        operation.scope_kind != operation.scope_json.get("kind")
+        or not hmac.compare_digest(
+            _review_bulk_scope_fingerprint(operation.scope_json),
+            operation.scope_fingerprint,
+        )
+    ):
+        raise ReviewBulkTokenError("operation scope가 변경되었습니다.")
+    digest = _review_bulk_confirmation_digest(
+        token,
+        operation_id=operation.operation_id,
+        actor=operation.actor,
+        action=operation.action,
+        scope_fingerprint=operation.scope_fingerprint,
+        expires_at=operation.confirmation_expires_at,
+    )
+    if not hmac.compare_digest(digest, operation.confirmation_token_hash):
+        raise ReviewBulkTokenError("유효하지 않은 confirmation token입니다.")
+    if (
+        operation.status == ReviewBulkOperationStatus.PREVIEWED.value
+        and utcnow() >= operation.confirmation_expires_at
+    ):
+        raise ReviewBulkTokenExpiredError("confirmation token이 만료되었습니다.")
+
+
+def _review_bulk_conflict(code: str, candidate_id: int, message: str) -> dict[str, Any]:
+    return {"candidate_id": candidate_id, "code": code, "message": message}
+
+
+async def _execute_review_bulk_item(
+    session: AsyncSession,
+    *,
+    operation: ReviewBulkOperation,
+    item: ReviewBulkOperationItem,
+    actor: str,
+    request_id: UUID,
+) -> None:
+    action = ReviewBulkAction(operation.action)
+    bulk_audit_context = {
+        "bulk_operation_id": str(operation.operation_id),
+        "bulk_request_id": str(request_id),
+    }
+    if action is ReviewBulkAction.IGNORE:
+        candidate, _, _ = await resolve_candidate(
+            session,
+            candidate_id=item.candidate_id,
+            action="ignore",
+            reviewed_by=actor,
+            reviewer_type="web",
+            review_note="일괄 검수에서 제외",
+            expected_revision=item.snapshot_revision,
+            client_operation_id=request_id,
+            commit=False,
+        )
+        await session.flush()
+        await session.refresh(
+            candidate,
+            attribute_names=[
+                "state_revision",
+                "match_status",
+                "matched_place_id",
+                "deleted_at",
+                "provider_evidence_json",
+            ],
+        )
+        await finalize_candidate_client_operation(
+            session,
+            candidate_id=item.candidate_id,
+            client_operation_id=request_id,
+            action="ignore",
+            expected_candidate_revision=candidate.state_revision,
+            expected_review_state=MatchStatus.IGNORED.value,
+            expected_matched_place_id=None,
+            expected_matched_place_revision=None,
+            commit=False,
+        )
+        await audit_service.record(
+            session,
+            actor_type="web",
+            action="candidate.resolve",
+            target_type="extracted_place_candidate",
+            target_id=str(item.candidate_id),
+            payload={
+                "client_operation_id": str(request_id),
+                "request": {
+                    "client_operation_id": str(request_id),
+                    "expected_revision": item.snapshot_revision,
+                    "action": "ignore",
+                    "review_note": "일괄 검수에서 제외",
+                },
+                "resolution": latest_candidate_resolution(candidate),
+                **bulk_audit_context,
+            },
+            commit=False,
+        )
+    elif action is ReviewBulkAction.DELETE:
+        summary = await soft_delete_candidates(
+            session,
+            [item.candidate_id],
+            reason="검수 후보 일괄 삭제",
+            deleted_by=actor,
+            force=False,
+            expected_status=MatchStatus.NEEDS_REVIEW,
+            expected_revisions={item.candidate_id: item.snapshot_revision},
+            client_operation_id=request_id,
+            client_operation_action="delete",
+        )
+        if summary.deleted_candidates != 1:
+            raise CandidateStatusConflictError(
+                expected_status=MatchStatus.NEEDS_REVIEW,
+                actual_status_by_candidate_id={item.candidate_id: "removed"},
+            )
+        await audit_service.record(
+            session,
+            actor_type="web",
+            action="candidate.delete",
+            target_type="extracted_place_candidate",
+            target_id=str(item.candidate_id),
+            payload={
+                "client_operation_id": str(request_id),
+                "soft_delete": True,
+                "reason": "검수 후보 일괄 삭제",
+                "tombstoned_exports": summary.tombstoned_exports,
+                "actor": actor,
+                **bulk_audit_context,
+            },
+            commit=False,
+        )
+    else:
+        if item.reopen_token is None:
+            raise InvalidCandidateUndoToken("reopen snapshot token이 없습니다.")
+        result = await reopen_candidate(
+            session,
+            candidate_id=item.candidate_id,
+            undo_token=item.reopen_token,
+        )
+        await audit_service.record(
+            session,
+            actor_type="web",
+            action="candidate.reopen",
+            target_type="extracted_place_candidate",
+            target_id=str(item.candidate_id),
+            payload={
+                "reopened_from": result.reopened_from,
+                "tombstoned_exports": result.tombstoned_exports,
+                "deleted_place_id": result.deleted_place_id,
+                "video_is_excluded": result.video_is_excluded,
+                "actor": actor,
+                **bulk_audit_context,
+            },
+            commit=False,
+        )
+
+
+async def execute_review_bulk_operation(
+    session: AsyncSession,
+    *,
+    operation_id: UUID,
+    confirmation_token: str,
+    actor: str,
+    request_id: UUID,
+    cursor: str | None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """동결 item을 bounded chunk로 처리하고 receipt와 mutation을 한 commit에 남긴다."""
+    actor_value = (actor or "").strip()
+    operation = (
+        await session.execute(
+            select(ReviewBulkOperation)
+            .where(ReviewBulkOperation.operation_id == operation_id)
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one_or_none()
+    if operation is None:
+        raise ReviewBulkOperationNotFoundError(
+            "일괄 검수 operation을 찾을 수 없습니다."
+        )
+    _verify_review_bulk_token(
+        operation,
+        actor=actor_value,
+        token=confirmation_token,
+    )
+    receipt = (
+        await session.execute(
+            select(ReviewBulkOperationReceipt)
+            .where(
+                ReviewBulkOperationReceipt.operation_id == operation_id,
+                ReviewBulkOperationReceipt.request_id == request_id,
+            )
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one_or_none()
+    if receipt is not None:
+        if receipt.request_cursor != cursor:
+            raise ReviewBulkCursorConflictError(
+                "같은 request_id에 다른 cursor를 사용할 수 없습니다."
+            )
+        replay = deepcopy(receipt.response_json)
+        # API route는 commit=False 뒤 바깥에서 commit하지만 direct service 호출자는
+        # 기본 commit=True 계약에 의존한다. replay 조기 반환도 operation FOR UPDATE
+        # row lock을 즉시 풀어야 다음 client가 불필요하게 session 종료까지 기다리지 않는다.
+        if commit:
+            await session.commit()
+        return replay
+    if operation.status in {
+        ReviewBulkOperationStatus.COMPLETED.value,
+        ReviewBulkOperationStatus.COMPLETED_WITH_ERRORS.value,
+    }:
+        # 완료 receipt의 exact request_id/cursor replay는 위에서 이미 반환했다. 같은
+        # cursor(null 포함)를 새 request로 다시 소비하면 response-loss 복구가 아니라
+        # fencing 위반이므로, 0건 성공처럼 보이게 하지 않고 항상 409로 거부한다.
+        raise ReviewBulkCursorConflictError("이미 소비된 execute cursor입니다.")
+    if operation.next_cursor != cursor:
+        raise ReviewBulkCursorConflictError(
+            "stale 또는 다른 operation의 execute cursor입니다."
+        )
+
+    items = list(
+        (
+            await session.execute(
+                select(ReviewBulkOperationItem)
+                .where(
+                    ReviewBulkOperationItem.operation_id == operation_id,
+                    ReviewBulkOperationItem.status
+                    == ReviewBulkItemStatus.PENDING.value,
+                )
+                .order_by(ReviewBulkOperationItem.candidate_id.asc())
+                .limit(REVIEW_BULK_CHUNK_SIZE)
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # 세 action의 단건 helper 모두 장소 lifecycle에 진입할 수 있다. 특히 delete의
+    # `soft_delete_candidates`도 lifecycle lock을 잡으므로, 여기서 공통 전역 순서인
+    # lifecycle -> export를 먼저 고정하지 않으면 다른 writer와 교착할 수 있다.
+    await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
+    candidate_ids = [item.candidate_id for item in items]
+    candidates = list(
+        (
+            await session.execute(
+                select(ExtractedPlaceCandidate)
+                .where(ExtractedPlaceCandidate.id.in_(candidate_ids))
+                .order_by(ExtractedPlaceCandidate.id.asc())
+                .options(
+                    load_only(
+                        ExtractedPlaceCandidate.id,
+                        ExtractedPlaceCandidate.state_revision,
+                        ExtractedPlaceCandidate.match_status,
+                        ExtractedPlaceCandidate.deleted_at,
+                        ExtractedPlaceCandidate.matched_place_id,
+                    )
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    candidate_by_id = {candidate.id: candidate for candidate in candidates}
+    chunk_started_at = utcnow()
+    conflicts: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    succeeded = 0
+    succeeded_ids: list[int] = []
+    conflict_types = (
+        CandidateRevisionConflictError,
+        CandidateResolveConflictError,
+        CandidateStatusConflictError,
+        CandidateMappingConflictError,
+        CandidateReopenConflictError,
+        CandidatePlaceChangedError,
+        InvalidCandidateUndoToken,
+    )
+    for item in items:
+        item.attempt_count += 1
+        candidate = candidate_by_id.get(item.candidate_id)
+        current_state = candidate_review_state(candidate) if candidate else None
+        if (
+            candidate is None
+            or candidate.state_revision != item.snapshot_revision
+            or current_state != item.snapshot_review_state
+            or candidate.matched_place_id != item.snapshot_matched_place_id
+        ):
+            error = _review_bulk_conflict(
+                "candidate_revision_conflict",
+                item.candidate_id,
+                "preview 이후 후보 상태가 변경되었습니다.",
+            )
+            conflicts.append(error)
+            item.status = ReviewBulkItemStatus.CONFLICT.value
+            item.error_code = error["code"]
+            item.error_message = error["message"]
+            item.processed_at = utcnow()
+            continue
+        try:
+            async with session.begin_nested():
+                await _execute_review_bulk_item(
+                    session,
+                    operation=operation,
+                    item=item,
+                    actor=actor_value,
+                    request_id=request_id,
+                )
+                await session.flush()
+        except conflict_types as exc:
+            code = (
+                "candidate_place_changed"
+                if isinstance(
+                    exc,
+                    (CandidateMappingConflictError, CandidatePlaceChangedError),
+                )
+                else "candidate_revision_conflict"
+            )
+            error = _review_bulk_conflict(code, item.candidate_id, str(exc))
+            conflicts.append(error)
+            item.status = ReviewBulkItemStatus.CONFLICT.value
+            item.error_code = code
+            item.error_message = str(exc)[:2000]
+            item.processed_at = utcnow()
+        except Exception as exc:
+            # request 자체의 response-loss는 durable receipt로 재생한다. 반면 item
+            # mutation 중 예외를 같은 operation에서 자동 재시도하면 원인을 모른 채
+            # 무한 진행하거나 processed+remaining 불변식을 깨뜨릴 수 있으므로 명시적인
+            # terminal failure로 남겨 사용자가 새 preview로 재시도하게 한다.
+            code = "candidate_bulk_failed"
+            message = "후보 처리 중 오류가 발생해 이 항목을 완료하지 못했습니다."
+            failed.append(_review_bulk_conflict(code, item.candidate_id, message))
+            item.status = ReviewBulkItemStatus.FAILED.value
+            item.error_code = code
+            # 예외 원문에는 SQL parameter나 provider credential이 포함될 수 있다.
+            # 영속 진단에는 고정 code와 예외 type만 남기고 str(exc)는 저장하지 않는다.
+            item.error_message = f"{code}:{type(exc).__name__}"[:2000]
+            item.processed_at = utcnow()
+        else:
+            succeeded += 1
+            succeeded_ids.append(item.candidate_id)
+            item.status = ReviewBulkItemStatus.SUCCEEDED.value
+            item.error_code = None
+            item.error_message = None
+            item.processed_at = utcnow()
+
+    await session.flush()
+    status_counts = dict(
+        (
+            await session.execute(
+                select(
+                    ReviewBulkOperationItem.status,
+                    func.count(),
+                )
+                .where(ReviewBulkOperationItem.operation_id == operation_id)
+                .group_by(ReviewBulkOperationItem.status)
+            )
+        ).all()
+    )
+    operation.succeeded_count = int(
+        status_counts.get(ReviewBulkItemStatus.SUCCEEDED.value, 0)
+    )
+    operation.conflict_count = int(
+        status_counts.get(ReviewBulkItemStatus.CONFLICT.value, 0)
+    )
+    operation.failed_count = int(
+        status_counts.get(ReviewBulkItemStatus.FAILED.value, 0)
+    )
+    operation.processed_count = (
+        operation.succeeded_count
+        + operation.conflict_count
+        + operation.failed_count
+    )
+    remaining = operation.total_count - operation.processed_count
+    complete = remaining == 0
+    chunk_finished_at = utcnow()
+    next_cursor = (
+        None
+        if complete
+        else (
+            f"{_REVIEW_BULK_CURSOR_VERSION}.{operation.operation_id}."
+            f"{secrets.token_urlsafe(18)}"
+        )
+    )
+    operation.next_cursor = next_cursor
+    operation.started_at = operation.started_at or chunk_started_at
+    if complete:
+        operation.status = (
+            ReviewBulkOperationStatus.COMPLETED_WITH_ERRORS.value
+            if operation.conflict_count or operation.failed_count
+            else ReviewBulkOperationStatus.COMPLETED.value
+        )
+        operation.finished_at = chunk_finished_at
+    else:
+        operation.status = ReviewBulkOperationStatus.RUNNING.value
+
+    response = {
+        "operation_id": str(operation.operation_id),
+        "request_id": str(request_id),
+        "processed": succeeded + len(conflicts) + len(failed),
+        "succeeded": succeeded,
+        "conflicts": conflicts,
+        "failed": failed,
+        "remaining": remaining,
+        "next_cursor": next_cursor,
+        "complete": complete,
+    }
+    session.add(
+        ReviewBulkOperationReceipt(
+            operation_id=operation.operation_id,
+            request_id=request_id,
+            request_cursor=cursor,
+            response_json=deepcopy(response),
+        )
+    )
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="candidate.bulk_chunk",
+        target_type="review_bulk_operation",
+        target_id=str(operation.operation_id),
+        payload={
+            "operation_id": str(operation.operation_id),
+            "request_id": str(request_id),
+            "action": operation.action,
+            "attempted": len(items),
+            "candidate_ids": candidate_ids,
+            "succeeded": succeeded,
+            "succeeded_candidate_ids": succeeded_ids,
+            "conflicts": len(conflicts),
+            "conflict_candidate_ids": [
+                issue["candidate_id"] for issue in conflicts
+            ],
+            "failed": len(failed),
+            "failed_candidate_ids": [issue["candidate_id"] for issue in failed],
+            "remaining": remaining,
+            "complete": complete,
+            "actor": actor_value,
+        },
+        commit=False,
+    )
+    await session.flush()
+    if commit:
+        await session.commit()
+    return response
 
 
 @dataclass(frozen=True)
