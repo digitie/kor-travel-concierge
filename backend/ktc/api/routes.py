@@ -36,6 +36,7 @@ from ktc.etl import (
 )
 from ktc.etl.youtube_client import YouTubeClient
 from ktc.models import (
+    LANE_BATCH,
     LANE_INTERACTIVE,
     AssetType,
     CrawlRun,
@@ -453,6 +454,12 @@ class ReprocessRequest(BaseModel):
     video_ids: list[str]
     # transcript=자막부터 / correction=교정부터 / poi=POI 추출부터.
     start_stage: Literal["transcript", "correction", "poi"] = "transcript"
+    # T-169(수동 whisper 재전사): true면 자막을 whisper 로컬 STT로 강제 재전사한다.
+    # auto 게이트(`TRANSCRIPT_WHISPER_ENABLED`)를 우회하고 CPU 무거운 batch 레인으로
+    # enqueue하며, transcript 단계부터 다시 처리한다.
+    force_whisper: bool = False
+    # whisper 모델 크기(예: "small"/"medium"). 비우면 config `WHISPER_MANUAL_MODEL_SIZE`.
+    whisper_model: str | None = None
 
 
 @router.post("/destinations/reprocess")
@@ -469,7 +476,59 @@ async def reprocess_videos(
     )[:200]
     if not video_ids:
         raise HTTPException(status_code=400, detail="video_ids required")
-    size = max(1, get_settings().POI_BATCH_MAX_VIDEOS)
+    settings = get_settings()
+
+    # 기본 재처리: 사용자 버튼 발원이라 대화형 레인. start_stage는 요청 그대로.
+    lane = LANE_INTERACTIVE
+    start_stage: str = payload.start_stage
+    extra_payload: dict[str, Any] = {}
+
+    if payload.force_whisper:
+        # T-169 수동 whisper 재전사: CPU 무거운 전사라 배치 레인으로 보낸다(대화형 아님,
+        # T-163). whisper는 transcript 단계에서만 돌므로 항상 transcript부터 재처리한다.
+        lane = LANE_BATCH
+        start_stage = "transcript"
+        model_size = (
+            (payload.whisper_model or "").strip()
+            or settings.WHISPER_MANUAL_MODEL_SIZE
+        )
+        extra_payload = {"force_whisper": True, "whisper_model": model_size}
+        # duration cap: 1건당 상한 — 유일한 per-item 상한이라 우회를 허용하면 안 된다.
+        # whisper는 wall-clock 타임아웃도, to_thread 협조 취소도 없어 수 시간짜리 단일
+        # 영상이 batch 단일 레인을 무한 점유해 harvest/스캔을 굶길 수 있다(T-121-E 재발).
+        # 라이브 다시보기·프리미어 아카이브는 duration_seconds가 NULL로 저장되므로, 강제
+        # whisper는 **알려진 양수 duration이고 cap 이하**인 영상만 허용한다(미상/비정상 거절).
+        cap = settings.TRANSCRIPT_WHISPER_FORCE_MAX_DURATION_SECONDS
+        rows = await session.execute(
+            select(YoutubeVideo.video_id, YoutubeVideo.duration_seconds).where(
+                YoutubeVideo.video_id.in_(video_ids)
+            )
+        )
+        durations = {vid: dur for vid, dur in rows.all()}
+        unknown_or_invalid = [
+            vid
+            for vid in video_ids
+            if durations.get(vid) is None or durations[vid] <= 0
+        ]
+        too_long = [
+            vid
+            for vid in video_ids
+            if durations.get(vid) is not None and durations[vid] > cap
+        ]
+        if unknown_or_invalid or too_long:
+            reasons: list[str] = []
+            if unknown_or_invalid:
+                reasons.append(
+                    "길이 미상/비정상 영상은 whisper 재전사 대상에서 제외됩니다: "
+                    f"{', '.join(unknown_or_invalid)}"
+                )
+            if too_long:
+                reasons.append(
+                    f"duration이 {cap}초를 초과: {', '.join(too_long)}"
+                )
+            raise HTTPException(status_code=400, detail=". ".join(reasons) + ".")
+
+    size = max(1, settings.POI_BATCH_MAX_VIDEOS)
     job_ids: list[str] = []
     for start in range(0, len(video_ids), size):
         chunk = video_ids[start : start + size]
@@ -477,10 +536,8 @@ async def reprocess_videos(
             session,
             job_type="poi_batch",
             source=RunSource.WEB,
-            payload={"video_ids": chunk, "start_stage": payload.start_stage},
-            # 검수 화면의 사용자 재처리 — 대화형 레인(T-163). poi_batch job_type이지만
-            # 발원이 사용자 버튼이라 배치 수집 후속과 달리 interactive다.
-            lane=LANE_INTERACTIVE,
+            payload={"video_ids": chunk, "start_stage": start_stage, **extra_payload},
+            lane=lane,
             commit=False,
         )
         job_ids.append(str(run.id))
@@ -492,14 +549,16 @@ async def reprocess_videos(
         payload={
             "videos": len(video_ids),
             "jobs": len(job_ids),
-            "start_stage": payload.start_stage,
+            "start_stage": start_stage,
+            "force_whisper": payload.force_whisper,
         },
     )
     return {
         "enqueued_jobs": len(job_ids),
         "videos": len(video_ids),
         "job_ids": job_ids,
-        "start_stage": payload.start_stage,
+        "start_stage": start_stage,
+        "force_whisper": payload.force_whisper,
     }
 
 

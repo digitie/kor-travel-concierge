@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-169**: whisper 정책·재전사 — AUTO_ENABLED와 manual force 분리(auto 기본값·model·duration 상한·일일 CPU 예산·concurrency 1 운영 결정), 체인 레벨 게이트·model 인자, 재전사 액션(batch lane). 선행: T-158·T-164. (PR-18 개정판) — **사용자 결정(2026-07-13)**: prod 자동 전사는 의도된 현행(ON) 유지, auto 기본값 결정 완료 — 수동 force·model 인자·상한만 구현
 - [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판) — **사용자 결정(2026-07-13)**: NCP Maps 결과는 캐시·저장 대상 제외 확정(`docs/provider-policy.md`)
 - [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
 - [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
@@ -52,6 +51,25 @@
 
 ## 완료
 
+- [x] **T-169**: whisper 수동 재전사 액션 — 자막 최종 실패 영상을 운영자가 명시적으로 whisper 재전사
+  (선별 실행, 기본화 아님, §2.2 ③). **사용자 결정(2026-07-13)**: prod 자동 전사(`TRANSCRIPT_WHISPER_
+  ENABLED`)는 현행 ON 유지 — auto 동작·기본값 불변, **수동 force·model 인자·상한만** 구현. `transcript.py`
+  `transcribe_via_whisper`에 `force`/`model_size`(keyword-only): `force=True`면 env 게이트 우회(auto 경로는
+  `if not force and env` 프리픽스로 byte-for-byte 불변), model 인자 미지정 시 env `WHISPER_MODEL_SIZE`
+  기본. 체인 빌더 `whisper_forced_chain(model_size)` + `postprocess_service._whisper_forced_transcript_
+  fetcher` 신설, `worker.poi_batch_handler`가 payload `force_whisper`/`whisper_model`을 읽어 주입(없으면
+  `_default_transcript_fetcher` 불변). API는 기존 `/destinations/reprocess` 재사용 — `ReprocessRequest`에
+  additive `force_whisper`/`whisper_model`, force 시 **batch lane**(interactive 아님)·model `small` 기본
+  (`WHISPER_MANUAL_MODEL_SIZE`)·**duration cap**(`TRANSCRIPT_WHISPER_FORCE_MAX_DURATION_SECONDS=1200`).
+  스키마 변경 없음(payload 파라미터). 2렌즈 적대적 리뷰: 확정 BLOCKER/MAJOR 0. 렌즈 이견 1건 **병합 전
+  보강** — duration cap이 `duration_seconds` NULL/0/음수를 통과시켜 라이브 아카이브(무한 whisper·비취소
+  `to_thread`)가 batch 단일 레인을 무한 점유(T-121-E 재발) → **known positive duration ≤ cap만 통과,
+  NULL/비양수는 400**. 알려진 MINOR(문서화·미수정): 요청당 whisper 건수 상한 부재(기존 reprocess `[:200]`
+  공통), 검수자/운영자 역할 분리 없음(기존 admin-proxy 신뢰 모델). **프런트 "whisper로 재전사" 버튼은
+  Agent B 후속**(API: `POST /api/v1/destinations/reprocess {video_ids, force_whisper, whisper_model?}`).
+  검증: 격리 DB backend 전체 pytest 571 passed(pre-existing 1건 외 0), whisper-force 테스트 10 passed,
+  migration 불필요, routes.py 변경은 additive(Agent B 미머지 브랜치 15개와 reprocess 영역 미충돌 확인).
+  (2026-07-13, 로드맵 PR-18 개정·§10 B3·§2.2 ③)
 - [x] **T-168**: description 단독 후보 경로 — 자막 전 provider 최종 실패(T-164 판정) 시 영상을
   폐기하던 것을 막고(§1.3 D1 수율), 저장된 영상 설명(제목·태그 포함)이 `DESCRIPTION_POI_MIN_LENGTH`
   (기본 200자) 이상이면 그 텍스트로 **검수 전용** 후보를 추출한다(`source_kind='description'`).

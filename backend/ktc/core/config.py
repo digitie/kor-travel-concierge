@@ -185,6 +185,21 @@ class Settings(BaseSettings):
     # 실행 환경은 Linux Docker 전용이며 FFmpeg은 컨테이너 이미지가 apt로 제공한다.
     FFMPEG_PATH: str = "/usr/bin/ffmpeg"
 
+    # --- whisper 수동 재전사 (T-169, 선별 실행 — auto whisper와 독립) ---
+    # 운영자가 자막이 최종 실패한 영상을 명시적으로 whisper(faster-whisper 로컬 STT)로
+    # 재전사할 때만 쓰는 상한/기본값이다. auto 전사 게이트(env `TRANSCRIPT_WHISPER_ENABLED`,
+    # prod ON)의 동작·기본값은 아래 필드들이 건드리지 않는다 — 수동 force 경로 전용이다.
+    #
+    # 운영 결정(2026-07-13): 수동 whisper는 batch 레인(T-163) 단일 워커에서만 돌아
+    # concurrency=1이 구조적으로 보장된다. duration cap이 1건당 상한을 걸고, 일일 CPU
+    # 예산은 운영자가 batch 레인 투입량으로 통제한다(하드 리미터는 미구현 — 상한만 구현).
+    # transcript_source='whisper' 기록은 PR-11 컬럼에 그대로 남는다.
+    #
+    # 영상 1건 재전사 상한(초). 이 값을 초과하는 영상은 수동 force 대상에서 400으로 거절한다.
+    TRANSCRIPT_WHISPER_FORCE_MAX_DURATION_SECONDS: int = 1200
+    # 수동 force 기본 whisper 모델(auto의 env `WHISPER_MODEL_SIZE` 기본 "base"보다 정확도 우선).
+    WHISPER_MANUAL_MODEL_SIZE: str = "small"
+
     # --- RustFS 미디어 저장소 ---
     RUSTFS_ENABLED: bool = True
     RUSTFS_ENDPOINT: str = "http://127.0.0.1:12101"

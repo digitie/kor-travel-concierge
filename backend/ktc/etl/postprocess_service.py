@@ -24,6 +24,7 @@ from ktc.etl.transcript import (
     TranscriptOutcome,
     TranscriptResult,
     fetch_transcript_async,
+    whisper_forced_chain,
 )
 from ktc.models import (
     CrawlStatus,
@@ -312,6 +313,24 @@ async def _new_candidates_for_video(
 async def _default_transcript_fetcher(video_id: str) -> TranscriptOutcome:
     """설정된 provider 체인으로 자막을 확보하고 provider별 시도를 함께 반환한다(T-164)."""
     return await fetch_transcript_async(video_id)
+
+
+def _whisper_forced_transcript_fetcher(
+    model_size: str | None = None,
+) -> TranscriptFetcher:
+    """whisper 강제 전사만 시도하는 fetcher를 만든다(T-169 수동 재전사, 게이트 우회).
+
+    provider 체인을 whisper 하나로 고정해 자막이 최종 실패한 영상을 운영자가 명시적으로
+    재전사할 때만 쓴다. auto whisper 게이트(`TRANSCRIPT_WHISPER_ENABLED`)와 기본 경로
+    (`_default_transcript_fetcher`)는 건드리지 않는다. `model_size`가 없으면 whisper 함수의
+    env 기본값을 따른다(라우트가 config 기본을 주입한다).
+    """
+    chain = whisper_forced_chain(model_size)
+
+    async def _fetch(video_id: str) -> TranscriptOutcome:
+        return await fetch_transcript_async(video_id, providers=chain)
+
+    return _fetch
 
 
 def _make_media_store(settings: Settings) -> media_store.MediaStore:

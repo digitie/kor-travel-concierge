@@ -379,6 +379,16 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
     start_stage = str(payload.get("start_stage") or "transcript")
     reprocess = bool(payload.get("start_stage"))
     default_category_code = _default_category_code_from_payload(payload)
+    # 수동 whisper 재전사(T-169): payload에 force_whisper가 실리면 자막 fetcher를
+    # whisper 강제 버전으로 바꿔 auto 게이트를 우회한다. 없으면 기본 경로 그대로.
+    force_whisper = bool(payload.get("force_whisper"))
+    whisper_model = payload.get("whisper_model")
+    if force_whisper:
+        transcript_fetcher = postprocess_service._whisper_forced_transcript_fetcher(
+            str(whisper_model) if whisper_model else None
+        )
+    else:
+        transcript_fetcher = postprocess_service._default_transcript_fetcher
 
     async def report_status(message: str, progress: float | None = None) -> None:
         await crawl_run_service.append_status_log(
@@ -419,7 +429,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
             store,
             videos=videos,
             runtime=runtime,
-            transcript_fetcher=postprocess_service._default_transcript_fetcher,
+            transcript_fetcher=transcript_fetcher,
             status_reporter=report_status,
             # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
             # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.
