@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from ktc.models import RunState, utcnow
+import pytest
+from sqlalchemy import func, select
+
+from ktc.models import CrawlRun, RunAttention, RunState, utcnow
 from ktc.services import crawl_run_service as svc
 
 
@@ -150,3 +153,145 @@ async def test_list_runs_filter_by_state(session):
     done = await svc.list_runs(session, state=RunState.DONE)
     assert len(pending) == 1
     assert len(done) == 1
+
+
+# ---------------------------------------------------------------------------
+# T-162: restart lineage·멱등 + attention 전이
+# ---------------------------------------------------------------------------
+
+
+async def _failed_run(session):
+    run = await svc.create_run(
+        session,
+        job_type="harvest",
+        source="web",
+        target_type="keyword",
+        target_id="부산",
+        payload={"query": "부산", "max_videos": 3},
+    )
+    await svc.mark_failed(session, run.id, error="boom")
+    return await svc.get_run(session, run.id)
+
+
+async def test_mark_failed_opens_attention(session):
+    failed = await _failed_run(session)
+    assert failed.attention == RunAttention.OPEN
+
+
+async def test_requeue_stale_isolation_opens_attention(session):
+    run = await svc.create_run(session, job_type="harvest", source="web")
+    await svc.claim_next_pending(session)
+    run_db = await svc.get_run(session, run.id)
+    run_db.retry_count = 3
+    run_db.heartbeat_at = utcnow() - timedelta(seconds=600)
+    await session.commit()
+
+    await svc.requeue_stale(session, threshold_seconds=300, max_retries=3)
+    failed = await svc.get_run(session, run.id)
+    assert failed.state == RunState.FAILED
+    assert failed.attention == RunAttention.OPEN
+
+
+async def test_create_restart_run_requires_terminal(session):
+    run = await svc.create_run(session, job_type="harvest", source="web")
+
+    with pytest.raises(ValueError, match="terminal"):
+        await svc.create_restart_run(session, run.id, source="web")
+
+
+async def test_create_restart_run_missing_origin(session):
+    run, created = await svc.create_restart_run(session, 999_999, source="web")
+    assert run is None
+    assert created is False
+
+
+async def test_create_restart_run_idempotent_with_lineage(session):
+    origin = await _failed_run(session)
+
+    first, created_first = await svc.create_restart_run(session, origin.id, source="web")
+    assert created_first is True
+    assert first.state == RunState.PENDING
+    assert first.restart_of_run_id == origin.id
+    # 입력 snapshot(payload/job_type/target)이 복사된다.
+    assert first.job_type == origin.job_type
+    assert first.target_id == origin.target_id
+    assert '"max_videos": 3' in (first.payload_json or "")
+    # 원본 attention은 superseded로 이관된다.
+    refreshed_origin = await svc.get_run(session, origin.id)
+    assert refreshed_origin.attention == RunAttention.SUPERSEDED
+
+    # 같은 원본의 중복 클릭: 새 run을 만들지 않고 active 재시작 run을 반환한다.
+    second, created_second = await svc.create_restart_run(session, origin.id, source="web")
+    assert created_second is False
+    assert second.id == first.id
+    count = await session.scalar(
+        select(func.count())
+        .select_from(CrawlRun)
+        .where(CrawlRun.restart_of_run_id == origin.id)
+    )
+    assert count == 1
+
+
+async def test_restart_done_resolves_origin_attention(session):
+    origin = await _failed_run(session)
+    restart, _ = await svc.create_restart_run(session, origin.id, source="web")
+
+    await svc.mark_done(session, restart.id)
+
+    refreshed_origin = await svc.get_run(session, origin.id)
+    assert refreshed_origin.attention == RunAttention.RESOLVED
+    # 재시작이 종료(terminal)되었으므로 새 재시작은 다시 허용된다.
+    third, created = await svc.create_restart_run(session, origin.id, source="web")
+    assert created is True
+    assert third.id != restart.id
+
+
+async def test_restart_failed_leaves_origin_superseded_and_opens_leaf(session):
+    origin = await _failed_run(session)
+    restart, _ = await svc.create_restart_run(session, origin.id, source="web")
+
+    await svc.mark_failed(session, restart.id, error="again")
+
+    refreshed_origin = await svc.get_run(session, origin.id)
+    refreshed_restart = await svc.get_run(session, restart.id)
+    # 최신 leaf attempt가 open을 갖고, 원본은 superseded로 남는다(B6 leaf 기준).
+    assert refreshed_origin.attention == RunAttention.SUPERSEDED
+    assert refreshed_restart.attention == RunAttention.OPEN
+
+
+async def test_restart_of_done_origin_keeps_attention_none(session):
+    origin = await svc.create_run(session, job_type="harvest", source="web")
+    await svc.mark_done(session, origin.id)
+
+    restart, created = await svc.create_restart_run(session, origin.id, source="web")
+    assert created is True
+    await svc.mark_done(session, restart.id)
+
+    refreshed_origin = await svc.get_run(session, origin.id)
+    # 해소할 실패가 없던 원본(성공 run 재실행)은 attention이 생기지 않는다.
+    assert refreshed_origin.attention is None
+
+
+async def test_acknowledge_attention_transitions(session):
+    failed = await _failed_run(session)
+
+    acked = await svc.acknowledge_attention(session, failed.id)
+    assert acked.attention == RunAttention.ACKNOWLEDGED
+    # 멱등 재호출: 그대로 acknowledged 유지.
+    again = await svc.acknowledge_attention(session, failed.id)
+    assert again.attention == RunAttention.ACKNOWLEDGED
+
+    # acknowledged 원본도 재시작 시 superseded로 이관된다.
+    restart, _ = await svc.create_restart_run(session, failed.id, source="web")
+    refreshed = await svc.get_run(session, failed.id)
+    assert refreshed.attention == RunAttention.SUPERSEDED
+
+    # superseded/None은 확인 대상이 아니다.
+    with pytest.raises(ValueError, match="open"):
+        await svc.acknowledge_attention(session, failed.id)
+    done_run = await svc.create_run(session, job_type="harvest", source="web")
+    await svc.mark_done(session, done_run.id)
+    with pytest.raises(ValueError, match="open"):
+        await svc.acknowledge_attention(session, done_run.id)
+
+    assert await svc.acknowledge_attention(session, 999_999) is None
