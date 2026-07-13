@@ -50,8 +50,14 @@ import {
   type ListEnvelope,
   type UnmatchedCandidate,
 } from "@/lib/api";
-import { candidateStatusLabel, categoryDisplayLabel } from "@/lib/display-labels";
-import { youtubeWatchUrl } from "@/lib/format";
+import {
+  candidateStatusLabel,
+  categoryDisplayLabel,
+  queueReasonBadgeVariant,
+  queueReasonLabel,
+  sourceKindLabel,
+} from "@/lib/display-labels";
+import { formatDateTimeShort, youtubeWatchUrl } from "@/lib/format";
 import {
   buildCreatePlaceResolution,
   isPlaceHitStorageAllowed,
@@ -2088,6 +2094,13 @@ const CandidateRow = memo(function CandidateRow({
   onOpenDetail: (candidateId: number) => void;
   onRequestDelete: (candidate: UnmatchedCandidate) => void;
 }) {
+  const confidencePercent =
+    candidate.confidence_score != null &&
+    Number.isFinite(candidate.confidence_score) &&
+    candidate.confidence_score >= 0 &&
+    candidate.confidence_score <= 1
+      ? Math.round(candidate.confidence_score * 100)
+      : null;
   const isRowAction = (target: EventTarget | null) =>
     target instanceof Element && target.closest("[data-row-action]") != null;
 
@@ -2123,17 +2136,31 @@ const CandidateRow = memo(function CandidateRow({
       <TableCell>
         <div className="flex max-w-[16rem] flex-col gap-1 whitespace-normal text-left">
           <span className="font-bold leading-snug">{candidate.ai_place_name}</span>
+          <span className="flex flex-wrap gap-1">
+            {confidencePercent != null ? (
+              <Badge variant="outline">매칭 신뢰도 {confidencePercent}%</Badge>
+            ) : null}
+            <Badge variant={queueReasonBadgeVariant(candidate.queue_reason)}>
+              {queueReasonLabel(candidate.queue_reason)}
+            </Badge>
+          </span>
           <span className="text-[12px] text-text-secondary">
             {categoryDisplayLabel(candidate.candidate_category)}
           </span>
         </div>
       </TableCell>
       <TableCell>
-        <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary">
+        <div
+          className="flex max-w-[14rem] flex-col gap-1 whitespace-normal text-left text-[12px] text-text-secondary"
+          title={`영상 ID: ${candidate.video_id}`}
+        >
+          <span className="truncate font-medium text-foreground">
+            {candidate.video_title}
+          </span>
+          <span className="truncate">{candidate.channel_title ?? "채널 정보 없음"}</span>
           <span className="text-left group-hover:text-primary">
             {candidate.location_hint ?? "위치 힌트 없음"}
           </span>
-          <span className="font-mono">{candidate.video_id}</span>
           <button
             type="button"
             data-row-action="true"
@@ -2153,6 +2180,9 @@ const CandidateRow = memo(function CandidateRow({
           {candidate.is_domestic === false ? (
             <Badge variant="outline">해외</Badge>
           ) : null}
+          <span className="text-[11px] text-muted-foreground">
+            {sourceKindLabel(candidate.source_kind)} · 등록 {formatDateTimeShort(candidate.created_at)}
+          </span>
         </div>
       </TableCell>
       <TableCell>

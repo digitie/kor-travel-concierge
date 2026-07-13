@@ -7,17 +7,20 @@ import re
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from geoalchemy2 import Geography
-from sqlalchemy import cast, delete, distinct, func, or_, select, update
+from sqlalchemy import Numeric, and_, case, cast, delete, distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.spatial import sync_place_geometry
 from ktc.etl import category_catalog
 from ktc.models import (
     ExtractedPlaceCandidate,
+    EvidenceSourceKind,
     FeatureExportStatus,
     MatchStatus,
     MediaAsset,
@@ -66,6 +69,39 @@ class CandidateReopenUnsupportedError(ValueError):
 
     확정 장소 정리(고아 판정·공유 장소 보호) 정책은 T-184에서 다룬다.
     """
+
+
+class QueueReason(str, Enum):
+    """검수 대기 우선순위를 설명하는 안정 API enum.
+
+    선언 순서가 곧 사용자 검수 우선순위다. 새 값은 기존 값의 의미를 바꾸지 않고
+    추가하며, SQL filter와 목록 payload가 같은 파생 규칙을 사용한다.
+    """
+
+    UNGROUNDED = "ungrounded"
+    NAME_MISMATCH = "name_mismatch"
+    REGION_MISMATCH = "region_mismatch"
+    SOURCE_CONFLICT = "source_conflict"
+    SOURCE_LOW_CONFIDENCE = "source_low_confidence"
+    SOURCE_UNCERTAIN = "source_uncertain"
+    AMBIGUOUS = "ambiguous"
+    NO_RESULT = "no_result"
+    VWORLD_UNREFINED_SINGLE = "vworld_unrefined_single"
+    FOREIGN = "foreign"
+    DESCRIPTION_ONLY = "description_only"
+    VISUAL_ONLY = "visual_only"
+    PROVIDER_MISSING = "provider_missing"
+    EXTRACTION_ONLY = "extraction_only"
+
+
+@dataclass(frozen=True)
+class CandidateListItem:
+    """검수 목록에 필요한 짧은 scalar만 결합한 조회 결과."""
+
+    candidate: ExtractedPlaceCandidate
+    video_title: str
+    channel_title: str | None
+    queue_reason: QueueReason
 
 
 @dataclass(frozen=True)
@@ -1409,21 +1445,146 @@ async def list_unmatched_candidates(
     return list(result.scalars().all())
 
 
+def _candidate_queue_reason_expression():
+    geocoding_reason = func.jsonb_extract_path_text(
+        ExtractedPlaceCandidate.provider_evidence_json,
+        "geocoding",
+        "decision",
+        "reason",
+    )
+    reconcile_decision = func.lower(
+        func.btrim(
+            func.coalesce(
+                func.jsonb_extract_path_text(
+                    ExtractedPlaceCandidate.provider_evidence_json,
+                    "reconcile",
+                    "decision",
+                ),
+                "",
+            )
+        )
+    )
+    reconcile_review_reason = func.jsonb_extract_path_text(
+        ExtractedPlaceCandidate.provider_evidence_json,
+        "reconcile",
+        "needs_review_reason",
+    )
+    reconcile_confidence_json = ExtractedPlaceCandidate.provider_evidence_json[
+        "reconcile"
+    ]["confidence_score"]
+    reconcile_confidence = cast(
+        case(
+            (
+                func.jsonb_typeof(reconcile_confidence_json) == "number",
+                func.jsonb_extract_path_text(
+                    ExtractedPlaceCandidate.provider_evidence_json,
+                    "reconcile",
+                    "confidence_score",
+                ),
+            ),
+            else_=None,
+        ),
+        Numeric,
+    )
+    review_note = func.lower(func.coalesce(ExtractedPlaceCandidate.review_note, ""))
+    return case(
+        (
+            or_(
+                geocoding_reason == QueueReason.NAME_MISMATCH.value,
+                review_note.contains("name_mismatch"),
+            ),
+            QueueReason.NAME_MISMATCH.value,
+        ),
+        (
+            or_(
+                geocoding_reason == QueueReason.REGION_MISMATCH.value,
+                review_note.contains("region_mismatch"),
+            ),
+            QueueReason.REGION_MISMATCH.value,
+        ),
+        (
+            reconcile_decision == "conflict",
+            QueueReason.SOURCE_CONFLICT.value,
+        ),
+        (
+            reconcile_decision == "low_confidence",
+            QueueReason.SOURCE_LOW_CONFIDENCE.value,
+        ),
+        (
+            or_(
+                reconcile_decision.in_(["needs_review", "uncertain"]),
+                func.nullif(func.btrim(reconcile_review_reason), "").is_not(None),
+                reconcile_confidence < Decimal("0.65"),
+            ),
+            QueueReason.SOURCE_UNCERTAIN.value,
+        ),
+        (
+            geocoding_reason == QueueReason.AMBIGUOUS.value,
+            QueueReason.AMBIGUOUS.value,
+        ),
+        (
+            geocoding_reason == QueueReason.NO_RESULT.value,
+            QueueReason.NO_RESULT.value,
+        ),
+        (
+            geocoding_reason == QueueReason.VWORLD_UNREFINED_SINGLE.value,
+            QueueReason.VWORLD_UNREFINED_SINGLE.value,
+        ),
+        (
+            ExtractedPlaceCandidate.is_domestic.is_(False),
+            QueueReason.FOREIGN.value,
+        ),
+        (
+            ExtractedPlaceCandidate.source_kind
+            == EvidenceSourceKind.DESCRIPTION.value,
+            QueueReason.DESCRIPTION_ONLY.value,
+        ),
+        (
+            ExtractedPlaceCandidate.source_kind == EvidenceSourceKind.VISUAL.value,
+            QueueReason.VISUAL_ONLY.value,
+        ),
+        (
+            and_(
+                ExtractedPlaceCandidate.provider_evidence_json.op("?")("geocoding"),
+                geocoding_reason.is_(None),
+            ),
+            QueueReason.PROVIDER_MISSING.value,
+        ),
+        else_=QueueReason.EXTRACTION_ONLY.value,
+    )
+
+
 def _unmatched_candidates_stmt(
     *,
     channel_id: str | None,
     playlist_id: str | None,
     keyword: str | None,
+    queue_reason: QueueReason | None = None,
+    source_kind: EvidenceSourceKind | None = None,
 ):
-    stmt = select(ExtractedPlaceCandidate).where(
-        ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
-        ExtractedPlaceCandidate.deleted_at.is_(None),
-    )
-    if channel_id or keyword:
-        stmt = stmt.join(
+    reason_expression = _candidate_queue_reason_expression()
+    stmt = (
+        select(
+            ExtractedPlaceCandidate,
+            YoutubeVideo.title.label("video_title"),
+            func.coalesce(YoutubeChannel.title, YoutubeVideo.channel_name).label(
+                "channel_title"
+            ),
+            reason_expression.label("queue_reason"),
+        )
+        .outerjoin(
             YoutubeVideo,
             YoutubeVideo.video_id == ExtractedPlaceCandidate.video_id,
         )
+        .outerjoin(
+            YoutubeChannel,
+            YoutubeChannel.channel_id == YoutubeVideo.channel_id,
+        )
+        .where(
+            ExtractedPlaceCandidate.match_status == MatchStatus.NEEDS_REVIEW,
+            ExtractedPlaceCandidate.deleted_at.is_(None),
+        )
+    )
     if channel_id:
         stmt = stmt.where(
             or_(
@@ -1435,6 +1596,10 @@ def _unmatched_candidates_stmt(
         stmt = stmt.where(ExtractedPlaceCandidate.source_playlist_id == playlist_id)
     if keyword:
         stmt = stmt.where(YoutubeVideo.source_search_query == keyword)
+    if queue_reason is not None:
+        stmt = stmt.where(reason_expression == queue_reason.value)
+    if source_kind is not None:
+        stmt = stmt.where(ExtractedPlaceCandidate.source_kind == source_kind.value)
     return stmt
 
 
@@ -1445,20 +1610,24 @@ async def list_unmatched_candidates_page(
     channel_id: str | None = None,
     playlist_id: str | None = None,
     keyword: str | None = None,
+    queue_reason: QueueReason | None = None,
+    source_kind: EvidenceSourceKind | None = None,
     cursor: str | None = None,
     newer_than_id: int | None = None,
-) -> ListPage[ExtractedPlaceCandidate]:
+) -> ListPage[CandidateListItem]:
     """검수 대기 후보를 최신 ID 기준의 안정적인 keyset page로 반환한다."""
     await ensure_repeatable_read(session)
     normalized_filters = {
         "channel_id": channel_id or None,
         "playlist_id": playlist_id or None,
         "keyword": keyword or None,
+        "queue_reason": queue_reason.value if queue_reason else None,
+        "source_kind": source_kind.value if source_kind else None,
         "match_status": MatchStatus.NEEDS_REVIEW.value,
         "visible": "not_deleted",
     }
     fingerprint = filter_fingerprint(
-        scope="unmatched-v1", sort="latest", filters=normalized_filters
+        scope="unmatched-v2", sort="latest", filters=normalized_filters
     )
     decoded = (
         decode_cursor(cursor, fingerprint=fingerprint, key_count=1)
@@ -1478,6 +1647,8 @@ async def list_unmatched_candidates_page(
         channel_id=normalized_filters["channel_id"],
         playlist_id=normalized_filters["playlist_id"],
         keyword=normalized_filters["keyword"],
+        queue_reason=queue_reason,
+        source_kind=source_kind,
     )
     id_stmt = base_stmt.with_only_columns(ExtractedPlaceCandidate.id).order_by(None)
     if decoded is None:
@@ -1504,22 +1675,26 @@ async def list_unmatched_candidates_page(
     page_stmt = base_stmt.where(ExtractedPlaceCandidate.id <= snapshot_id)
     if decoded is not None:
         page_stmt = page_stmt.where(ExtractedPlaceCandidate.id < decoded.keys[0])
-    rows = list(
-        (
-            await session.execute(
-                page_stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit + 1)
-            )
+    rows = (
+        await session.execute(
+            page_stmt.order_by(ExtractedPlaceCandidate.id.desc()).limit(limit + 1)
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     has_more = len(rows) > limit
-    items = rows[:limit]
+    items = [
+        CandidateListItem(
+            candidate=row[0],
+            video_title=row.video_title or row[0].video_id,
+            channel_title=row.channel_title,
+            queue_reason=QueueReason(row.queue_reason),
+        )
+        for row in rows[:limit]
+    ]
     next_cursor = (
         encode_cursor(
             fingerprint=fingerprint,
             snapshot_id=snapshot_id,
-            keys=(items[-1].id,),
+            keys=(items[-1].candidate.id,),
         )
         if has_more and items
         else None

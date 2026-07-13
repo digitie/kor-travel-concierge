@@ -505,6 +505,11 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     const firstRow = page.getByRole('row', { name: /자동 후보 1/ });
     await expect(firstRow).toHaveAttribute('aria-selected', 'true');
+    await expect(firstRow).toContainText('자동 검수 영상 1');
+    await expect(firstRow).toContainText('자동 검수 채널');
+    await expect(firstRow).toContainText('매칭 신뢰도 83%');
+    await expect(firstRow).toContainText('추출 직후');
+    await expect(firstRow).toContainText('등록');
     await firstRow.click();
     await expect.poll(() => requests.searchQueries).toContain('자동 후보 1');
     await page
@@ -800,11 +805,17 @@ function reviewCandidateFixture(
   return {
     id,
     video_id: `review-video-${id}`,
+    video_title: `자동 검수 영상 ${id}`,
+    channel_title: '자동 검수 채널',
     ai_place_name: name,
     location_hint: null,
     candidate_category: '카페',
     candidate_category_code: '0',
     match_status: 'needs_review',
+    confidence_score: id === 1 ? 0.83 : null,
+    source_kind: 'transcript',
+    created_at: '2026-07-13T03:00:00Z',
+    queue_reason: isDomestic ? 'extraction_only' : 'foreign',
     timestamp_start: timestampStart,
     is_domestic: isDomestic,
   };

@@ -133,14 +133,45 @@ export type PlaceSourceVideo = {
   speaker_note: string | null;
 };
 
+export type ReviewQueueReason =
+  | "ungrounded"
+  | "name_mismatch"
+  | "region_mismatch"
+  | "source_conflict"
+  | "source_low_confidence"
+  | "source_uncertain"
+  | "ambiguous"
+  | "no_result"
+  | "vworld_unrefined_single"
+  | "foreign"
+  | "description_only"
+  | "visual_only"
+  | "provider_missing"
+  | "extraction_only";
+
+export type ReviewSourceKind =
+  | "transcript"
+  | "url_summary"
+  | "reconcile"
+  | "manual"
+  | "geocoding"
+  | "description"
+  | "visual";
+
 export type UnmatchedCandidate = {
   id: number;
   video_id: string;
+  video_title: string;
+  channel_title: string | null;
   ai_place_name: string;
   location_hint: string | null;
   candidate_category: string | null;
   candidate_category_code: string | null;
   match_status: string;
+  confidence_score: number | null;
+  source_kind: ReviewSourceKind;
+  created_at: string;
+  queue_reason: ReviewQueueReason;
   timestamp_start: string | null;
   // POI 추출 LLM의 국내 여부 판정. null=미판정, true=국내, false=해외.
   is_domestic: boolean | null;
@@ -510,6 +541,14 @@ export type DestinationFilter = {
   district?: string | null;
 };
 
+export type ReviewCandidateFilter = Pick<
+  DestinationFilter,
+  "channelId" | "playlistId" | "keyword"
+> & {
+  queueReason?: ReviewQueueReason | null;
+  sourceKind?: ReviewSourceKind | null;
+};
+
 export type DestinationFacets = {
   channels: { id: string; title: string; place_count: number }[];
   playlists: { id: string; title: string; place_count: number }[];
@@ -563,14 +602,14 @@ export function buildDestinationExportUrl({
 }
 
 export async function listUnmatchedCandidates(
-  filter?: DestinationFilter,
+  filter?: ReviewCandidateFilter,
   limit = 2000,
 ): Promise<UnmatchedCandidate[]> {
   return (await listUnmatchedCandidatesPage(filter, { limit })).items;
 }
 
 export async function listUnmatchedCandidatesPage(
-  filter?: DestinationFilter,
+  filter?: ReviewCandidateFilter,
   pagination: ListPagination = {},
 ): Promise<ListEnvelope<UnmatchedCandidate>> {
   const params = new URLSearchParams();
@@ -582,6 +621,8 @@ export async function listUnmatchedCandidatesPage(
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
+  if (filter?.queueReason) params.set("reason", filter.queueReason);
+  if (filter?.sourceKind) params.set("source_kind", filter.sourceKind);
   const qs = params.toString();
   return requestJson<ListEnvelope<UnmatchedCandidate>>(
     `/api/v1/destinations/unmatched${qs ? `?${qs}` : ""}`,

@@ -463,6 +463,8 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 > **개정(2026-07-13, §10 반영)**: `queue_reason`은 파생 문자열이 아니라 **안정 enum + 우선순위 규칙 문서화**(ungrounded > name_mismatch > region_mismatch > ambiguous > no_result > foreign > description_only > visual_only 등). reason·source_kind·grounding을 서버 필터로도 노출(grounding 값은 T-165 후).
 
+> **구현 완료(2026-07-13, T-182)**: 목록 scalar·안정 사유 우선순위·`reason`/`source_kind` filter와 `unmatched-v2` cursor를 적용했다. grounding은 T-165 raw 저장 계약 전에는 산출·filter하지 않는 것으로 명시 이연했다. 상세 evidence 비노출과 300건 응답 증가분을 n150에서 측정했고, 오염 confidence/JSONB fail-safe를 추가했다.
+
 - **해결**: U2, D3(표시 측).
 - **변경 파일**: `backend/ktc/services/place_service.py`, `backend/ktc/api/routes.py`(`_candidate_list_payload`), `frontend/src/lib/api.ts`, `frontend/src/app/review/page.tsx`, `backend/tests/`.
 - **작업 절차**:

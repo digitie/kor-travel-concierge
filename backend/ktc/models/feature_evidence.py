@@ -11,6 +11,8 @@ class EvidenceSourceKind(str, Enum):
     RECONCILE = "reconcile"
     MANUAL = "manual"
     GEOCODING = "geocoding"
+    DESCRIPTION = "description"
+    VISUAL = "visual"
 
 
 class FeatureExportStatus(str, Enum):
