@@ -17,10 +17,11 @@ import {
   listRunQueue,
   listSourceTargets,
   restartRun,
+  RUN_QUEUE_OBSERVER_OPTIONS,
+  RUN_QUEUE_QUERY_KEY,
   runSourceTargetNow,
   stopRun,
   triggerPoiBatch,
-  USER_JOB_TYPES,
   type CrawlRunSummary,
   type SourceTargetSummary,
 } from "@/lib/api";
@@ -72,9 +73,9 @@ export function CollectWorkspace() {
   const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
   const runQueueQuery = useQuery({
-    queryKey: ["run-queue", "user"],
-    queryFn: () => listRunQueue(USER_JOB_TYPES),
-    refetchInterval: 2_000,
+    queryKey: RUN_QUEUE_QUERY_KEY,
+    queryFn: listRunQueue,
+    ...RUN_QUEUE_OBSERVER_OPTIONS,
   });
   const sourceTargetsQuery = useQuery({
     queryKey: ["source-targets"],
@@ -84,7 +85,7 @@ export function CollectWorkspace() {
 
   const invalidateJobs = () => {
     queryClient.invalidateQueries({ queryKey: ["runs"] });
-    queryClient.invalidateQueries({ queryKey: ["run-queue"] });
+    queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
   };
   const stopRunMutation = useMutation({ mutationFn: stopRun, onSuccess: invalidateJobs });
   const restartRunMutation = useMutation({ mutationFn: restartRun, onSuccess: invalidateJobs });
@@ -107,7 +108,7 @@ export function CollectWorkspace() {
   });
 
   const isMutating = stopRunMutation.isPending || restartRunMutation.isPending;
-  const queueRuns = runQueueQuery.data ?? [];
+  const queueRuns = runQueueQuery.data?.items ?? [];
   const activeRun =
     queueRuns.find((run) => run.state.toLowerCase() === "running") ??
     queueRuns.find((run) => run.state.toLowerCase() === "pending") ??

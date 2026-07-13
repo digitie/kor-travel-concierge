@@ -1192,6 +1192,267 @@ async def test_runs_job_types_filter(client, session):
     assert "source_scan" in {r["job_type"] for r in everything}
 
 
+async def test_run_queue_static_route_uses_run_summary_contract(client, session):
+    from ktc.models import (
+        CrawlRun,
+        RunAttention,
+        RunSource,
+        RunState,
+        YoutubeChannel,
+    )
+
+    session.add(YoutubeChannel(channel_id="UCqueue", title="대기열 채널"))
+    session.add(
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            target_type="channel",
+            target_id="UCqueue",
+            state=RunState.PENDING,
+            progress=0.0,
+            status_log_json=json.dumps(
+                [{"timestamp": "2026-07-13T00:00:00Z", "message": "파싱 금지"}]
+            ),
+            result_json="{invalid-json",
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="video_analysis",
+            source=RunSource.WEB,
+            target_type="video",
+            target_id="failed-video",
+            state=RunState.FAILED,
+            progress=0.5,
+            attention=RunAttention.OPEN,
+        )
+    )
+    session.add(
+        CrawlRun(
+            job_type="source_scan",
+            source=RunSource.SCHEDULER,
+            target_type="source_targets",
+            target_id="active",
+            state=RunState.PENDING,
+            progress=0.0,
+        )
+    )
+    await session.commit()
+
+    response = await client.get("/api/v1/runs/queue")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "items",
+        "running_count",
+        "pending_count",
+        "open_attention_count",
+        "has_more",
+        "user_job_types",
+    }
+    assert body["running_count"] == 0
+    assert body["pending_count"] == 1
+    assert body["open_attention_count"] == 1
+    assert body["has_more"] is False
+    assert body["user_job_types"] == [
+        "harvest",
+        "poi_batch",
+        "deep_research",
+        "video_analysis",
+    ]
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert set(item) == {
+        "job_id",
+        "job_type",
+        "job_type_label",
+        "lane",
+        "source",
+        "target_type",
+        "target_type_label",
+        "target_id",
+        "target_label",
+        "state",
+        "progress",
+        "current_message",
+        "max_videos",
+        "default_category_code",
+        "default_category_label",
+        "status_logs",
+        "retry_count",
+        "last_error",
+        "restart_of_run_id",
+        "attention",
+        "result",
+        "created_at",
+        "started_at",
+        "finished_at",
+    }
+    assert item["job_type"] == "harvest"
+    assert item["state"] == "pending"
+    assert item["target_label"] == "대기열 채널"
+    assert item["status_logs"] == []
+    assert item["result"] is None
+
+
+async def test_run_queue_caps_large_backlog_and_reports_exact_counts(client, session):
+    from ktc.models import CrawlRun, RunSource, RunState
+    from ktc.services import crawl_run_service
+
+    running = [
+        CrawlRun(
+            job_type="deep_research",
+            source=RunSource.WEB,
+            state=RunState.RUNNING,
+            progress=0.5,
+        )
+        for _ in range(2)
+    ]
+    pending = [
+        CrawlRun(
+            job_type="harvest",
+            source=RunSource.WEB,
+            state=RunState.PENDING,
+            progress=0.0,
+        )
+        for _ in range(crawl_run_service.RUN_QUEUE_ITEM_LIMIT + 3)
+    ]
+    session.add_all([*running, *pending])
+    await session.commit()
+
+    response = await client.get("/api/v1/runs/queue")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == crawl_run_service.RUN_QUEUE_ITEM_LIMIT
+    assert body["running_count"] == 2
+    assert body["pending_count"] == crawl_run_service.RUN_QUEUE_ITEM_LIMIT + 3
+    assert body["open_attention_count"] == 0
+    assert body["has_more"] is True
+    assert [item["job_id"] for item in body["items"][:2]] == [
+        str(item.id) for item in running
+    ]
+
+
+async def test_runs_terminal_attention_filter_finds_failure_beyond_active_backlog(
+    client, session
+):
+    from ktc.models import CrawlRun, RunAttention, RunSource, RunState
+
+    failed = CrawlRun(
+        job_type="harvest",
+        source=RunSource.WEB,
+        target_type="keyword",
+        target_id="old-open-attention",
+        state=RunState.FAILED,
+        attention=RunAttention.OPEN,
+        progress=0.5,
+    )
+    session.add(failed)
+    await session.flush()
+    session.add_all(
+        [
+            CrawlRun(
+                job_type="harvest",
+                source=RunSource.WEB,
+                state=RunState.PENDING,
+                attention=RunAttention.OPEN,
+                progress=0.0,
+            )
+            for _ in range(81)
+        ]
+    )
+    session.add_all(
+        [
+            CrawlRun(
+                job_type="harvest",
+                source=RunSource.WEB,
+                state=RunState.DONE,
+                attention=RunAttention.ACKNOWLEDGED,
+                progress=1.0,
+            )
+            for _ in range(81)
+        ]
+    )
+    done_open = CrawlRun(
+        job_type="harvest",
+        source=RunSource.WEB,
+        state=RunState.DONE,
+        attention=RunAttention.OPEN,
+        progress=1.0,
+    )
+    cancelled_open = CrawlRun(
+        job_type="video_analysis",
+        source=RunSource.WEB,
+        state=RunState.CANCELLED,
+        attention=RunAttention.OPEN,
+        progress=0.2,
+    )
+    internal_open = CrawlRun(
+        job_type="source_scan",
+        source=RunSource.SCHEDULER,
+        state=RunState.FAILED,
+        attention=RunAttention.OPEN,
+        progress=0.5,
+    )
+    session.add_all([done_open, cancelled_open, internal_open])
+    await session.commit()
+
+    response = await client.get(
+        "/api/v1/runs",
+        params={
+            "terminal": "true",
+            "attention": "open",
+            "user_jobs_only": "true",
+            "limit": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["has_more"] is True
+    assert body["next_cursor"]
+    assert [item["job_id"] for item in body["items"]] == [
+        str(cancelled_open.id),
+        str(done_open.id),
+    ]
+
+    next_response = await client.get(
+        "/api/v1/runs",
+        params={
+            "terminal": "true",
+            "attention": "open",
+            "user_jobs_only": "true",
+            "limit": 2,
+            "cursor": body["next_cursor"],
+        },
+    )
+    assert next_response.status_code == 200
+    next_body = next_response.json()
+    assert next_body["total"] == 3
+    assert next_body["has_more"] is False
+    assert [item["job_id"] for item in next_body["items"]] == [str(failed.id)]
+    assert all(
+        item["attention"] == "open"
+        and item["state"] in {"done", "failed", "cancelled"}
+        for item in [*body["items"], *next_body["items"]]
+    )
+
+
+async def test_runs_rejects_ambiguous_user_jobs_and_explicit_types(client):
+    response = await client.get(
+        "/api/v1/runs",
+        params={"user_jobs_only": "true", "job_types": "harvest"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "user_jobs_only와 job_types는 함께 사용할 수 없습니다"
+    )
+
+
 async def test_run_now_enqueues_and_increments(client, session):
     from ktc.models import SourceTarget
 

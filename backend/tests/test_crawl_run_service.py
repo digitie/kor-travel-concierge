@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import InvalidRequestError
 
 from ktc.models import (
     LANE_BATCH,
@@ -211,6 +212,208 @@ async def test_list_runs_filter_by_state(session):
     done = await svc.list_runs(session, state=RunState.DONE)
     assert len(pending) == 1
     assert len(done) == 1
+
+
+async def test_list_run_queue_orders_user_active_and_counts_open_attention(session):
+    async def add_run(
+        job_type: str,
+        state: RunState,
+        attention: RunAttention | None = None,
+    ) -> CrawlRun:
+        run = await svc.create_run(
+            session,
+            job_type=job_type,
+            source="web",
+            target_type="keyword",
+            target_id=f"queue-{job_type}",
+            commit=False,
+        )
+        run.state = state
+        run.attention = attention
+        return run
+
+    pending_harvest = await add_run("harvest", RunState.PENDING)
+    running_deep_research = await add_run("deep_research", RunState.RUNNING)
+    running_harvest = await add_run("harvest", RunState.RUNNING)
+    pending_poi_batch = await add_run("poi_batch", RunState.PENDING)
+    await add_run("source_scan", RunState.RUNNING)
+    await add_run("transcript", RunState.PENDING)
+    await add_run("video_analysis", RunState.DONE, RunAttention.OPEN)
+    await add_run("harvest", RunState.FAILED, RunAttention.ACKNOWLEDGED)
+    await add_run("poi_batch", RunState.FAILED, RunAttention.SUPERSEDED)
+    await add_run("deep_research", RunState.FAILED, RunAttention.RESOLVED)
+    await add_run("source_scan", RunState.FAILED, RunAttention.OPEN)
+    pending_video_analysis = await add_run(
+        "video_analysis", RunState.PENDING, RunAttention.OPEN
+    )
+    await add_run("poi_batch", RunState.CANCELLED, RunAttention.OPEN)
+    await session.commit()
+
+    snapshot = await svc.list_run_queue(session)
+
+    assert [item.id for item in snapshot.items] == [
+        running_deep_research.id,
+        running_harvest.id,
+        pending_harvest.id,
+        pending_poi_batch.id,
+        pending_video_analysis.id,
+    ]
+    assert {item.job_type for item in snapshot.items} == set(svc.USER_JOB_TYPES)
+    assert snapshot.running_count == 2
+    assert snapshot.pending_count == 3
+    assert snapshot.open_attention_count == 2
+    assert snapshot.has_more is False
+
+
+async def test_list_run_queue_returns_attention_when_active_empty(session):
+    failed = await svc.create_run(
+        session,
+        job_type="harvest",
+        source="web",
+        commit=False,
+    )
+    failed.state = RunState.FAILED
+    failed.attention = RunAttention.OPEN
+    await svc.create_run(
+        session,
+        job_type="source_scan",
+        source="scheduler",
+        commit=False,
+    )
+    await session.commit()
+
+    snapshot = await svc.list_run_queue(session)
+
+    assert snapshot.items == []
+    assert snapshot.running_count == 0
+    assert snapshot.pending_count == 0
+    assert snapshot.open_attention_count == 1
+    assert snapshot.has_more is False
+
+
+async def test_list_run_queue_caps_backlog_but_returns_exact_counts(session):
+    running = [
+        CrawlRun(
+            job_type="harvest",
+            source="web",
+            state=RunState.RUNNING,
+            progress=0.5,
+        )
+        for _ in range(2)
+    ]
+    pending = [
+        CrawlRun(
+            job_type="poi_batch",
+            source="web",
+            state=RunState.PENDING,
+            progress=0.0,
+        )
+        for _ in range(svc.RUN_QUEUE_ITEM_LIMIT + 3)
+    ]
+    session.add_all([*running, *pending])
+    await session.commit()
+
+    snapshot = await svc.list_run_queue(session)
+
+    assert len(snapshot.items) == svc.RUN_QUEUE_ITEM_LIMIT
+    assert snapshot.running_count == 2
+    assert snapshot.pending_count == svc.RUN_QUEUE_ITEM_LIMIT + 3
+    assert snapshot.has_more is True
+    assert [item.id for item in snapshot.items[:2]] == [item.id for item in running]
+    assert [item.id for item in snapshot.items[2:]] == [
+        item.id for item in pending[: svc.RUN_QUEUE_ITEM_LIMIT - 2]
+    ]
+
+
+async def test_list_run_queue_exact_limit_has_no_more(session):
+    session.add_all(
+        [
+            CrawlRun(
+                job_type="harvest",
+                source="web",
+                state=RunState.PENDING,
+                progress=0.0,
+            )
+            for _ in range(svc.RUN_QUEUE_ITEM_LIMIT)
+        ]
+    )
+    await session.commit()
+
+    snapshot = await svc.list_run_queue(session)
+
+    assert len(snapshot.items) == svc.RUN_QUEUE_ITEM_LIMIT
+    assert snapshot.pending_count == svc.RUN_QUEUE_ITEM_LIMIT
+    assert snapshot.has_more is False
+
+
+async def test_list_run_queue_raiseloads_large_detail_columns(session):
+    run = CrawlRun(
+        job_type="harvest",
+        source="web",
+        state=RunState.PENDING,
+        progress=0.0,
+        status_log_json='[{"message":"large"}]',
+        result_json='{"large":true}',
+    )
+    session.add(run)
+    await session.commit()
+    session.expunge_all()
+
+    snapshot = await svc.list_run_queue(session)
+
+    assert len(snapshot.items) == 1
+    with pytest.raises(InvalidRequestError, match="raiseload=True"):
+        _ = snapshot.items[0].status_log_json
+    with pytest.raises(InvalidRequestError, match="raiseload=True"):
+        _ = snapshot.items[0].result_json
+
+
+async def test_list_run_queue_uses_one_repeatable_read_snapshot(session_factory):
+    async with session_factory() as setup_session:
+        run = await svc.create_run(
+            setup_session,
+            job_type="harvest",
+            source="web",
+            commit=False,
+        )
+        run.state = RunState.RUNNING
+        await setup_session.commit()
+        run_id = run.id
+
+    async with session_factory() as reader_session:
+        class BarrierSession:
+            def __init__(self, delegate):
+                self._delegate = delegate
+                self._barrier_reached = False
+
+            def __getattr__(self, name):
+                return getattr(self._delegate, name)
+
+            async def execute(self, *args, **kwargs):
+                result = await self._delegate.execute(*args, **kwargs)
+                if not self._barrier_reached:
+                    self._barrier_reached = True
+                    async with session_factory() as writer_session:
+                        changed = await writer_session.get(CrawlRun, run_id)
+                        assert changed is not None
+                        changed.state = RunState.FAILED
+                        changed.attention = RunAttention.OPEN
+                        await writer_session.commit()
+                return result
+
+        snapshot = await svc.list_run_queue(BarrierSession(reader_session))
+
+        assert [item.id for item in snapshot.items] == [run_id]
+        assert snapshot.running_count == 1
+        assert snapshot.pending_count == 0
+        assert snapshot.open_attention_count == 0
+        assert snapshot.has_more is False
+
+    async with session_factory() as verify_session:
+        changed = await verify_session.get(CrawlRun, run_id)
+        assert changed is not None
+        assert changed.state == RunState.FAILED
+        assert changed.attention == RunAttention.OPEN
 
 
 # ---------------------------------------------------------------------------

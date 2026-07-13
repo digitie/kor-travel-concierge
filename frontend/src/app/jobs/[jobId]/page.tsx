@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftIcon,
   CheckCircle2Icon,
@@ -16,6 +16,7 @@ import {
   getRunVideoStats,
   getVideoTranscript,
   reprocessVideos,
+  RUN_QUEUE_QUERY_KEY,
   type RunVideoStat,
 } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
@@ -183,6 +184,7 @@ function VideoStatsSection({
 
 function VideoStatRows({ stat }: { stat: RunVideoStat }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [showTranscript, setShowTranscript] = useState(false);
   const transcriptQuery = useQuery({
     queryKey: ["video-transcript", stat.video_id],
@@ -191,6 +193,9 @@ function VideoStatRows({ stat }: { stat: RunVideoStat }) {
   });
   const reprocess = useMutation({
     mutationFn: () => reprocessVideos([stat.video_id], "transcript"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
+    },
   });
 
   return (

@@ -349,6 +349,7 @@ def test_read_scope_policy_allows_only_declared_supply_paths(path):
     [
         ("POST", "/api/v1/destinations"),
         ("GET", "/api/v1/runs"),
+        ("GET", "/api/v1/runs/queue"),
         ("GET", "/api/v1/destinations/unmatched"),
         ("GET", "/api/v1/destinations/candidates/1/detail"),
         ("GET", "/api/v1/destinations/not-a-number/detail"),
@@ -380,6 +381,7 @@ async def test_read_key_allows_supply_and_denies_write_and_internal_gets(
         harvest = await ac.post("/api/v1/harvest", headers=headers, json={})
         delete_place = await ac.delete("/api/v1/destinations/1", headers=headers)
         settings_get = await ac.get("/api/v1/settings", headers=headers)
+        run_queue = await ac.get("/api/v1/runs/queue", headers=headers)
         unmatched = await ac.get("/api/v1/destinations/unmatched", headers=headers)
         candidate = await ac.get(
             "/api/v1/destinations/candidates/1/detail", headers=headers
@@ -390,6 +392,7 @@ async def test_read_key_allows_supply_and_denies_write_and_internal_gets(
     assert harvest.status_code == 403
     assert delete_place.status_code == 403
     assert settings_get.status_code == 403
+    assert run_queue.status_code == 403
     assert unmatched.status_code == 403
     assert candidate.status_code == 403
     app.dependency_overrides.clear()
@@ -409,7 +412,7 @@ async def test_admin_db_key_header_allows_internal_api_but_not_admin_proxy_api(
 
     headers = {"X-API-Key": api_key}
     async with _make_client(session_factory, settings) as ac:
-        internal = await ac.get("/api/v1/runs", headers=headers)
+        internal = await ac.get("/api/v1/runs/queue", headers=headers)
         admin_proxy_only = await ac.get(
             "/api/v1/admin/public-api-keys", headers=headers
         )

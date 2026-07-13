@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangleIcon,
   DatabaseIcon,
@@ -16,9 +17,11 @@ import {
   getRustfsStatus,
   listAuditLogs,
   listLoginEvents,
-  listRuns,
+  listRunsPage,
   listRunQueue,
-  USER_JOB_TYPES,
+  RUN_HISTORY_REFETCH_INTERVAL_MS,
+  RUN_QUEUE_OBSERVER_OPTIONS,
+  RUN_QUEUE_QUERY_KEY,
   type CrawlRunSummary,
 } from "@/lib/api";
 import {
@@ -75,18 +78,49 @@ function auditTargetLabel(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+function subscribeClientState() {
+  return () => undefined;
+}
+
+function getClientSnapshot() {
+  return true;
+}
+
+function getServerSnapshot() {
+  return false;
+}
+
 export function StatusDashboard() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const mounted = useSyncExternalStore(
+    subscribeClientState,
+    getClientSnapshot,
+    getServerSnapshot,
+  );
   const [runActionFeedback, setRunActionFeedback] =
     useState<RunActionFeedback | null>(null);
   const queueQuery = useQuery({
-    queryKey: ["run-queue", "status"],
-    queryFn: () => listRunQueue(USER_JOB_TYPES),
-    refetchInterval: 3_000,
+    queryKey: RUN_QUEUE_QUERY_KEY,
+    queryFn: listRunQueue,
+    ...RUN_QUEUE_OBSERVER_OPTIONS,
   });
-  const runsQuery = useQuery({
-    queryKey: ["runs", "status"],
-    queryFn: () => listRuns({ limit: 80, jobTypes: USER_JOB_TYPES }),
-    refetchInterval: 5_000,
+  const attentionOnly = searchParams.get("attention") === "open";
+  const runsQuery = useInfiniteQuery({
+    queryKey: ["runs", "status", attentionOnly],
+    queryFn: ({ pageParam }) =>
+      listRunsPage({
+        terminal: true,
+        attention: attentionOnly ? "open" : undefined,
+        userJobsOnly: true,
+        limit: 80,
+        cursor: pageParam,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.next_cursor : undefined,
+    staleTime: 60_000,
+    refetchInterval: RUN_HISTORY_REFETCH_INTERVAL_MS,
   });
   const metricsQuery = useQuery({
     queryKey: ["metrics"],
@@ -109,18 +143,15 @@ export function StatusDashboard() {
     refetchInterval: 15_000,
   });
 
-  const queueRuns = queueQuery.data ?? [];
-  const historyRuns = (runsQuery.data ?? []).filter(
-    (run) =>
-      run.state.toLowerCase() !== "running" &&
-      run.state.toLowerCase() !== "pending",
-  );
-  const running = queueRuns.filter(
-    (run) => run.state.toLowerCase() === "running",
-  );
-  const pending = queueRuns.filter(
-    (run) => run.state.toLowerCase() === "pending",
-  );
+  const queueRuns = queueQuery.data?.items ?? [];
+  const openAttentionCount = queueQuery.data?.open_attention_count ?? 0;
+  const runningCount = queueQuery.data?.running_count ?? 0;
+  const pendingCount = queueQuery.data?.pending_count ?? 0;
+  const activeCount = runningCount + pendingCount;
+  const historyRuns = runsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const historyTotal = runsQuery.data?.pages[0]?.total ?? historyRuns.length;
+  const selectedRunTab =
+    searchParams.get("tab") === "history" ? "history" : "active";
   const metrics = metricsQuery.data;
   const db = metrics?.database ?? {};
   const runsByState = asRecord(db.runs_by_state);
@@ -135,6 +166,26 @@ export function StatusDashboard() {
     void rustfsQuery.refetch();
     void auditQuery.refetch();
     void loginEventsQuery.refetch();
+  }
+
+  function changeRunTab(value: unknown) {
+    const next = new URLSearchParams(searchParams.toString());
+    if (value === "history") {
+      next.set("tab", "history");
+    } else {
+      next.delete("tab");
+      next.delete("attention");
+    }
+    const query = next.toString();
+    router.replace(`/status${query ? `?${query}` : ""}`, { scroll: false });
+  }
+
+  if (!mounted) {
+    return (
+      <p role="status" className="text-sm text-text-secondary">
+        상태 정보를 불러오는 중입니다.
+      </p>
+    );
   }
 
   return (
@@ -184,8 +235,14 @@ export function StatusDashboard() {
         <MetricCard
           icon={<ListChecksIcon className="size-4" />}
           label="실행 큐"
-          value={`실행 ${running.length} · 대기 ${pending.length}`}
-          tone={running.length > 0 ? "active" : "neutral"}
+          value={`실행 ${runningCount} · 대기 ${pendingCount} · 확인 필요 ${openAttentionCount}`}
+          tone={
+            openAttentionCount > 0
+              ? "warn"
+              : runningCount > 0
+                ? "active"
+                : "neutral"
+          }
         />
         <MetricCard
           icon={<DatabaseIcon className="size-4" />}
@@ -225,12 +282,20 @@ export function StatusDashboard() {
                 {runsQuery.error.message}
               </p>
             ) : null}
-            <Tabs defaultValue="active">
+            <Tabs value={selectedRunTab} onValueChange={changeRunTab}>
               <TabsList>
-                <TabsTrigger value="active">진행 중 {queueRuns.length}</TabsTrigger>
-                <TabsTrigger value="history">완료 이력 {historyRuns.length}</TabsTrigger>
+                <TabsTrigger value="active">진행 중 {activeCount}</TabsTrigger>
+                <TabsTrigger value="history">
+                  {attentionOnly ? "확인 필요" : "완료 이력"}{" "}
+                  {historyTotal}
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="active" className="mt-3">
+                {queueQuery.data?.has_more ? (
+                  <p role="status" className="mb-2 text-xs text-text-secondary">
+                    활성 작업 총 {activeCount}건 중 {queueRuns.length}건 표시
+                  </p>
+                ) : null}
                 <RunStatusTable
                   runs={queueRuns}
                   empty="실행 중이거나 대기 중인 작업이 없습니다."
@@ -238,11 +303,46 @@ export function StatusDashboard() {
                 />
               </TabsContent>
               <TabsContent value="history" className="mt-3">
+                {attentionOnly ? (
+                  <div
+                    role="status"
+                    className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-text-secondary"
+                  >
+                    <span>아직 확인하지 않은 종료 작업만 표시합니다.</span>
+                    <Link
+                      href="/status?tab=history"
+                      className={buttonVariants({ variant: "outline", size: "xs" })}
+                    >
+                      전체 이력 보기
+                    </Link>
+                  </div>
+                ) : null}
                 <RunStatusTable
                   runs={historyRuns}
                   empty="완료된 작업 이력이 없습니다."
                   onActionFeedback={setRunActionFeedback}
                 />
+                {runsQuery.isFetchNextPageError ? (
+                  <p role="alert" className="mt-2 text-xs text-destructive">
+                    다음 작업 이력을 불러오지 못했습니다. 다시 시도해 주세요.
+                  </p>
+                ) : null}
+                {runsQuery.hasNextPage ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-3 w-full"
+                    disabled={runsQuery.isFetchingNextPage}
+                    onClick={() =>
+                      void runsQuery.fetchNextPage({ cancelRefetch: false })
+                    }
+                  >
+                    {runsQuery.isFetchingNextPage
+                      ? "작업 이력 불러오는 중"
+                      : `다음 작업 이력 불러오기 (${historyRuns.length}/${historyTotal})`}
+                  </Button>
+                ) : null}
               </TabsContent>
             </Tabs>
           </Panel>

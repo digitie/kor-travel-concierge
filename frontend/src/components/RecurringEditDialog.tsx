@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getSourceTargetVideos,
   listCategories,
+  RUN_QUEUE_QUERY_KEY,
   runSourceTargetNow,
   updateSourceTarget,
   type CategoryOption,
@@ -143,7 +144,7 @@ export function RecurringEditDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["source-targets"] });
       queryClient.invalidateQueries({ queryKey: ["runs"] });
-      queryClient.invalidateQueries({ queryKey: ["run-queue"] });
+      queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
       close();
     },
   });

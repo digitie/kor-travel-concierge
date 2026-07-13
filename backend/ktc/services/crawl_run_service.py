@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import defer
 
 from ktc.models import (
     LANE_BATCH,
@@ -50,6 +51,17 @@ MAX_STATUS_LOGS = 80
 # stage event detail 상한(비대 방지 — 상세 로그가 아니라 측정치 주석이다).
 _MAX_STAGE_DETAIL_CHARS = 2_000
 
+# 작업 현황 UI에 노출하는 사용자 작업 유형. 내부 유지보수 작업(`source_scan`,
+# `transcript` 등)은 대기열과 실패 attention 집계에서 제외한다(T-181).
+USER_JOB_TYPES: tuple[str, ...] = (
+    "harvest",
+    "poi_batch",
+    "deep_research",
+    "video_analysis",
+)
+# 10초 polling 응답이 backlog 크기에 비례해 커지지 않도록 활성 항목을 제한한다.
+RUN_QUEUE_ITEM_LIMIT = 100
+
 # handler/ETL 서비스에 주입하는 단계 이벤트 콜백 계약(키워드 인자):
 # (stage, *, outcome, provider=None, attempt=None, item_ref=None,
 #  started_at=None, finished_at=None, elapsed_ms=None, detail=None)
@@ -67,6 +79,17 @@ class StopRunTransition:
     run_id: int
     previous_state: RunState
     accepted_state: RunState
+
+
+@dataclass(frozen=True)
+class RunQueueSnapshot:
+    """동일한 DB snapshot에서 읽은 사용자 작업 대기열과 집계."""
+
+    items: list[CrawlRun]
+    running_count: int
+    pending_count: int
+    open_attention_count: int
+    has_more: bool
 
 
 def _clamp_progress(progress: float) -> float:
@@ -368,6 +391,8 @@ async def list_runs_page(
     session: AsyncSession,
     *,
     state: str | None = None,
+    terminal_only: bool = False,
+    attention: RunAttention | None = None,
     limit: int = 50,
     job_types: list[str] | None = None,
     cursor: str | None = None,
@@ -377,9 +402,14 @@ async def list_runs_page(
     await ensure_repeatable_read(session)
     normalized_job_types = sorted(set(job_types or []))
     fingerprint = filter_fingerprint(
-        scope="runs-v1",
+        scope="runs-v2",
         sort="latest",
-        filters={"state": state, "job_types": normalized_job_types},
+        filters={
+            "state": state,
+            "terminal_only": terminal_only,
+            "attention": attention.value if attention is not None else None,
+            "job_types": normalized_job_types,
+        },
     )
     decoded = (
         decode_cursor(cursor, fingerprint=fingerprint, key_count=1)
@@ -398,6 +428,10 @@ async def list_runs_page(
     conditions = []
     if state is not None:
         conditions.append(CrawlRun.state == state)
+    if terminal_only:
+        conditions.append(CrawlRun.state.in_(TERMINAL_RUN_STATES))
+    if attention is not None:
+        conditions.append(CrawlRun.attention == attention)
     if normalized_job_types:
         conditions.append(CrawlRun.job_type.in_(normalized_job_types))
 
@@ -458,6 +492,72 @@ async def list_runs_page(
         total=total,
         newest_id=snapshot_id or None,
         newer_than=newer_than,
+    )
+
+
+async def list_run_queue(session: AsyncSession) -> RunQueueSnapshot:
+    """사용자 활성 작업과 확인이 필요한 종료 작업 수를 한 snapshot에서 반환한다.
+
+    활성 작업은 실행 중 작업을 먼저, 같은 상태에서는 오래된 ID부터 반환한다.
+    attention 배지는 사용자 작업 중 종료됐고 아직 `open`인 항목만 센다.
+    """
+    await ensure_repeatable_read(session)
+    running_count_expr = (
+        func.count(CrawlRun.id)
+        .filter(CrawlRun.state == RunState.RUNNING)
+        .over()
+        .label("running_count")
+    )
+    pending_count_expr = (
+        func.count(CrawlRun.id)
+        .filter(CrawlRun.state == RunState.PENDING)
+        .over()
+        .label("pending_count")
+    )
+    # 기존 ix_crawl_runs_claim_pending(state, id)가 active state scan과 상태별 FIFO
+    # 후보 축을 제공한다. 같은 filter의 window 집계와 고정 상한만 추가하므로 별도
+    # index/migration은 필요하지 않다.
+    rows = (
+        await session.execute(
+            select(CrawlRun, running_count_expr, pending_count_expr)
+            .options(
+                defer(CrawlRun.status_log_json, raiseload=True),
+                defer(CrawlRun.result_json, raiseload=True),
+            )
+            .where(
+                CrawlRun.job_type.in_(USER_JOB_TYPES),
+                CrawlRun.state.in_((RunState.RUNNING, RunState.PENDING)),
+            )
+            .order_by(
+                case((CrawlRun.state == RunState.RUNNING, 0), else_=1),
+                CrawlRun.id.asc(),
+            )
+            .limit(RUN_QUEUE_ITEM_LIMIT)
+        )
+    ).all()
+    active_runs = [row[0] for row in rows]
+    if rows:
+        running_count = int(rows[0]._mapping["running_count"])
+        pending_count = int(rows[0]._mapping["pending_count"])
+    else:
+        running_count = 0
+        pending_count = 0
+    open_attention_count = int(
+        await session.scalar(
+            select(func.count(CrawlRun.id)).where(
+                CrawlRun.job_type.in_(USER_JOB_TYPES),
+                CrawlRun.state.in_(TERMINAL_RUN_STATES),
+                CrawlRun.attention == RunAttention.OPEN,
+            )
+        )
+        or 0
+    )
+    return RunQueueSnapshot(
+        items=active_runs,
+        running_count=running_count,
+        pending_count=pending_count,
+        open_attention_count=open_attention_count,
+        has_more=(running_count + pending_count) > len(active_runs),
     )
 
 

@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-07-13: T-181 — run-queue 단일 폴링·attention 이력
+
+- **작고 정확한 queue snapshot**: `GET /api/v1/runs/queue`를 동적 `/runs/{job_id}`보다 먼저
+  등록하고, 서버 정본 `USER_JOB_TYPES`만 running 우선·상태별 FIFO로 조회한다. 10초 전역 poll이
+  backlog 크기에 비례하지 않도록 항목은 100건으로 제한하되 `COUNT() FILTER ... OVER()`로
+  running/pending 전체 수와 `has_more`를 정확히 반환한다. 종료 상태의 open attention은 별도 partial
+  index 경로로 집계하고 두 SELECT는 `REPEATABLE READ` snapshot에 묶었다. `status_log_json`과
+  `result_json`은 `defer(..., raiseload=True)`로 읽지 않으며 queue 직렬화도 빈 상세만 내보낸다.
+- **한 cache·한 poll 소유자**: `JobStatusLink`, 수집 화면, 상태 화면을 `['run-queue']` 하나로
+  통일하고 shell의 `JobStatusLink`만 응답 완료 시점 기준 10초 poll을 소유한다. 다른 observer는 fresh
+  cache만 소비한다. 페이지 remount는 남은 deadline을 이어받고, fetch·offline pause 중 timer를 끄며,
+  오류 cache도 mount마다 즉시 재요청하지 않아 장애 중 화면 이동이 요청 폭주로 번지지 않는다. 수집,
+  재처리, Deep Research, poi batch, 반복 실행, 중지·재시작 등 사용 중인 작업 mutation은 성공 즉시
+  queue를 invalidate한다.
+- **막다른 attention 제거**: 정확한 open attention 배지는 `/status?tab=history&attention=open`으로
+  이동한다. `/runs`에 `terminal`, `attention`, 서버 소유 `user_jobs_only` filter를 추가해 활성 full
+  summary 중복을 없애고 queue endpoint만 실패해도 이력을 독립 조회한다. 이력은 80건 cursor page를
+  계속 append하므로 81번째 미확인 작업에도 도달하며 60초 safety refresh를 유지한다. 활성 ID 소멸은
+  이력과 destination facet을 즉시 invalidate하고, 결과·검수 facet은 10분 safety poll과 수동 새로고침,
+  장소 생성·병합·삭제 직후 invalidate를 함께 사용한다.
+- **반복 적대 검토·검증**: backend snapshot/SQL·UX/접근성·테스트/계약 세 렌즈로 3회 이상
+  재검토했다. 무제한 payload, facet 영구 stale, attention 링크의 최신 80건 절단, page remount cadence,
+  overdue 1ms timer, queue 부분 장애 결합, 81건 pagination, terminal/attention filter 독립성, deferred
+  column 회귀, 빠른 응답 시 상태 화면 hydration 불일치를 차례로 보완해 최종 P0/P1/P2 0건을
+  확인했다. 최신 main의 T-164와 Alembic 0020 위 n150에서 관련 backend 125건·변경 Python Ruff,
+  frontend lint·type-check·Vitest 106건·production build, Playwright 14건 통과(live 4건 skip)를
+  검증했다. backend 전체 기준선은 474건 통과·3건 실패로, 기존 postprocess category 기대 1건과
+  T-164 테스트의 선택 provider 미설치 가정이 n150 설치 환경과 다른 2건뿐이며 T-181 신규 실패는
+  없다.
+
 ## 2026-07-13: T-164 — transcript_attempts 관측 (D1)
 
 - **문제**: 자막 3 provider(youtube-transcript-api·yt-dlp·faster-whisper)가 전부
