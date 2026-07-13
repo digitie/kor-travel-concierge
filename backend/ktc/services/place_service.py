@@ -16,9 +16,12 @@ from geoalchemy2 import Geography
 from sqlalchemy import Numeric, and_, case, cast, delete, distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ktc.core.config import get_settings
 from ktc.core.spatial import sync_place_geometry
 from ktc.etl import category_catalog
+from ktc.etl.place_name import names_match
 from ktc.models import (
+    AuditStatus,
     ExtractedPlaceCandidate,
     EvidenceSourceKind,
     FeatureExportStatus,
@@ -183,6 +186,63 @@ async def find_duplicate_candidates(
     return await find_places_within_radius(
         session, lat=lat, lng=lng, radius_meters=radius_meters, limit=limit
     )
+
+
+@dataclass(frozen=True)
+class MergeSuggestion:
+    """확정 장소의 잠재 중복 병합 후보(T-167, 로드맵 PR-14 개정판, D6).
+
+    정규화 이름이 유사하고(같은 pairwise `names_match` 규칙) 근접(config 병합 반경 내)한
+    다른 확정 장소를 노출한다. 이는 **제안**일 뿐이며 자동으로 상태를 바꾸지 않는다 —
+    실제 병합은 사람이 `merge_places`로 실행한다(자동 병합은 provider ID·주소 일치의 좁은
+    경우만 후속 도입, §10.4).
+    """
+
+    place: TravelPlace
+    distance_m: float
+
+
+async def merge_suggestions_for_place(
+    session: AsyncSession,
+    *,
+    place_id: int,
+    radius_meters: float | None = None,
+    limit: int = 10,
+) -> list[MergeSuggestion]:
+    """확정 장소의 잠재 중복(정규화 이름 유사 + 근접) 병합 제안 목록을 산출한다.
+
+    자동 병합을 하지 않고 제안만 반환한다(자동 상태 변경 없음). 좌표가 없는 장소는 빈
+    목록을 준다. 반경 기본값은 자동확정 병합 반경(config)과 같게 둔다.
+    """
+    place = await session.get(TravelPlace, place_id)
+    if place is None:
+        raise ValueError(f"place not found: {place_id}")
+    if place.latitude is None or place.longitude is None:
+        return []
+    radius = (
+        radius_meters
+        if radius_meters is not None
+        else get_settings().GEOCODE_MERGE_RADIUS_METERS
+    )
+    nearby = await find_places_within_radius(
+        session,
+        lat=place.latitude,
+        lng=place.longitude,
+        radius_meters=radius,
+        limit=limit + 1,
+    )
+    suggestions: list[MergeSuggestion] = []
+    for other, distance in nearby:
+        if other.place_id == place_id:
+            continue
+        # 근접만으로는 제안하지 않는다. 이름 게이트(정규화 동일 또는 구체적 부분 포함)를
+        # 통과하는 잠재 중복만 노출해 오제안(관광지 밀집 지역의 무관 장소)을 줄인다.
+        if not names_match(place.name, other.name):
+            continue
+        suggestions.append(MergeSuggestion(place=other, distance_m=distance))
+        if len(suggestions) >= limit:
+            break
+    return suggestions
 
 
 async def list_places(session: AsyncSession, *, limit: int = 100) -> list[TravelPlace]:
@@ -2004,4 +2064,136 @@ async def exclude_video(
         "deleted_mappings": deleted_mappings,
         "deleted_places": deleted_places,
         "tombstoned_exports": soft_summary.tombstoned_exports,
+    }
+
+
+# --- auto-match audit 표본 (T-167, 로드맵 PR-14 개정판, G9) ---
+
+
+class AuditNotSampledError(ValueError):
+    """audit 표본이 아닌 후보에 audit 결과를 기록하려 했다(라우트 409)."""
+
+
+@dataclass(frozen=True)
+class AuditSampleItem:
+    """auto-match audit 표본 1건(후보 + 표시용 영상 제목·확정 장소명)."""
+
+    candidate: ExtractedPlaceCandidate
+    video_title: str | None
+    place_name: str | None
+
+
+async def list_audit_samples(
+    session: AsyncSession,
+    *,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[AuditSampleItem]:
+    """auto-match audit 표본을 미검토 우선·최신순으로 조회한다(사후 검토 큐, G9).
+
+    `status`가 주어지면 해당 audit 상태(`pending`|`accurate`|`misconfirmed`)만 반환한다.
+    표본은 자동확정(MATCHED) 후보이며 표시일 뿐 MATCHED·export 상태는 유지된다(사후 관측).
+    soft delete된 후보는 제외한다.
+    """
+    stmt = (
+        select(
+            ExtractedPlaceCandidate,
+            YoutubeVideo.title,
+            TravelPlace.name,
+        )
+        .join(
+            YoutubeVideo,
+            YoutubeVideo.video_id == ExtractedPlaceCandidate.video_id,
+            isouter=True,
+        )
+        .join(
+            TravelPlace,
+            TravelPlace.place_id == ExtractedPlaceCandidate.matched_place_id,
+            isouter=True,
+        )
+        .where(
+            ExtractedPlaceCandidate.audit_status.is_not(None),
+            ExtractedPlaceCandidate.deleted_at.is_(None),
+        )
+    )
+    if status is not None:
+        stmt = stmt.where(ExtractedPlaceCandidate.audit_status == status)
+    stmt = stmt.order_by(
+        # 미검토(pending)를 먼저 노출하고, 그 안에서 최신 표시순.
+        case(
+            (ExtractedPlaceCandidate.audit_status == AuditStatus.PENDING.value, 0),
+            else_=1,
+        ),
+        ExtractedPlaceCandidate.id.desc(),
+    ).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [
+        AuditSampleItem(candidate=candidate, video_title=title, place_name=name)
+        for candidate, title, name in rows
+    ]
+
+
+async def record_audit_result(
+    session: AsyncSession,
+    *,
+    candidate_id: int,
+    accurate: bool,
+    reviewed_by: str,
+    note: str | None = None,
+    commit: bool = True,
+) -> ExtractedPlaceCandidate:
+    """audit 표본에 사람 검토 결과(정확/오확정)를 기록한다(G9).
+
+    이 기록은 **사후 관측**이므로 자동확정(MATCHED)·export 상태를 바꾸지 않는다. 오확정으로
+    판정해도 실제 되돌리기는 별도 reopen(T-160/T-184 정책)에서 사람이 수행한다. 표본이 아닌
+    후보(`audit_status IS NULL`)에 기록하려 하면 `AuditNotSampledError`.
+    """
+    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    if candidate is None or candidate.deleted_at is not None:
+        raise ValueError(f"candidate not found: {candidate_id}")
+    if candidate.audit_status is None:
+        raise AuditNotSampledError(
+            "auto-match audit 표본이 아닌 후보에는 감사 결과를 기록할 수 없습니다."
+        )
+    candidate.audit_status = (
+        AuditStatus.ACCURATE.value if accurate else AuditStatus.MISCONFIRMED.value
+    )
+    candidate.audit_reviewed_by = reviewed_by
+    candidate.audit_reviewed_at = utcnow()
+    if note is not None:
+        candidate.audit_note = note.strip() or None
+    if commit:
+        await session.commit()
+        await session.refresh(candidate)
+    return candidate
+
+
+async def audit_summary(session: AsyncSession) -> dict[str, Any]:
+    """auto-match audit 표본의 오확정률(자동확정 뒤집힘 비율)을 집계한다(§7 G9 지표).
+
+    `misconfirmation_rate = misconfirmed / (accurate + misconfirmed)`. 검토된 표본이 없으면
+    None(표본 0을 정밀도 100%로 오도하지 않는다).
+    """
+    rows = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.audit_status, func.count())
+            .where(
+                ExtractedPlaceCandidate.audit_status.is_not(None),
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+            .group_by(ExtractedPlaceCandidate.audit_status)
+        )
+    ).all()
+    counts = {status: int(count) for status, count in rows}
+    pending = counts.get(AuditStatus.PENDING.value, 0)
+    accurate = counts.get(AuditStatus.ACCURATE.value, 0)
+    misconfirmed = counts.get(AuditStatus.MISCONFIRMED.value, 0)
+    reviewed = accurate + misconfirmed
+    return {
+        "sampled": pending + reviewed,
+        "pending": pending,
+        "reviewed": reviewed,
+        "accurate": accurate,
+        "misconfirmed": misconfirmed,
+        "misconfirmation_rate": (misconfirmed / reviewed) if reviewed else None,
     }

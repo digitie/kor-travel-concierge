@@ -220,6 +220,18 @@ class DeepResearchRequest(BaseModel):
     max_sources: int = Field(default=8, ge=1, le=20)
 
 
+class AuditResultRequest(BaseModel):
+    """auto-match audit 표본 검토 결과 기록 요청(T-167, G9).
+
+    `accurate=True`=자동확정이 정확, `False`=오확정. 기록은 사후 관측이라 자동확정
+    상태(MATCHED·export)를 바꾸지 않는다(실제 되돌리기는 별도 reopen).
+    """
+
+    accurate: bool
+    note: str | None = Field(default=None, max_length=1000)
+    reviewed_by: str = "web"
+
+
 class AuthEventRequest(BaseModel):
     """Next 로그인/로그아웃 라우트가 기록하는 인증 이벤트."""
 
@@ -1682,6 +1694,149 @@ async def get_candidate_detail(
                 "place_id": place_id,
             }
             for sid, name, status, category, place_id in sibling_rows
+        ],
+    }
+
+
+# --- auto-match audit 표본 (T-167, 로드맵 PR-14 개정판, G9) ---
+# 리터럴 `/destinations/audit/*`는 int `{place_id}`/`{candidate_id}` 경로와 세그먼트가
+# 겹치지 않지만, 명확성을 위해 파라미터 경로보다 먼저 등록한다.
+
+
+@router.get("/destinations/audit/samples")
+async def list_audit_sample_queue(
+    status: Literal["pending", "accurate", "misconfirmed"] | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """auto-match audit 표본 큐를 미검토 우선·최신순으로 반환한다(G9).
+
+    표본은 자동확정(MATCHED, reviewer="system") 후보이며 표시일 뿐 MATCHED·export 상태는
+    유지된다(사후 관측 — 노출 차단 아님).
+    """
+    items = await place_service.list_audit_samples(
+        session, status=status, limit=limit
+    )
+    return {
+        "items": [
+            {
+                "candidate_id": item.candidate.id,
+                "video_id": item.candidate.video_id,
+                "video_title": item.video_title,
+                "ai_place_name": item.candidate.ai_place_name,
+                "matched_place_id": item.candidate.matched_place_id,
+                "place_name": item.place_name,
+                "confidence_score": item.candidate.confidence_score,
+                "grounding_status": item.candidate.grounding_status,
+                "audit_status": item.candidate.audit_status,
+                "audit_reviewed_by": item.candidate.audit_reviewed_by,
+                "audit_reviewed_at": (
+                    item.candidate.audit_reviewed_at.isoformat()
+                    if item.candidate.audit_reviewed_at
+                    else None
+                ),
+                "audit_note": item.candidate.audit_note,
+                "reviewed_at": (
+                    item.candidate.reviewed_at.isoformat()
+                    if item.candidate.reviewed_at
+                    else None
+                ),
+            }
+            for item in items
+        ],
+    }
+
+
+@router.get("/destinations/audit/summary")
+async def get_audit_summary(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """auto-match audit 표본의 오확정률(자동확정 뒤집힘 비율)을 반환한다(§7 G9 지표).
+
+    `misconfirmation_rate = misconfirmed / (accurate + misconfirmed)`. 검토 표본이 없으면
+    null(표본 0을 정밀도 100%로 오도하지 않는다).
+    """
+    return await place_service.audit_summary(session)
+
+
+@router.post("/destinations/audit/{candidate_id}")
+async def submit_audit_result(
+    candidate_id: int,
+    payload: AuditResultRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """audit 표본에 사람 검토 결과(정확/오확정)를 기록한다(G9).
+
+    사후 관측이라 자동확정(MATCHED)·export 상태를 바꾸지 않는다. 표본이 아니면 409,
+    없는/삭제된 후보면 404.
+    """
+    try:
+        candidate = await place_service.record_audit_result(
+            session,
+            candidate_id=candidate_id,
+            accurate=payload.accurate,
+            reviewed_by=payload.reviewed_by,
+            note=payload.note,
+        )
+    except place_service.AuditNotSampledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await audit_service.record(
+        session,
+        actor_type="web",
+        action="candidate.audit_result",
+        target_type="extracted_place_candidate",
+        target_id=str(candidate_id),
+        payload={
+            "audit_status": candidate.audit_status,
+            "accurate": payload.accurate,
+        },
+    )
+    return {
+        "candidate_id": candidate.id,
+        "audit_status": candidate.audit_status,
+        "audit_reviewed_by": candidate.audit_reviewed_by,
+        "audit_reviewed_at": (
+            candidate.audit_reviewed_at.isoformat()
+            if candidate.audit_reviewed_at
+            else None
+        ),
+        # audit은 사후 관측 — 자동확정 상태는 그대로 유지됨을 응답으로 확인시킨다.
+        "match_status": candidate.match_status,
+        "feature_export_status": candidate.feature_export_status,
+    }
+
+
+@router.get("/destinations/{place_id}/merge-suggestions")
+async def get_place_merge_suggestions(
+    place_id: int, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """확정 장소의 잠재 중복(정규화 이름 유사 + 근접) 병합 제안을 반환한다(T-167, D6).
+
+    **제안**일 뿐 자동으로 상태를 바꾸지 않는다(자동 병합 금지 — 실제 병합은 사람이
+    판단해 `merge_places`로 실행한다).
+    """
+    try:
+        suggestions = await place_service.merge_suggestions_for_place(
+            session, place_id=place_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "place_id": place_id,
+        "suggestions": [
+            {
+                "place_id": suggestion.place.place_id,
+                "name": suggestion.place.name,
+                "official_address": suggestion.place.official_address,
+                "road_address": suggestion.place.road_address,
+                "latitude": suggestion.place.latitude,
+                "longitude": suggestion.place.longitude,
+                "category": suggestion.place.category,
+                "distance_m": round(suggestion.distance_m, 1),
+            }
+            for suggestion in suggestions
         ],
     }
 
