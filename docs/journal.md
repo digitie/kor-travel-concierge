@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-07-14: T-188 — /destinations SQL 푸시다운 (S5, G8)
+
+- **문제**: `/destinations` 목록 `list_place_summaries`가 확정 장소·mention을 Python으로 **전량** 로드·
+  집계·정렬한 뒤 잘라 O(전체). `_list_mentions_by_place`가 limit **전** 전량 join을 로드하는 게 최대 비용.
+- **구현(SQL 푸시다운)**: 필터(category/q/district)를 WHERE(category coalesce 동치·q=`strpos(lower(concat_ws(
+  ...)))`·district=주소 앞2토큰 regexp)로, `mention_count=count(distinct video_id)`·`source_channel_count=
+  count(distinct channel_id)`(inner join youtube_videos)를 group-by 서브쿼리로, 정렬 4종·LIMIT을 SQL로. 문자열
+  비교는 **`COLLATE "C"`**(UTF-8 바이트순=Python 코드포인트순)로 Python 정렬과 일치, 모든 정렬은 place_id(PK)
+  최종 tiebreak로 전순서. **`_list_mentions_by_place`를 정렬·LIMIT 후 페이지 대상 place만 IN 단일 쿼리로 이동**
+  (핵심 이득·N+1 아님). `list_place_summaries_page`(cursor·watermark(MAX)·total·newer_than·keyset OR-chain)도
+  SQL화, cursor scope `destinations-python-v1`→`destinations-sql-v2`. 시그니처·반환형(PlaceSummary·source_videos)
+  불변, `limit=None` 전량 경로(theme_service 2곳)·place_ids·video_id 보존. 유지된 Python 정본(`_place_matches_
+  result_filters`·`_list_mentions_by_place`·`_place_summary_sort_key`)을 golden 오라클로 씀.
+- **EXPLAIN(ANALYZE,BUFFERS)** (시드 장소 3,000·mapping 34,867·영상 1,500): 기본 latest 페이지 = Index Scan
+  Backward pkey + Limit **101행 0.085ms**(O(limit)); 페이지 mentions 전송 **34,867→1,107행(~31×↓)**; 장소
+  hydration **3,000→101(~30×↓)**; total count 0.49ms; snapshot MAX 0.078ms. mention_count 정렬만 전역 랭킹이라
+  GroupAggregate(65.9ms)이나 DB측 정수 집계로 옮기고 전송은 101행. **migration 없음**(인덱스 불필요·단일 head).
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: golden SQL-vs-Python 동치(COLLATE·keyset 음수튜플
+  복원·집계 inner join·watermark/total/newer_than·limit=None·post-limit mentions 재조회·필터 coalesce/nullif
+  전부 검증), bind 파라미터(injection 없음), REPEATABLE READ 단일 스냅샷, source_videos 보류 정당성 확인.
+  known-MINOR(한국어/ASCII 도메인 무해·문서화만): ① district regexp `\s`가 비-ASCII 공백(NBSP)에서 Python
+  `str.split()`(유니코드 공백)과 갈릴 수 있음(지오코더 정규화 주소라 저확률), ② `lower()` 비-ASCII 케이스폴딩
+  로케일 차이(COLLATE "C"는 정렬 비교에만·lower ctype엔 미적용), ③ mention_count 정렬 전량 GroupAggregate(수용
+  트레이드오프·구 Python-load 대비 개선·대규모 전환 시 인덱스 재검토 인지). 국제 주소로 도메인이 바뀌면 ①②
+  재검토.
+- **범위 경계**: source_videos 목록 payload 배열 제거는 보류(선배포=상세가 서빙 확인까지만). frontend
+  (`DestinationWorkspace`·`lib/api.ts`)·frontend cursor 에러 리셋은 Agent B 영역이고 거의 모든 미머지 codex
+  브랜치와 경합해 미변경(응답 스키마 불변).
+- **검증**: 격리 disposable DB backend 전체 pytest 737 passed(실패 0), golden 매트릭스(정렬4×필터16×limit·
+  place_ids·cursor page·snapshot 격리·구 cursor 거부) 통과, 단일 head, origin/main(#202) 0 behind.
 ## 2026-07-14: T-185 — 검수 bulk filter snapshot·receipt ledger
 
 - **서버 계약**: 로그인한 same-origin BFF 전용

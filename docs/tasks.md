@@ -55,7 +55,6 @@
   workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
   T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
-- [ ] **T-188**: `/destinations` SQL 푸시다운 — EXPLAIN(ANALYZE,BUFFERS) 검증, `source_videos` 사용처 전수→detail lazy 선배포→제거, `limit=None` 시그니처 호환. 선행: T-178. (PR-20 개정판, G8)
 - [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. 전역 export advisory lock의 빈 GET·dirty batch·전량 reconcile p95를 n150에서 측정하고, bounded dirty claim과 writer 지연 상한을 계약화한다. (PR-25 개정판, G10)
 - [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
 - [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
@@ -65,6 +64,23 @@
 
 ## 완료
 
+- [x] **T-188**: `/destinations` SQL 푸시다운 (S5, G8) — 목록 `list_place_summaries`가 확정 장소·mention을
+  Python으로 전량 로드·집계·정렬 후 자르던 것을 **SQL 푸시다운**으로 O(전체)→O(limit)로 바꿨다. 필터
+  (category/q/district)를 WHERE(ILIKE·strpos·regexp)로, `mention_count`/`source_channel_count`를 group-by
+  집계 서브쿼리로, 정렬 4종(mention_count/latest/name/category)·LIMIT을 SQL로(문자열은 `COLLATE "C"`로
+  Python 코드포인트순 일치), `_list_mentions_by_place`를 **정렬·LIMIT 후 페이지 대상 place만 IN 단일 쿼리**로
+  이동(핵심 이득·N+1 아님). `list_place_summaries_page`(cursor·watermark·total·newer_than·keyset)도 SQL화,
+  cursor scope `destinations-python-v1`→`destinations-sql-v2`(구 cursor 배포 경계 1회 400, T-178 in-memory
+  토큰이라 격리). 시그니처 호환(`limit: int|None=100`·`limit=None` theme_service 2곳·place_ids·video_id 불변).
+  **EXPLAIN(ANALYZE,BUFFERS)**(시드 장소 3천·mapping 34,867): 기본 latest 페이지 = PK 인덱스 backward scan
+  101행 0.085ms, 페이지 mentions 전송 34,867→1,107(~31×↓), 장소 hydration 3,000→101(~30×↓). migration 없음
+  (인덱스 불필요·단일 head 유지). source_videos 목록 배열 제거는 **보류**(backend 이미 O(limit)·상세는 서빙=
+  선배포 조건 충족, frontend 제거는 거의 모든 미머지 codex 브랜치와 경합해 follow-up). 2렌즈 적대적 리뷰:
+  **확정 BLOCKER/MAJOR 0**(golden SQL-vs-Python 동치 — COLLATE·keyset·집계·watermark·limit=None 전부 검증).
+  known-MINOR(한국어/ASCII 도메인 무해·문서화): district regexp가 비-ASCII 공백(NBSP)에서 `str.split()`과
+  갈릴 수 있음(지오코더 정규화 주소라 저확률), `lower()` 비-ASCII 케이스폴딩 로케일 차이, mention_count 정렬은
+  전량 GroupAggregate(수용 트레이드오프·전송은 101행). 검증: 격리 DB backend 전체 pytest 737 passed(실패 0),
+  golden 매트릭스(정렬4×필터16×limit) 통과. (2026-07-14, 로드맵 PR-20 개정·S5·G8)
 - [x] **T-185**: 검수 bulk — 로그인 BFF 전용 `preview`·`execute` 계약과 durable operation/item/receipt
   ledger를 추가했다. 명시 선택은 최대 500건, filter snapshot은 정확한 최대 10,000건이며 10,001번째를
   확인하면 일부를 자르지 않고 413으로 거부한다. preview는 `REPEATABLE READ`에서 revision·상태를
