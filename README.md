@@ -27,6 +27,7 @@
 - **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
 - **장소 언급 소스와 내보내기**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지 확인하고, 언급 횟수로 정렬하며, 선택 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보낼 수 있습니다.
 - **범용 feature export API**: 검수 통과 YouTube 장소 후보를 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 노출합니다. `kor-travel-map`이 이를 `kor-travel-concierge-youtube` provider로 pull해 `feature_id`와 `feature_snapshot`을 만들고, PinVi는 그 값을 자체 feature 연계 POI row로 저장합니다. Curated plan은 feature 자체가 아니라 이 POI row들의 모음으로 구성됩니다. 계약 정본은 `docs/feature-export-api.md`입니다.
+- **완결성 있는 목록 API**: 검수·작업·장소·테마 목록은 `total`·`newest_id`·`newer_than`과 filter fingerprint keyset cursor가 있는 공통 envelope를 반환합니다. 범용 feature 공급의 기존 sequence cursor는 변경하지 않습니다. 계약 정본은 `docs/list-api-contract.md`입니다.
 - **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
 - **전면 비동기 실행**: `httpx.AsyncClient`, SQLAlchemy async session, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.

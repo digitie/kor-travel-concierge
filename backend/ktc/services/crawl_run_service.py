@@ -11,10 +11,18 @@ import json
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.models import CrawlRun, RunState, utcnow
+from ktc.services.list_pagination import (
+    ListPage,
+    MAX_DB_INTEGER_ID,
+    decode_cursor,
+    encode_cursor,
+    ensure_repeatable_read,
+    filter_fingerprint,
+)
 
 # stale 판단 기본 임계값(초). heartbeat가 이 시간 이상 갱신되지 않으면 재투입 대상.
 DEFAULT_STALE_THRESHOLD_SECONDS = 300
@@ -137,6 +145,103 @@ async def list_runs(
         stmt = stmt.where(CrawlRun.job_type.in_(job_types))
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_runs_page(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 50,
+    job_types: list[str] | None = None,
+    cursor: str | None = None,
+    newer_than_id: int | None = None,
+) -> ListPage[CrawlRun]:
+    """작업 목록을 최신 ID 기준의 안정적인 keyset page로 반환한다."""
+    await ensure_repeatable_read(session)
+    normalized_job_types = sorted(set(job_types or []))
+    fingerprint = filter_fingerprint(
+        scope="runs-v1",
+        sort="latest",
+        filters={"state": state, "job_types": normalized_job_types},
+    )
+    decoded = (
+        decode_cursor(cursor, fingerprint=fingerprint, key_count=1)
+        if cursor
+        else None
+    )
+    if decoded is not None and (
+        not isinstance(decoded.keys[0], int)
+        or isinstance(decoded.keys[0], bool)
+        or decoded.keys[0] < 1
+        or decoded.keys[0] > MAX_DB_INTEGER_ID
+        or decoded.keys[0] > decoded.snapshot_id
+    ):
+        raise ValueError("유효하지 않은 작업 목록 cursor입니다")
+
+    conditions = []
+    if state is not None:
+        conditions.append(CrawlRun.state == state)
+    if normalized_job_types:
+        conditions.append(CrawlRun.job_type.in_(normalized_job_types))
+
+    if decoded is None:
+        newest_id = await session.scalar(select(func.max(CrawlRun.id)).where(*conditions))
+        snapshot_id = int(newest_id or 0)
+    else:
+        snapshot_id = decoded.snapshot_id
+
+    snapshot_conditions = [*conditions, CrawlRun.id <= snapshot_id]
+    total = int(
+        await session.scalar(
+            select(func.count(CrawlRun.id)).where(*snapshot_conditions)
+        )
+        or 0
+    )
+    newer_than = 0
+    if newer_than_id is not None:
+        newer_than = int(
+            await session.scalar(
+                select(func.count(CrawlRun.id)).where(
+                    *conditions, CrawlRun.id > newer_than_id
+                )
+            )
+            or 0
+        )
+
+    page_conditions = list(snapshot_conditions)
+    if decoded is not None:
+        page_conditions.append(CrawlRun.id < decoded.keys[0])
+    rows = list(
+        (
+            await session.execute(
+                select(CrawlRun)
+                .where(*page_conditions)
+                .order_by(CrawlRun.id.desc())
+                .limit(limit + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = (
+        encode_cursor(
+            fingerprint=fingerprint,
+            snapshot_id=snapshot_id,
+            keys=(items[-1].id,),
+        )
+        if has_more and items
+        else None
+    )
+    return ListPage(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=total,
+        newest_id=snapshot_id or None,
+        newer_than=newer_than,
+    )
 
 
 async def claim_next_pending(session: AsyncSession) -> CrawlRun | None:

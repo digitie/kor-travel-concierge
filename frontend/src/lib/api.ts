@@ -21,6 +21,21 @@ export type HarvestContentFilter = "both" | "shorts" | "videos";
 export type DestinationSort = "latest" | "mention_count" | "name" | "category";
 export type DestinationExportFormat = "xlsx" | "gpx" | "kml";
 
+export type ListEnvelope<T> = {
+  items: T[];
+  next_cursor: string | null;
+  has_more: boolean;
+  total: number;
+  newest_id: number | null;
+  newer_than: number;
+};
+
+export type ListPagination = {
+  limit?: number;
+  cursor?: string | null;
+  newerThanId?: number | null;
+};
+
 export type StartHarvestInput = {
   targetType: HarvestTargetType;
   targetValue: string;
@@ -406,14 +421,56 @@ export async function probeApi(path: string): Promise<ApiProbeResult> {
 }
 
 export type ThemeItem = { value: string; title: string; poi_count: number };
+export type ThemeSummaryItem = ThemeItem & {
+  kind: "channel" | "playlist" | "keyword";
+  first_mapping_id: number;
+  latest_mapping_id: number;
+};
 export type ThemeList = {
   channels: ThemeItem[];
   playlists: ThemeItem[];
   keywords: ThemeItem[];
 };
 
+export function groupThemeItems(items: ThemeSummaryItem[]): ThemeList {
+  const grouped: ThemeList = { channels: [], playlists: [], keywords: [] };
+  for (const item of items) {
+    const legacyItem: ThemeItem = {
+      value: item.value,
+      title: item.title,
+      poi_count: item.poi_count,
+    };
+    if (item.kind === "channel") grouped.channels.push(legacyItem);
+    else if (item.kind === "playlist") grouped.playlists.push(legacyItem);
+    else grouped.keywords.push(legacyItem);
+  }
+  return grouped;
+}
+
+export async function listThemesPage(
+  pagination: ListPagination = {},
+): Promise<ListEnvelope<ThemeSummaryItem>> {
+  const params = new URLSearchParams({
+    limit: String(pagination.limit ?? 100),
+  });
+  if (pagination.cursor) params.set("cursor", pagination.cursor);
+  if (pagination.newerThanId != null) {
+    params.set("newer_than_id", String(pagination.newerThanId));
+  }
+  return requestJson<ListEnvelope<ThemeSummaryItem>>(
+    `/api/v1/themes?${params.toString()}`,
+  );
+}
+
 export async function listThemes(): Promise<ThemeList> {
-  return requestJson<ThemeList>("/api/v1/themes");
+  const items: ThemeSummaryItem[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await listThemesPage({ limit: 500, cursor });
+    items.push(...page.items);
+    cursor = page.has_more ? page.next_cursor : null;
+  } while (cursor);
+  return groupThemeItems(items);
 }
 
 export async function startHarvest(input: StartHarvestInput): Promise<HarvestJob> {
@@ -465,7 +522,20 @@ export async function listDestinations(
   sort: DestinationSort = "latest",
   filter?: DestinationFilter,
 ): Promise<DestinationSummary[]> {
+  return (await listDestinationsPage(sort, filter)).items;
+}
+
+export async function listDestinationsPage(
+  sort: DestinationSort = "latest",
+  filter?: DestinationFilter,
+  pagination: ListPagination = {},
+): Promise<ListEnvelope<DestinationSummary>> {
   const params = new URLSearchParams({ sort });
+  if (pagination.limit != null) params.set("limit", String(pagination.limit));
+  if (pagination.cursor) params.set("cursor", pagination.cursor);
+  if (pagination.newerThanId != null) {
+    params.set("newer_than_id", String(pagination.newerThanId));
+  }
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
@@ -473,7 +543,7 @@ export async function listDestinations(
   if (filter?.category) params.set("category", filter.category);
   if (filter?.query) params.set("q", filter.query);
   if (filter?.district) params.set("district", filter.district);
-  return requestJson<DestinationSummary[]>(
+  return requestJson<ListEnvelope<DestinationSummary>>(
     `/api/v1/destinations?${params.toString()}`,
   );
 }
@@ -503,13 +573,24 @@ export async function listUnmatchedCandidates(
   filter?: DestinationFilter,
   limit = 2000,
 ): Promise<UnmatchedCandidate[]> {
+  return (await listUnmatchedCandidatesPage(filter, { limit })).items;
+}
+
+export async function listUnmatchedCandidatesPage(
+  filter?: DestinationFilter,
+  pagination: ListPagination = {},
+): Promise<ListEnvelope<UnmatchedCandidate>> {
   const params = new URLSearchParams();
-  params.set("limit", String(limit));
+  params.set("limit", String(pagination.limit ?? 2000));
+  if (pagination.cursor) params.set("cursor", pagination.cursor);
+  if (pagination.newerThanId != null) {
+    params.set("newer_than_id", String(pagination.newerThanId));
+  }
   if (filter?.channelId) params.set("channel_id", filter.channelId);
   if (filter?.playlistId) params.set("playlist_id", filter.playlistId);
   if (filter?.keyword) params.set("keyword", filter.keyword);
   const qs = params.toString();
-  return requestJson<UnmatchedCandidate[]>(
+  return requestJson<ListEnvelope<UnmatchedCandidate>>(
     `/api/v1/destinations/unmatched${qs ? `?${qs}` : ""}`,
   );
 }
@@ -560,6 +641,22 @@ export async function listRuns({
   limit?: number;
   jobTypes?: readonly string[];
 } = {}): Promise<CrawlRunSummary[]> {
+  return (await listRunsPage({ state, limit, jobTypes })).items;
+}
+
+export async function listRunsPage({
+  state,
+  limit = 12,
+  jobTypes,
+  cursor,
+  newerThanId,
+}: {
+  state?: "pending" | "running" | "done" | "failed" | string;
+  limit?: number;
+  jobTypes?: readonly string[];
+  cursor?: string | null;
+  newerThanId?: number | null;
+} = {}): Promise<ListEnvelope<CrawlRunSummary>> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (state) {
     params.set("state", state);
@@ -567,7 +664,13 @@ export async function listRuns({
   if (jobTypes && jobTypes.length > 0) {
     params.set("job_types", jobTypes.join(","));
   }
-  return requestJson<CrawlRunSummary[]>(`/api/v1/runs?${params.toString()}`);
+  if (cursor) params.set("cursor", cursor);
+  if (newerThanId != null) {
+    params.set("newer_than_id", String(newerThanId));
+  }
+  return requestJson<ListEnvelope<CrawlRunSummary>>(
+    `/api/v1/runs?${params.toString()}`,
+  );
 }
 
 export async function listRunQueue(
@@ -911,13 +1014,17 @@ export async function getPlaceOpinion(
 export type CandidateDetail = {
   candidate: {
     id: number;
+    video_id: string;
     ai_place_name: string;
     location_hint: string | null;
     candidate_category: string | null;
+    candidate_category_code: string | null;
     match_status: string;
     confidence_score: number | null;
+    is_domestic: boolean | null;
     speaker_note: string | null;
     source_kind: string | null;
+    feature_export_status: string;
     timestamp_start: string | null;
     timestamp_end: string | null;
     source_text: string | null;

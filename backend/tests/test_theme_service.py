@@ -74,12 +74,20 @@ async def _seed(session):
 
 async def test_list_themes_counts_channels_and_keywords(session):
     await _seed(session)
-    themes = await theme_service.list_themes(session)
-    channel = next(c for c in themes["channels"] if c["value"] == "c1")
+    themes = await theme_service.list_theme_summaries_page(session)
+    channel = next(
+        item
+        for item in themes.items
+        if item["kind"] == "channel" and item["value"] == "c1"
+    )
     # c1은 v_a(6) + v_b(2) = 8개 확정 POI를 공급한다.
     assert channel["poi_count"] == 8
     assert channel["title"] == "여행유튜버"
-    keyword = next(k for k in themes["keywords"] if k["value"] == "부산 여행")
+    keyword = next(
+        item
+        for item in themes.items
+        if item["kind"] == "keyword" and item["value"] == "부산 여행"
+    )
     # 보정 검색어 '부산 여행'은 v_a(6개)만 갖는다.
     assert keyword["poi_count"] == 6
 

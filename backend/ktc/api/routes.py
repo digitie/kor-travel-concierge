@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.core.config import get_settings
-from ktc.core.database import get_session
+from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.core.security import (
     require_admin_proxy,
     require_api_key,
@@ -56,6 +56,7 @@ from ktc.services import (
     audit_service,
     crawl_run_service,
     feature_export_service,
+    list_pagination,
     login_event_service,
     place_export_service,
     place_service,
@@ -668,11 +669,17 @@ def _target_label(
 
 @router.get("/runs")
 async def list_runs(
-    state: str | None = None,
-    limit: int = 20,
-    job_types: str | None = None,
-    session: AsyncSession = Depends(get_session),
-) -> list[dict[str, Any]]:
+    state: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=20, ge=1, le=100),
+    job_types: str | None = Query(default=None, max_length=649),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    session: AsyncSession = Depends(get_repeatable_read_session),
+) -> dict[str, Any]:
     """최근 작업 목록을 반환한다.
 
     `job_types`(쉼표 구분)를 주면 해당 job_type만 본다(예: 내부 `source_scan`을
@@ -681,13 +688,35 @@ async def list_runs(
     types = (
         [t.strip() for t in job_types.split(",") if t.strip()] if job_types else None
     )
-    runs = await crawl_run_service.list_runs(
-        session, state=state, limit=max(1, min(limit, 100)), job_types=types
-    )
+    if types and (len(types) > 10 or any(len(job_type) > 64 for job_type in types)):
+        raise HTTPException(
+            status_code=400,
+            detail="job_types는 최대 10개, 항목당 64자까지 허용합니다",
+        )
+    try:
+        page = await crawl_run_service.list_runs_page(
+            session,
+            state=state,
+            limit=limit,
+            job_types=types,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     titles = await _resolve_title_map(
-        session, [(run.target_type, run.target_id) for run in runs]
+        session, [(run.target_type, run.target_id) for run in page.items]
     )
-    return [_run_summary_dict(run, titles) for run in runs]
+    return list_pagination.page_payload(
+        list_pagination.ListPage(
+            items=[_run_summary_dict(run, titles) for run in page.items],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            total=page.total,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
+    )
 
 
 @router.get("/place-search")
@@ -1082,35 +1111,55 @@ async def list_keywords() -> list[dict[str, Any]]:
 @router.get("/destinations")
 async def list_destinations(
     sort: str = "latest",
-    limit: int = 100,
-    channel_id: str | None = None,
-    playlist_id: str | None = None,
-    keyword: str | None = None,
-    video_id: str | None = None,
-    category: str | None = None,
-    q: str | None = None,
-    district: str | None = None,
-    session: AsyncSession = Depends(get_session),
-) -> list[dict[str, Any]]:
+    limit: int = Query(default=100, ge=1, le=500),
+    channel_id: str | None = Query(default=None, max_length=128),
+    playlist_id: str | None = Query(default=None, max_length=128),
+    keyword: str | None = Query(default=None, max_length=255),
+    video_id: str | None = Query(default=None, max_length=128),
+    category: str | None = Query(default=None, max_length=64),
+    q: str | None = Query(default=None, max_length=255),
+    district: str | None = Query(default=None, max_length=128),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    session: AsyncSession = Depends(get_repeatable_read_session),
+) -> dict[str, Any]:
     """확정 여행지 목록을 반환한다.
 
     `channel_id`/`playlist_id`/`keyword`/`video_id`로 출처(유튜버/재생목록/검색어/영상)별
     필터링한다(작업 상세에서 특정 영상의 POI만 보기).
     """
     _validate_destination_sort(sort)
-    summaries = await place_service.list_place_summaries(
-        session,
-        sort=sort,
-        limit=max(1, min(limit, 500)),
-        channel_id=channel_id,
-        playlist_id=playlist_id,
-        keyword=keyword,
-        video_id=video_id,
-        category=category,
-        query=q,
-        district=district,
+    try:
+        page = await place_service.list_place_summaries_page(
+            session,
+            sort=sort,
+            limit=limit,
+            channel_id=channel_id,
+            playlist_id=playlist_id,
+            keyword=keyword,
+            video_id=video_id,
+            category=category,
+            query=q,
+            district=district,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return list_pagination.page_payload(
+        list_pagination.ListPage(
+            items=[_place_summary_payload(summary) for summary in page.items],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            total=page.total,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
     )
-    return [_place_summary_payload(summary) for summary in summaries]
 
 
 @router.get("/destinations/facets")
@@ -1158,23 +1207,43 @@ async def export_destinations(
 @router.get("/destinations/unmatched")
 async def list_unmatched_candidates(
     limit: int = Query(2000, ge=1, le=2000),
-    channel_id: str | None = None,
-    playlist_id: str | None = None,
-    keyword: str | None = None,
-    session: AsyncSession = Depends(get_session),
-) -> list[dict[str, Any]]:
+    channel_id: str | None = Query(default=None, max_length=128),
+    playlist_id: str | None = Query(default=None, max_length=128),
+    keyword: str | None = Query(default=None, max_length=255),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    session: AsyncSession = Depends(get_repeatable_read_session),
+) -> dict[str, Any]:
     """매칭 실패(`needs_review`) 후보 검수 큐. 결과 보기와 동일한 출처 필터 지원."""
-    candidates = await place_service.list_unmatched_candidates(
-        session,
-        limit=limit,
-        channel_id=channel_id,
-        playlist_id=playlist_id,
-        keyword=keyword,
-    )
+    try:
+        page = await place_service.list_unmatched_candidates_page(
+            session,
+            limit=limit,
+            channel_id=channel_id,
+            playlist_id=playlist_id,
+            keyword=keyword,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # 목록은 경량 payload만 반환한다. 상세 근거(provider_evidence_json 등)는 후보 상세
     # 엔드포인트에서 개별 조회하므로, 2,000행 응답에 무거운 JSONB를 실어 검수 화면을
     # 느리게 만들지 않는다(응답 크기 ~3.8MB → ~1.3MB).
-    return [_candidate_list_payload(candidate) for candidate in candidates]
+    return list_pagination.page_payload(
+        list_pagination.ListPage(
+            items=[_candidate_list_payload(candidate) for candidate in page.items],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            total=page.total,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
+    )
 
 
 @router.post("/destinations/{place_id}/correct")
@@ -1498,13 +1567,17 @@ async def get_candidate_detail(
     return {
         "candidate": {
             "id": candidate.id,
+            "video_id": candidate.video_id,
             "ai_place_name": candidate.ai_place_name,
             "location_hint": candidate.location_hint,
             "candidate_category": candidate.candidate_category,
+            "candidate_category_code": place_service.candidate_category_code(candidate),
             "match_status": candidate.match_status,
             "confidence_score": candidate.confidence_score,
+            "is_domestic": candidate.is_domestic,
             "speaker_note": candidate.speaker_note,
             "source_kind": candidate.source_kind,
+            "feature_export_status": candidate.feature_export_status,
             "timestamp_start": candidate.timestamp_start,
             "timestamp_end": candidate.timestamp_end,
             "source_text": candidate.source_text,
@@ -2217,10 +2290,26 @@ async def features_changes(
 
 @router.get("/themes")
 async def list_themes(
-    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    session: AsyncSession = Depends(get_repeatable_read_session),
 ) -> dict[str, Any]:
     """공급 가능한 테마 목록(유튜버/재생목록/보정 검색어)과 각 테마의 확정 POI 수."""
-    return await theme_service.list_themes(session)
+    try:
+        page = await theme_service.list_theme_summaries_page(
+            session,
+            limit=limit,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return list_pagination.page_payload(page)
 
 
 @router.get("/themes/places")

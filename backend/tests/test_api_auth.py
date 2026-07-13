@@ -12,14 +12,15 @@ import asyncio
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from ktc.core import database
 from ktc.core.config import Settings, get_settings
-from ktc.core.database import get_session
+from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.core.security import is_read_scope_path
 from ktc.models import PublicApiKey
-from ktc.services import public_api_key_service
+from ktc.services import place_service, public_api_key_service
 from main import app
 
 PROD_API_KEY = "secret-key-1"
@@ -38,7 +39,14 @@ def _make_client(session_factory, settings: Settings) -> AsyncClient:
         async with session_factory() as s:
             yield s
 
+    async def override_repeatable_read_session():
+        async with session_factory() as s:
+            yield s
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[
+        get_repeatable_read_session
+    ] = override_repeatable_read_session
     app.dependency_overrides[get_settings] = lambda: settings
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
@@ -99,6 +107,42 @@ async def test_non_local_accepts_db_public_api_key(session_factory):
     async with _make_client(session_factory, settings) as ac:
         resp = await ac.get(f"/api/v1/destinations?key={api_key}")
         assert resp.status_code == 200
+    app.dependency_overrides.clear()
+
+
+async def test_public_key_cache_miss_uses_separate_repeatable_read_session(
+    session_factory, monkeypatch
+):
+    """인증 DB 조회가 먼저 일어나도 목록 transaction 격리를 보장한다."""
+    settings = Settings(APP_ENV="production", API_AUTH_ENABLED=True, API_KEYS="")
+    async with session_factory() as session:
+        api_key, _item = await public_api_key_service.create_key(
+            session,
+            label="격리 수준 테스트 키",
+            created_by="test",
+            scope="read",
+        )
+
+    observed: dict[str, str] = {}
+    original_list = place_service.list_place_summaries_page
+
+    async def observed_list(session, **kwargs):
+        observed["isolation"] = str(
+            await session.scalar(text("SHOW transaction_isolation"))
+        )
+        return await original_list(session, **kwargs)
+
+    monkeypatch.setattr(database, "async_session_factory", session_factory)
+    monkeypatch.setattr(place_service, "list_place_summaries_page", observed_list)
+    async with _make_client(session_factory, settings) as ac:
+        # 테스트 override가 아닌 실제 목록 전용 dependency를 사용한다.
+        app.dependency_overrides.pop(get_repeatable_read_session)
+        response = await ac.get(
+            "/api/v1/destinations", headers={"X-API-Key": api_key}
+        )
+
+    assert response.status_code == 200
+    assert observed == {"isolation": "repeatable read"}
     app.dependency_overrides.clear()
 
 

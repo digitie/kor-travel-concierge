@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from ktc.core.database import get_session
+from ktc.core.database import get_repeatable_read_session, get_session
 from main import app
 
 
@@ -19,7 +19,14 @@ async def client(session_factory):
         async with session_factory() as s:
             yield s
 
+    async def override_repeatable_read_session():
+        async with session_factory() as s:
+            yield s
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[
+        get_repeatable_read_session
+    ] = override_repeatable_read_session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -490,7 +497,7 @@ async def test_g1_delete_tombstone_reopen_reissue_cycle(client, session_factory)
 
     # 검수 큐·상세에서 유령으로 남지 않는다.
     unmatched = await client.get("/api/v1/destinations/unmatched")
-    assert all(item["id"] != candidate_id for item in unmatched.json())
+    assert all(item["id"] != candidate_id for item in unmatched.json()["items"])
     detail = await client.get(
         f"/api/v1/destinations/candidates/{candidate_id}/detail"
     )

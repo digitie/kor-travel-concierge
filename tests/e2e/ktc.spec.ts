@@ -95,8 +95,10 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     await expect
       .poll(async () => {
         const response = await page.request.get(`${backendURL}/api/v1/runs?limit=12`);
-        const runs = (await response.json()) as Array<{ job_type: string }>;
-        return runs.some((run) => run.job_type === 'deep_research');
+        const runs = (await response.json()) as {
+          items: Array<{ job_type: string }>;
+        };
+        return runs.items.some((run) => run.job_type === 'deep_research');
       })
       .toBe(true);
 
@@ -118,8 +120,8 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     await expect
       .poll(async () => {
         const response = await page.request.get(`${backendURL}/api/v1/destinations/unmatched`);
-        const candidates = (await response.json()) as unknown[];
-        return candidates.length;
+        const candidates = (await response.json()) as { items: unknown[] };
+        return candidates.items.length;
       })
       .toBe(0);
 
@@ -354,9 +356,13 @@ async function expectSeedReady(page: Page) {
           placesResponse.json(),
           candidatesResponse.json(),
           auditResponse.json(),
-        ])) as [unknown[], unknown[], unknown[]];
+        ])) as [
+          { items: unknown[] },
+          { items: unknown[] },
+          unknown[],
+        ];
 
-        return `${places.length}:${candidates.length}:${audits.length}`;
+        return `${places.items.length}:${candidates.items.length}:${audits.length}`;
       },
       { timeout: 10_000 },
     )

@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from ktc.core.database import get_session
+from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.etl import llm_client, place_search
 from main import app
 
@@ -204,7 +204,14 @@ async def api_client(session_factory):
         async with session_factory() as s:
             yield s
 
+    async def override_repeatable_read_session():
+        async with session_factory() as s:
+            yield s
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[
+        get_repeatable_read_session
+    ] = override_repeatable_read_session
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:

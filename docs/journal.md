@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-13: T-177 — 목록 공통 envelope와 안정 cursor 계약
+
+- **공통 공급 계약**: 검수·작업·장소·테마 목록을
+  `{items,next_cursor,has_more,total,newest_id,newer_than}`으로 통일했다. 첫 page watermark와 전체
+  정렬 key를 가진 URL-safe cursor, endpoint·정렬·정규화 filter fingerprint, 동률 ID tiebreak를
+  적용하고 잘못된 version·범위·filter·문자열 길이는 400/422로 거절한다. 301/501번째 항목은 cursor
+  순회로 접근하며 후보·장소·작업·테마는 page 밖에서도 단건 상세 조회가 가능하다.
+- **snapshot 일관성**: 공개 read key cache miss에서 인증 SELECT가 먼저 실행될 때 같은 FastAPI
+  session이 `READ COMMITTED`로 시작되는 문제를 2차 적대적 리뷰에서 발견했다. 인증 `get_session`과
+  별도인 목록 dependency를 추가해 네 route가 첫 statement 전 `REPEATABLE READ` transaction을
+  시작하도록 고쳤고, 실제 production dependency와 `SHOW transaction_isolation`을 쓰는 회귀 테스트로
+  고정했다.
+- **호환·후속 경계**: backend 응답 변경은 breaking 계약으로 문서화하고 프런트 API wrapper가 기존
+  배열과 테마 그룹 shape를 임시 복원한다. features snapshot/changes의 sequence cursor·3필드 응답은
+  불변이다. 장소·테마의 전체 Python 재집계 비용은 숨기지 않고 T-188/T-190 SQL pushdown으로
+  이관했으며, unsigned 조회 cursor는 T-185 일괄 검수 승인 token으로 재사용하지 않는다.
+- **검증**: PostgreSQL skill의 MVCC·index 기준으로 신규 migration이 불필요함을 확인하고 적대적
+  리뷰를 두 차례 이상 반복해 최종 P0/P1 0건을 확인했다. n150에서 backend 전체 pytest와 Ruff,
+  frontend lint·type-check·Vitest 34건·production build, Playwright 5건을 통과했다.
+
 ## 2026-07-13: T-161 — LLM async/multimodal 게이트웨이 (B6)
 
 - **문제**: rate limiter가 자막 교정·batch POI 2곳만 커버하고 deep research·키워드 확장·검수

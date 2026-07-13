@@ -341,6 +341,10 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 
 #### PR-32. 목록 공통 envelope 계약 `[UX·속도 P1]` `[M]` — T-177
 
+- **완료(2026-07-13)**: 네 목록에 `newer_than`을 포함한 공통 envelope, watermark keyset·filter
+  fingerprint cursor, page 밖 상세 조회와 별도 `REPEATABLE READ` session을 적용했다. 프런트 호환
+  wrapper는 기존 화면을 보존하고 features 계약은 변경하지 않았다. 301/501건 acceptance와 n150
+  backend·frontend·Playwright 검증을 통과했다.
 - **해결**: B7. features의 기존 `{items,next_cursor,has_more}` 계약은 **불변**.
 - **작업 절차**: 검수(unmatched)·작업(runs)·장소(destinations)·테마(themes) 목록에 `{items, next_cursor, has_more, total, newest_id}` envelope 적용(backend 계약 + 테스트 PR — 프런트 전환은 각 후속 태스크). `total`은 cursor 적용 전 현재 filter 전체 건수. 정렬은 동률 tiebreak 포함 안정 keyset, cursor에 sort·filter fingerprint를 넣어 다른 filter에 재사용 불가. "새 항목 N건"은 `newer_than_id` count. page 밖 대상은 detail 단건 직접 조회 보장.
 - **완료 기준**: G5(301/501건 fixture).

@@ -14,7 +14,7 @@ from zipfile import ZipFile
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from ktc.core.database import get_session
+from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.services import audit_service, settings_service
 from main import app
 
@@ -25,7 +25,14 @@ async def client(session_factory):
         async with session_factory() as s:
             yield s
 
+    async def override_repeatable_read_session():
+        async with session_factory() as s:
+            yield s
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[
+        get_repeatable_read_session
+    ] = override_repeatable_read_session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -56,7 +63,7 @@ async def test_harvest_status_404(client):
 
 async def _run_by_job_id(client, job_id: str) -> dict:
     runs = await client.get("/api/v1/runs?limit=10")
-    return next(r for r in runs.json() if r["job_id"] == job_id)
+    return next(r for r in runs.json()["items"] if r["job_id"] == job_id)
 
 
 async def test_harvest_channel_url_resolves_to_id(client):
@@ -340,18 +347,29 @@ async def test_destinations_reflect_db(client, session_factory):
 
     dest = await client.get("/api/v1/destinations?sort=mention_count")
     assert dest.status_code == 200
-    haeundae = next(d for d in dest.json() if d["name"] == "해운대")
-    assert haeundae["mention_count"] == 2
+    haeundae = next(d for d in dest.json()["items"] if d["name"] == "해운대")
+    # 같은 영상 안의 반복 mapping은 고유 영상 1건으로 센다.
+    assert haeundae["mention_count"] == 1
     assert haeundae["source_channel_count"] == 1
     assert haeundae["source_videos"][0]["channel_name"] == "부산 유튜버"
     assert haeundae["source_videos"][0]["video_title"] == "부산 여행"
 
     unmatched = await client.get("/api/v1/destinations/unmatched")
     assert unmatched.status_code == 200
-    assert any(u["ai_place_name"] == "검수대상" for u in unmatched.json())
-    unmatched_item = next(u for u in unmatched.json() if u["ai_place_name"] == "검수대상")
-    assert unmatched_item["source_kind"] == "transcript"
-    assert unmatched_item["feature_export_status"] == FeatureExportStatus.PENDING
+    assert any(
+        u["ai_place_name"] == "검수대상" for u in unmatched.json()["items"]
+    )
+    unmatched_item = next(
+        u for u in unmatched.json()["items"] if u["ai_place_name"] == "검수대상"
+    )
+    detail = await client.get(
+        f"/api/v1/destinations/candidates/{unmatched_item['id']}/detail"
+    )
+    assert detail.json()["candidate"]["source_kind"] == "transcript"
+    assert (
+        detail.json()["candidate"]["feature_export_status"]
+        == FeatureExportStatus.PENDING
+    )
 
 
 async def test_candidate_and_place_detail_and_delete(client, session_factory):
@@ -590,9 +608,9 @@ async def test_operations_endpoints_return_runs_audits_and_storage(client, sessi
 
     runs = await client.get("/api/v1/runs")
     assert runs.status_code == 200
-    assert runs.json()[0]["state"] == "failed"
-    assert "작업이 실패했습니다" in runs.json()[0]["current_message"]
-    assert runs.json()[0]["status_logs"][-1]["level"] == "error"
+    assert runs.json()["items"][0]["state"] == "failed"
+    assert "작업이 실패했습니다" in runs.json()["items"][0]["current_message"]
+    assert runs.json()["items"][0]["status_logs"][-1]["level"] == "error"
 
     audits = await client.get("/api/v1/audit-logs")
     assert audits.status_code == 200
@@ -958,7 +976,7 @@ async def test_run_labels_human_readable(client, session):
     )
     await session.commit()
 
-    runs = (await client.get("/api/v1/runs?limit=20")).json()
+    runs = (await client.get("/api/v1/runs?limit=20")).json()["items"]
     by = {(r["target_type"], r["target_id"]): r for r in runs}
     chan = by[("channel", "UClabeltest")]
     assert chan["target_type_label"] == "유튜버"
@@ -999,12 +1017,12 @@ async def test_runs_job_types_filter(client, session):
 
     only_harvest = (
         await client.get("/api/v1/runs?job_types=harvest&limit=50")
-    ).json()
+    ).json()["items"]
     types = {r["job_type"] for r in only_harvest}
     assert "harvest" in types
     assert "source_scan" not in types
 
-    everything = (await client.get("/api/v1/runs?limit=50")).json()
+    everything = (await client.get("/api/v1/runs?limit=50")).json()["items"]
     assert "source_scan" in {r["job_type"] for r in everything}
 
 
@@ -1033,7 +1051,9 @@ async def test_run_now_enqueues_and_increments(client, session):
     await session.refresh(target)
     assert target.run_count == 1
 
-    runs = (await client.get("/api/v1/runs?job_types=harvest&limit=50")).json()
+    runs = (
+        await client.get("/api/v1/runs?job_types=harvest&limit=50")
+    ).json()["items"]
     assert any(r["target_id"] == "지금 진행 테스트" for r in runs)
 
     # 같은 작업이 이미 active → 중복 생성하지 않음
