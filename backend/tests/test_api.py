@@ -255,6 +255,51 @@ async def test_stop_terminal_run_400(client, session):
     assert stop.status_code == 400
 
 
+async def test_stop_pending_and_running_response_contract(client, session):
+    from sqlalchemy import select
+
+    from ktc.models import AuditLog, CrawlRun, RunState
+    from ktc.services import crawl_run_service
+
+    pending_response = await client.post(
+        "/api/v1/harvest", json={"query": "대기 취소", "max_videos": 1}
+    )
+    pending_id = int(pending_response.json()["job_id"])
+    pending_stop = await client.post(f"/api/v1/runs/{pending_id}/stop")
+    assert pending_stop.status_code == 200
+    assert pending_stop.json() == {"job_id": str(pending_id), "state": "cancelled"}
+
+    running_response = await client.post(
+        "/api/v1/harvest", json={"query": "실행 중지", "max_videos": 1}
+    )
+    running_id = int(running_response.json()["job_id"])
+    claimed = await crawl_run_service.claim_next_pending(session)
+    assert claimed.id == running_id
+
+    running_stop = await client.post(f"/api/v1/runs/{running_id}/stop")
+    assert running_stop.status_code == 200
+    assert running_stop.json() == {"job_id": str(running_id), "state": "running"}
+    run = await session.get(CrawlRun, running_id)
+    await session.refresh(run)
+    assert run.state == RunState.RUNNING
+    assert run.cancel_requested is True
+    audit = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.action == "run.stop",
+                AuditLog.target_id == str(running_id),
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalars().one()
+    assert json.loads(audit.payload_json)["prev_state"] == "running"
+
+    missing = await client.post("/api/v1/runs/999999/stop")
+    assert missing.status_code == 404
+
+
 async def test_restart_rejects_non_terminal_run(client):
     """T-162: terminal(done/failed/cancelled) 상태만 재시작할 수 있다."""
     resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})

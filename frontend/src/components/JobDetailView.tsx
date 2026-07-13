@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -21,9 +22,12 @@ import {
 import {
   categoryDisplayLabel,
   jobTypeDisplayLabel,
-  runProgressBarClass,
-  runStateBadgeVariant,
-  runStateLabel,
+  runAttentionBadgeVariant,
+  runAttentionLabel,
+  runOutcome,
+  runOutcomeBadgeVariant,
+  runOutcomeLabel,
+  runOutcomeProgressBarClass,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
 import { durationLabel, formatDateTime, intervalLabel } from "@/lib/format";
@@ -33,6 +37,7 @@ import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
 
 function runResultLabel(result: Record<string, unknown>, hasResult: boolean): string {
   if (!hasResult) return "진행 중";
+  if (result.quota_deferred === true) return "쿼터로 처리 보류";
   const parts: string[] = [];
   if (typeof result.discovered === "number") parts.push(`수집 ${result.discovered}`);
   if (typeof result.inserted === "number") parts.push(`신규 ${result.inserted}`);
@@ -194,13 +199,18 @@ function RunSummaryCards({
   placesCount: number;
 }) {
   const progress = Math.round((run.progress ?? 0) * 100);
+  const outcome = runOutcome(run);
   return (
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <MetricCard
         icon={<ListChecksIcon className="size-4" />}
         label="상태"
-        value={runStateLabel(run.state)}
-        tone={run.state.toLowerCase() === "failed" ? "warn" : "neutral"}
+        value={runOutcomeLabel(run)}
+        tone={
+          outcome === "failed" || outcome === "quota_deferred"
+            ? "warn"
+            : "neutral"
+        }
       />
       <MetricCard
         icon={<TimerIcon className="size-4" />}
@@ -270,9 +280,14 @@ function RunProgressPanel({
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <Badge variant={runStateBadgeVariant(run.state)}>
-              {runStateLabel(run.state)}
+            <Badge variant={runOutcomeBadgeVariant(run)}>
+              {runOutcomeLabel(run)}
             </Badge>
+            {run.attention ? (
+              <Badge variant={runAttentionBadgeVariant(run.attention)}>
+                {runAttentionLabel(run.attention)}
+              </Badge>
+            ) : null}
             <Badge variant="outline">
               {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
             </Badge>
@@ -289,6 +304,14 @@ function RunProgressPanel({
           <p className="mt-2 break-all font-mono text-[11px] text-text-secondary">
             {run.job_id}
           </p>
+          {run.restart_of_run_id ? (
+            <Link
+              href={`/jobs/${run.restart_of_run_id}`}
+              className="mt-1 inline-flex text-[12px] font-bold text-primary underline-offset-2 hover:underline"
+            >
+              원본 작업 #{run.restart_of_run_id}
+            </Link>
+          ) : null}
         </div>
         <div className="w-full shrink-0 lg:w-72">
           <div className="mb-1 flex items-center justify-between text-[12px]">
@@ -297,7 +320,7 @@ function RunProgressPanel({
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-surface-muted">
             <div
-              className={runProgressBarClass(run.state)}
+              className={runOutcomeProgressBarClass(run)}
               style={{ width: `${progress}%` }}
             />
           </div>

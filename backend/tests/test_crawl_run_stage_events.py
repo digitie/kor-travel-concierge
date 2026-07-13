@@ -20,6 +20,21 @@ from ktc.services import crawl_run_service
 from scheduler import worker
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        (1, False),
+        ("true", False),
+        ({"unexpected": True}, False),
+        (None, False),
+    ],
+)
+def test_quota_deferred_requires_explicit_boolean_true(value, expected):
+    assert worker._is_quota_deferred({"quota_deferred": value}) is expected
+
+
 async def test_record_stage_event_persists_and_computes_elapsed(session):
     run = await crawl_run_service.create_run(session, job_type="poi_batch", source="web")
 

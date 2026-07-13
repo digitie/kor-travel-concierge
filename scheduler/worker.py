@@ -49,6 +49,13 @@ from ktc.models import (
     utcnow,
 )
 
+from ktc.services import (
+    crawl_run_service,
+    place_service,
+    settings_service,
+    source_scan_service,
+)
+
 # 워커 레인별 interval job id(T-163). 각 레인 1 인스턴스(max_instances=1)로 등록한다.
 WORKER_JOB_IDS: dict[str, str] = {
     LANE_INTERACTIVE: "crawl-run-worker-interactive",
@@ -57,12 +64,6 @@ WORKER_JOB_IDS: dict[str, str] = {
 # lane 분리 이전 단일 워커 job id. persistent jobstore에 남아 lane 미지정 run_once를
 # 계속 돌릴 수 있어 기동 시 제거한다(T-163).
 LEGACY_WORKER_JOB_ID = "crawl-run-worker"
-from ktc.services import (
-    crawl_run_service,
-    place_service,
-    settings_service,
-    source_scan_service,
-)
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
@@ -105,6 +106,11 @@ def load_payload(run: CrawlRun) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("payload_json은 JSON object여야 한다")
     return payload
+
+
+def _is_quota_deferred(result: object) -> bool:
+    """명시적인 JSON boolean `true`만 비성공 쿼터 보류로 판정한다."""
+    return isinstance(result, Mapping) and result.get("quota_deferred") is True
 
 
 def _max_videos_from_payload(payload: Mapping[str, Any]) -> int:
@@ -421,7 +427,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
             start_stage=start_stage,
             default_category_code=default_category_code,
         )
-        if summary.get("quota_deferred"):
+        if _is_quota_deferred(summary):
             total_outcome = "deferred"
     except BaseException:
         total_outcome = "failure"
@@ -438,7 +444,7 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
         )
     # 일일 쿼터 보류 시에는 DONE으로 표시하지 않는다 — 영상을 DISCOVERED로 두어
     # 다음 PT일/수동 재실행 때 재처리되게 한다(중복은 dedup으로 방지).
-    if not summary.get("quota_deferred"):
+    if not _is_quota_deferred(summary):
         for video in videos:
             if video.crawl_status != CrawlStatus.FAILED:
                 video.crawl_status = CrawlStatus.DONE
@@ -741,7 +747,7 @@ async def _run_handler_with_session(
             raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
         result = await handler(session, fresh_run)
         # 쿼터 보류 등 비-성공 종료는 "완료"로 덮어쓰지 않고 경고로 명시한다(사용자 오해 방지).
-        if isinstance(result, dict) and result.get("quota_deferred"):
+        if _is_quota_deferred(result):
             await crawl_run_service.mark_done(
                 session,
                 run.id,

@@ -410,8 +410,9 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 - **작업 절차**:
   1. `/status` 작업 이력 테이블 행(`StatusDashboard.tsx:413-418` 인근)에 terminal 상태(`failed`/`cancelled`/`done`) 대상 "다시 시작" 버튼 추가 — `restartRun` 호출 후 `["runs"]`·`["run-queue"]` invalidate. running 행에는 "중지"(`stopRun`) 버튼.
   2. `/jobs/[jobId]` 헤더에 같은 조건의 작업 단위 재시작 버튼 추가(현재는 영상 단위 재처리만 존재).
-  3. 버튼은 pending 상태 표시(`disabled` + 스피너), 실패 토스트. 파괴적 액션이 아니므로 확인 다이얼로그는 두지 않는다.
+  3. 버튼은 pending 상태 표시(`disabled` + 스피너), `ConfirmActionButton` 확인, 행이 즉시 제거돼도 유지되는 상위 live feedback을 제공한다. 중지·재시작 성공 뒤 `["runs"]`·`["run-queue"]`와 관련 단건 query를 invalidate한다.
 - **완료 기준**: 실패 작업 복구가 어느 job 표면에서든 1클릭.
+- **구현 완료(2026-07-13, T-180)**: 공용 작업 액션, exact state/outcome 계약, `quota_deferred` 경고 표시, attention·lineage 링크를 `/status`와 `/jobs/[jobId]`에 적용했다. backend는 stop-vs-claim 원자성, 응답/audit transition snapshot, 동시 restart 멱등, 보류 child 이후 성공 descendant의 조상 attention 해소를 보강했다. 최신 main의 T-163 위로 재배치한 뒤 n150 관련 backend 113건·frontend Vitest 104건·Playwright 11건과 3렌즈 반복 적대 검토 최종 P0/P1 0건으로 마감했다.
 
 #### PR-04. 워커 레인 분리 (대화형/배치) `[속도 P0]` `[S]`
 

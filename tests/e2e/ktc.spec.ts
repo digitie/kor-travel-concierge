@@ -75,6 +75,165 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
 
+  test('실패·쿼터 보류 작업을 멱등 재시작하고 lineage·attention을 표시한다', async ({
+    page,
+  }) => {
+    const errors = collectConsoleErrors(page);
+    await loginAsAdmin(page, '/status');
+    await page.getByRole('tab', { name: /완료 이력/ }).click();
+
+    const failedRow = page.getByRole('row', { name: /실패 재시작 E2E/ });
+    await expect(failedRow).toBeVisible();
+    await expect(failedRow.getByText('확인 필요', { exact: true })).toBeVisible();
+
+    const firstRestartResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/v1/runs/') &&
+        response.url().endsWith('/restart') &&
+        response.request().method() === 'POST',
+    );
+    await failedRow
+      .getByRole('button', { name: '다시 시작', exact: true })
+      .click();
+    const firstDialog = page.getByRole('alertdialog');
+    await expect(firstDialog).toContainText('같은 입력으로 새 작업을 등록합니다');
+    await firstDialog
+      .getByRole('button', { name: '다시 시작', exact: true })
+      .click();
+    const firstRestart = await firstRestartResponse;
+    expect(firstRestart.ok()).toBeTruthy();
+    const firstResult = (await firstRestart.json()) as {
+      job_id: string;
+      restart_of_run_id: string;
+      created: boolean;
+    };
+    expect(firstResult.created).toBe(true);
+
+    await expect(failedRow.getByText('재시작됨', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status')).toContainText(
+      '새 재시작 작업을 등록했습니다.',
+    );
+
+    const duplicateRestartResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/v1/runs/') &&
+        response.url().endsWith('/restart') &&
+        response.request().method() === 'POST',
+    );
+    await failedRow
+      .getByRole('button', { name: '다시 시작', exact: true })
+      .click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: '다시 시작', exact: true })
+      .click();
+    const duplicateRestart = await duplicateRestartResponse;
+    const duplicateResult = (await duplicateRestart.json()) as {
+      job_id: string;
+      created: boolean;
+    };
+    expect(duplicateResult).toEqual({
+      job_id: firstResult.job_id,
+      created: false,
+      state: 'pending',
+      restart_of_run_id: firstResult.restart_of_run_id,
+    });
+    await expect(page.getByRole('status')).toContainText(
+      '이미 진행 중인 재시작 작업을 사용합니다.',
+    );
+
+    await page.getByRole('status').getByRole('link', { name: '작업 보기' }).click();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${firstResult.job_id}$`));
+    await expect(page.getByRole('link', { name: /원본 작업 #/ })).toHaveAttribute(
+      'href',
+      `/jobs/${firstResult.restart_of_run_id}`,
+    );
+
+    await page.goto('/status');
+    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    const deferredRow = page.getByRole('row', { name: /쿼터 보류 E2E/ });
+    await expect(deferredRow.getByText('쿼터 보류', { exact: true })).toBeVisible();
+    const deferredDetailLink = deferredRow.getByRole('link', {
+      name: '상세',
+      exact: true,
+    });
+    const deferredDetailHref = await deferredDetailLink.getAttribute('href');
+    expect(deferredDetailHref).toMatch(/^\/jobs\/\d+$/);
+    await deferredDetailLink.click();
+    await expect(page).toHaveURL(new RegExp(`${deferredDetailHref}$`));
+    await expect(page.getByText('쿼터 보류', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('쿼터로 처리 보류', { exact: true })).toBeVisible();
+
+    const deferredRestartResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/v1/runs/') &&
+        response.url().endsWith('/restart') &&
+        response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '다시 시작', exact: true }).click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: '다시 시작', exact: true })
+      .click();
+    const deferredRestart = await deferredRestartResponse;
+    const deferredResult = (await deferredRestart.json()) as { job_id: string };
+    await expect(page).toHaveURL(new RegExp(`/jobs/${deferredResult.job_id}$`));
+
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
+  test('실행 중 작업을 확인 후 중지 요청하고 즉시 상태를 갱신한다', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    let hideRunningQueue = false;
+    await page.route('**/api/v1/runs?**', async (route) => {
+      const url = new URL(route.request().url());
+      if (hideRunningQueue && url.searchParams.get('state') === 'running') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            items: [],
+            next_cursor: null,
+            has_more: false,
+            total: 0,
+            newest_id: null,
+            newer_than: 0,
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.route('**/api/v1/runs/*/stop', async (route) => {
+      const response = await route.fetch();
+      hideRunningQueue = true;
+      await route.fulfill({ response });
+    });
+    await loginAsAdmin(page, '/status');
+
+    const runningRow = page.getByRole('row', { name: /부산 맛집/ });
+    await expect(runningRow).toBeVisible();
+    const stopResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/v1/runs/') &&
+        response.url().endsWith('/stop') &&
+        response.request().method() === 'POST',
+    );
+    await runningRow.getByRole('button', { name: '중지', exact: true }).click();
+    const stopDialog = page.getByRole('alertdialog');
+    await expect(stopDialog).toContainText('이미 저장된 결과는 유지됩니다');
+    await stopDialog.getByRole('button', { name: '중지', exact: true }).click();
+    const stopped = await stopResponse;
+    expect(stopped.ok()).toBeTruthy();
+    const stopResult = (await stopped.json()) as {
+      state: string;
+    };
+    expect(stopResult.state).toBe('running');
+    await expect(runningRow).toHaveCount(0);
+    await expect(page.getByRole('status')).toContainText('중지를 요청했습니다.');
+    expectRelevantConsoleErrors(errors).toEqual([]);
+  });
+
   test('Deep Research(상세 모달)와 검수 저장이 API·UI에 반영된다', async ({ page }) => {
     const errors = collectConsoleErrors(page);
     await expectSeedReady(page);

@@ -1,11 +1,98 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isTerminalRun,
   queueReasonBadgeVariant,
   queueReasonLabel,
+  runAttentionBadgeVariant,
+  runAttentionLabel,
+  runOutcome,
+  runOutcomeBadgeVariant,
+  runOutcomeLabel,
+  runOutcomeProgressBarClass,
   sourceKindLabel,
 } from "./display-labels";
-import type { ReviewQueueReason, ReviewSourceKind } from "./api";
+import type {
+  ReviewQueueReason,
+  ReviewSourceKind,
+  RunAttention,
+} from "./api";
+
+describe("작업 결과 판정", () => {
+  it.each(["done", "failed", "cancelled"])(
+    "%s만 terminal 상태로 판정한다",
+    (state) => {
+      expect(isTerminalRun(state)).toBe(true);
+    },
+  );
+
+  it.each(["pending", "running", "stale", null, undefined])(
+    "%s는 terminal 상태가 아니다",
+    (state) => {
+      expect(isTerminalRun(state)).toBe(false);
+    },
+  );
+
+  it("done 결과의 명시적 boolean true만 쿼터 보류로 판정한다", () => {
+    expect(
+      runOutcome({ state: "done", result: { quota_deferred: true } }),
+    ).toBe("quota_deferred");
+    expect(
+      runOutcome({ state: "done", result: { quota_deferred: "true" } }),
+    ).toBe("succeeded");
+    expect(runOutcome({ state: "done", result: { quota_deferred: 1 } })).toBe(
+      "succeeded",
+    );
+    expect(
+      runOutcome({ state: "running", result: { quota_deferred: true } }),
+    ).toBe("active");
+    expect(
+      runOutcomeProgressBarClass({
+        state: "done",
+        result: { quota_deferred: true },
+      }),
+    ).toContain("bg-warning");
+  });
+
+  it.each([
+    ["done", null, "succeeded", "완료", "secondary"],
+    ["failed", null, "failed", "실패", "destructive"],
+    ["cancelled", null, "cancelled", "취소", "outline"],
+    ["running", null, "active", "실행", "outline"],
+    [
+      "done",
+      { quota_deferred: true },
+      "quota_deferred",
+      "쿼터 보류",
+      "destructive",
+    ],
+  ] as const)(
+    "%s 작업을 %s 결과로 표시한다",
+    (state, result, outcome, label, variant) => {
+      const run = { state, result };
+      expect(runOutcome(run)).toBe(outcome);
+      expect(runOutcomeLabel(run)).toBe(label);
+      expect(runOutcomeBadgeVariant(run)).toBe(variant);
+    },
+  );
+});
+
+describe("작업 attention 표시", () => {
+  it.each<[RunAttention, string, "outline" | "secondary" | "destructive"]>([
+    ["open", "확인 필요", "destructive"],
+    ["acknowledged", "확인함", "outline"],
+    ["superseded", "재시작됨", "secondary"],
+    ["resolved", "해결됨", "secondary"],
+  ])("%s를 한국어 라벨과 배지로 표시한다", (attention, label, variant) => {
+    expect(runAttentionLabel(attention)).toBe(label);
+    expect(runAttentionBadgeVariant(attention)).toBe(variant);
+  });
+
+  it("attention이 없으면 주의 없음으로 표시한다", () => {
+    expect(runAttentionLabel(null)).toBe("주의 없음");
+    expect(runAttentionBadgeVariant(null)).toBe("outline");
+  });
+});
 
 describe("queueReasonLabel", () => {
   it.each<[ReviewQueueReason, string]>([

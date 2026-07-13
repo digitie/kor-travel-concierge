@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -27,8 +28,11 @@ import {
   jobTypeDisplayLabel,
   loginEventLabel,
   loginOutcomeLabel,
-  runProgressBarClass,
-  runStateBadgeVariant,
+  runAttentionBadgeVariant,
+  runAttentionLabel,
+  runOutcomeBadgeVariant,
+  runOutcomeLabel,
+  runOutcomeProgressBarClass,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
@@ -36,6 +40,10 @@ import { asNum, asRecord, formatBytes, formatDateTimeShort } from "@/lib/format"
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  RunActionButtons,
+  type RunActionFeedback,
+} from "@/components/RunActionButtons";
 import {
   CountList,
   EmptyState,
@@ -68,6 +76,8 @@ function auditTargetLabel(value: string): string {
 }
 
 export function StatusDashboard() {
+  const [runActionFeedback, setRunActionFeedback] =
+    useState<RunActionFeedback | null>(null);
   const queueQuery = useQuery({
     queryKey: ["run-queue", "status"],
     queryFn: () => listRunQueue(USER_JOB_TYPES),
@@ -137,6 +147,39 @@ export function StatusDashboard() {
         </Button>
       </div>
 
+      {runActionFeedback ? (
+        <div
+          role={runActionFeedback.kind === "error" ? "alert" : "status"}
+          className={`rounded-lg border px-3 py-2 text-sm ${
+            runActionFeedback.kind === "error"
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-surface-muted bg-surface-subtle text-text-secondary"
+          }`}
+        >
+          {runActionFeedback.kind === "error" ? (
+            <>
+              작업 #{runActionFeedback.jobId}의
+              {runActionFeedback.action === "stop" ? " 중지" : " 재시작"} 요청에
+              실패했습니다: {runActionFeedback.message}
+            </>
+          ) : runActionFeedback.kind === "stopped" ? (
+            <>작업 #{runActionFeedback.jobId}의 중지를 요청했습니다.</>
+          ) : (
+            <>
+              {runActionFeedback.created
+                ? "새 재시작 작업을 등록했습니다."
+                : "이미 진행 중인 재시작 작업을 사용합니다."}{" "}
+              <Link
+                href={`/jobs/${runActionFeedback.jobId}`}
+                className="font-bold text-primary underline-offset-2 hover:underline"
+              >
+                작업 보기
+              </Link>
+            </>
+          )}
+        </div>
+      ) : null}
+
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={<ListChecksIcon className="size-4" />}
@@ -191,12 +234,14 @@ export function StatusDashboard() {
                 <RunStatusTable
                   runs={queueRuns}
                   empty="실행 중이거나 대기 중인 작업이 없습니다."
+                  onActionFeedback={setRunActionFeedback}
                 />
               </TabsContent>
               <TabsContent value="history" className="mt-3">
                 <RunStatusTable
                   runs={historyRuns}
                   empty="완료된 작업 이력이 없습니다."
+                  onActionFeedback={setRunActionFeedback}
                 />
               </TabsContent>
             </Tabs>
@@ -322,9 +367,11 @@ export function StatusDashboard() {
 function RunStatusTable({
   runs,
   empty,
+  onActionFeedback,
 }: {
   runs: CrawlRunSummary[];
   empty: string;
+  onActionFeedback: (feedback: RunActionFeedback) => void;
 }) {
   if (runs.length === 0) {
     return (
@@ -345,16 +392,23 @@ function RunStatusTable({
             <th className="px-3 py-2">진행</th>
             <th className="px-3 py-2">메시지</th>
             <th className="px-3 py-2">시간</th>
-            <th className="px-3 py-2 text-right">상세</th>
+            <th className="px-3 py-2 text-right">액션</th>
           </tr>
         </thead>
         <tbody>
           {runs.map((run) => (
             <tr key={run.job_id} className="border-t border-surface-muted">
               <td className="px-3 py-2 align-top">
-                <Badge variant={runStateBadgeVariant(run.state)}>
-                  {runStateLabel(run.state)}
-                </Badge>
+                <div className="flex max-w-36 flex-wrap gap-1">
+                  <Badge variant={runOutcomeBadgeVariant(run)}>
+                    {runOutcomeLabel(run)}
+                  </Badge>
+                  {run.attention ? (
+                    <Badge variant={runAttentionBadgeVariant(run.attention)}>
+                      {runAttentionLabel(run.attention)}
+                    </Badge>
+                  ) : null}
+                </div>
               </td>
               <td className="px-3 py-2 align-top">
                 <div className="flex max-w-[20rem] flex-col gap-1 whitespace-normal">
@@ -367,6 +421,14 @@ function RunStatusTable({
                   <span className="font-mono text-[11px] text-text-secondary">
                     {run.job_id}
                   </span>
+                  {run.restart_of_run_id ? (
+                    <Link
+                      href={`/jobs/${run.restart_of_run_id}`}
+                      className="w-fit text-[11px] font-bold text-primary underline-offset-2 hover:underline"
+                    >
+                      원본 작업 #{run.restart_of_run_id}
+                    </Link>
+                  ) : null}
                 </div>
               </td>
               <td className="px-3 py-2 align-top">
@@ -380,7 +442,7 @@ function RunStatusTable({
                 <div className="flex w-28 flex-col gap-1">
                   <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
-                      className={runProgressBarClass(run.state)}
+                      className={runOutcomeProgressBarClass(run)}
                       style={{ width: progressPercent(run) }}
                     />
                   </div>
@@ -409,13 +471,14 @@ function RunStatusTable({
                 </div>
               </td>
               <td className="px-3 py-2 align-top">
-                <div className="flex justify-end">
+                <div className="flex flex-col items-end gap-1">
                   <Link
                     href={`/jobs/${run.job_id}`}
                     className={buttonVariants({ variant: "outline", size: "xs" })}
                   >
                     상세
                   </Link>
+                  <RunActionButtons run={run} onFeedback={onActionFeedback} />
                 </div>
               </td>
             </tr>

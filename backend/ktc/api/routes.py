@@ -46,7 +46,6 @@ from ktc.models import (
     MatchStatus,
     MediaAsset,
     RunSource,
-    RunState,
     SourceTarget,
     TravelPlace,
     VideoPlaceMapping,
@@ -873,29 +872,21 @@ async def stop_run(
     `pending`이면 즉시 `cancelled`로 마감하고, `running`이면 협조적 중지 신호를 건다
     (실행자가 곧 `cancelled`로 마감). 이미 종료된 작업은 400.
     """
-    run = await crawl_run_service.get_run(session, job_id)
-    if run is None:
+    try:
+        transition = await crawl_run_service.stop_run(session, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if transition is None:
         raise HTTPException(status_code=404, detail="job not found")
-    prev_state = run.state
-    if run.state == RunState.PENDING:
-        await crawl_run_service.cancel_pending(session, job_id)
-        new_state = RunState.CANCELLED.value
-    elif run.state == RunState.RUNNING:
-        await crawl_run_service.request_cancel(session, job_id)
-        new_state = run.state
-    else:
-        raise HTTPException(
-            status_code=400, detail="이미 종료된 작업은 중지할 수 없습니다"
-        )
     await audit_service.record(
         session,
         actor_type="web",
         action="run.stop",
         target_type="crawl_run",
         target_id=str(job_id),
-        payload={"prev_state": prev_state},
+        payload={"prev_state": transition.previous_state},
     )
-    return {"job_id": str(job_id), "state": new_state}
+    return {"job_id": str(job_id), "state": transition.accepted_state}
 
 
 @router.post("/runs/{job_id}/restart")

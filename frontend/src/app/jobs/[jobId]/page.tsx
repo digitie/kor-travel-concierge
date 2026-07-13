@@ -21,6 +21,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { JobDetailView } from "@/components/JobDetailView";
+import { RunActionButtons } from "@/components/RunActionButtons";
 import { EmptyState, MetricCard, Panel } from "@/components/panels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,13 @@ export default function JobDetailPage() {
       description={`작업 ID ${jobId}`}
       actions={
         <>
+          {run ? (
+            <RunActionButtons
+              run={run}
+              size="sm"
+              restartBehavior="navigate"
+            />
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -277,4 +285,3 @@ function VideoStatRows({ stat }: { stat: RunVideoStat }) {
     </Fragment>
   );
 }
-
