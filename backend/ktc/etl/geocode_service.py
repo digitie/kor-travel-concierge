@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vworld import AsyncVworldClient
 
 from ktc.models import (
+    AuditStatus,
     EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -31,11 +32,12 @@ from ktc.models import (
     TravelPlace,
     utcnow,
 )
-from ktc.services import place_service
-from ktc.etl import category_catalog, region_gate
+import random
 
-_MIN_CONTAINED_NAME_LENGTH = 4
-_MIN_CONTAINED_NAME_RATIO = 0.6
+from ktc.services import place_service
+from ktc.core.config import get_settings
+from ktc.etl import category_catalog, region_gate
+from ktc.etl.place_name import names_match as _names_match
 
 
 async def geocode_query(
@@ -148,9 +150,15 @@ async def apply_geocode_to_candidate(
 
     result_kind = c.result_kind or GeocodeResultKind.ADDRESS.value
 
-    # 좌표 근접 중복 확인 (T-005 저장소 계층 재사용)
+    # 좌표 근접 중복 확인 (T-005 저장소 계층 재사용). 병합 반경은 config 상수(기본 300m)로
+    # 둔다(T-167, 로드맵 PR-14 절차 3). 이 근접 재사용은 아래 identity 게이트가 후보 AI명과
+    # 기존 장소명을 대조하므로(이름 불일치 시 needs_review) 반경 확대가 오병합을 늘리지 않는다
+    # (무검증 반경 확대 금지 원칙과 정합 — T-166 이름 게이트 통과 후에만 재사용).
     dups = await place_service.find_duplicate_candidates(
-        session, lat=c.latitude, lng=c.longitude
+        session,
+        lat=c.latitude,
+        lng=c.longitude,
+        radius_meters=get_settings().GEOCODE_MERGE_RADIUS_METERS,
     )
     nearby_place = dups[0][0] if dups else None
 
@@ -219,6 +227,9 @@ async def apply_geocode_to_candidate(
     candidate.reviewed_by = reviewer
     candidate.reviewed_at = utcnow()
     candidate.feature_export_status = FeatureExportStatus.READY.value
+    # auto-match audit 표본 표시(T-167, G9). MATCHED·export 상태는 그대로 두고(사후 관측 —
+    # 노출 차단 아님) 자동확정 정밀도(오확정률) 측정용 표본만 남긴다.
+    _maybe_flag_audit_sample(candidate, reviewer)
 
     await place_service.ensure_candidate_mapping(session, candidate, place)
     await sync_place_geometry(session, place.place_id, place.latitude, place.longitude)
@@ -241,6 +252,28 @@ def _grounding_blocks_autoconfirm(candidate: ExtractedPlaceCandidate) -> bool:
     if candidate.source_kind != EvidenceSourceKind.TRANSCRIPT.value:
         return False
     return candidate.grounding_status != GroundingStatus.VERIFIED_RAW.value
+
+
+def _maybe_flag_audit_sample(
+    candidate: ExtractedPlaceCandidate, reviewer: str
+) -> None:
+    """자동확정된 후보를 확률적으로 auto-match audit 표본으로 표시한다(T-167, G9).
+
+    자동확정(MATCHED, reviewer="system")은 검수 큐에서 사라져 정밀도(뒤집힘 비율)를 잴
+    표본이 없다(§7 지표). `AUTO_MATCH_AUDIT_SAMPLE_RATE`(기본 0.1) 비율로 표본을 남겨
+    사람이 사후에 "정확/오확정"을 기록할 수 있게 한다. 표본 표시는 상태 전이가 아니라
+    사후 관측이므로 MATCHED·export 상태는 건드리지 않는다. rate<=0이면 비활성, rate>=1이면
+    전량. 이미 표시된 후보(재처리)는 유지한다(멱등).
+    """
+    if reviewer != "system":
+        return
+    if candidate.audit_status is not None:
+        return
+    rate = get_settings().AUTO_MATCH_AUDIT_SAMPLE_RATE
+    if rate <= 0:
+        return
+    if rate >= 1 or random.random() < rate:
+        candidate.audit_status = AuditStatus.PENDING.value
 
 
 def _evaluate_identity_gates(
@@ -345,34 +378,6 @@ def _resolve_ambiguous_single(
             continue
         passed.append(cand)
     return passed[0] if len(passed) == 1 else None
-
-
-def _names_match(left: str | None, right: str | None) -> bool:
-    """두 이름이 동일 장소를 가리키는지의 pairwise 판정.
-
-    C8 정정: 기존 `_names_compatible(a,b,c)`의 any-pair 통과(세 값 중 아무 한 쌍만 맞아도
-    True)를 제거하고 비교 목적별로 두 이름만 대조한다. 한쪽이 비면 검증 불가로 False.
-    """
-    a, b = _normalize_name(left), _normalize_name(right)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    return _is_specific_contained_name(a, b)
-
-
-def _is_specific_contained_name(left: str, right: str) -> bool:
-    if left not in right and right not in left:
-        return False
-    shorter, longer = sorted((left, right), key=len)
-    return (
-        len(shorter) >= _MIN_CONTAINED_NAME_LENGTH
-        and len(shorter) / len(longer) >= _MIN_CONTAINED_NAME_RATIO
-    )
-
-
-def _normalize_name(value: str | None) -> str:
-    return "".join((value or "").casefold().split())
 
 
 def _geocode_evidence(
