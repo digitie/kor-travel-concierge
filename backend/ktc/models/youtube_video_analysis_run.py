@@ -39,6 +39,20 @@ class YoutubeVideoAnalysisRun(TimestampMixin, Base):
     state: Mapped[str] = mapped_column(
         String(32), nullable=False, default=VideoAnalysisRunState.PENDING, index=True
     )
+    # scheduler claim 소유권 fence. 같은 crawl run이 stale 재투입돼도 retry_count가
+    # 달라지고 claim_token이 회전하므로, 이전 worker의 늦은 apply가 최신 owner를
+    # 덮거나 FAILED로 바꾸지 못한다.
+    owner_crawl_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "crawl_runs.id",
+            name="fk_youtube_video_analysis_runs_owner_crawl_run_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    owner_retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_asset_id: Mapped[int | None] = mapped_column(

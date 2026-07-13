@@ -17,11 +17,12 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ktc.core.config import get_settings
@@ -68,6 +69,12 @@ LEGACY_WORKER_JOB_ID = "crawl-run-worker"
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
+VIDEO_ANALYSIS_STALE_MAX_ATTEMPTS = 3
+VIDEO_ANALYSIS_RUNNING_LEASE_SECONDS = 15 * 60
+
+
+def _analysis_state_value(value: object) -> str:
+    return value.value if isinstance(value, VideoAnalysisRunState) else str(value)
 
 
 def scheduler_jobstore_url(database_url: str, explicit_url: str | None = None) -> str:
@@ -642,12 +649,119 @@ async def _has_analysis_run(
     return result.scalar_one_or_none() is not None
 
 
+async def _acquire_analysis_run_creation_lock(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    run_type: str,
+) -> None:
+    """동일 영상·분석 종류의 check→insert를 transaction 단위로 직렬화한다."""
+    lock_name = f"ktc:video-analysis:{video_id}:{run_type}"
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(lock_name, 0)))
+        .execution_options(autoflush=False)
+    )
+
+
+async def _reclaim_stale_analysis_runs(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    run_type: str,
+    lease_seconds: int = VIDEO_ANALYSIS_RUNNING_LEASE_SECONDS,
+) -> int:
+    """중단된 worker가 남긴 오래된 running 분석을 같은 row의 pending으로 회수한다.
+
+    호출자는 영상·분석 종류 advisory lock을 이미 보유해야 한다. 정상 외부 호출의
+    timeout보다 긴 lease만 회수해, 프로세스 재시작 뒤에도 `_has_analysis_run`에 영구
+    고착되지 않으면서 살아 있는 분석을 섣불리 중복 실행하지 않는다.
+    """
+    cutoff = utcnow() - timedelta(seconds=max(1, lease_seconds))
+    result = await session.execute(
+        select(YoutubeVideoAnalysisRun)
+        .outerjoin(
+            CrawlRun,
+            CrawlRun.id == YoutubeVideoAnalysisRun.owner_crawl_run_id,
+        )
+        .where(
+            YoutubeVideoAnalysisRun.video_id == video_id,
+            YoutubeVideoAnalysisRun.run_type == run_type,
+            YoutubeVideoAnalysisRun.state == VideoAnalysisRunState.RUNNING,
+            or_(
+                # migration 전/직접 실행 row는 owner가 없으므로 보수적인 시간 만료만 쓴다.
+                and_(
+                    YoutubeVideoAnalysisRun.owner_crawl_run_id.is_(None),
+                    or_(
+                        YoutubeVideoAnalysisRun.started_at.is_(None),
+                        YoutubeVideoAnalysisRun.started_at <= cutoff,
+                    ),
+                ),
+                # scheduler 소유 row는 parent attempt가 끝났거나 retry generation이
+                # 바뀐 즉시 회수한다. 살아 있는 parent heartbeat가 있으면 LLM admission이
+                # 오래 걸려도 단순 started_at만으로 소유권을 빼앗지 않는다.
+                and_(
+                    YoutubeVideoAnalysisRun.owner_crawl_run_id.is_not(None),
+                    or_(
+                        CrawlRun.id.is_(None),
+                        CrawlRun.state != "running",
+                        YoutubeVideoAnalysisRun.owner_retry_count.is_(None),
+                        YoutubeVideoAnalysisRun.owner_retry_count
+                        != CrawlRun.retry_count,
+                        and_(
+                            CrawlRun.heartbeat_at.is_not(None),
+                            CrawlRun.heartbeat_at <= cutoff,
+                        ),
+                        and_(
+                            CrawlRun.heartbeat_at.is_(None),
+                            or_(
+                                YoutubeVideoAnalysisRun.started_at.is_(None),
+                                YoutubeVideoAnalysisRun.started_at <= cutoff,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        .order_by(YoutubeVideoAnalysisRun.id)
+        .with_for_update(of=YoutubeVideoAnalysisRun)
+        .execution_options(populate_existing=True, autoflush=False)
+    )
+    rows = list(result.scalars().all())
+    for analysis_run in rows:
+        analysis_run.state = VideoAnalysisRunState.PENDING
+        analysis_run.started_at = None
+        analysis_run.finished_at = None
+        analysis_run.owner_crawl_run_id = None
+        analysis_run.owner_retry_count = None
+        analysis_run.claim_token = None
+        analysis_run.last_error = (
+            "stale_running_reclaimed: 이전 worker의 분석 lease가 만료되어 재실행"
+        )
+    await session.flush()
+    return len(rows)
+
+
 async def _pending_analysis_runs(
     session: AsyncSession,
     *,
     video_id: str,
     run_type: str,
+    claim: bool = False,
+    owner_crawl_run_id: int | None = None,
+    owner_retry_count: int | None = None,
 ) -> list[YoutubeVideoAnalysisRun]:
+    if claim and owner_crawl_run_id is not None:
+        current_parent = await session.scalar(
+            select(CrawlRun.id)
+            .where(
+                CrawlRun.id == owner_crawl_run_id,
+                CrawlRun.state == "running",
+                CrawlRun.retry_count == owner_retry_count,
+            )
+            .with_for_update()
+        )
+        if current_parent is None:
+            return []
     stmt = (
         select(YoutubeVideoAnalysisRun)
         .where(
@@ -657,8 +771,236 @@ async def _pending_analysis_runs(
         )
         .order_by(YoutubeVideoAnalysisRun.id)
     )
+    if claim:
+        stmt = stmt.with_for_update(skip_locked=True).limit(1)
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    rows = list(result.scalars().all())
+    if claim:
+        # 첫 서비스 `_mark_running` commit이 이 claim을 확정한다. 그 전까지 row lock이
+        # 다른 handler의 SKIP LOCKED claim을 막고, 여러 row도 한꺼번에 running으로 flush된다.
+        for analysis_run in rows:
+            analysis_run.state = VideoAnalysisRunState.RUNNING
+            analysis_run.owner_crawl_run_id = owner_crawl_run_id
+            analysis_run.owner_retry_count = owner_retry_count
+            analysis_run.claim_token = str(uuid4())
+        await session.flush()
+    return rows
+
+
+async def _supersede_pending_analysis_runs_with_done_peer(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    run_type: str,
+) -> int:
+    """먼저 완료된 같은 종류 run이 있으면 남은 pending 중복을 외부 호출 없이 끝낸다."""
+    done_peer_id = await session.scalar(
+        select(YoutubeVideoAnalysisRun.id)
+        .where(
+            YoutubeVideoAnalysisRun.video_id == video_id,
+            YoutubeVideoAnalysisRun.run_type == run_type,
+            YoutubeVideoAnalysisRun.state == VideoAnalysisRunState.DONE,
+        )
+        .order_by(YoutubeVideoAnalysisRun.id)
+        .limit(1)
+    )
+    if done_peer_id is None:
+        return 0
+    rows = list(
+        (
+            await session.execute(
+                select(YoutubeVideoAnalysisRun)
+                .where(
+                    YoutubeVideoAnalysisRun.video_id == video_id,
+                    YoutubeVideoAnalysisRun.run_type == run_type,
+                    YoutubeVideoAnalysisRun.state == VideoAnalysisRunState.PENDING,
+                )
+                .order_by(YoutubeVideoAnalysisRun.id)
+                .with_for_update(skip_locked=True)
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        # 정상 DONE/no-pending 경로다. rollback은 handler가 계속 쓸 run/video identity를
+        # expire해 다음 run_type 접근에서 async lazy-load 오류를 만들 수 있으므로, 읽기
+        # transaction과 parent row lock만 정상 종료한다.
+        await session.commit()
+        return 0
+    now = utcnow()
+    for analysis_run in rows:
+        analysis_run.state = VideoAnalysisRunState.FAILED
+        analysis_run.finished_at = now
+        analysis_run.last_error = (
+            "superseded_by_completed_peer: "
+            f"analysis_run_id={done_peer_id} 결과가 먼저 확정됨"
+        )
+        analysis_run.owner_crawl_run_id = None
+        analysis_run.owner_retry_count = None
+        analysis_run.claim_token = None
+    await session.commit()
+    return len(rows)
+
+
+async def _run_analysis_with_stale_retry(
+    session: AsyncSession,
+    video: YoutubeVideo,
+    analysis_run: YoutubeVideoAnalysisRun,
+    runner: Callable[
+        [AsyncSession, YoutubeVideo, YoutubeVideoAnalysisRun],
+        Awaitable[dict[str, Any]],
+    ],
+) -> dict[str, Any]:
+    """정상 동시 입력 drift는 최신 snapshot으로 bounded 즉시 재실행한다."""
+    result: dict[str, Any] = {}
+    for attempt in range(1, VIDEO_ANALYSIS_STALE_MAX_ATTEMPTS + 1):
+        analysis_run_id = analysis_run.id
+        claim_token = analysis_run.claim_token
+        owner_crawl_run_id = analysis_run.owner_crawl_run_id
+        owner_retry_count = analysis_run.owner_retry_count
+        try:
+            result = await runner(session, video, analysis_run)
+        except Exception as exc:
+            # apply transaction의 DB 예외는 service 내부 LLM try/except 밖에서 발생할 수
+            # 있다. 실패 transaction을 먼저 버린 뒤 같은 run을 terminal failed로 남겨
+            # `_has_analysis_run`의 running 영구 고착을 막고, crawl run 실패는 그대로
+            # 상위로 전파한다.
+            await session.rollback()
+            parent_owned = True
+            if owner_crawl_run_id is not None:
+                parent = (
+                    await session.execute(
+                        select(CrawlRun)
+                        .where(CrawlRun.id == owner_crawl_run_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                ).scalar_one_or_none()
+                parent_owned = (
+                    parent is not None
+                    and parent.state == "running"
+                    and parent.retry_count == owner_retry_count
+                )
+            failed_run = (
+                await session.execute(
+                    select(YoutubeVideoAnalysisRun)
+                    .where(YoutubeVideoAnalysisRun.id == analysis_run_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            ).scalar_one_or_none()
+            if (
+                failed_run is not None
+                and parent_owned
+                and failed_run.claim_token == claim_token
+                and failed_run.state != VideoAnalysisRunState.DONE.value
+            ):
+                failed_run.state = VideoAnalysisRunState.FAILED
+                failed_run.finished_at = utcnow()
+                failed_run.last_error = f"runner_apply_failed: {exc}"
+                failed_run.owner_crawl_run_id = None
+                failed_run.owner_retry_count = None
+                failed_run.claim_token = None
+                await session.commit()
+            elif failed_run is not None and (
+                not parent_owned or failed_run.claim_token != claim_token
+            ):
+                ownership_lost = {
+                    "analysis_run_id": failed_run.id,
+                    "run_type": failed_run.run_type,
+                    "state": _analysis_state_value(failed_run.state),
+                    "stale_input": False,
+                    "superseded": True,
+                    "ownership_lost": True,
+                    "attempts": attempt,
+                }
+                await session.rollback()
+                return ownership_lost
+            else:
+                await session.rollback()
+            raise
+        result["attempts"] = attempt
+        if result.get("stale_input") is not True:
+            return result
+
+    # 계속 변하는 입력은 무한 외부 호출하지 않고 명시적 failed로 끝낸다. FAILED는
+    # `_has_analysis_run`에서 제외되므로 다음 사용자/스케줄러 job이 새 run으로 재시도한다.
+    await session.rollback()
+    parent_owned = True
+    if owner_crawl_run_id is not None:
+        parent = (
+            await session.execute(
+                select(CrawlRun)
+                .where(CrawlRun.id == owner_crawl_run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        parent_owned = (
+            parent is not None
+            and parent.state == "running"
+            and parent.retry_count == owner_retry_count
+        )
+    current = (
+        await session.execute(
+            select(YoutubeVideoAnalysisRun)
+            .where(YoutubeVideoAnalysisRun.id == analysis_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one()
+    if not parent_owned or current.claim_token != claim_token:
+        ownership_lost = {
+            "analysis_run_id": current.id,
+            "run_type": current.run_type,
+            "state": _analysis_state_value(current.state),
+            "stale_input": False,
+            "superseded": True,
+            "ownership_lost": True,
+            "attempts": VIDEO_ANALYSIS_STALE_MAX_ATTEMPTS,
+        }
+        await session.rollback()
+        return ownership_lost
+    current.state = VideoAnalysisRunState.FAILED
+    current.finished_at = utcnow()
+    current.last_error = (
+        "stale_input_retry_exhausted: "
+        f"최신 입력 적용을 {VIDEO_ANALYSIS_STALE_MAX_ATTEMPTS}회 재시도했으나 계속 변경됨"
+    )
+    current.owner_crawl_run_id = None
+    current.owner_retry_count = None
+    current.claim_token = None
+    await session.commit()
+    return {
+        **result,
+        "state": VideoAnalysisRunState.FAILED.value,
+        "retryable": True,
+        "error": current.last_error,
+    }
+
+
+async def _lock_analysis_parent_attempt(
+    session: AsyncSession,
+    run: CrawlRun,
+) -> bool:
+    """child claim transaction이 현재 parent retry generation에 속하는지 확인한다."""
+    run_id = getattr(run, "id", None)
+    retry_count = getattr(run, "retry_count", None)
+    if run_id is None:
+        # service 단위 테스트의 경량 run double은 parent persistence가 없다.
+        return True
+    current = await session.scalar(
+        select(CrawlRun.id)
+        .where(
+            CrawlRun.id == run_id,
+            CrawlRun.state == "running",
+            CrawlRun.retry_count == retry_count,
+        )
+        .with_for_update()
+    )
+    return current is not None
 
 
 async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
@@ -673,7 +1015,32 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
 
     created_run_ids: list[int] = []
     skipped = 0
+    if not await _lock_analysis_parent_attempt(session, run):
+        await session.rollback()
+        return {
+            "video_id": video_id,
+            "created_analysis_runs": 0,
+            "skipped_existing_analysis_runs": 0,
+            "analysis_run_ids": [],
+            "executed_analysis_runs": 0,
+            "failed_analysis_runs": 0,
+            "superseded_analysis_runs": 0,
+            "ownership_lost_analysis_runs": 0,
+            "ownership_lost": True,
+            "skipped_unsupported_analysis_runs": 0,
+            "analysis_results": [],
+        }
     for run_type in _analysis_run_type_values(payload):
+        await _acquire_analysis_run_creation_lock(
+            session,
+            video_id=video_id,
+            run_type=run_type,
+        )
+        await _reclaim_stale_analysis_runs(
+            session,
+            video_id=video_id,
+            run_type=run_type,
+        )
         if await _has_analysis_run(session, video_id=video_id, run_type=run_type):
             skipped += 1
             continue
@@ -690,40 +1057,116 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
 
     executed_results: list[dict[str, Any]] = []
     skipped_unsupported = 0
+    preflight_superseded = 0
+    parent_ownership_lost = False
     # 정책 주석(T-161): RPD 소진(GeminiQuotaExceeded)이면 analysis run은 서비스 내부
     # broad except로 terminal failed 처리된다 — poi_batch의 quota_deferred(보류)와
     # 비대칭. 보류 통일은 후속 검토.
     for run_type in _analysis_run_type_values(payload):
-        pending_runs = await _pending_analysis_runs(
-            session,
-            video_id=video_id,
-            run_type=run_type,
-        )
         if run_type == VideoAnalysisRunType.URL_SUMMARY.value:
-            for analysis_run in pending_runs:
-                executed_results.append(
-                    await video_analysis_service.run_url_summary_analysis(
+            while True:
+                if not await _lock_analysis_parent_attempt(session, run):
+                    parent_ownership_lost = True
+                    await session.rollback()
+                    break
+                preflight_superseded += (
+                    await _supersede_pending_analysis_runs_with_done_peer(
                         session,
-                        video,
-                        analysis_run,
+                        video_id=video_id,
+                        run_type=run_type,
                     )
                 )
+                pending_runs = await _pending_analysis_runs(
+                    session,
+                    video_id=video_id,
+                    run_type=run_type,
+                    claim=True,
+                    owner_crawl_run_id=getattr(run, "id", None),
+                    owner_retry_count=getattr(run, "retry_count", None),
+                )
+                if not pending_runs:
+                    break
+                analysis_run = pending_runs[0]
+                analysis_result = await _run_analysis_with_stale_retry(
+                    session,
+                    video,
+                    analysis_run,
+                    video_analysis_service.run_url_summary_analysis,
+                )
+                executed_results.append(analysis_result)
+                if analysis_result.get("ownership_lost") is True:
+                    parent_ownership_lost = True
+                    break
         elif run_type == VideoAnalysisRunType.RECONCILE.value:
-            for analysis_run in pending_runs:
-                executed_results.append(
-                    await video_analysis_service.run_reconcile_analysis(
+            if not await _lock_analysis_parent_attempt(session, run):
+                parent_ownership_lost = True
+                await session.rollback()
+                break
+            # URL canonical 결과가 아직 없으면 reconcile 입력 자체가 성립하지 않는다.
+            # pending을 claim하지 않아 다음 job에서 URL 성공 뒤 실행할 수 있게 남긴다.
+            current_video = (
+                await session.execute(
+                    select(YoutubeVideo)
+                    .where(YoutubeVideo.video_id == video_id)
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            ).scalar_one()
+            if not current_video.gemini_url_summary_json:
+                continue
+            while True:
+                if not await _lock_analysis_parent_attempt(session, run):
+                    parent_ownership_lost = True
+                    await session.rollback()
+                    break
+                preflight_superseded += (
+                    await _supersede_pending_analysis_runs_with_done_peer(
                         session,
-                        video,
-                        analysis_run,
+                        video_id=video_id,
+                        run_type=run_type,
                     )
                 )
+                pending_runs = await _pending_analysis_runs(
+                    session,
+                    video_id=video_id,
+                    run_type=run_type,
+                    claim=True,
+                    owner_crawl_run_id=getattr(run, "id", None),
+                    owner_retry_count=getattr(run, "retry_count", None),
+                )
+                if not pending_runs:
+                    break
+                analysis_run = pending_runs[0]
+                analysis_result = await _run_analysis_with_stale_retry(
+                    session,
+                    video,
+                    analysis_run,
+                    video_analysis_service.run_reconcile_analysis,
+                )
+                executed_results.append(analysis_result)
+                if analysis_result.get("ownership_lost") is True:
+                    parent_ownership_lost = True
+                    break
         else:
+            pending_runs = await _pending_analysis_runs(
+                session,
+                video_id=video_id,
+                run_type=run_type,
+            )
             skipped_unsupported += len(pending_runs)
+        if parent_ownership_lost:
+            break
 
     failed = sum(
         1
         for item in executed_results
         if item.get("state") == VideoAnalysisRunState.FAILED.value
+        and item.get("superseded") is not True
+    )
+    superseded = preflight_superseded + sum(
+        1 for item in executed_results if item.get("superseded") is True
+    )
+    ownership_lost = sum(
+        1 for item in executed_results if item.get("ownership_lost") is True
     )
     return {
         "video_id": video_id,
@@ -732,6 +1175,9 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
         "analysis_run_ids": created_run_ids,
         "executed_analysis_runs": len(executed_results),
         "failed_analysis_runs": failed,
+        "superseded_analysis_runs": superseded,
+        "ownership_lost_analysis_runs": ownership_lost,
+        "ownership_lost": parent_ownership_lost or ownership_lost > 0,
         "skipped_unsupported_analysis_runs": skipped_unsupported,
         "analysis_results": executed_results,
     }
@@ -747,6 +1193,27 @@ DEFAULT_HANDLERS: dict[str, JobHandler] = {
 }
 
 
+async def _lock_owned_crawl_run_attempt(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    retry_count: int,
+) -> CrawlRun | None:
+    """현재 running retry generation만 잠가 이전 attempt의 상태 덮어쓰기를 막는다."""
+    return (
+        await session.execute(
+            select(CrawlRun)
+            .where(
+                CrawlRun.id == run_id,
+                CrawlRun.state == "running",
+                CrawlRun.retry_count == retry_count,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one_or_none()
+
+
 async def _run_handler_with_session(
     session_factory: async_sessionmaker[AsyncSession],
     run: CrawlRun,
@@ -754,6 +1221,15 @@ async def _run_handler_with_session(
 ) -> None:
     """handler를 자체 세션에서 실행하고 완료 상태까지 기록한다(취소 가능한 실행 단위)."""
     async with session_factory() as session:
+        expected_retry_count = int(run.retry_count)
+        owned_run = await _lock_owned_crawl_run_attempt(
+            session,
+            run_id=run.id,
+            retry_count=expected_retry_count,
+        )
+        if owned_run is None:
+            await session.rollback()
+            return
         await crawl_run_service.append_status_log(
             session, run.id, "작업 실행 환경을 준비 중입니다.", progress=0.1
         )
@@ -761,8 +1237,21 @@ async def _run_handler_with_session(
         if fresh_run is None:
             raise RuntimeError(f"claim된 작업을 다시 조회할 수 없음: {run.id}")
         result = await handler(session, fresh_run)
+        # analysis claim token을 잃은 이전 attempt는 최신 generation의 parent 상태도
+        # DONE/FAILED로 덮지 않고 조용히 종료한다.
+        if result.get("ownership_lost") is True:
+            await session.rollback()
+            return
         # 쿼터 보류 등 비-성공 종료는 "완료"로 덮어쓰지 않고 경고로 명시한다(사용자 오해 방지).
         if _is_quota_deferred(result):
+            owned_run = await _lock_owned_crawl_run_attempt(
+                session,
+                run_id=run.id,
+                retry_count=expected_retry_count,
+            )
+            if owned_run is None:
+                await session.rollback()
+                return
             await crawl_run_service.mark_done(
                 session,
                 run.id,
@@ -771,9 +1260,25 @@ async def _run_handler_with_session(
                 final_level="warning",
             )
         else:
+            owned_run = await _lock_owned_crawl_run_attempt(
+                session,
+                run_id=run.id,
+                retry_count=expected_retry_count,
+            )
+            if owned_run is None:
+                await session.rollback()
+                return
             await crawl_run_service.append_status_log(
                 session, run.id, "수집 결과를 정리 중입니다.", progress=0.9
             )
+            owned_run = await _lock_owned_crawl_run_attempt(
+                session,
+                run_id=run.id,
+                retry_count=expected_retry_count,
+            )
+            if owned_run is None:
+                await session.rollback()
+                return
             await crawl_run_service.mark_done(session, run.id, result=result)
 
 
@@ -781,6 +1286,7 @@ async def _heartbeat_and_cancel_watch(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: int,
     *,
+    retry_count: int,
     interval_seconds: float,
     on_cancel: Callable[[], None],
 ) -> None:
@@ -789,8 +1295,18 @@ async def _heartbeat_and_cancel_watch(
         await asyncio.sleep(interval_seconds)
         try:
             async with session_factory() as session:
-                await crawl_run_service.heartbeat(session, run_id)
-                if await crawl_run_service.is_cancel_requested(session, run_id):
+                owned_run = await _lock_owned_crawl_run_attempt(
+                    session,
+                    run_id=run_id,
+                    retry_count=retry_count,
+                )
+                if owned_run is None:
+                    await session.rollback()
+                    return
+                owned_run.heartbeat_at = utcnow()
+                cancel_requested = bool(owned_run.cancel_requested)
+                await session.commit()
+                if cancel_requested:
                     on_cancel()
                     return
         except Exception as exc:  # pragma: no cover - DB 상태에 따라 메시지가 달라진다.
@@ -838,6 +1354,7 @@ async def execute_run(
         _heartbeat_and_cancel_watch(
             session_factory,
             run.id,
+            retry_count=int(run.retry_count),
             interval_seconds=heartbeat_interval,
             on_cancel=_request_handler_cancel,
         )
@@ -847,14 +1364,30 @@ async def execute_run(
     except asyncio.CancelledError:
         if cancel_state["requested"]:
             async with session_factory() as session:
-                await crawl_run_service.mark_cancelled(session, run.id)
+                owned_run = await _lock_owned_crawl_run_attempt(
+                    session,
+                    run_id=run.id,
+                    retry_count=int(run.retry_count),
+                )
+                if owned_run is not None:
+                    await crawl_run_service.mark_cancelled(session, run.id)
+                else:
+                    await session.rollback()
         else:
             # 외부(스케줄러 종료 등) 취소는 handler를 정리하고 그대로 전파한다.
             handler_task.cancel()
             raise
     except Exception as exc:
         async with session_factory() as session:
-            await crawl_run_service.mark_failed(session, run.id, error=str(exc))
+            owned_run = await _lock_owned_crawl_run_attempt(
+                session,
+                run_id=run.id,
+                retry_count=int(run.retry_count),
+            )
+            if owned_run is not None:
+                await crawl_run_service.mark_failed(session, run.id, error=str(exc))
+            else:
+                await session.rollback()
     finally:
         watch_task.cancel()
         try:

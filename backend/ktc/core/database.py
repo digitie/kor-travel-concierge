@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -29,6 +30,94 @@ engine: AsyncEngine = create_engine()
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine, expire_on_commit=False
 )
+DATABASE_BOOTSTRAP_ADVISORY_LOCK_ID = 176
+
+
+async def ensure_candidate_place_revision_triggers(
+    connection: AsyncConnection,
+) -> None:
+    """`create_all` bootstrap DB에도 0026 revision trigger 계약을 설치한다.
+
+    운영 DB는 Alembic 0026이 같은 이름의 함수·trigger를 소유한다. local/test/e2e의 빈
+    DB는 `create_all`로 테이블을 만들기 때문에, 그 뒤 이 helper를 실행해야 실제 실행과
+    테스트에서도 모든 candidate/place UPDATE가 DB 소유 revision을 정확히 1 올린다.
+    """
+    await connection.exec_driver_sql(
+        f"SELECT pg_advisory_xact_lock({DATABASE_BOOTSTRAP_ADVISORY_LOCK_ID})"
+    )
+    candidate_revision_exists = bool(
+        (
+            await connection.exec_driver_sql(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'extracted_place_candidates'
+                      AND column_name = 'state_revision'
+                )
+                """
+            )
+        ).scalar()
+    )
+    place_revision_exists = bool(
+        (
+            await connection.exec_driver_sql(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'travel_places'
+                      AND column_name = 'state_revision'
+                )
+                """
+            )
+        ).scalar()
+    )
+    if not candidate_revision_exists or not place_revision_exists:
+        raise RuntimeError(
+            "candidate/place state_revision 컬럼이 없습니다. 0026 downgrade schema는 "
+            "create_all로 복구할 수 없으므로 DB를 재생성하거나 Alembic head로 "
+            "upgrade해야 합니다."
+        )
+    await connection.exec_driver_sql(
+        """
+        CREATE OR REPLACE FUNCTION ktc_0026_bump_state_revision()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            NEW.state_revision := OLD.state_revision + 1;
+            RETURN NEW;
+        END;
+        $$
+        """
+    )
+    await connection.exec_driver_sql(
+        "DROP TRIGGER IF EXISTS trg_epc_bump_state_revision "
+        "ON extracted_place_candidates"
+    )
+    await connection.exec_driver_sql(
+        """
+        CREATE TRIGGER trg_epc_bump_state_revision
+        BEFORE UPDATE ON extracted_place_candidates
+        FOR EACH ROW
+        EXECUTE FUNCTION ktc_0026_bump_state_revision()
+        """
+    )
+    await connection.exec_driver_sql(
+        "DROP TRIGGER IF EXISTS trg_travel_places_bump_state_revision "
+        "ON travel_places"
+    )
+    await connection.exec_driver_sql(
+        """
+        CREATE TRIGGER trg_travel_places_bump_state_revision
+        BEFORE UPDATE ON travel_places
+        FOR EACH ROW
+        EXECUTE FUNCTION ktc_0026_bump_state_revision()
+        """
+    )
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -68,9 +157,15 @@ async def init_db() -> None:
 
     settings = get_settings()
     async with engine.begin() as conn:
+        # backend와 MCP가 같은 빈 local DB에서 동시에 기동해 create_all/trigger DDL을
+        # 경합하지 않도록 bootstrap 전체를 transaction advisory lock으로 직렬화한다.
+        await conn.exec_driver_sql(
+            f"SELECT pg_advisory_xact_lock({DATABASE_BOOTSTRAP_ADVISORY_LOCK_ID})"
+        )
         await ensure_postgis_extension(conn)
         if settings.is_local_env:
             await conn.run_sync(Base.metadata.create_all)
+            await ensure_candidate_place_revision_triggers(conn)
         else:
             logging.getLogger(__name__).info(
                 "비-local 환경(APP_ENV=%s): create_all을 건너뛴다. 운영 schema는 "

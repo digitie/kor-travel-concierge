@@ -25,6 +25,7 @@ from ktc.models import (
     VideoPlaceMapping,
     YoutubeVideo,
 )
+from ktc.models.travel_place import PlaceLifecycleOrigin
 from ktc.services import place_service
 
 
@@ -84,6 +85,8 @@ async def test_apply_matched_creates_place(session):
     assert place.is_geocoded is True
     assert place.name == "월정리 카페"
     assert place.road_address == "제주 구좌읍 ..."
+    assert place.lifecycle_origin == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    assert place.origin_candidate_id == candidate.id
 
     refreshed = await session.get(ExtractedPlaceCandidate, candidate.id)
     assert refreshed.match_status == MatchStatus.MATCHED
@@ -175,6 +178,8 @@ async def test_apply_matched_reuses_nearby_duplicate(session):
     place = await apply_geocode_to_candidate(session, candidate, decision)
     # 근접 중복이므로 기존 장소를 재사용 (새로 만들지 않음)
     assert place.place_id == existing.place_id
+    assert place.lifecycle_origin == PlaceLifecycleOrigin.PERSISTENT.value
+    assert place.origin_candidate_id is None
     places = (await session.execute(select(TravelPlace))).scalars().all()
     assert len(places) == 1
 

@@ -52,7 +52,11 @@ from ktc.models.search_keyword import SearchKeyword
 from ktc.models.source_target import SourceTarget, TargetType
 from ktc.models.system_setting import SystemSetting
 from ktc.models.transcript_attempt import TranscriptAttemptRecord
-from ktc.models.travel_place import DescriptionReviewStatus, TravelPlace
+from ktc.models.travel_place import (
+    DescriptionReviewStatus,
+    PlaceLifecycleOrigin,
+    TravelPlace,
+)
 from ktc.models.video_place_mapping import VideoPlaceMapping
 from ktc.models.youtube_channel import YoutubeChannel
 from ktc.models.youtube_playlist import YoutubePlaylist
@@ -101,6 +105,7 @@ __all__ = [
     "VideoAnalysisRunState",
     "TravelPlace",
     "DescriptionReviewStatus",
+    "PlaceLifecycleOrigin",
     "ExtractedPlaceCandidate",
     "MatchStatus",
     "AuditStatus",

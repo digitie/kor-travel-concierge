@@ -24,7 +24,7 @@
 - **RustFS 미디어 저장**: 다운로드한 원본 동영상, 자막 파일, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 무기한 보존합니다.
 - **PostgreSQL + PostGIS 목표 DB**: `python-kraddr-geo`가 쓰는 로컬 PostgreSQL/PostGIS 서버를 재사용하되 별도 DB `kor_travel_concierge`를 목표로 하고, 장소·영상·매핑·작업 상태·공간 인덱스를 Alembic으로 관리합니다.
 - **VWorld 우선 지오코딩**: 지오코딩과 역지오코딩은 `python-vworld-api`의 `AsyncVworldClient`를 직접 사용하고, Kakao Local 주소 검색·키워드 장소 검색과 Naver를 보조 경로로 사용합니다. `kraddr-geo` 지오코딩 연계는 현재 계획에 포함하지 않습니다.
-- **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다.
+- **매칭 검수 UX**: 자동 매칭이 실패하거나 모호한 장소는 사용자가 원문, 후보 주소, 영상 타임스탬프를 보고 직접 수정하거나 제외 처리할 수 있습니다. 마지막 단건 처리는 즉시 되돌릴 수 있고, 제외·삭제·오확정 후보는 `removed` 목록에서 복구할 수 있습니다. 공유·기존 장소와 RustFS 원본은 복구 과정에서 삭제하지 않습니다.
 - **장소 언급 소스와 내보내기**: 확정 장소가 어느 영상과 유튜버에서 언급되었는지 확인하고, 언급 횟수로 정렬하며, 선택 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보낼 수 있습니다.
 - **범용 feature export API**: 검수 통과 YouTube 장소 후보를 `/api/v1/features/snapshot`·`/api/v1/features/changes`로 노출합니다. `kor-travel-map`이 이를 `kor-travel-concierge-youtube` provider로 pull해 `feature_id`와 `feature_snapshot`을 만들고, PinVi는 그 값을 자체 feature 연계 POI row로 저장합니다. Curated plan은 feature 자체가 아니라 이 POI row들의 모음으로 구성됩니다. 계약 정본은 `docs/feature-export-api.md`입니다.
 - **완결성 있는 목록 API**: 검수·작업·장소·테마 목록은 `total`·`newest_id`·`newer_than`과 filter fingerprint keyset cursor가 있는 공통 envelope를 반환합니다. 범용 feature 공급의 기존 sequence cursor는 변경하지 않습니다. 계약 정본은 `docs/list-api-contract.md`입니다.

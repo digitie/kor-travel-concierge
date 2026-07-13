@@ -483,6 +483,8 @@ def test_whisper_disabled_without_env(monkeypatch):
 
 def test_whisper_not_configured_with_env_but_no_libs(monkeypatch):
     monkeypatch.setenv("TRANSCRIPT_WHISPER_ENABLED", "1")
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
     attempt = transcript.transcribe_via_whisper("vid")
     assert attempt.outcome == "not_configured"
 
@@ -490,8 +492,10 @@ def test_whisper_not_configured_with_env_but_no_libs(monkeypatch):
 # --- 라이브러리 미설치 시 not_configured(graceful) --------------------------
 
 
-def test_providers_not_configured_without_libs():
-    # 테스트 환경에는 transcript 라이브러리가 없다 → 지연 import ImportError → not_configured.
+def test_providers_not_configured_without_libs(monkeypatch):
+    # requirements 설치 여부와 무관하게 지연 import의 미설치 경로를 격리한다.
+    monkeypatch.setitem(sys.modules, "youtube_transcript_api", None)
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)
     assert transcript.fetch_via_transcript_api("vid").outcome == "not_configured"
     assert transcript.fetch_via_ytdlp("vid").outcome == "not_configured"
 

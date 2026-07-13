@@ -11,6 +11,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
+from ktc.core.database import ensure_candidate_place_revision_triggers
 from ktc.core.spatial import ensure_postgis_extension
 from ktc.models import Base, TravelPlace, YoutubeChannel, YoutubeVideo
 
@@ -58,6 +59,7 @@ async def engine():
         await ensure_postgis_extension(conn)
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_candidate_place_revision_triggers(conn)
     yield eng
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

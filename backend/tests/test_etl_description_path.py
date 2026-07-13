@@ -9,6 +9,10 @@ substring으로 판정하되 verified 여부와 무관하게 자동확정은 막
 
 from __future__ import annotations
 
+import asyncio
+import json
+from uuid import uuid4
+
 from sqlalchemy import select
 
 from ktc.etl import (
@@ -433,6 +437,132 @@ async def test_transcript_reprocess_supersedes_description_candidate(
     )
     assert len(live) == 1
     assert live[0].source_kind == EvidenceSourceKind.TRANSCRIPT.value
+
+
+async def test_transcript_supersede_preserves_concurrent_human_ignore(
+    session_factory,
+    monkeypatch,
+):
+    """초기 dedup SELECT 뒤의 사람 제외는 supersede보다 우선한다."""
+    async with session_factory() as seed_session:
+        video = await _make_video(
+            seed_session,
+            video_id="reproc-ignore-race",
+            description=_LONG_DESCRIPTION,
+        )
+        await _run_batch(
+            seed_session,
+            monkeypatch,
+            video,
+            transcript_ok=False,
+            pois=[
+                {
+                    "official_name": "성심당 본점",
+                    "category_code": "01050100",
+                    "is_domestic": True,
+                    "evidence_quote": "성심당 본점에서 튀김소보로를 먹고",
+                }
+            ],
+        )
+        description_candidate = (
+            await seed_session.execute(select(ExtractedPlaceCandidate))
+        ).scalar_one()
+        candidate_id = description_candidate.id
+        video_id = video.video_id
+
+    supersede_reached = asyncio.Event()
+    release_supersede = asyncio.Event()
+    original_soft_delete = place_service.soft_delete_candidates
+
+    async def paused_soft_delete(*args, **kwargs):
+        supersede_reached.set()
+        await release_supersede.wait()
+        return await original_soft_delete(*args, **kwargs)
+
+    monkeypatch.setattr(
+        place_service,
+        "soft_delete_candidates",
+        paused_soft_delete,
+    )
+
+    async def reprocess() -> dict[str, object]:
+        async with session_factory() as worker_session:
+            worker_video = await worker_session.get(YoutubeVideo, video_id)
+            assert worker_video is not None
+            return await _run_batch(
+                worker_session,
+                monkeypatch,
+                worker_video,
+                transcript_ok=True,
+                pois=[
+                    {
+                        "official_name": "성심당 본점",
+                        "category_code": "01050100",
+                        "is_domestic": True,
+                        "evidence_quote": "성심당 본점 빵이 맛있습니다",
+                    }
+                ],
+            )
+
+    reprocess_task = asyncio.create_task(reprocess())
+    try:
+        await asyncio.wait_for(supersede_reached.wait(), timeout=5)
+        operation_id = uuid4()
+        async with session_factory() as reviewer_session:
+            current = await reviewer_session.get(
+                ExtractedPlaceCandidate, candidate_id
+            )
+            assert current is not None
+            ignored, _, _ = await place_service.resolve_candidate(
+                reviewer_session,
+                candidate_id=candidate_id,
+                action="ignore",
+                reviewed_by="human-reviewer",
+                reviewer_type="web",
+                review_note="사람이 description 후보를 제외함",
+                expected_revision=current.state_revision,
+                client_operation_id=operation_id,
+            )
+            ignored, _ = await place_service.finalize_candidate_client_operation(
+                reviewer_session,
+                candidate_id=candidate_id,
+                client_operation_id=operation_id,
+                action="ignore",
+                expected_candidate_revision=ignored.state_revision,
+                expected_review_state=MatchStatus.IGNORED.value,
+                expected_matched_place_id=None,
+                expected_matched_place_revision=None,
+            )
+            user_revision = ignored.state_revision
+            user_review = json.loads(
+                json.dumps(ignored.provider_evidence_json["review"])
+            )
+        release_supersede.set()
+        summary = await asyncio.wait_for(reprocess_task, timeout=5)
+    finally:
+        release_supersede.set()
+        if not reprocess_task.done():
+            reprocess_task.cancel()
+        await asyncio.gather(reprocess_task, return_exceptions=True)
+
+    assert summary["created_candidates"] == 0
+    async with session_factory() as check_session:
+        candidates = (
+            await check_session.execute(select(ExtractedPlaceCandidate))
+        ).scalars().all()
+        assert len(candidates) == 1
+        current = candidates[0]
+        assert current.id == candidate_id
+        assert current.match_status == MatchStatus.IGNORED.value
+        assert current.deleted_at is None
+        assert current.state_revision == user_revision
+        assert current.provider_evidence_json["review"] == user_review
+        assert current.provider_evidence_json["review"]["last_client_operation"][
+            "id"
+        ] == str(operation_id)
+        assert current.provider_evidence_json["review"]["resolutions"][-1][
+            "action"
+        ] == "ignore"
 
 
 async def test_description_suppressed_when_transcript_candidate_exists(

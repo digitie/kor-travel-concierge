@@ -49,14 +49,13 @@
   frontend lint/type-check/Vitest 159건/build, Playwright 22건 통과(live 4건 skip)를 검증했다. backend
   전체는 664건 통과, n150 optional transcript library 설치 상태와 가정이 다른 기존 2건만 실패했다.
   (2026-07-13, PR-08 개정판, G5)
-- [ ] **T-184**: undo/reopen UI + 제외 목록 뷰 — 마지막 처리 undo 토스트, IGNORED·삭제 복구, reference count 기반 장소 정리(공유 장소 보호). 선행: T-160(A). (PR-09 개정판 UI) — **T-160 이연분 포함**: MATCHED/USER_CORRECTED 후보의 reopen 백엔드(현재 400 — 장소 정리 정책과 함께)와 영상 제외 undo 정책(reopen 시 `youtube_videos.is_excluded`는 별개로 잔존)
 - [ ] **T-185**: 검수 bulk — filter snapshot 서버 액션+preview count+확인 token+크기/분할·retry 계약, 해외 일괄 제외 포함. 선행: T-160(A)·T-177. (PR-10 개정판)
 - [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리, provider 요청 debounce 250~400ms+abort+identity, startTransition으로 120ms 해킹 제거. 선행: T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
 - [ ] **T-188**: `/destinations` SQL 푸시다운 — EXPLAIN(ANALYZE,BUFFERS) 검증, `source_videos` 사용처 전수→detail lazy 선배포→제거, `limit=None` 시그니처 호환. 선행: T-178. (PR-20 개정판, G8)
-- [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. (PR-25 개정판, G10)
+- [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. 전역 export advisory lock의 빈 GET·dirty batch·전량 reconcile p95를 n150에서 측정하고, bounded dirty claim과 writer 지연 상한을 계약화한다. (PR-25 개정판, G10)
 - [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
-- [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). (PR-27 개정판)
+- [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
 - [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
 
 ---
@@ -82,6 +81,22 @@
   0025. **rebase 코디네이션**: 착수 중 origin/main이 T-183(#196)로 전진해 0023(down 0024)이 head가 됨 →
   T-183 위 rebase(무텍스트충돌 auto-merge, 함수 단위 검증)·migration 0025 down_revision 0023 reparent.
   (2026-07-14, 로드맵 PR-22 개정·S6/A2·G1)
+- [x] **T-184**: undo/reopen UI + 제외 목록 — IGNORED와 soft delete를 합친 `removed` 서버 목록과
+  복구 전용 UI, 마지막 단건 무기한 snackbar, 모바일 상세 handoff를 구현했다. IGNORED·삭제·MATCHED·
+  USER_CORRECTED를 opaque descriptor로 `needs_review`에 복귀시키고, candidate/place DB trigger revision과
+  final candidate/place snapshot에 결합한 필수 `client_operation_id`로 stale·ABA·응답 유실 뒤 타 검수자
+  결과 오인을 차단했다. 장소에는
+  `candidate_created|persistent|legacy_unknown` origin을 도입해 전역 활성 후보·mapping 참조가 모두 0인
+  후보 생성 장소만 정리하며 공유·persistent·legacy 장소와 `MediaAsset` 행·RustFS 객체를 보존한다.
+  reopen 후 영상 제외는 독립 유지하고, lifecycle→export→candidate→place→mapping→asset 잠금과 감사·
+  tombstone 단일 transaction을 적용했다. removed 화면은 외부 장소 검색·AI 의견·VWorld 호출을 하지
+  않는다. T-171 rebase 뒤 모든 공유 payload writer를 다시 감사해 주소 역보강·채널/재생목록/영상 metadata·
+  영상 summary/reconcile·deep research·요약 적용을 export lock+dirty golden 계약에 편입했다. 영상 분석은
+  parent retry generation+claim token fence, stale bounded retry, 중복 first-wins, 사람 review/audit 우선권을
+  적용하고 별도 migration 0027로 소유권 컬럼을 추가했다. backend/UX/동시성/E2E 렌즈로 4회 이상 적대
+  검토했다. n150에서 migration round-trip, backend 731 passed, 변경 Python Ruff, frontend lint·type-check·
+  Vitest 191 passed·build, Playwright 31 passed(4 live 전용 skipped, 실패·재시도 0)를 통과했다.
+  (2026-07-13, PR-09 개정판, ADR-40·41, G1)
 - [x] **T-170**: 지오코딩 provider별 캐시 (S7) — 반복 장소 provider 재호출을 DB 캐시로 감소.
   **provider-policy allowlist 준수가 핵심**: `PROVIDER_CACHE_POLICY`(감사가능 dict, `{cacheable,
   positive/negative TTL, allowed_fields}`)로 **Kakao만 캐시**(UX cache 허용+최신 유지 의무, positive

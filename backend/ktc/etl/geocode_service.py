@@ -38,6 +38,7 @@ from ktc.models import (
     FeatureExportStatus,
     GroundingStatus,
     MatchStatus,
+    PlaceLifecycleOrigin,
     TravelPlace,
     VideoPlaceMapping,
     utcnow,
@@ -318,6 +319,10 @@ async def _enrich_missing_addresses_isolated(
             return None
 
         async with session_factory() as write_session:
+            # core geocode commit의 dirty가 공급 GET에 먼저 consume된 뒤 reverse 응답이
+            # 도착할 수 있다. 주소 UPDATE와 co-matched 후보 dirty 재등록을 같은 transaction에
+            # 묶고, sync와 같은 export -> place 순서로 잠가 stale ledger를 남기지 않는다.
+            await feature_export_service.acquire_feature_export_lock(write_session)
             row = (
                 await write_session.execute(
                     select(TravelPlace, _PLACE_XMIN)
@@ -339,6 +344,12 @@ async def _enrich_missing_addresses_isolated(
             if not current.official_address and reverse.get("parcel_address"):
                 current.official_address = reverse["parcel_address"]
                 applied["parcel_address"] = reverse["parcel_address"]
+            if applied:
+                await feature_export_service.mark_place_candidates_dirty(
+                    write_session,
+                    current.place_id,
+                    reason="geocode_reverse_address_enrichment",
+                )
             await write_session.commit()
             return applied or None
     except Exception:
@@ -424,6 +435,9 @@ async def apply_geocode_to_candidate(
     # merge/delete가 아직 needs_review인 후보를 predicate에서 건너뛴 뒤 장소를 바꾸는
     # gap을 닫고, 공통 lock 순서를 advisory -> candidate -> place -> mapping으로 맞춘다.
     await place_service.acquire_place_lifecycle_lock(session)
+    # 자동확정과 dirty outbox 기록은 feature sync와 같은 export lock을 candidate보다
+    # 먼저 잡아 lifecycle -> export -> candidate -> place 순서를 지킨다(T-171/T-184).
+    await feature_export_service.acquire_feature_export_lock(session)
 
     # 이 지점 전에는 candidate/place/mapping mutation이 없다. 외부 I/O가 끝난 뒤 짧게
     # candidate row를 잠그고 identity map의 stale 값을 최신 사용자 결정으로 교체한다.
@@ -586,6 +600,8 @@ async def apply_geocode_to_candidate(
         code = place_service.candidate_category_code(candidate)
         category_code = category_catalog.normalize_code_or_unknown(code)
         place = TravelPlace(
+            lifecycle_origin=PlaceLifecycleOrigin.CANDIDATE_CREATED.value,
+            origin_candidate_id=candidate.id,
             name=candidate.ai_place_name,
             latitude=c.latitude,
             longitude=c.longitude,

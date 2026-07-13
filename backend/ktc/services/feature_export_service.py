@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +57,22 @@ EXPORTABLE_STATUSES = {
 
 FEATURE_EXPORT_LIMIT_DEFAULT = 200
 FEATURE_EXPORT_LIMIT_MAX = 500
+FEATURE_EXPORT_ADVISORY_LOCK_ID = 175
+
+
+async def acquire_feature_export_lock(session: AsyncSession) -> None:
+    """feature ledger 분류·전환 writer를 transaction 단위로 직렬화한다.
+
+    장소 생명주기 mutation과 함께 잡을 때의 전역 순서는 반드시
+    `place lifecycle(174) → feature export(175) → candidate/place row`다. 독립
+    sync는 이 lock만 먼저 잡고 candidate snapshot을 읽는다.
+    이 순서로 sync가 과거 READY snapshot을 읽어 만든 늦은 upsert가 soft delete/reopen의
+    tombstone 뒤에 commit되는 write skew를 막는다.
+    """
+    await session.execute(
+        select(func.pg_advisory_xact_lock(FEATURE_EXPORT_ADVISORY_LOCK_ID))
+        .execution_options(autoflush=False)
+    )
 
 
 @dataclass(frozen=True)
@@ -93,10 +109,15 @@ def normalize_limit(limit: int) -> int:
 # --- payload 빌드 ---
 
 
-def _video_summary(video: YoutubeVideo | None) -> str | None:
+def export_video_summary(video: YoutubeVideo | None) -> str | None:
+    """공급 payload와 writer dirty 판정이 공유하는 영상 요약 우선순위다."""
     if video is None:
         return None
-    return video.reconciled_summary or video.transcript_summary or video.gemini_url_summary
+    return (
+        video.reconciled_summary
+        or video.transcript_summary
+        or video.gemini_url_summary
+    )
 
 
 def _source_title(
@@ -181,7 +202,7 @@ def _build_payload(
         "video_id": candidate.video_id,
         "video_url": (video.canonical_url or video.url) if video else None,
         "video_title": video.title if video else None,
-        "video_summary": _video_summary(video),
+        "video_summary": export_video_summary(video),
         "source_type": video.source_target_type if video else None,
         "source_value": video.source_target_value if video else None,
         "source_title": _source_title(video=video, channel=channel, playlist=playlist),
@@ -281,6 +302,11 @@ def _classify(
         return None, None, None
     if (
         status in EXPORTABLE_STATUSES
+        and candidate.match_status
+        in {
+            MatchStatus.MATCHED.value,
+            MatchStatus.USER_CORRECTED.value,
+        }
         and candidate.matched_place_id is not None
         and not _export_grounding_blocked(candidate)
     ):
@@ -350,6 +376,28 @@ async def mark_place_candidates_dirty(
     await mark_candidates_dirty(session, list(ids), reason)
 
 
+async def mark_video_candidates_dirty(
+    session: AsyncSession, video_id: str | None, reason: str
+) -> None:
+    """영상 export 필드를 공유하는 모든 활성 후보를 dirty로 표시한다.
+
+    `video_summary` 같은 영상 단위 필드는 같은 영상에서 나온 export 후보 모두의 payload에
+    복제된다. 한 분석 run이 일부 후보 상태만 바꾸더라도 영상 요약 자체가 달라졌다면 해당
+    영상의 활성 후보 전부를 같은 transaction에서 다시 발행해야 golden 불변식이 유지된다.
+    """
+    if not video_id:
+        return
+    ids = (
+        await session.execute(
+            select(ExtractedPlaceCandidate.id).where(
+                ExtractedPlaceCandidate.video_id == video_id,
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    await mark_candidates_dirty(session, list(ids), reason)
+
+
 async def _next_sequence(session: AsyncSession) -> int:
     value = await session.scalar(select(feature_export_sequence.next_value()))
     return int(value)
@@ -373,6 +421,9 @@ async def tombstone_candidate_exports(
     ids = [int(cid) for cid in candidate_ids]
     if not ids:
         return 0
+    # 호출자가 lifecycle lock을 썼다면 그 lock이 항상 먼저다. sync와 같은 export
+    # lock 아래에서 ledger 존재 여부를 읽어 늦은 upsert와 직렬화한다.
+    await acquire_feature_export_lock(session)
     rows = list(
         (
             await session.execute(
@@ -572,6 +623,9 @@ async def sync_feature_exports(session: AsyncSession, *, commit: bool = True) ->
     시작 시 1회 + scheduler 시간당 1회 실행해, dirty outbox 배선을 놓친 mutation을 최대
     1시간 내 자가 치유한다(T-171). 변경 건수를 반환한다.
     """
+    # 모든 ledger writer가 이 lock을 먼저 잡는다. tombstone 경로가 먼저면 최신 후보
+    # 상태를 읽고, sync가 먼저면 뒤따르는 tombstone이 같은 임계구간에서 회수한다.
+    await acquire_feature_export_lock(session)
     changed = await _sync_scope(session, candidate_ids=None)
     if commit:
         await session.commit()
@@ -591,8 +645,13 @@ async def sync_dirty(session: AsyncSession, *, commit: bool = True) -> int:
     존재 확인 이후 커밋된 새 변경은 outbox에 남아 다음 GET이 처리한다(유실 없음). 변경
     건수를 반환한다.
     """
+    # outbox DELETE/UPSERT와 candidate snapshot을 export lock 뒤로 일원화한다. claim을
+    # 먼저 하고 lock을 기다리면, lock을 가진 writer의 outbox UPSERT와 교착할 수 있다.
+    await acquire_feature_export_lock(session)
     has_dirty = await session.scalar(select(ExportDirtyOutbox.candidate_id).limit(1))
     if has_dirty is None:
+        if commit:
+            await session.commit()
         return 0
     claimed = (
         await session.execute(
@@ -601,6 +660,8 @@ async def sync_dirty(session: AsyncSession, *, commit: bool = True) -> int:
     ).scalars().all()
     dirty_ids = {int(cid) for cid in claimed}
     if not dirty_ids:
+        if commit:
+            await session.commit()
         return 0
     changed = await _sync_scope(session, candidate_ids=dirty_ids)
     if commit:
@@ -659,6 +720,12 @@ async def _read_page(
         # 변경이 없으면 입력 cursor를 그대로 유지해 다음 polling이 재스캔하지 않게 한다.
         next_cursor = cursor or None
 
+    # get_snapshot/get_changes가 먼저 수행한 sync(commit=False)까지 page read와 같은
+    # transaction으로 확정한다. 특히 snapshot에는 노출되지 않는 reject/tombstone만
+    # 새로 생긴 경우 rows가 비어도 commit하지 않으면 session close에서 ledger와
+    # sequence가 rollback되어 다음 요청 cursor 계약이 깨진다.
+    await session.commit()
+
     return FeatureExportPage(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -669,7 +736,9 @@ async def get_snapshot(
     limit: int = FEATURE_EXPORT_LIMIT_DEFAULT,
 ) -> FeatureExportPage:
     """현재 활성(`upsert`) feature를 full snapshot으로 노출한다."""
-    await sync_dirty(session)
+    # sync와 page read를 한 transaction에 묶어 tombstone과 경합한 요청이 오래된
+    # upsert snapshot을 응답한 뒤 제거 marker보다 늦게 관측되는 순서 역전을 막는다.
+    await sync_dirty(session, commit=False)
     return await _read_page(
         session, cursor=cursor, limit=limit, only_active=True
     )
@@ -682,7 +751,7 @@ async def get_changes(
     limit: int = FEATURE_EXPORT_LIMIT_DEFAULT,
 ) -> FeatureExportPage:
     """`upsert`/`reject`/`tombstone` 변경을 incremental로 노출한다."""
-    await sync_dirty(session)
+    await sync_dirty(session, commit=False)
     return await _read_page(
         session, cursor=cursor, limit=limit, only_active=False
     )

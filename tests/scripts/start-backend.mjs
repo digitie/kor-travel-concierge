@@ -11,6 +11,9 @@ const tmpDir = path.join(testsRoot, ".tmp");
 const backendPort = process.env.E2E_BACKEND_PORT ?? "18080";
 const frontendPort = process.env.E2E_FRONTEND_PORT ?? "13100";
 const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
+const e2eAdminProxySecret =
+  process.env.KTC_E2E_ADMIN_PROXY_SECRET ??
+  "kor-travel-concierge-e2e-admin-proxy-secret";
 const e2eDatabaseUrl =
   process.env.KTC_E2E_DATABASE_URL ??
   process.env.KTC_TEST_PG_DSN ??
@@ -43,6 +46,10 @@ const child = spawn(
       // E2E 백엔드는 인증을 우회한다. APP_ENV 기본값(local)도 우회하지만 의도를 명시한다.
       APP_ENV: "e2e",
       DATABASE_URL: e2eDatabaseUrl,
+      // `/api/v1/admin/*`는 APP_ENV=e2e에서도 관리자 BFF 공유 비밀을 반드시
+      // 검증한다. frontend 런처와 같은 E2E 전용 값을 주입해 하니스를 hermetic하게
+      // 유지하고, 호스트의 운영용 KTC_ADMIN_PROXY_SECRET 상속에 의존하지 않는다.
+      KTC_ADMIN_PROXY_SECRET: e2eAdminProxySecret,
       NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${backendPort}`,
       CORS_ALLOW_ORIGINS: [
         frontendOrigin,

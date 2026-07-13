@@ -11,22 +11,48 @@ import pytest
 from sqlalchemy import select
 
 from ktc.models import (
+    AuditStatus,
     CrawlRun,
+    ExtractedPlaceCandidate,
+    MatchStatus,
     RunState,
     SourceTarget,
     TravelPlace,
+    VideoAnalysisRunState,
+    VideoAnalysisRunType,
     YoutubeChannel,
     YoutubeVideo,
     YoutubeVideoAnalysisRun,
     utcnow,
 )
-from ktc.services import crawl_run_service, settings_service
+from ktc.services import crawl_run_service, place_service, settings_service
 from scheduler import worker
 
 
 async def _fresh_run(session_factory, run_id):
     async with session_factory() as session:
         return await crawl_run_service.get_run(session, run_id)
+
+
+async def _running_video_analysis_parent(session, *, video_id, run_types):
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="video_analysis",
+        source="scheduler",
+        target_type="video",
+        target_id=video_id,
+        payload={"video_id": video_id, "analysis_run_types": run_types},
+    )
+    claimed = await crawl_run_service.claim_next_pending(session)
+    assert claimed is not None and claimed.id == run.id
+    return run.id
+
+
+async def _invoke_video_analysis_handler(session_factory, parent_id):
+    async with session_factory() as worker_session:
+        parent = await worker_session.get(CrawlRun, parent_id)
+        assert parent is not None
+        return await worker.video_analysis_handler(worker_session, parent)
 
 
 async def _ok_handler(session, run):
@@ -227,7 +253,7 @@ async def test_harvest_handler_passes_channel_target(monkeypatch, session):
         return {"ok": True, "target_type": "channel", "video_ids": ["v1"]}
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    run = await crawl_run_service.create_run(
+    await crawl_run_service.create_run(
         session,
         job_type="harvest",
         source="web",
@@ -255,7 +281,7 @@ async def test_harvest_handler_passes_playlist_target(monkeypatch, session):
         return {"ok": True, "target_type": "playlist", "video_ids": ["v1"]}
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    run = await crawl_run_service.create_run(
+    await crawl_run_service.create_run(
         session,
         job_type="harvest",
         source="web",
@@ -289,7 +315,7 @@ async def test_harvest_handler_enqueues_poi_batch_after_ingest(monkeypatch, sess
         }
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    run = await crawl_run_service.create_run(
+    await crawl_run_service.create_run(
         session,
         job_type="harvest",
         source="web",
@@ -328,7 +354,7 @@ async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, sessio
         }
 
     monkeypatch.setattr(worker, "run_harvest", fake_run_harvest)
-    run = await crawl_run_service.create_run(
+    await crawl_run_service.create_run(
         session,
         job_type="harvest",
         source="web",
@@ -352,7 +378,7 @@ async def test_harvest_handler_skips_transcript_when_flagged(monkeypatch, sessio
 
 
 async def test_transcript_handler_enqueues_poi_batch(session):
-    run = await crawl_run_service.create_run(
+    await crawl_run_service.create_run(
         session,
         job_type="transcript",
         source="web",
@@ -643,6 +669,1109 @@ async def test_video_analysis_handler_executes_pending_analysis_runs(
         ).scalars().all()
     assert {item.run_type for item in analysis_runs} == {"url_summary", "reconcile"}
     assert {item.state for item in analysis_runs} == {"done"}
+
+
+@pytest.mark.parametrize(
+    ("run_type", "runner_name"),
+    [
+        (VideoAnalysisRunType.URL_SUMMARY.value, "run_url_summary_analysis"),
+        (VideoAnalysisRunType.RECONCILE.value, "run_reconcile_analysis"),
+    ],
+)
+async def test_video_analysis_handler_supersedes_duplicate_pending_after_first_done(
+    monkeypatch,
+    session,
+    session_factory,
+    run_type,
+    runner_name,
+):
+    """같은 종류 pending 2건은 첫 완료 뒤 둘째를 외부 호출 없이 terminal 처리한다."""
+    from types import SimpleNamespace
+
+    calls: list[int] = []
+
+    async def fake_runner(worker_session, video, analysis_run):
+        calls.append(analysis_run.id)
+        analysis_run.state = VideoAnalysisRunState.DONE.value
+        analysis_run.summary_text = "먼저 확정된 분석 결과"
+        if run_type == VideoAnalysisRunType.URL_SUMMARY.value:
+            video.gemini_url_summary_json = {
+                "summary": "먼저 확정된 분석 결과",
+                "places": [],
+            }
+        await worker_session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": VideoAnalysisRunState.DONE.value,
+            "stale_input": False,
+        }
+
+    monkeypatch.setattr(worker.video_analysis_service, runner_name, fake_runner)
+    session.add(YoutubeChannel(channel_id=f"UC-duplicate-{run_type}", title="여행채널"))
+    video = YoutubeVideo(
+        video_id=f"v-duplicate-{run_type}",
+        title="중복 분석 영상",
+        url=f"https://youtu.be/v-duplicate-{run_type}",
+        channel_id=f"UC-duplicate-{run_type}",
+        gemini_url_summary_json=(
+            {"summary": "기존 URL 요약", "places": []}
+            if run_type == VideoAnalysisRunType.RECONCILE.value
+            else None
+        ),
+    )
+    session.add(video)
+    await session.flush()
+    first_run = YoutubeVideoAnalysisRun(
+        video_id=video.video_id,
+        run_type=run_type,
+        state=VideoAnalysisRunState.PENDING.value,
+    )
+    second_run = YoutubeVideoAnalysisRun(
+        video_id=video.video_id,
+        run_type=run_type,
+        state=VideoAnalysisRunState.PENDING.value,
+    )
+    session.add_all([first_run, second_run])
+    await session.commit()
+    first_run_id = first_run.id
+    second_run_id = second_run.id
+
+    fake_run = SimpleNamespace(
+        target_type="video",
+        target_id=video.video_id,
+        payload_json=json.dumps(
+            {"video_id": video.video_id, "analysis_run_types": [run_type]}
+        ),
+    )
+    async with session_factory() as worker_session:
+        result = await worker.video_analysis_handler(worker_session, fake_run)
+
+    assert calls == [first_run_id]
+    assert result["created_analysis_runs"] == 0
+    assert result["executed_analysis_runs"] == 1
+    assert result["superseded_analysis_runs"] == 1
+    async with session_factory() as verify_session:
+        first = await verify_session.get(YoutubeVideoAnalysisRun, first_run_id)
+        second = await verify_session.get(YoutubeVideoAnalysisRun, second_run_id)
+        assert first is not None and second is not None
+        assert first.state == VideoAnalysisRunState.DONE.value
+        assert second.state == VideoAnalysisRunState.FAILED.value
+        assert second.finished_at is not None
+        assert second.last_error is not None
+        assert "superseded_by_completed_peer" in second.last_error
+
+
+async def test_video_analysis_handler_retries_existing_stale_pending_run(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """stale_input 분석 run은 소유권을 유지한 채 새 row 없이 즉시 재실행된다."""
+    calls: list[int] = []
+
+    async def fake_url_summary(session, video, analysis_run):
+        calls.append(analysis_run.id)
+        if len(calls) == 1:
+            analysis_run.state = "running"
+            analysis_run.last_error = "stale_input: 재실행 필요"
+            await session.commit()
+            return {
+                "analysis_run_id": analysis_run.id,
+                "run_type": analysis_run.run_type,
+                "state": "running",
+                "stale_input": True,
+            }
+        analysis_run.state = "done"
+        analysis_run.last_error = None
+        video.gemini_url_summary = "최신 입력으로 재실행한 요약"
+        await session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": "done",
+            "stale_input": False,
+        }
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        fake_url_summary,
+    )
+    session.add(YoutubeChannel(channel_id="UC-stale-retry", title="여행채널"))
+    video = YoutubeVideo(
+        video_id="v-stale-retry",
+        title="최신 영상",
+        url="https://youtu.be/v-stale-retry",
+        channel_id="UC-stale-retry",
+    )
+    session.add(video)
+    await session.flush()
+    analysis_run = YoutubeVideoAnalysisRun(
+        video_id=video.video_id,
+        run_type="url_summary",
+        state="pending",
+        last_error="stale_input: URL 분석 중 영상 입력이 변경됨",
+    )
+    session.add(analysis_run)
+    await session.commit()
+    analysis_run_id = analysis_run.id
+    run = await crawl_run_service.create_run(
+        session,
+        job_type="video_analysis",
+        source="scheduler",
+        target_type="video",
+        target_id=video.video_id,
+        payload={
+            "video_id": video.video_id,
+            "analysis_run_types": ["url_summary"],
+        },
+    )
+
+    assert await worker.run_once(
+        session_factory,
+        heartbeat_interval_seconds=999,
+    ) == run.id
+
+    refreshed = await _fresh_run(session_factory, run.id)
+    assert refreshed.state == RunState.DONE
+    assert '"created_analysis_runs": 0' in (refreshed.result_json or "")
+    assert '"executed_analysis_runs": 1' in (refreshed.result_json or "")
+    assert calls == [analysis_run_id, analysis_run_id]
+    async with session_factory() as verify_session:
+        rows = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == video.video_id,
+                    YoutubeVideoAnalysisRun.run_type == "url_summary",
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].id == analysis_run_id
+        assert rows[0].state == "done"
+        assert rows[0].last_error is None
+
+
+@pytest.mark.parametrize("human_action", ["review", "audit"])
+async def test_reconcile_bounded_retry_preserves_human_review_fields(
+    monkeypatch,
+    session,
+    session_factory,
+    human_action,
+):
+    """첫 reconcile 대기 중 사람 판정은 재시도 뒤에도 AI 의견보다 우선한다."""
+    from types import SimpleNamespace
+
+    video_id = f"v-reconcile-human-{human_action}"
+    session.add(
+        YoutubeChannel(
+            channel_id=f"UC-reconcile-human-{human_action}",
+            title="사람 검수 채널",
+        )
+    )
+    video = YoutubeVideo(
+        video_id=video_id,
+        title="사람 검수 경합 영상",
+        url=f"https://youtu.be/{video_id}",
+        channel_id=f"UC-reconcile-human-{human_action}",
+        transcript_summary="사람 검수 대상 자막 요약",
+        gemini_url_summary_json={
+            "summary": "URL 요약",
+            "places": [{"name": "사람 검수 장소"}],
+        },
+    )
+    session.add(video)
+    await session.flush()
+    candidate = ExtractedPlaceCandidate(
+        video_id=video_id,
+        source_text="사람 검수 원문 근거",
+        ai_place_name="사람 검수 장소",
+        match_status=(
+            MatchStatus.NEEDS_REVIEW.value
+            if human_action == "review"
+            else MatchStatus.MATCHED.value
+        ),
+        review_note="사람 판정 전 메모",
+        audit_status=(AuditStatus.PENDING.value if human_action == "audit" else None),
+        provider_evidence_json={"transcript": {"segment": "보존할 원문 근거"}},
+    )
+    analysis_run = YoutubeVideoAnalysisRun(
+        video_id=video_id,
+        run_type=VideoAnalysisRunType.RECONCILE.value,
+        state=VideoAnalysisRunState.PENDING.value,
+    )
+    session.add_all([candidate, analysis_run])
+    await session.commit()
+    candidate_id = candidate.id
+    analysis_run_id = analysis_run.id
+
+    first_llm_started = asyncio.Event()
+    release_first_llm = asyncio.Event()
+    llm_calls = 0
+
+    def reconcile_payload(summary: str) -> str:
+        return json.dumps(
+            {
+                "summary": summary,
+                "places": [
+                    {
+                        "name": "사람 검수 장소",
+                        "decision": "conflict",
+                        "transcript_candidate_ids": [candidate_id],
+                        "transcript_evidence": "자막 근거",
+                        "url_evidence": "URL 근거",
+                        "confidence_score": 0.3,
+                        "needs_review_reason": "AI 재검토 의견",
+                    }
+                ],
+                "conflicts": ["사람 판정과 독립인 AI 충돌 의견"],
+                "overall_confidence": 0.3,
+            },
+            ensure_ascii=False,
+        )
+
+    async def controlled_llm(_prompt: str) -> str:
+        nonlocal llm_calls
+        llm_calls += 1
+        if llm_calls == 1:
+            first_llm_started.set()
+            await release_first_llm.wait()
+            return reconcile_payload("사람 판정 전에 생성한 stale 결과")
+        return reconcile_payload("사람 판정 뒤 최신 입력으로 생성한 결과")
+
+    real_runner = worker.video_analysis_service.run_reconcile_analysis
+
+    async def controlled_runner(worker_session, worker_video, worker_analysis_run):
+        return await real_runner(
+            worker_session,
+            worker_video,
+            worker_analysis_run,
+            llm=controlled_llm,
+            model="gemini-test",
+        )
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_reconcile_analysis",
+        controlled_runner,
+    )
+    fake_run = SimpleNamespace(
+        target_type="video",
+        target_id=video_id,
+        payload_json=json.dumps(
+            {
+                "video_id": video_id,
+                "analysis_run_types": [VideoAnalysisRunType.RECONCILE.value],
+            }
+        ),
+    )
+
+    async def invoke_handler():
+        async with session_factory() as worker_session:
+            return await worker.video_analysis_handler(worker_session, fake_run)
+
+    handler_task = asyncio.create_task(invoke_handler())
+    try:
+        await asyncio.wait_for(first_llm_started.wait(), timeout=5)
+        async with session_factory() as reviewer_session:
+            if human_action == "review":
+                reviewed = await place_service.review_candidate(
+                    reviewer_session,
+                    candidate_id=candidate_id,
+                    reviewed_by="human-reviewer",
+                    review_note="사람이 작성한 최종 검수 메모",
+                )
+                assert reviewed.match_status == MatchStatus.NEEDS_REVIEW.value
+            else:
+                reviewed = await place_service.record_audit_result(
+                    reviewer_session,
+                    candidate_id=candidate_id,
+                    accurate=True,
+                    reviewed_by="human-auditor",
+                    note="사람이 정확 판정",
+                )
+                assert reviewed.audit_status == AuditStatus.ACCURATE.value
+        release_first_llm.set()
+        result = await asyncio.wait_for(handler_task, timeout=5)
+    finally:
+        release_first_llm.set()
+        if not handler_task.done():
+            handler_task.cancel()
+        await asyncio.gather(handler_task, return_exceptions=True)
+
+    assert llm_calls == 2
+    assert result["executed_analysis_runs"] == 1
+    assert result["analysis_results"][0]["attempts"] == 2
+    assert result["analysis_results"][0]["state"] == VideoAnalysisRunState.DONE.value
+    async with session_factory() as verify_session:
+        current = await verify_session.get(ExtractedPlaceCandidate, candidate_id)
+        current_run = await verify_session.get(
+            YoutubeVideoAnalysisRun, analysis_run_id
+        )
+        assert current is not None and current_run is not None
+        assert current_run.state == VideoAnalysisRunState.DONE.value
+        assert current.analysis_run_id is None
+        assert current.provider_evidence_json["transcript"] == {
+            "segment": "보존할 원문 근거"
+        }
+        assert current.provider_evidence_json["reconcile"][
+            "needs_review_reason"
+        ] == "AI 재검토 의견"
+        if human_action == "review":
+            assert current.match_status == MatchStatus.NEEDS_REVIEW.value
+            assert current.reviewed_by == "human-reviewer"
+            assert current.reviewed_at is not None
+            assert current.review_note == "사람이 작성한 최종 검수 메모"
+            assert current.audit_status is None
+        else:
+            assert current.match_status == MatchStatus.MATCHED.value
+            assert current.review_note == "사람 판정 전 메모"
+            assert current.audit_status == AuditStatus.ACCURATE.value
+            assert current.audit_reviewed_by == "human-auditor"
+            assert current.audit_reviewed_at is not None
+            assert current.audit_note == "사람이 정확 판정"
+
+
+async def test_concurrent_video_analysis_handlers_create_and_claim_once(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """동일 video/run_type의 동시 handler는 analysis row와 외부 실행을 하나만 만든다."""
+    from types import SimpleNamespace
+
+    calls: list[int] = []
+    llm_started = asyncio.Event()
+    release_llm = asyncio.Event()
+
+    async def paused_url_summary(session, video, analysis_run):
+        calls.append(analysis_run.id)
+        # production `_mark_running`과 같이 claim을 먼저 commit한 뒤 외부 I/O를 기다린다.
+        await session.commit()
+        llm_started.set()
+        await release_llm.wait()
+        analysis_run.state = "done"
+        video.gemini_url_summary = "동시 실행 단일 결과"
+        await session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": "done",
+            "stale_input": False,
+        }
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        paused_url_summary,
+    )
+    session.add(YoutubeChannel(channel_id="UC-analysis-race", title="여행채널"))
+    session.add(
+        YoutubeVideo(
+            video_id="v-analysis-race",
+            title="동시 분석 영상",
+            url="https://youtu.be/v-analysis-race",
+            channel_id="UC-analysis-race",
+        )
+    )
+    await session.commit()
+    fake_run = SimpleNamespace(
+        target_type="video",
+        target_id="v-analysis-race",
+        payload_json=json.dumps(
+            {
+                "video_id": "v-analysis-race",
+                "analysis_run_types": ["url_summary"],
+            }
+        ),
+    )
+    start = asyncio.Event()
+
+    async def invoke_handler():
+        async with session_factory() as worker_session:
+            await start.wait()
+            return await worker.video_analysis_handler(worker_session, fake_run)
+
+    first = asyncio.create_task(invoke_handler())
+    second = asyncio.create_task(invoke_handler())
+    start.set()
+    try:
+        await asyncio.wait_for(llm_started.wait(), timeout=5)
+        release_llm.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(first, second),
+            timeout=5,
+        )
+    finally:
+        release_llm.set()
+        for task in (first, second):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+    assert len(calls) == 1
+    assert sum(item["created_analysis_runs"] for item in results) == 1
+    assert sum(item["executed_analysis_runs"] for item in results) == 1
+    async with session_factory() as verify_session:
+        rows = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == "v-analysis-race",
+                    YoutubeVideoAnalysisRun.run_type == "url_summary",
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].id == calls[0]
+        assert rows[0].state == "done"
+
+
+@pytest.mark.parametrize("late_outcome", ["success", "failure"])
+async def test_rotated_parent_attempt_fences_late_analysis_owner(
+    monkeypatch,
+    session,
+    session_factory,
+    late_outcome,
+):
+    """재투입 claim이 같은 row를 완료하면 이전 owner의 성공·실패 모두 무효화한다."""
+    video_id = f"v-analysis-owner-{late_outcome}"
+    session.add(
+        YoutubeChannel(
+            channel_id=f"UC-analysis-owner-{late_outcome}",
+            title="소유권 회전 채널",
+        )
+    )
+    session.add(
+        YoutubeVideo(
+            video_id=video_id,
+            title="소유권 회전 영상",
+            url=f"https://youtu.be/{video_id}",
+            channel_id=f"UC-analysis-owner-{late_outcome}",
+        )
+    )
+    await session.commit()
+    parent = await crawl_run_service.create_run(
+        session,
+        job_type="video_analysis",
+        source="scheduler",
+        target_type="video",
+        target_id=video_id,
+        payload={
+            "video_id": video_id,
+            "analysis_run_types": [VideoAnalysisRunType.URL_SUMMARY.value],
+        },
+    )
+    claimed = await crawl_run_service.claim_next_pending(session)
+    assert claimed is not None and claimed.id == parent.id
+    parent_id = parent.id
+
+    old_llm_started = asyncio.Event()
+    release_old_llm = asyncio.Event()
+    runner_calls = 0
+    claim_snapshots: list[tuple[str | None, int | None]] = []
+    real_runner = worker.video_analysis_service.run_url_summary_analysis
+
+    async def old_llm(_prompt: str, _video_url: str) -> str:
+        old_llm_started.set()
+        await release_old_llm.wait()
+        if late_outcome == "failure":
+            raise RuntimeError("이전 owner의 늦은 LLM 실패")
+        return json.dumps(
+            {"summary": "이전 owner의 늦은 요약", "places": []},
+            ensure_ascii=False,
+        )
+
+    async def new_llm(_prompt: str, _video_url: str) -> str:
+        return json.dumps(
+            {"summary": "새 owner가 확정한 요약", "places": []},
+            ensure_ascii=False,
+        )
+
+    async def routed_runner(worker_session, video, analysis_run):
+        nonlocal runner_calls
+        runner_calls += 1
+        claim_snapshots.append(
+            (analysis_run.claim_token, analysis_run.owner_retry_count)
+        )
+        return await real_runner(
+            worker_session,
+            video,
+            analysis_run,
+            llm=old_llm if runner_calls == 1 else new_llm,
+            model="gemini-test",
+        )
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        routed_runner,
+    )
+
+    async def invoke_handler():
+        async with session_factory() as worker_session:
+            current_parent = await worker_session.get(CrawlRun, parent_id)
+            assert current_parent is not None
+            return await worker.video_analysis_handler(worker_session, current_parent)
+
+    old_task = asyncio.create_task(invoke_handler())
+    try:
+        await asyncio.wait_for(old_llm_started.wait(), timeout=5)
+        async with session_factory() as rotate_session:
+            current_parent = (
+                await rotate_session.execute(
+                    select(CrawlRun)
+                    .where(CrawlRun.id == parent_id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            current_parent.retry_count += 1
+            current_parent.state = RunState.RUNNING.value
+            current_parent.heartbeat_at = utcnow()
+            await rotate_session.commit()
+
+        new_result = await asyncio.wait_for(invoke_handler(), timeout=5)
+        release_old_llm.set()
+        old_result = await asyncio.wait_for(old_task, timeout=5)
+    finally:
+        release_old_llm.set()
+        if not old_task.done():
+            old_task.cancel()
+        await asyncio.gather(old_task, return_exceptions=True)
+
+    assert runner_calls == 2
+    assert claim_snapshots[0][0]
+    assert claim_snapshots[1][0]
+    assert claim_snapshots[0][0] != claim_snapshots[1][0]
+    assert [item[1] for item in claim_snapshots] == [0, 1]
+    assert new_result["executed_analysis_runs"] == 1
+    assert new_result["analysis_results"][0]["state"] == "done"
+    assert old_result["analysis_results"][0]["state"] == "done"
+    assert old_result["analysis_results"][0]["superseded"] is True
+    assert old_result["analysis_results"][0]["ownership_lost"] is True
+    async with session_factory() as verify_session:
+        rows = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == video_id,
+                    YoutubeVideoAnalysisRun.run_type
+                    == VideoAnalysisRunType.URL_SUMMARY.value,
+                )
+            )
+        ).scalars().all()
+        current_video = await verify_session.get(YoutubeVideo, video_id)
+        assert len(rows) == 1
+        assert current_video is not None
+        assert rows[0].state == VideoAnalysisRunState.DONE.value
+        assert rows[0].summary_text == "새 owner가 확정한 요약"
+        assert rows[0].summary_json["summary"] == "새 owner가 확정한 요약"
+        assert rows[0].owner_crawl_run_id is None
+        assert rows[0].owner_retry_count is None
+        assert rows[0].claim_token is None
+        assert rows[0].last_error is None
+        assert current_video.gemini_url_summary == "새 owner가 확정한 요약"
+        assert current_video.gemini_url_summary_json["summary"] == (
+            "새 owner가 확정한 요약"
+        )
+
+
+async def test_parent_retry_pending_fences_old_url_before_child_reclaim(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """parent 세대만 바뀌어도 이전 URL owner는 running child를 적용하지 못한다."""
+    video_id = "v-analysis-parent-pending"
+    session.add(YoutubeChannel(channel_id="UC-parent-pending", title="세대 전환 채널"))
+    session.add(
+        YoutubeVideo(
+            video_id=video_id,
+            title="세대 전환 영상",
+            url=f"https://youtu.be/{video_id}",
+            channel_id="UC-parent-pending",
+        )
+    )
+    await session.commit()
+    parent_id = await _running_video_analysis_parent(
+        session,
+        video_id=video_id,
+        run_types=[VideoAnalysisRunType.URL_SUMMARY.value],
+    )
+
+    llm_started = asyncio.Event()
+    release_llm = asyncio.Event()
+    real_runner = worker.video_analysis_service.run_url_summary_analysis
+
+    async def paused_llm(_prompt: str, _video_url: str) -> str:
+        llm_started.set()
+        await release_llm.wait()
+        return json.dumps(
+            {"summary": "이전 parent 세대의 늦은 요약", "places": []},
+            ensure_ascii=False,
+        )
+
+    async def controlled_runner(worker_session, video, analysis_run):
+        return await real_runner(
+            worker_session,
+            video,
+            analysis_run,
+            llm=paused_llm,
+            model="gemini-test",
+        )
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        controlled_runner,
+    )
+    handler_task = asyncio.create_task(
+        _invoke_video_analysis_handler(session_factory, parent_id)
+    )
+    old_claim_token = None
+    try:
+        await asyncio.wait_for(llm_started.wait(), timeout=5)
+        async with session_factory() as observe_session:
+            running_child = (
+                await observe_session.execute(
+                    select(YoutubeVideoAnalysisRun).where(
+                        YoutubeVideoAnalysisRun.video_id == video_id,
+                        YoutubeVideoAnalysisRun.run_type
+                        == VideoAnalysisRunType.URL_SUMMARY.value,
+                    )
+                )
+            ).scalar_one()
+            assert running_child.state == VideoAnalysisRunState.RUNNING.value
+            assert running_child.owner_crawl_run_id == parent_id
+            assert running_child.owner_retry_count == 0
+            assert running_child.claim_token is not None
+            old_claim_token = running_child.claim_token
+
+        async with session_factory() as rotate_session:
+            parent = (
+                await rotate_session.execute(
+                    select(CrawlRun).where(CrawlRun.id == parent_id).with_for_update()
+                )
+            ).scalar_one()
+            parent.retry_count += 1
+            parent.state = RunState.PENDING.value
+            await rotate_session.commit()
+        release_llm.set()
+        result = await asyncio.wait_for(handler_task, timeout=5)
+    finally:
+        release_llm.set()
+        if not handler_task.done():
+            handler_task.cancel()
+        await asyncio.gather(handler_task, return_exceptions=True)
+
+    assert result["ownership_lost"] is True
+    assert result["ownership_lost_analysis_runs"] == 1
+    assert result["analysis_results"][0]["ownership_lost"] is True
+    assert result["analysis_results"][0]["state"] == (
+        VideoAnalysisRunState.RUNNING.value
+    )
+    async with session_factory() as verify_session:
+        parent = await verify_session.get(CrawlRun, parent_id)
+        child = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == video_id,
+                    YoutubeVideoAnalysisRun.run_type
+                    == VideoAnalysisRunType.URL_SUMMARY.value,
+                )
+            )
+        ).scalar_one()
+        video = await verify_session.get(YoutubeVideo, video_id)
+        assert parent is not None and video is not None
+        assert parent.state == RunState.PENDING.value
+        assert parent.retry_count == 1
+        assert child.state == VideoAnalysisRunState.RUNNING.value
+        assert child.owner_crawl_run_id == parent_id
+        assert child.owner_retry_count == 0
+        assert child.claim_token == old_claim_token
+        assert child.finished_at is None
+        assert child.summary_text is None
+        assert child.summary_json is None
+        assert child.last_error is None
+        assert video.gemini_url_summary is None
+        assert video.gemini_url_summary_json is None
+
+
+async def test_old_url_generation_cannot_claim_pending_reconcile_after_ownership_loss(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """URL ownership를 잃은 handler는 같은 old generation으로 reconcile을 claim하지 않는다."""
+    video_id = "v-analysis-split-brain"
+    session.add(YoutubeChannel(channel_id="UC-split-brain", title="세대 분리 채널"))
+    session.add(
+        YoutubeVideo(
+            video_id=video_id,
+            title="세대 분리 영상",
+            url=f"https://youtu.be/{video_id}",
+            channel_id="UC-split-brain",
+            gemini_url_summary="기존 세대가 확정한 URL 요약",
+            gemini_url_summary_json={
+                "summary": "기존 세대가 확정한 URL 요약",
+                "places": [],
+            },
+        )
+    )
+    await session.commit()
+    parent_id = await _running_video_analysis_parent(
+        session,
+        video_id=video_id,
+        run_types=[
+            VideoAnalysisRunType.URL_SUMMARY.value,
+            VideoAnalysisRunType.RECONCILE.value,
+        ],
+    )
+
+    llm_started = asyncio.Event()
+    release_llm = asyncio.Event()
+    reconcile_calls = 0
+    real_url_runner = worker.video_analysis_service.run_url_summary_analysis
+
+    async def paused_url_llm(_prompt: str, _video_url: str) -> str:
+        llm_started.set()
+        await release_llm.wait()
+        return json.dumps(
+            {"summary": "old generation URL 요약", "places": []},
+            ensure_ascii=False,
+        )
+
+    async def controlled_url_runner(worker_session, video, analysis_run):
+        return await real_url_runner(
+            worker_session,
+            video,
+            analysis_run,
+            llm=paused_url_llm,
+            model="gemini-test",
+        )
+
+    async def forbidden_reconcile_runner(_session, _video, _analysis_run):
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        raise AssertionError("old generation이 reconcile을 실행했습니다")
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        controlled_url_runner,
+    )
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_reconcile_analysis",
+        forbidden_reconcile_runner,
+    )
+    handler_task = asyncio.create_task(
+        _invoke_video_analysis_handler(session_factory, parent_id)
+    )
+    try:
+        await asyncio.wait_for(llm_started.wait(), timeout=5)
+        async with session_factory() as rotate_session:
+            parent = (
+                await rotate_session.execute(
+                    select(CrawlRun).where(CrawlRun.id == parent_id).with_for_update()
+                )
+            ).scalar_one()
+            parent.retry_count += 1
+            parent.state = RunState.PENDING.value
+            await rotate_session.commit()
+        release_llm.set()
+        result = await asyncio.wait_for(handler_task, timeout=5)
+    finally:
+        release_llm.set()
+        if not handler_task.done():
+            handler_task.cancel()
+        await asyncio.gather(handler_task, return_exceptions=True)
+
+    assert reconcile_calls == 0
+    assert result["ownership_lost"] is True
+    assert result["executed_analysis_runs"] == 1
+    assert result["analysis_results"][0]["run_type"] == (
+        VideoAnalysisRunType.URL_SUMMARY.value
+    )
+    assert result["analysis_results"][0]["ownership_lost"] is True
+    async with session_factory() as verify_session:
+        rows = list(
+            (
+                await verify_session.execute(
+                    select(YoutubeVideoAnalysisRun)
+                    .where(YoutubeVideoAnalysisRun.video_id == video_id)
+                    .order_by(YoutubeVideoAnalysisRun.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        video = await verify_session.get(YoutubeVideo, video_id)
+        assert video is not None
+        assert len(rows) == 2
+        by_type = {row.run_type: row for row in rows}
+        url_run = by_type[VideoAnalysisRunType.URL_SUMMARY.value]
+        reconcile_run = by_type[VideoAnalysisRunType.RECONCILE.value]
+        assert url_run.state == VideoAnalysisRunState.RUNNING.value
+        assert url_run.owner_crawl_run_id == parent_id
+        assert url_run.owner_retry_count == 0
+        assert url_run.claim_token is not None
+        assert reconcile_run.state == VideoAnalysisRunState.PENDING.value
+        assert reconcile_run.owner_crawl_run_id is None
+        assert reconcile_run.owner_retry_count is None
+        assert reconcile_run.claim_token is None
+        assert video.gemini_url_summary == "기존 세대가 확정한 URL 요약"
+        assert video.gemini_url_summary_json["summary"] == (
+            "기존 세대가 확정한 URL 요약"
+        )
+        assert video.reconciled_summary_json is None
+
+
+async def test_done_url_without_pending_allows_normal_reconcile_completion(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """URL DONE/no-pending 정상 경로가 ORM identity를 expire하지 않고 reconcile을 잇는다."""
+    video_id = "v-analysis-done-url-reconcile"
+    session.add(YoutubeChannel(channel_id="UC-done-url", title="정상 이어하기 채널"))
+    video = YoutubeVideo(
+        video_id=video_id,
+        title="URL 완료 뒤 reconcile 영상",
+        url=f"https://youtu.be/{video_id}",
+        channel_id="UC-done-url",
+        gemini_url_summary="이미 완료된 URL 요약",
+        gemini_url_summary_json={
+            "summary": "이미 완료된 URL 요약",
+            "places": [],
+        },
+    )
+    url_run = YoutubeVideoAnalysisRun(
+        video_id=video_id,
+        run_type=VideoAnalysisRunType.URL_SUMMARY.value,
+        state=VideoAnalysisRunState.DONE.value,
+        summary_text="이미 완료된 URL 요약",
+        summary_json={"summary": "이미 완료된 URL 요약", "places": []},
+        finished_at=utcnow(),
+    )
+    reconcile_run = YoutubeVideoAnalysisRun(
+        video_id=video_id,
+        run_type=VideoAnalysisRunType.RECONCILE.value,
+        state=VideoAnalysisRunState.PENDING.value,
+    )
+    session.add_all([video, url_run, reconcile_run])
+    await session.commit()
+    url_run_id = url_run.id
+    reconcile_run_id = reconcile_run.id
+    parent_id = await _running_video_analysis_parent(
+        session,
+        video_id=video_id,
+        run_types=[
+            VideoAnalysisRunType.URL_SUMMARY.value,
+            VideoAnalysisRunType.RECONCILE.value,
+        ],
+    )
+
+    url_calls = 0
+    reconcile_calls = 0
+    real_reconcile_runner = worker.video_analysis_service.run_reconcile_analysis
+
+    async def forbidden_url_runner(_session, _video, _analysis_run):
+        nonlocal url_calls
+        url_calls += 1
+        raise AssertionError("DONE URL 분석을 다시 실행했습니다")
+
+    async def reconcile_llm(_prompt: str) -> str:
+        return json.dumps(
+            {
+                "summary": "정상적으로 완료한 reconcile 요약",
+                "places": [],
+                "conflicts": [],
+            },
+            ensure_ascii=False,
+        )
+
+    async def controlled_reconcile_runner(worker_session, video, analysis_run):
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return await real_reconcile_runner(
+            worker_session,
+            video,
+            analysis_run,
+            llm=reconcile_llm,
+            model="gemini-test",
+        )
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        forbidden_url_runner,
+    )
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_reconcile_analysis",
+        controlled_reconcile_runner,
+    )
+
+    result = await _invoke_video_analysis_handler(session_factory, parent_id)
+
+    assert url_calls == 0
+    assert reconcile_calls == 1
+    assert result["ownership_lost"] is False
+    assert result["executed_analysis_runs"] == 1
+    assert result["analysis_results"][0]["run_type"] == (
+        VideoAnalysisRunType.RECONCILE.value
+    )
+    assert result["analysis_results"][0]["state"] == (
+        VideoAnalysisRunState.DONE.value
+    )
+    async with session_factory() as verify_session:
+        current_url_run = await verify_session.get(
+            YoutubeVideoAnalysisRun, url_run_id
+        )
+        current_reconcile_run = await verify_session.get(
+            YoutubeVideoAnalysisRun, reconcile_run_id
+        )
+        current_video = await verify_session.get(YoutubeVideo, video_id)
+        assert current_url_run is not None
+        assert current_reconcile_run is not None
+        assert current_video is not None
+        assert current_url_run.state == VideoAnalysisRunState.DONE.value
+        assert current_url_run.summary_text == "이미 완료된 URL 요약"
+        assert current_reconcile_run.state == VideoAnalysisRunState.DONE.value
+        assert current_reconcile_run.summary_text == "정상적으로 완료한 reconcile 요약"
+        assert current_video.gemini_url_summary == "이미 완료된 URL 요약"
+        assert current_video.reconciled_summary == "정상적으로 완료한 reconcile 요약"
+
+
+async def test_video_analysis_handler_reclaims_expired_running_lease(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """worker 중단으로 오래된 running row가 남아도 같은 row를 회수해 완료한다."""
+    from types import SimpleNamespace
+
+    calls: list[int] = []
+
+    async def fake_url_summary(worker_session, video, analysis_run):
+        calls.append(analysis_run.id)
+        assert analysis_run.state == "running"
+        analysis_run.state = "done"
+        analysis_run.last_error = None
+        video.gemini_url_summary = "lease 회수 뒤 생성한 요약"
+        await worker_session.commit()
+        return {
+            "analysis_run_id": analysis_run.id,
+            "run_type": analysis_run.run_type,
+            "state": "done",
+            "stale_input": False,
+        }
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        fake_url_summary,
+    )
+    session.add(YoutubeChannel(channel_id="UC-analysis-reclaim", title="여행채널"))
+    video = YoutubeVideo(
+        video_id="v-analysis-reclaim",
+        title="lease 회수 영상",
+        url="https://youtu.be/v-analysis-reclaim",
+        channel_id="UC-analysis-reclaim",
+    )
+    session.add(video)
+    await session.flush()
+    analysis_run = YoutubeVideoAnalysisRun(
+        video_id=video.video_id,
+        run_type="url_summary",
+        state="running",
+        started_at=utcnow()
+        - timedelta(seconds=worker.VIDEO_ANALYSIS_RUNNING_LEASE_SECONDS + 1),
+        last_error="worker가 중단되기 전 상태",
+    )
+    session.add(analysis_run)
+    await session.commit()
+    analysis_run_id = analysis_run.id
+
+    fake_run = SimpleNamespace(
+        target_type="video",
+        target_id=video.video_id,
+        payload_json=json.dumps(
+            {
+                "video_id": video.video_id,
+                "analysis_run_types": ["url_summary"],
+            }
+        ),
+    )
+    async with session_factory() as worker_session:
+        result = await worker.video_analysis_handler(worker_session, fake_run)
+
+    assert result["created_analysis_runs"] == 0
+    assert result["executed_analysis_runs"] == 1
+    assert calls == [analysis_run_id]
+    async with session_factory() as verify_session:
+        current = await verify_session.get(YoutubeVideoAnalysisRun, analysis_run_id)
+        assert current is not None
+        assert current.state == "done"
+        assert current.last_error is None
+
+
+async def test_video_analysis_runner_apply_exception_marks_run_failed(
+    monkeypatch,
+    session,
+    session_factory,
+):
+    """service apply 예외가 나도 분석 row를 running에 영구 고착시키지 않는다."""
+    from types import SimpleNamespace
+
+    async def broken_apply(worker_session, _video, analysis_run):
+        # 외부 호출 시작을 확정한 production service와 같은 commit 경계를 만든다.
+        analysis_run.started_at = utcnow()
+        await worker_session.commit()
+        raise RuntimeError("apply transaction failed")
+
+    monkeypatch.setattr(
+        worker.video_analysis_service,
+        "run_url_summary_analysis",
+        broken_apply,
+    )
+    session.add(YoutubeChannel(channel_id="UC-analysis-apply", title="여행채널"))
+    session.add(
+        YoutubeVideo(
+            video_id="v-analysis-apply",
+            title="apply 실패 영상",
+            url="https://youtu.be/v-analysis-apply",
+            channel_id="UC-analysis-apply",
+        )
+    )
+    await session.commit()
+    fake_run = SimpleNamespace(
+        target_type="video",
+        target_id="v-analysis-apply",
+        payload_json=json.dumps(
+            {
+                "video_id": "v-analysis-apply",
+                "analysis_run_types": ["url_summary"],
+            }
+        ),
+    )
+
+    async with session_factory() as worker_session:
+        with pytest.raises(RuntimeError, match="apply transaction failed"):
+            await worker.video_analysis_handler(worker_session, fake_run)
+
+    async with session_factory() as verify_session:
+        rows = (
+            await verify_session.execute(
+                select(YoutubeVideoAnalysisRun).where(
+                    YoutubeVideoAnalysisRun.video_id == "v-analysis-apply",
+                    YoutubeVideoAnalysisRun.run_type == "url_summary",
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].state == "failed"
+        assert rows[0].last_error == "runner_apply_failed: apply transaction failed"
 
 
 async def test_enqueue_source_scan_once_deduplicates(session_factory):

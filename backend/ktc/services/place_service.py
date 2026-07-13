@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import math
 import re
 from collections.abc import Sequence
@@ -10,7 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from geoalchemy2 import Geography
 from sqlalchemy import Numeric, and_, case, cast, delete, distinct, func, or_, select
@@ -28,6 +31,7 @@ from ktc.models import (
     GroundingStatus,
     MatchStatus,
     MediaAsset,
+    PlaceLifecycleOrigin,
     TravelPlace,
     VideoPlaceMapping,
     YoutubeChannel,
@@ -80,6 +84,23 @@ class CandidateResolveConflictError(ValueError):
     """이미 해결됐거나 검수 대상이 아닌 후보를 다시 resolve하려 했다(라우트 409)."""
 
 
+class CandidateRevisionConflictError(ValueError):
+    """후보 row lock 뒤 확인한 revision이 클라이언트 선행 조건과 다르다."""
+
+    def __init__(self, *, expected_revision: int, actual_revision: int) -> None:
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+        super().__init__("후보가 다른 작업으로 변경되었습니다. 최신 상태를 다시 확인해 주세요.")
+
+
+class CandidatePlaceChangedError(ValueError):
+    """undo token 발급 뒤 후보의 장소 연결 또는 장소 revision이 달라졌다."""
+
+
+class InvalidCandidateUndoToken(ValueError):
+    """strict canonical `candidate-undo-v1` token이 아니다."""
+
+
 class CandidateStatusConflictError(ValueError):
     """FOR UPDATE 후의 실제 후보 상태가 삭제 선행 조건과 다르다(라우트 409)."""
 
@@ -100,11 +121,189 @@ class CandidateReopenConflictError(ValueError):
     """이미 검수 대기(needs_review) 상태라 reopen이 무의미하다(라우트 409)."""
 
 
-class CandidateReopenUnsupportedError(ValueError):
-    """`matched`/`user_corrected` 후보의 reopen은 T-160 범위 밖이다(라우트 400).
+_CANDIDATE_UNDO_VERSION = "candidate-undo-v1"
+_MAX_BIGINT = 9_223_372_036_854_775_807
+_CANDIDATE_UNDO_KEYS = frozenset(
+    {
+        "version",
+        "candidate_id",
+        "candidate_revision",
+        "prior_state",
+        "effective_state",
+        "matched_place_id",
+        "matched_place_revision",
+    }
+)
 
-    확정 장소 정리(고아 판정·공유 장소 보호) 정책은 T-184에서 다룬다.
-    """
+
+@dataclass(frozen=True)
+class CandidateUndoToken:
+    """후보 처리 직후의 DB 상태를 고정하는 opaque undo 선행 조건."""
+
+    candidate_id: int
+    candidate_revision: int
+    prior_state: str
+    effective_state: str
+    matched_place_id: int | None
+    matched_place_revision: int | None
+
+
+def candidate_review_state(candidate: ExtractedPlaceCandidate) -> str:
+    """soft delete를 우선하는 사용자 관점 후보 상태를 반환한다."""
+    if candidate.deleted_at is not None:
+        return "deleted"
+    return str(getattr(candidate.match_status, "value", candidate.match_status))
+
+
+def _positive_int(value: Any, *, maximum: int) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 < value <= maximum
+    )
+
+
+def _candidate_undo_payload(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    matched_place_revision: int | None,
+) -> dict[str, Any]:
+    matched_place_id = candidate.matched_place_id
+    if (matched_place_id is None) != (matched_place_revision is None):
+        raise ValueError("undo token의 장소 ID와 revision은 함께 있어야 합니다")
+    return {
+        "version": _CANDIDATE_UNDO_VERSION,
+        "candidate_id": candidate.id,
+        "candidate_revision": candidate.state_revision,
+        # underlying match_status와 soft-delete 우선 effective state를 모두 넣어
+        # `deleted(needs_review)`와 live `needs_review`를 구분한다.
+        "prior_state": str(
+            getattr(candidate.match_status, "value", candidate.match_status)
+        ),
+        "effective_state": candidate_review_state(candidate),
+        "matched_place_id": matched_place_id,
+        "matched_place_revision": matched_place_revision,
+    }
+
+
+def encode_candidate_undo_token(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    matched_place_revision: int | None = None,
+) -> str:
+    """padding 없는 canonical base64url JSON undo token을 생성한다."""
+    payload = _candidate_undo_payload(
+        candidate,
+        matched_place_revision=matched_place_revision,
+    )
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def candidate_undo_descriptor(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    matched_place_revision: int | None = None,
+) -> dict[str, Any]:
+    """브라우저가 해석하지 않고 reopen에 되돌려 보낼 descriptor를 반환한다."""
+    return {
+        "candidate_id": candidate.id,
+        "token": encode_candidate_undo_token(
+            candidate,
+            matched_place_revision=matched_place_revision,
+        ),
+    }
+
+
+def decode_candidate_undo_token(token: str) -> CandidateUndoToken:
+    """비정규·확장 field·타입 혼동을 거부하는 strict token decoder."""
+    if not isinstance(token, str) or not 1 <= len(token) <= 4096:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", token) is None:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.b64decode(
+            padded.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+        payload = json.loads(raw.decode("utf-8"))
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+    ) as exc:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다") from exc
+    if not isinstance(payload, dict) or set(payload) != _CANDIDATE_UNDO_KEYS:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    if payload.get("version") != _CANDIDATE_UNDO_VERSION:
+        raise InvalidCandidateUndoToken("지원하지 않는 undo token 버전입니다")
+    if not _positive_int(
+        payload.get("candidate_id"), maximum=MAX_DB_INTEGER_ID
+    ) or not _positive_int(
+        payload.get("candidate_revision"), maximum=_MAX_BIGINT
+    ):
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    prior_state = payload.get("prior_state")
+    effective_state = payload.get("effective_state")
+    allowed_states = {status.value for status in MatchStatus}
+    if not isinstance(prior_state, str) or prior_state not in allowed_states:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    if (
+        not isinstance(effective_state, str)
+        or effective_state not in allowed_states | {"deleted"}
+    ):
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    if effective_state != "deleted" and effective_state != prior_state:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    place_id = payload.get("matched_place_id")
+    place_revision = payload.get("matched_place_revision")
+    if (place_id is None) != (place_revision is None):
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    if place_id is not None and (
+        not _positive_int(place_id, maximum=MAX_DB_INTEGER_ID)
+        or not _positive_int(place_revision, maximum=_MAX_BIGINT)
+    ):
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    canonical = base64.urlsafe_b64encode(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    if canonical != token:
+        raise InvalidCandidateUndoToken("유효하지 않은 undo token입니다")
+    return CandidateUndoToken(
+        candidate_id=payload["candidate_id"],
+        candidate_revision=payload["candidate_revision"],
+        prior_state=prior_state,
+        effective_state=effective_state,
+        matched_place_id=place_id,
+        matched_place_revision=place_revision,
+    )
+
+
+def _require_candidate_revision(
+    candidate: ExtractedPlaceCandidate,
+    expected_revision: int | None,
+) -> None:
+    """서비스 내부 호출은 생략 가능하지만 REST는 반드시 expected revision을 전달한다."""
+    if expected_revision is None:
+        return
+    if candidate.state_revision != expected_revision:
+        raise CandidateRevisionConflictError(
+            expected_revision=expected_revision,
+            actual_revision=candidate.state_revision,
+        )
 
 
 class QueueReason(str, Enum):
@@ -142,6 +341,7 @@ class ReviewCandidateStatus(str, Enum):
 
     NEEDS_REVIEW = MatchStatus.NEEDS_REVIEW.value
     IGNORED = MatchStatus.IGNORED.value
+    REMOVED = "removed"
 
 
 class ReviewCandidateDomesticFilter(str, Enum):
@@ -160,6 +360,8 @@ class CandidateListItem:
     video_title: str
     channel_title: str | None
     queue_reason: QueueReason
+    video_is_excluded: bool
+    matched_place_revision: int | None
 
 
 @dataclass(frozen=True)
@@ -996,6 +1198,9 @@ async def correct_place(
         # 기존 장소를 다른 반경으로 옮기는 동안 신규 장소의 최종 중복 조회가 구 geom을
         # 보면 동일 좌표 장소가 이중 생성될 수 있다. 좌표 보정만 lifecycle lock에 참여한다.
         await acquire_place_lifecycle_lock(session)
+    # T-171 dirty outbox와 feature sync가 candidate/place snapshot을 읽으므로 place를
+    # 잠그기 전에 export lock을 선취한다. 좌표 보정은 lifecycle → export 순서다.
+    await feature_export_service.acquire_feature_export_lock(session)
     # 같은 session의 identity map에 남은 구버전 장소를 수정하지 않도록 최신 행을
     # 강제로 다시 적재하고 잠근다. 좌표 보정과 자동 지오코딩은 lifecycle lock을
     # 공유하고, 장소 단독 보정은 그 뒤 place만 잠근다.
@@ -1068,6 +1273,30 @@ async def correct_place(
     return place
 
 
+def _merge_place_lifecycle_origin(source: TravelPlace, target: TravelPlace) -> None:
+    """병합 장소의 보존 강도를 `persistent > legacy > candidate`로 합성한다."""
+    rank = {
+        PlaceLifecycleOrigin.CANDIDATE_CREATED.value: 0,
+        PlaceLifecycleOrigin.LEGACY_UNKNOWN.value: 1,
+        PlaceLifecycleOrigin.PERSISTENT.value: 2,
+    }
+    source_origin = str(
+        getattr(source.lifecycle_origin, "value", source.lifecycle_origin)
+    )
+    target_origin = str(
+        getattr(target.lifecycle_origin, "value", target.lifecycle_origin)
+    )
+    if rank[source_origin] <= rank[target_origin]:
+        # 둘 다 candidate_created인 경우도 target의 origin_candidate_id를 유지한다.
+        return
+    target.lifecycle_origin = source_origin
+    target.origin_candidate_id = (
+        source.origin_candidate_id
+        if source_origin == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+        else None
+    )
+
+
 async def merge_places(
     session: AsyncSession,
     *,
@@ -1079,11 +1308,14 @@ async def merge_places(
     if source_place_id == target_place_id:
         raise ValueError("source_place_id와 target_place_id는 달라야 한다")
 
-    # 장소 lifecycle 전역 lock 뒤 모든 관련 행을 mutation/autoflush 전에
-    # candidate -> place -> mapping -> asset 순으로 잠근다.
+    # 장소 lifecycle 전역 lock 뒤 export writer lock을 선취하고 모든 관련 행을
+    # mutation/autoflush 전에 candidate -> place -> mapping -> asset 순으로 잠근다.
+    # sync가 source 장소 snapshot으로 payload를 만들고 있는 동안 merge가 source를
+    # 삭제하면 null/fallback UPSERT가 생길 수 있으므로 174 -> 175 순서를 공유한다.
     # geocode post-core 검증과 delete/authoritative 경로도 candidate를 먼저 잠그므로,
     # merge가 mapping을 먼저 UPDATE한 뒤 candidate를 기다리는 역순 deadlock을 만들지 않는다.
     await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
     candidate_result = await session.execute(
         select(ExtractedPlaceCandidate)
         .where(
@@ -1139,6 +1371,7 @@ async def merge_places(
         asset.place_id = target_place_id
 
     target_backfilled = False
+    _merge_place_lifecycle_origin(source, target)
     for field in (
         "description",
         "gemini_enriched_description",
@@ -1266,6 +1499,77 @@ def latest_candidate_resolution(
     return resolutions[-1] if resolutions else None
 
 
+def last_candidate_client_operation_id(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    matched_place_revision: int | None = None,
+) -> str | None:
+    """현재 후보·장소 snapshot과 정확히 일치하는 브라우저 작업 ID만 읽는다.
+
+    JSONB 표식은 감사 흔적으로 남을 수 있지만 후보가 reopen/내부 mutation을 거치거나
+    연결 장소만 보정돼도 더 이상 해당 브라우저 작업의 결과가 아니다. 후보 revision과
+    연결 장소 ID/revision을 모두 대조해 response-loss 복구의 거짓 양성을 막는다.
+    """
+    evidence = candidate.provider_evidence_json
+    if not isinstance(evidence, dict):
+        return None
+    review = evidence.get("review")
+    if not isinstance(review, dict):
+        return None
+    operation = review.get("last_client_operation")
+    if not isinstance(operation, dict):
+        return None
+    operation_id = operation.get("id")
+    result_candidate_revision = operation.get("result_candidate_revision")
+    marker_place_id = operation.get("matched_place_id")
+    marker_place_revision = operation.get("matched_place_revision")
+    if (
+        not isinstance(operation_id, str)
+        or not operation_id
+        or not _positive_int(result_candidate_revision, maximum=_MAX_BIGINT)
+        or result_candidate_revision != candidate.state_revision
+        or marker_place_id != candidate.matched_place_id
+    ):
+        return None
+    if candidate.matched_place_id is None:
+        if marker_place_revision is not None or matched_place_revision is not None:
+            return None
+    elif (
+        not _positive_int(marker_place_id, maximum=MAX_DB_INTEGER_ID)
+        or not _positive_int(marker_place_revision, maximum=_MAX_BIGINT)
+        or marker_place_revision != matched_place_revision
+    ):
+        return None
+    return operation_id
+
+
+def _record_last_client_operation(
+    candidate: ExtractedPlaceCandidate,
+    *,
+    client_operation_id: UUID,
+    action: str,
+    occurred_at,
+    matched_place_revision: int | None,
+) -> None:
+    """다음 후보 UPDATE 결과와 연결 장소 snapshot을 묶은 복구 표식을 기록한다."""
+    current = deepcopy(candidate.provider_evidence_json)
+    evidence = current if isinstance(current, dict) else {}
+    review = evidence.get("review")
+    review = deepcopy(review) if isinstance(review, dict) else {}
+    review["schema_version"] = 1
+    review["last_client_operation"] = {
+        "id": str(client_operation_id),
+        "action": action,
+        "timestamp": occurred_at.isoformat(),
+        # 이 JSONB 대입을 포함한 단일 UPDATE에서 DB trigger가 정확히 1 증가시킨다.
+        "result_candidate_revision": candidate.state_revision + 1,
+        "matched_place_id": candidate.matched_place_id,
+        "matched_place_revision": matched_place_revision,
+    }
+    evidence["review"] = review
+    candidate.provider_evidence_json = evidence
+
+
 async def _provider_identities_for_places(
     session: AsyncSession, place_ids: list[int]
 ) -> dict[int, set[tuple[str, str]]]:
@@ -1346,6 +1650,7 @@ def _append_resolution_evidence(
     place: TravelPlace | None,
     nearby_decision: str | None,
     nearby_place_ids: list[int],
+    client_operation_id: UUID | None,
 ) -> dict[str, Any]:
     """기존 evidence namespace를 보존하며 버전된 검수 이력을 누적한다."""
     current = deepcopy(candidate.provider_evidence_json)
@@ -1421,6 +1726,8 @@ def _append_resolution_evidence(
             "candidate_place_ids": nearby_place_ids,
         },
     }
+    if client_operation_id is not None:
+        resolution["client_operation_id"] = str(client_operation_id)
     resolutions.append(resolution)
     review["schema_version"] = 1
     review["resolutions"] = resolutions
@@ -1442,6 +1749,8 @@ async def resolve_candidate(
     resolution_evidence: dict[str, Any] | None = None,
     duplicate_resolution: str | None = None,
     duplicate_place_id: int | None = None,
+    expected_revision: int | None = None,
+    client_operation_id: UUID | None = None,
     commit: bool = True,
 ) -> tuple[ExtractedPlaceCandidate, TravelPlace | None, VideoPlaceMapping | None]:
     """매칭 실패 후보를 기존 장소, 신규 장소, 제외 중 하나로 해결한다.
@@ -1451,10 +1760,11 @@ async def resolve_candidate(
     soft delete된 후보는 해결할 수 없다(먼저 reopen 필요, T-160).
     """
     # 장소를 연결하거나 만드는 action은 candidate row보다 먼저 lifecycle lock을 잡는다.
-    # merge/delete와 predicate-gap 없이 직렬화하고, 이후 공통 순서를
-    # lifecycle advisory -> candidate -> place -> mapping으로 유지한다.
+    # 모든 action은 T-171 dirty outbox/sync와 export lock을 공유해, 이후 공통 순서를
+    # lifecycle advisory -> export advisory -> candidate -> place -> mapping으로 유지한다.
     if action in {"match_existing", "create_place"}:
         await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
     candidate = (
         await session.execute(
             select(ExtractedPlaceCandidate)
@@ -1465,6 +1775,7 @@ async def resolve_candidate(
     ).scalar_one_or_none()
     if candidate is None:
         raise ValueError(f"candidate not found: {candidate_id}")
+    _require_candidate_revision(candidate, expected_revision)
     if candidate.deleted_at is not None:
         raise CandidateResolveConflictError(
             "삭제됐거나 다른 검수자가 이미 처리한 candidate다"
@@ -1603,6 +1914,8 @@ async def resolve_candidate(
                 place.category = selected_label
         else:
             place = TravelPlace(
+                lifecycle_origin=PlaceLifecycleOrigin.CANDIDATE_CREATED.value,
+                origin_candidate_id=candidate.id,
                 name=data["name"],
                 description=data.get("description"),
                 gemini_enriched_description=data.get("gemini_enriched_description"),
@@ -1641,6 +1954,7 @@ async def resolve_candidate(
         place=place,
         nearby_decision=nearby_decision,
         nearby_place_ids=nearby_place_ids,
+        client_operation_id=client_operation_id,
     )
     if place is not None:
         mapping = await _ensure_candidate_mapping(session, candidate, place)
@@ -1666,6 +1980,108 @@ async def resolve_candidate(
             session, candidate_id=candidate_id
         )
     return candidate, place, mapping
+
+
+async def finalize_candidate_client_operation(
+    session: AsyncSession,
+    *,
+    candidate_id: int,
+    client_operation_id: UUID,
+    action: str,
+    expected_candidate_revision: int,
+    expected_review_state: str,
+    expected_matched_place_id: int | None,
+    expected_matched_place_revision: int | None,
+    commit: bool = True,
+) -> tuple[ExtractedPlaceCandidate, TravelPlace | None]:
+    """post-core 응답 복구 표식을 후보·장소의 정확한 최종 snapshot에 붙인다.
+
+    resolve core와 감사 로그를 먼저 확정하고 느린 행정구역 보강까지 끝낸 뒤 호출한다.
+    그 사이 후보가 reopen/내부 mutation을 거쳤거나 장소가 다시 보정됐다면 안전하게
+    실패해 오래된 브라우저 작업 ID를 새로운 live 상태에 붙이지 않는다.
+    """
+    if (expected_matched_place_id is None) != (
+        expected_matched_place_revision is None
+    ):
+        raise ValueError("operation 표식의 장소 ID와 revision은 함께 있어야 합니다")
+
+    # merge/delete/좌표 보정과 같은 lifecycle 경계를 먼저 통과한 뒤
+    # candidate -> place 순으로 잠근다.
+    await acquire_place_lifecycle_lock(session)
+    candidate = (
+        await session.execute(
+            select(ExtractedPlaceCandidate)
+            .where(ExtractedPlaceCandidate.id == candidate_id)
+            .order_by(ExtractedPlaceCandidate.id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one_or_none()
+    if candidate is None:
+        raise ValueError(f"candidate not found: {candidate_id}")
+    _require_candidate_revision(candidate, expected_candidate_revision)
+    if candidate_review_state(candidate) != expected_review_state:
+        raise CandidateResolveConflictError(
+            "후보 상태가 resolve core 결과에서 변경되었습니다."
+        )
+    if candidate.matched_place_id != expected_matched_place_id:
+        raise CandidatePlaceChangedError(
+            "후보의 장소 연결이 resolve core 결과에서 변경되었습니다."
+        )
+
+    latest_resolution = latest_candidate_resolution(candidate)
+    if (
+        latest_resolution is None
+        or latest_resolution.get("client_operation_id")
+        != str(client_operation_id)
+        or latest_resolution.get("action") != action
+    ):
+        raise CandidateResolveConflictError(
+            "후보의 최신 검수 이력이 resolve core 결과에서 변경되었습니다."
+        )
+
+    place: TravelPlace | None = None
+    if expected_matched_place_id is not None:
+        place = (
+            await session.execute(
+                select(TravelPlace)
+                .where(TravelPlace.place_id == expected_matched_place_id)
+                .order_by(TravelPlace.place_id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if (
+            place is None
+            or place.state_revision != expected_matched_place_revision
+        ):
+            raise CandidatePlaceChangedError(
+                "연결 장소가 행정구역 보강 결과에서 변경되었습니다."
+            )
+
+    _record_last_client_operation(
+        candidate,
+        client_operation_id=client_operation_id,
+        action=action,
+        occurred_at=utcnow(),
+        matched_place_revision=expected_matched_place_revision,
+    )
+    await session.flush()
+    await session.refresh(
+        candidate,
+        attribute_names=["state_revision", "provider_evidence_json"],
+    )
+    if (
+        last_candidate_client_operation_id(
+            candidate,
+            matched_place_revision=expected_matched_place_revision,
+        )
+        != str(client_operation_id)
+    ):
+        raise RuntimeError("operation 표식의 결과 revision 검증에 실패했습니다")
+    if commit:
+        await session.commit()
+    return candidate, place
 
 
 async def authoritative_candidate_resolution(
@@ -1793,11 +2209,13 @@ async def delete_place(
     - 미디어 자산(`media_assets`)은 장소 링크만 해제한다(미디어 자체는 보존).
     되돌린 후보 목록을 반환한다(호출부의 ledger 동기화·감사 로그용).
     """
-    # merge_places와 같은 lifecycle advisory -> candidate -> place -> mapping -> asset
-    # 순서로 관련 행을 전부 잠근 뒤 mutation을 시작한다. 후보가 없는 legacy mapping도
+    # export sync와도 직렬화되는 lifecycle advisory -> export advisory -> candidate ->
+    # place -> mapping -> asset 순서로 관련 행을 전부 잠근 뒤 mutation을 시작한다.
+    # 후보가 없는 legacy mapping도
     # 존재할 수 있으므로 place를 먼저 잠그지 않고 mapping/asset을 변경하면 merge의
     # place-first 구간과 교착한다. autoflush도 잠금 집합이 완성될 때까지 억제한다.
     await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
     reverted = list(
         (
             await session.execute(
@@ -2071,6 +2489,10 @@ def _unmatched_candidates_stmt(
                 "channel_title"
             ),
             reason_expression.label("queue_reason"),
+            func.coalesce(YoutubeVideo.is_excluded, False).label(
+                "video_is_excluded"
+            ),
+            TravelPlace.state_revision.label("matched_place_revision"),
         )
         .outerjoin(
             YoutubeVideo,
@@ -2080,10 +2502,28 @@ def _unmatched_candidates_stmt(
             YoutubeChannel,
             YoutubeChannel.channel_id == YoutubeVideo.channel_id,
         )
-        .where(ExtractedPlaceCandidate.deleted_at.is_(None))
+        .outerjoin(
+            TravelPlace,
+            TravelPlace.place_id == ExtractedPlaceCandidate.matched_place_id,
+        )
     )
     if status is not None:
-        stmt = stmt.where(ExtractedPlaceCandidate.match_status == status.value)
+        if status is ReviewCandidateStatus.REMOVED:
+            stmt = stmt.where(
+                or_(
+                    ExtractedPlaceCandidate.deleted_at.is_not(None),
+                    and_(
+                        ExtractedPlaceCandidate.deleted_at.is_(None),
+                        ExtractedPlaceCandidate.match_status
+                        == MatchStatus.IGNORED.value,
+                    ),
+                )
+            )
+        else:
+            stmt = stmt.where(
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+                ExtractedPlaceCandidate.match_status == status.value,
+            )
     if channel_id:
         stmt = stmt.where(
             or_(
@@ -2153,10 +2593,10 @@ async def list_unmatched_candidates_page(
         "queue_reason": queue_reason.value if queue_reason else None,
         "source_kind": source_kind.value if source_kind else None,
         "grounding": grounding_status.value if grounding_status else None,
-        "visible": "not_deleted",
+        "state_predicate": status_value.value,
     }
     fingerprint = filter_fingerprint(
-        scope="unmatched-v4", sort=sort_value.value, filters=normalized_filters
+        scope="unmatched-v5", sort=sort_value.value, filters=normalized_filters
     )
     decoded = (
         decode_cursor(cursor, fingerprint=fingerprint, key_count=1)
@@ -2230,6 +2670,12 @@ async def list_unmatched_candidates_page(
             video_title=row.video_title or row[0].video_id,
             channel_title=row.channel_title,
             queue_reason=QueueReason(row.queue_reason),
+            video_is_excluded=bool(row.video_is_excluded),
+            matched_place_revision=(
+                int(row.matched_place_revision)
+                if row.matched_place_revision is not None
+                else None
+            ),
         )
         for row in rows[:limit]
     ]
@@ -2255,11 +2701,7 @@ async def list_unmatched_candidates_page(
 async def get_candidate_list_item(
     session: AsyncSession, candidate_id: int
 ) -> CandidateListItem | None:
-    """page 밖 딥링크용 목록 항목 1건을 상태와 무관하게 직접 조회한다.
-
-    `ignored`는 검수 이력으로 열람할 수 있지만 soft delete된 후보는 목록과 동일하게
-    노출하지 않는다.
-    """
+    """page 밖 딥링크용 목록 항목 1건을 삭제 여부·상태와 무관하게 직접 조회한다."""
     row = (
         await session.execute(
             _unmatched_candidates_stmt(
@@ -2277,6 +2719,12 @@ async def get_candidate_list_item(
         video_title=row.video_title or row[0].video_id,
         channel_title=row.channel_title,
         queue_reason=QueueReason(row.queue_reason),
+        video_is_excluded=bool(row.video_is_excluded),
+        matched_place_revision=(
+            int(row.matched_place_revision)
+            if row.matched_place_revision is not None
+            else None
+        ),
     )
 
 
@@ -2302,6 +2750,9 @@ async def soft_delete_candidates(
     deleted_by: str | None = None,
     force: bool = False,
     expected_status: MatchStatus | str | None = None,
+    expected_revisions: dict[int, int] | None = None,
+    client_operation_id: UUID | None = None,
+    client_operation_action: str = "delete",
 ) -> SoftDeleteSummary:
     """추출 후보를 soft delete 한다(T-160, 로드맵 B1).
 
@@ -2332,16 +2783,16 @@ async def soft_delete_candidates(
             expected_status_value = MatchStatus(expected_status)
         except ValueError as exc:
             raise ValueError("유효하지 않은 후보 상태 선행 조건입니다") from exc
-    # 행 락으로 동시 resolve(`resolve_candidate`도 FOR UPDATE)와 직렬화한다 —
-    # 락 없이면 409 판정(매핑 유무)이 구버전 스냅샷을 읽는 race가 생긴다.
-    candidates = list(
+    # export sync도 candidate snapshot과 ledger FK insert를 수행하므로 export lock을
+    # candidate row보다 먼저 잡아 `export -> candidate` 순서를 모든 writer가 공유한다.
+    await feature_export_service.acquire_feature_export_lock(session)
+    # 행 락으로 동시 resolve(`resolve_candidate`도 FOR UPDATE)와 직렬화한다 — 락 없이면
+    # 409 판정(매핑 유무)이 구버전 스냅샷을 읽는 race가 생긴다.
+    locked_candidates = list(
         (
             await session.execute(
                 select(ExtractedPlaceCandidate)
-                .where(
-                    ExtractedPlaceCandidate.id.in_(ids),
-                    ExtractedPlaceCandidate.deleted_at.is_(None),
-                )
+                .where(ExtractedPlaceCandidate.id.in_(ids))
                 .order_by(ExtractedPlaceCandidate.id.asc())
                 .with_for_update()
                 .execution_options(populate_existing=True, autoflush=False)
@@ -2350,6 +2801,15 @@ async def soft_delete_candidates(
         .scalars()
         .all()
     )
+    if expected_revisions:
+        for candidate in locked_candidates:
+            expected_revision = expected_revisions.get(candidate.id)
+            _require_candidate_revision(candidate, expected_revision)
+    candidates = [
+        candidate
+        for candidate in locked_candidates
+        if candidate.deleted_at is None
+    ]
     if not candidates:
         return _EMPTY_SOFT_DELETE
     if expected_status_value is not None:
@@ -2371,6 +2831,9 @@ async def soft_delete_candidates(
                 select(VideoPlaceMapping).where(
                     VideoPlaceMapping.place_candidate_id.in_(live_ids)
                 )
+                .order_by(VideoPlaceMapping.id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
             )
         )
         .scalars()
@@ -2406,6 +2869,14 @@ async def soft_delete_candidates(
         candidate.deleted_at = now
         candidate.deletion_reason = reason_text
         candidate.deleted_by = deleted_by
+        if client_operation_id is not None:
+            _record_last_client_operation(
+                candidate,
+                client_operation_id=client_operation_id,
+                action=client_operation_action,
+                occurred_at=now,
+                matched_place_revision=None,
+            )
 
     tombstoned = await feature_export_service.tombstone_candidate_exports(
         session, live_ids, reason=reason_text
@@ -2418,6 +2889,8 @@ async def soft_delete_candidates(
         session, live_ids, reason="soft_delete"
     )
     await session.flush()
+    for candidate in candidates:
+        await session.refresh(candidate, attribute_names=["state_revision"])
     return SoftDeleteSummary(
         candidate_ids=live_ids,
         deleted_candidates=len(candidates),
@@ -2427,64 +2900,202 @@ async def soft_delete_candidates(
     )
 
 
+@dataclass(frozen=True)
+class CandidateReopenResult:
+    """reopen core 결과. 감사 로그와 사용자 안내에 필요한 scalar만 반환한다."""
+
+    candidate: ExtractedPlaceCandidate
+    reopened_from: str
+    tombstoned_exports: int
+    deleted_place_id: int | None
+    video_is_excluded: bool
+
+
 async def reopen_candidate(
-    session: AsyncSession, *, candidate_id: int
-) -> tuple[ExtractedPlaceCandidate, str]:
-    """soft delete 또는 제외(`ignored`)된 후보를 검수 대기로 복귀한다(T-160, PR-09 백엔드).
+    session: AsyncSession,
+    *,
+    candidate_id: int,
+    undo_token: str,
+) -> CandidateReopenResult:
+    """opaque token이 고정한 후보·장소 snapshot만 검수 대기로 되돌린다.
 
-    - soft deleted: 삭제 3필드를 clear 하고 `needs_review` + export `pending`으로
-      되돌린다. 다음 `sync_feature_exports`는 재확정 전까지 tombstone을 유지하고,
-      재확정(ready + 장소 매칭) 시 새 sequence의 upsert를 재발행한다.
-    - `ignored`: `needs_review` + `pending` 복귀.
-    - 이미 `needs_review`: `CandidateReopenConflictError`(409 — 복귀할 것이 없다).
-    - `matched`/`user_corrected`: **의도적 이연** — `CandidateReopenUnsupportedError`(400).
-      확정 해제는 reference count 기반 장소 정리(공유 장소 보호)와 함께 T-184에서
-      구현한다.
-    - 영상 제외(`exclude_video`)로 삭제된 후보를 reopen 해도
-      `youtube_videos.is_excluded`는 별개 상태로 남는다(영상 제외 undo는 T-184
-      정책 소관) — 후보만 검수 큐로 돌아오고 영상은 여전히 수집에서 스킵된다.
-
-    반환: (후보, 복귀 출처 라벨 `deleted`|`ignored`) — 감사 로그용. flush까지만
-    수행하고 commit은 호출자 책임이다.
+    lock 순서는 lifecycle advisory → export advisory → candidate → place →
+    candidate mapping ID → asset ID다.
+    후보가 만든 고아 장소만 제거하며 persistent/legacy/shared 장소와 RustFS 자산 행은
+    보존한다. 영상 제외 상태도 독립 정책이라 절대 해제하지 않는다. commit과 감사 로그는
+    라우트 책임이다.
     """
-    candidate = await session.get(ExtractedPlaceCandidate, candidate_id)
+    token = decode_candidate_undo_token(undo_token)
+    await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
+    candidate = (
+        await session.execute(
+            select(ExtractedPlaceCandidate)
+            .where(ExtractedPlaceCandidate.id == candidate_id)
+            .order_by(ExtractedPlaceCandidate.id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one_or_none()
     if candidate is None:
         raise ValueError(f"candidate not found: {candidate_id}")
-    if candidate.deleted_at is not None:
-        candidate.deleted_at = None
-        candidate.deletion_reason = None
-        candidate.deleted_by = None
-        candidate.match_status = MatchStatus.NEEDS_REVIEW
-        candidate.feature_export_status = FeatureExportStatus.PENDING.value
-        # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 직전 판정
-        # 사유 참고 가치가 있어 보존한다.
-        candidate.reviewed_by = None
-        candidate.reviewed_at = None
-        # 복귀(needs_review+pending)로 기존 export가 tombstone 회수돼야 하므로 dirty로
-        # 표시한다(T-171). 재확정 전까지 sync는 tombstone을 유지한다(freeze).
-        await feature_export_service.mark_candidates_dirty(
-            session, [candidate.id], reason="reopen:deleted"
+    if token.candidate_id != candidate.id:
+        raise CandidateRevisionConflictError(
+            expected_revision=token.candidate_revision,
+            actual_revision=candidate.state_revision,
         )
-        await session.flush()
-        return candidate, "deleted"
-    if candidate.match_status == MatchStatus.IGNORED.value:
-        candidate.match_status = MatchStatus.NEEDS_REVIEW
-        candidate.feature_export_status = FeatureExportStatus.PENDING.value
-        # 검수자 메타는 clear(재검수 시 stale 표시 방지), review_note는 보존.
-        candidate.reviewed_by = None
-        candidate.reviewed_at = None
-        await feature_export_service.mark_candidates_dirty(
-            session, [candidate.id], reason="reopen:ignored"
-        )
-        await session.flush()
-        return candidate, "ignored"
-    if candidate.match_status == MatchStatus.NEEDS_REVIEW.value:
+    current_state = candidate_review_state(candidate)
+    if current_state == MatchStatus.NEEDS_REVIEW.value:
         raise CandidateReopenConflictError(
             "이미 검수 대기(needs_review) 상태라 복귀할 것이 없습니다."
         )
-    raise CandidateReopenUnsupportedError(
-        "확정(matched/user_corrected)된 후보의 되돌리기는 지원하지 않습니다"
-        " (장소 정리 정책은 T-184에서 다룬다)."
+    _require_candidate_revision(candidate, token.candidate_revision)
+    if (
+        str(getattr(candidate.match_status, "value", candidate.match_status))
+        != token.prior_state
+        or current_state != token.effective_state
+    ):
+        raise CandidateRevisionConflictError(
+            expected_revision=token.candidate_revision,
+            actual_revision=candidate.state_revision,
+        )
+    if candidate.matched_place_id != token.matched_place_id:
+        raise CandidatePlaceChangedError(
+            "후보의 장소 연결이 바뀌어 되돌릴 수 없습니다."
+        )
+
+    place: TravelPlace | None = None
+    if token.matched_place_id is not None:
+        place = (
+            await session.execute(
+                select(TravelPlace)
+                .where(TravelPlace.place_id == token.matched_place_id)
+                .order_by(TravelPlace.place_id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if (
+            place is None
+            or place.state_revision != token.matched_place_revision
+        ):
+            raise CandidatePlaceChangedError(
+                "연결 장소가 바뀌어 되돌릴 수 없습니다."
+            )
+
+    mappings = list(
+        (
+            await session.execute(
+                select(VideoPlaceMapping)
+                .where(VideoPlaceMapping.place_candidate_id == candidate.id)
+                .order_by(VideoPlaceMapping.id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mapping_place_ids = {mapping.place_id for mapping in mappings}
+    if token.matched_place_id is None:
+        if mappings:
+            raise CandidatePlaceChangedError(
+                "후보의 장소 매핑이 바뀌어 되돌릴 수 없습니다."
+            )
+    elif not mappings or mapping_place_ids != {token.matched_place_id}:
+        raise CandidatePlaceChangedError(
+            "후보의 장소 매핑이 바뀌어 되돌릴 수 없습니다."
+        )
+
+    assets: list[MediaAsset] = []
+    if place is not None:
+        assets = list(
+            (
+                await session.execute(
+                    select(MediaAsset)
+                    .where(MediaAsset.place_id == place.place_id)
+                    .order_by(MediaAsset.id.asc())
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    # 모든 lock과 token 비교를 끝낸 뒤 mutation을 시작한다. review_note와 provider/audit
+    # evidence는 과거 판단 근거라 보존한다.
+    candidate.deleted_at = None
+    candidate.deletion_reason = None
+    candidate.deleted_by = None
+    candidate.match_status = MatchStatus.NEEDS_REVIEW.value
+    candidate.matched_place_id = None
+    candidate.feature_export_status = FeatureExportStatus.PENDING.value
+    candidate.reviewed_by = None
+    candidate.reviewed_at = None
+    for mapping in mappings:
+        await session.delete(mapping)
+    tombstoned = await feature_export_service.tombstone_candidate_exports(
+        session,
+        [candidate.id],
+        reason="후보 검수 되돌리기",
+    )
+    # 복귀(needs_review+pending)를 durable outbox에도 기록한다. 기존 ledger는 위에서
+    # 이미 tombstone으로 전환했으므로 다음 dirty consume은 freeze되고, 재확정 때만
+    # upsert/reject로 다시 발행된다(T-171).
+    await feature_export_service.mark_candidates_dirty(
+        session, [candidate.id], reason=f"reopen:{current_state}"
+    )
+    await session.flush()
+
+    deleted_place_id: int | None = None
+    if (
+        place is not None
+        and place.lifecycle_origin
+        == PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+    ):
+        remaining_candidates = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(ExtractedPlaceCandidate)
+                .where(
+                    ExtractedPlaceCandidate.matched_place_id == place.place_id,
+                    ExtractedPlaceCandidate.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+        remaining_mappings = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(VideoPlaceMapping)
+                .where(VideoPlaceMapping.place_id == place.place_id)
+            )
+            or 0
+        )
+        if remaining_candidates == 0 and remaining_mappings == 0:
+            for asset in assets:
+                asset.place_id = None
+            await session.flush()
+            deleted_place_id = place.place_id
+            await session.delete(place)
+            await session.flush()
+
+    await session.refresh(candidate, attribute_names=["state_revision"])
+    video_is_excluded = bool(
+        await session.scalar(
+            select(YoutubeVideo.is_excluded).where(
+                YoutubeVideo.video_id == candidate.video_id
+            )
+        )
+        or False
+    )
+    return CandidateReopenResult(
+        candidate=candidate,
+        reopened_from=current_state,
+        tombstoned_exports=tombstoned,
+        deleted_place_id=deleted_place_id,
+        video_is_excluded=video_is_excluded,
     )
 
 
@@ -2494,21 +3105,23 @@ async def exclude_video(
     *,
     reason: str | None = None,
     excluded_by: str | None = "web",
+    commit: bool = True,
 ) -> dict[str, Any] | None:
     """동영상을 제외(블록리스트)하고 관련 POI를 정리한다.
 
     영상을 `is_excluded=True`로 표시(이후 수집에서 스킵), 이 영상의 추출 후보를
     **soft delete**(T-160 — 행·export ledger 보존, 이미 export된 건 tombstone 전환)
-    하고 언급 매핑을 삭제하며, 다른 영상이 더 이상 언급하지 않아 고아가 된 장소만
-    삭제한다. 다른 영상이 같은 장소를 언급하면 그 장소·언급은 보존한다.
+    하고 언급 매핑을 삭제하며, 다른 영상이 더 이상 언급하지 않는 고아 중에서도
+    `candidate_created` 장소만 삭제한다. persistent/legacy/shared 장소는 보존한다.
     반환: 정리 건수 요약. 영상을 찾지 못하면 None.
     """
     video = await session.get(YoutubeVideo, video_id)
     if video is None:
         return None
     # 이후 candidate/mapping 정리와 orphan place 삭제를 하나의 장소 lifecycle
-    # 임계구간에 둔다. merge/delete/geocode가 중간 predicate snapshot을 관측하지 않는다.
+    # 임계구간에 둔다. export lock도 row lock보다 먼저 잡아 sync와 교착하지 않는다.
     await acquire_place_lifecycle_lock(session)
+    await feature_export_service.acquire_feature_export_lock(session)
     video.is_excluded = True
     # 공백 reason이 helper의 사유 필수 검증(ValueError→500)으로 흐르지 않게
     # delete 라우트와 같은 정규화 패턴을 쓴다.
@@ -2556,6 +3169,7 @@ async def exclude_video(
     )
 
     deleted_places = 0
+    preserved_places = 0
     for pid in sorted(place_ids):
         remaining_maps = (
             await session.execute(
@@ -2585,6 +3199,12 @@ async def exclude_video(
             ).scalar_one_or_none()
             if place is None:
                 continue
+            if (
+                place.lifecycle_origin
+                != PlaceLifecycleOrigin.CANDIDATE_CREATED.value
+            ):
+                preserved_places += 1
+                continue
             assets = list(
                 (
                     await session.execute(
@@ -2606,13 +3226,16 @@ async def exclude_video(
             await session.flush()
             deleted_places += 1
 
-    await session.commit()
+    if commit:
+        await session.commit()
     return {
         "video_id": video_id,
         "deleted_candidates": soft_summary.deleted_candidates,
         "deleted_mappings": deleted_mappings,
         "deleted_places": deleted_places,
+        "preserved_places": preserved_places,
         "tombstoned_exports": soft_summary.tombstoned_exports,
+        "video_is_excluded": True,
     }
 
 

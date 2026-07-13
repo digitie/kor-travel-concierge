@@ -41,6 +41,57 @@
 - **검증**: 격리 disposable DB backend 전체 pytest 675 passed(실패 0), migration upgrade/downgrade
   round-trip 단일 head, `test_migration_graph` 통과, origin/main(#196) 0 behind.
 
+## 2026-07-13: T-184 — 검수 undo/reopen·제외 목록·참조 기반 장소 생명주기
+
+- **복구 계약**: IGNORED와 soft delete를 합친 `removed` 목록을 추가하고, IGNORED·삭제·MATCHED·
+  USER_CORRECTED를 서버 발급 opaque descriptor로 `needs_review`에 복귀시킨다. resolve/delete는
+  `expected_revision`, reopen은 candidate/place revision을 확인한다. forward 응답 유실은 요청 전에 만든
+  `client_operation_id`와 exact detail의 최신 operation이 같을 때만 성공으로 인정한다. resolve의 operation
+  표식은 core/audit commit과 행정구역 보강 뒤 final candidate/place revision에 결합하고, 기대 상태인데
+  표식만 아직 없는 finalization 구간은 제한된 backoff 재조회로만 기다린다.
+- **장소·미디어 보존**: 장소 origin을 `candidate_created|persistent|legacy_unknown`으로 명시한다.
+  후보 생성 장소는 origin 후보의 소유물이 아니라 provenance이며, 어느 후보가 마지막 참조를 끊든
+  활성 후보와 mapping이 모두 0일 때만 정리한다. persistent·legacy·공유 장소는 보존하고,
+  `MediaAsset`은 장소 링크만 해제하며 RustFS 객체는 삭제하지 않는다. 영상 제외도 reopen과 독립 유지한다.
+- **동시성·export**: 후보/장소 모든 UPDATE의 revision을 DB trigger가 소유한다. writer 잠금 순서를
+  lifecycle 174→export 175→candidate→place→mapping→asset으로 고정하고, targeted tombstone·후보 전이·
+  감사 로그를 한 commit에 묶었다. 빈 feature snapshot/changes도 선행 sync를 commit한다.
+- **T-171 통합 재감사**: rebase 뒤 feature payload를 쓰는 경로를 전수 대조했다. reverse address 보강,
+  채널/재생목록/영상 metadata upsert, 영상 transcript·URL·reconcile summary, deep research, 설명 보정은
+  export advisory lock 뒤 최신 row를 잠그고 실제 공급 필드가 바뀔 때 같은 영상·장소를 공유하는 활성
+  후보 전체를 durable dirty로 표시한다. stale identity map·빈 cursor page·co-match 후보를 포함한 golden
+  회귀에서 incremental sync 뒤 전량 sync 변경 0건을 요구한다. 외부 LLM 전 read transaction을 닫고
+  apply 때 입력 snapshot/revision을 다시 확인하며, 영상 제외·사람 변경이 먼저면 AI 결과를 버린다.
+- **영상 분석 owner fence**: analysis run에 parent crawl ID·retry generation·claim token을 별도 migration
+  `0027`로 추가했다. parent heartbeat/retry와 token을 `_mark_running`·LLM 실패·성공 apply·stale 재시도
+  소진마다 `parent→analysis` 순서로 잠가 검증한다. 이전 attempt는 새 generation의 analysis와 parent
+  DONE/FAILED/heartbeat를 바꾸지 않는다. 중복 run은 first canonical 결과 이후 `superseded`로 종결하고,
+  실제 입력 drift만 같은 owner가 최대 3회 재시도한다. 사람 review/audit 후보는 reconcile이 상태·메모를
+  덮지 않고 AI 의견만 evidence에 보존한다(ADR-41).
+- **UX**: 마지막 단건 snackbar는 시간 제한 없이 유지하고 다음 성공이 대체한다. removed 행은 복구와
+  상세 확인만 허용하고 외부 장소 provider·AI 의견·VWorld map을 mount하지 않는다. 모바일 상세은
+  생성 시각·operation ID가 포함된 descriptor를 5분 동안 목록으로 한 번만 handoff하며, consume-before-
+  parse·scope·workflow epoch·modal generation으로 오래되거나 늦은 응답을 막는다.
+- **반복 검토**: backend·frontend·동시성·E2E 렌즈로 3회 이상 적대 검토했다. 1차에서 export 늦은
+  upsert, create_all trigger 누락, 감사 원자성, lock inversion, 빈 page sync rollback, modal ABA,
+  복구 화면 외부 API 호출, response-loss 타인 결과 오인을 찾아 수정했다. 2·3차에서 reconcile stale
+  overwrite, batch supersede 경합, merge/export lock 역전, sibling 중복, candidate/place operation ABA,
+  DELETE 반사 응답 신뢰, mobile handoff 만료, finalizer 대기 구간을 추가로 찾아 수정했다. T-171 통합
+  4차에서는 빈 export cursor write skew, 공유 metadata/요약 dirty 누락, LLM transaction 장기 점유,
+  reconcile 사람 판정 덮기, 중복 first-wins 역전, stale parent·child split-brain, RUNNING orphan과 migration
+  불변성을 찾아 수정했다. 알려진 transcript 고정 object key의 evidence 재현성 부채는 T-191에 P1
+  acceptance로 편입했고, 전역 export lock p95·bounded claim은 T-189에서 n150 수치로 마감한다.
+- **n150 최종 검증**: Alembic 단일 head `20260713_0027` clean upgrade와 `0025` downgrade→head
+  round-trip, backend 전체 731 passed(환경 설치 여부를 암묵 가정하던 transcript 2건을 명시적 미설치
+  격리로 수정하고 advisory lock 관측 timing flake도 10초 deadline으로 고정), 변경 Python Ruff 통과.
+  frontend lint·type-check·Vitest 191 passed·production build 통과. Playwright는 fresh DB와 새 서버만 쓰는
+  `CI=1` 격리 실행에서 31 passed·live 전용 4 skipped·실패/재시도 0(7.6분). 이 과정에서 신규 place→origin
+  candidate FK를 고려하지 않은 E2E seed 삭제 순서, backend에 누락된 E2E admin proxy secret, page append 뒤
+  자동 검색 timer 취소 race, 제거 화면 중복 상태 안내를 발견해 수정했다. 자동 검색은 후보·workflow epoch에
+  묶인 300ms debounce로 quota 완충과 stale 방지를 함께 보장한다. lifecycle advisory key 174의 정확한 대기와
+  `FeatureExport` ledger 생성 후 재시드도 별도 검증했다. 종료 뒤 테스트 포트·컨테이너·DB·임시 wrapper
+  잔존 수는 모두 0이다.
+
 ## 2026-07-13: T-170 — 지오코딩 provider별 캐시 (S7)
 
 - **문제**: 같은 장소가 여러 영상에 반복 등장하면 VWorld/Kakao/Naver를 매번 재호출(S7). 100m 반경

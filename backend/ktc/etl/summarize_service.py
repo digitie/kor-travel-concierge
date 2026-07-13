@@ -31,6 +31,7 @@ from ktc.models import (
     YoutubePlaylistVideo,
     YoutubeVideo,
 )
+from ktc.services import feature_export_service
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 
@@ -49,6 +50,18 @@ def _short_text(value: str, *, limit: int = 80) -> str:
     if len(value) <= limit:
         return value
     return f"{value[:limit]}..."
+
+
+def _summarize_video_input_snapshot(video: YoutubeVideo) -> tuple[Any, ...]:
+    """POI prompt 입력과 기존 summary output을 late apply fencing용으로 고정한다."""
+    return (
+        video.description_raw,
+        video.is_excluded,
+        video.transcript_summary,
+        video.description_gemini_corrected,
+        video.description_gemini_corrected_at,
+        video.description_gemini_model,
+    )
 
 
 async def summarize_video(
@@ -95,13 +108,34 @@ async def summarize_video(
     )
     await _report(status_reporter, f"{video_label}의 자막을 RustFS에 저장했습니다.", None)
 
+    # asset commit 뒤 prompt 입력은 최신 video row에서 다시 읽는다. excluded 영상은
+    # 외부 LLM을 호출하지 않고, 읽기 transaction은 LLM 대기 전에 닫는다.
+    video = (
+        await session.execute(
+            select(YoutubeVideo)
+            .where(YoutubeVideo.video_id == video.video_id)
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one()
+    if video.is_excluded:
+        await session.commit()
+        return {
+            "video_id": video.video_id,
+            "status": "excluded",
+            "transcript_asset_id": asset.id,
+            "candidates": 0,
+        }
+    input_snapshot = _summarize_video_input_snapshot(video)
+    description_raw = video.description_raw
+    await session.commit()
+
     # 2) Gemini POI 추출 (파싱 실패 시 재시도) — thread 격리·rate limiter 예약은
     #    게이트웨이(`llm_client`)가 처리한다(T-161).
     try:
         await _report(status_reporter, f"Gemini에서 {video_label}의 장소 후보를 추출 중입니다.", None)
         result = await poi_extraction.extract_pois(
             timestamped_transcript=transcript_text,
-            description_raw=video.description_raw,
+            description_raw=description_raw,
             llm=llm,
             max_retries=max_retries,
         )
@@ -121,17 +155,49 @@ async def summarize_video(
             "candidates": 0,
         }
 
+    # LLM 대기 뒤 export lock을 먼저 잡고 최신 영상 행을 잠근다. 재요약으로 effective
+    # video_summary가 달라지면 같은 영상의 기존 확정 후보 전부를 dirty로 재발행한다.
+    await feature_export_service.acquire_feature_export_lock(session)
+    video = (
+        await session.execute(
+            select(YoutubeVideo)
+            .where(YoutubeVideo.video_id == video.video_id)
+            .with_for_update()
+            .execution_options(populate_existing=True, autoflush=False)
+        )
+    ).scalar_one()
+    if video.is_excluded or _summarize_video_input_snapshot(video) != input_snapshot:
+        status = "excluded" if video.is_excluded else "stale_input"
+        await session.commit()
+        await _report(
+            status_reporter,
+            (
+                f"{video_label}이 제외되어 늦은 장소 추출 결과를 적용하지 않았습니다."
+                if video.is_excluded
+                else f"{video_label} 입력이 변경되어 늦은 장소 추출 결과를 적용하지 않았습니다."
+            ),
+            None,
+        )
+        return {
+            "video_id": video.video_id,
+            "status": status,
+            "stale_input": status == "stale_input",
+            "transcript_asset_id": asset.id,
+            "candidates": 0,
+        }
+    previous_export_summary = feature_export_service.export_video_summary(video)
     video.transcript_summary = result.summary
+    description_report_message: str | None = None
 
     # 3) 영상 설명 보정본 저장 (원문 description_raw 보존)
     if result.description_gemini_corrected:
         video.description_gemini_corrected = result.description_gemini_corrected
         video.description_gemini_corrected_at = datetime.now(timezone.utc)
         video.description_gemini_model = gemini_model or get_settings().GEMINI_ENGINE_VERSION
-        await _report(
-            status_reporter,
-            f"Gemini에서 영상 설명을 보정했습니다. 보정 결과는 \"{_short_text(result.description_gemini_corrected)}\" 입니다.",
-            None,
+        # reporter가 같은 DB session을 commit할 수 있으므로 export 임계구간 밖에서 보낸다.
+        description_report_message = (
+            "Gemini에서 영상 설명을 보정했습니다. 보정 결과는 "
+            f'"{_short_text(result.description_gemini_corrected)}" 입니다.'
         )
 
     # 4) 추출 장소를 needs_review 후보로 생성 (자동 확정 금지)
@@ -185,7 +251,22 @@ async def summarize_video(
         created += 1
 
     video.crawl_status = CrawlStatus.SUMMARIZED
+    if (
+        feature_export_service.export_video_summary(video)
+        != previous_export_summary
+    ):
+        await feature_export_service.mark_video_candidates_dirty(
+            session,
+            video.video_id,
+            reason="video_transcript_summary",
+        )
     await session.commit()
+    if description_report_message is not None:
+        await _report(
+            status_reporter,
+            description_report_message,
+            None,
+        )
     await _report(
         status_reporter,
         f"{video_label}에서 장소 후보 {created}개를 추출해 검수 큐에 저장했습니다.",

@@ -524,6 +524,14 @@ Codex 리뷰(§10.5)의 10단계 순서를 실행 계약으로 채택하고, 사
 - **테스트**: 상태 전이 3종(ignore→reopen, create_place→reopen 고아 정리, match_existing→reopen 장소 보존) + ledger 동기화 회귀 + 멱등(이미 NEEDS_REVIEW인 후보 reopen 시 409 또는 no-op 명시). `tests/e2e` 검수 스펙 실행(상태 select 추가분 갱신).
 - **완료 기준**: 어떤 검수 실수도 1클릭 내 복구, 제외 후보 열람 가능.
 
+> **구현 완료(2026-07-13, T-184)**: 제외와 soft delete를 합친 `removed` 복구 목록, 마지막 단건
+> snackbar, IGNORED·삭제·MATCHED·USER_CORRECTED reopen을 구현했다. 후보/장소 DB revision과 opaque
+> descriptor로 stale 복구를 차단하고, final candidate/place snapshot에 결합한 `client_operation_id`가
+> exact detail의 최신 operation과 같을 때만 응답 유실을 성공으로 승격한다. 후보 생성 장소는 origin
+> 후보의 소유물이 아니라 provenance로
+> 취급해 전역 참조 0일 때만 정리하며 persistent·legacy·공유 장소, `MediaAsset` 행, RustFS 객체,
+> 영상 제외 상태는 보존한다. 복구 전용 화면은 외부 provider와 지도를 호출하지 않는다.
+
 #### PR-10. 검수 일괄 처리 배치 API `[UX P1]` `[S/M]`
 
 > **개정(2026-07-13, §10 반영)**: 상한 500과 "모두"의 충돌 해소(B7) — 로드된 id 목록이 아니라 **filter snapshot을 서버 bulk 액션에 전달**하고 preview count + 확인 token + 크기·분할·retry 계약을 둔다(장시간 단일 트랜잭션 lock 금지). 해외 일괄 제외는 T-160·T-184(가역성) 후.

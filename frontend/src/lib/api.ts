@@ -181,7 +181,17 @@ export type ReviewSourceKind =
   | "visual";
 
 export type ReviewCandidateSort = "newest" | "oldest";
-export type ReviewCandidateStatus = "needs_review" | "ignored";
+export type ReviewCandidateStatus = "needs_review" | "ignored" | "removed";
+export type CandidateReviewState =
+  | "needs_review"
+  | "ignored"
+  | "deleted"
+  | "matched"
+  | "user_corrected";
+export type CandidateUndoDescriptor = {
+  candidate_id: number;
+  token: string;
+};
 export type ReviewGroundingStatus =
   | "verified_raw"
   | "unverified"
@@ -199,6 +209,11 @@ export type UnmatchedCandidate = {
   candidate_category: string | null;
   candidate_category_code: string | null;
   match_status: string;
+  review_state: CandidateReviewState;
+  state_revision: number;
+  last_client_operation_id: string | null;
+  video_is_excluded: boolean;
+  undo?: CandidateUndoDescriptor | null;
   confidence_score: number | null;
   source_kind: ReviewSourceKind;
   grounding_status: ReviewGroundingStatus;
@@ -387,6 +402,8 @@ export type LoginEventSummary = {
 
 export type ResolveCandidateInput = {
   action: "match_existing" | "create_place" | "ignore";
+  expectedRevision: number;
+  clientOperationId: string;
   placeId?: number;
   correctedName?: string;
   latitude?: number;
@@ -401,6 +418,63 @@ export type ResolveCandidateInput = {
   duplicateResolution?: "merge_existing" | "create_new";
   duplicatePlaceId?: number;
   reviewNote?: string;
+};
+
+export type CandidateMutationPayload = {
+  id: number;
+  video_id: string;
+  ai_place_name: string;
+  match_status: string;
+  review_state: CandidateReviewState;
+  state_revision: number;
+  last_client_operation_id: string | null;
+  video_is_excluded: boolean;
+  undo?: CandidateUndoDescriptor | null;
+  matched_place_id: number | null;
+  feature_export_status: string;
+};
+
+export type CandidateMutationPlace = {
+  place_id: number;
+  name: string;
+  description: string | null;
+  gemini_enriched_description: string | null;
+  official_address: string | null;
+  road_address: string | null;
+  latitude: number;
+  longitude: number;
+  category: string | null;
+  category_code_suggestion: string | null;
+  sigungu_code: string | null;
+  sigungu_name: string | null;
+  legal_dong_code: string | null;
+  legal_dong_name: string | null;
+  api_source: string | null;
+  is_geocoded: boolean;
+};
+
+export type ResolveCandidateResult = {
+  status: string;
+  client_operation_id: string;
+  candidate: CandidateMutationPayload;
+  place: CandidateMutationPlace | null;
+  mapping_id: number | null;
+  undo: CandidateUndoDescriptor;
+};
+
+export type DeleteCandidateResult = {
+  deleted: true;
+  id: number;
+  client_operation_id: string;
+  state_revision: number;
+  review_state: "deleted";
+  undo: CandidateUndoDescriptor;
+};
+
+export type ReopenCandidateResult = {
+  status: string;
+  reopened_from: CandidateReviewState;
+  candidate: CandidateMutationPayload;
 };
 
 export type CategoryOption = {
@@ -876,13 +950,15 @@ export async function listLoginEvents(): Promise<LoginEventSummary[]> {
 export async function resolveCandidate(
   candidateId: number,
   input: ResolveCandidateInput,
-): Promise<{ status: string }> {
-  return requestJson<{ status: string }>(
+): Promise<ResolveCandidateResult> {
+  return requestJson<ResolveCandidateResult>(
     `/api/v1/destinations/unmatched/${candidateId}/resolve`,
     {
       method: "POST",
       body: JSON.stringify({
         action: input.action,
+        expected_revision: input.expectedRevision,
+        client_operation_id: input.clientOperationId,
         place_id: input.placeId,
         corrected_name: input.correctedName,
         latitude: input.latitude,
@@ -1163,6 +1239,11 @@ export type CandidateDetail = {
     candidate_category: string | null;
     candidate_category_code: string | null;
     match_status: string;
+    review_state: CandidateReviewState;
+    state_revision: number;
+    last_client_operation_id: string | null;
+    video_is_excluded: boolean;
+    undo?: CandidateUndoDescriptor | null;
     confidence_score: number | null;
     grounding_status: ReviewGroundingStatus;
     is_domestic: boolean | null;
@@ -1197,6 +1278,7 @@ export type CandidateDetail = {
     id: number;
     ai_place_name: string;
     match_status: string;
+    review_state: CandidateReviewState;
     candidate_category: string | null;
     place_id: number | null;
   }[];
@@ -1223,10 +1305,34 @@ export async function getCandidateTranscript(
 
 export async function deleteCandidate(
   id: number,
-): Promise<{ deleted: boolean; id: number }> {
-  return requestJson(`/api/v1/destinations/candidates/${id}`, {
-    method: "DELETE",
+  expectedRevision: number,
+  clientOperationId: string,
+  reason?: string,
+): Promise<DeleteCandidateResult> {
+  const params = new URLSearchParams({
+    expected_revision: String(expectedRevision),
+    client_operation_id: clientOperationId,
   });
+  const normalizedReason = reason?.trim();
+  if (normalizedReason) params.set("reason", normalizedReason);
+  return requestJson<DeleteCandidateResult>(
+    `/api/v1/destinations/candidates/${id}?${params.toString()}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export async function reopenCandidate(
+  descriptor: CandidateUndoDescriptor,
+): Promise<ReopenCandidateResult> {
+  return requestJson<ReopenCandidateResult>(
+    `/api/v1/destinations/unmatched/${descriptor.candidate_id}/reopen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ undo_token: descriptor.token }),
+    },
+  );
 }
 
 export type PlaceMention = {

@@ -609,6 +609,7 @@ async def process_video_batch(
         for alias, it in batch.items()
     }
     created_candidates: list[ExtractedPlaceCandidate] = []
+    supersede_conflicted_pairs: set[tuple[str, str]] = set()
     for poi in pois:
         item = batch.get(poi.video_id)
         if item is None:
@@ -616,6 +617,8 @@ async def process_video_batch(
         video = item["video"]
         source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
         dedup_key = (video.video_id, normalize_place_name(poi.official_name))
+        if dedup_key in supersede_conflicted_pairs:
+            continue
         existing = existing_by_pair.get(dedup_key, [])
         new_priority = _source_kind_priority(source_kind)
         # 같은/상위 우선순위 후보가 이미 있으면 새 후보를 억제한다(멱등 + 자막 우선).
@@ -630,12 +633,27 @@ async def process_video_batch(
         if existing:
             from ktc.services import place_service  # 지연 import(순환 회피)
 
-            await place_service.soft_delete_candidates(
-                session,
-                [c.id for c in existing],
-                reason="superseded_by_higher_priority_source",
-                deleted_by="system",
-            )
+            expected_revisions = {
+                candidate.id: candidate.state_revision for candidate in existing
+            }
+            try:
+                await place_service.soft_delete_candidates(
+                    session,
+                    [candidate.id for candidate in existing],
+                    reason="superseded_by_higher_priority_source",
+                    deleted_by="system",
+                    expected_status=MatchStatus.NEEDS_REVIEW,
+                    expected_revisions=expected_revisions,
+                )
+            except (
+                place_service.CandidateRevisionConflictError,
+                place_service.CandidateStatusConflictError,
+            ):
+                # 초기 dedup SELECT 뒤 사람이 ignore/reopen/delete하거나 evidence를
+                # 갱신했다. helper는 lock 아래 선행조건 확인 전 mutation하지 않으므로
+                # transaction은 계속 사용 가능하며, 이 pair의 신규 후보도 만들지 않는다.
+                supersede_conflicted_pairs.add(dedup_key)
+                continue
         existing_by_pair[dedup_key] = []
         playlist_id = await _source_playlist_id_for_video(session, video.video_id)
         category_code = (
@@ -733,6 +751,9 @@ async def process_video_batch(
         await session.flush()  # candidate.id 확보(같은 트랜잭션)
         from ktc.services import feature_export_service  # 지연 import(순환 회피)
 
+        # 신규 행은 아직 다른 transaction에 보이지 않지만 outbox writer 계약을 일관되게
+        # 유지하고 sync_dirty claim과의 잠금 순서를 고정한다(T-171/T-184).
+        await feature_export_service.acquire_feature_export_lock(session)
         await feature_export_service.mark_candidates_dirty(
             session,
             [c.id for c in created_candidates],
