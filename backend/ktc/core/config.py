@@ -153,8 +153,12 @@ class Settings(BaseSettings):
     # description 단독 후보 경로(T-168, 로드맵 PR-17, §1.3 D1 수율). 자막 전 provider 최종
     # 실패(T-164 판정) 시 영상을 폐기하는 대신, 저장된 영상 설명(제목·태그 포함)이 이 길이
     # 이상이면 그 텍스트로 검수 전용 후보를 추출한다(자동확정 금지, recall 경로). 미달이면
-    # 기존대로 실패(사유 코드 description_too_short). 너무 짧은 설명은 POI 신호가 희박해
-    # 오탐만 늘리므로 하한을 둔다.
+    # 기존대로 실패(사유 코드 description_too_short).
+    # 주의: 이 길이 하한은 **신호 밀도 필터가 아니라 최소 컷**이다 — 극단적으로 짧은 설명만
+    # 배제할 뿐 off-topic(홍보·해시태그 나열 등) 판별은 하지 않는다. 실제 off-topic 필터는
+    # 하위 LLM POI 추출이며, 자막 대량 실패 시 저품질 description 후보가 검수 큐로 유입될 수
+    # 있다. 그 유입량·승인율은 source_kind='description' audit 필터로 분리 측정한다(recall
+    # 경로, §7.1 G9 — 후보 수 증가를 신뢰성 향상으로 계상하지 않는다).
     DESCRIPTION_POI_MIN_LENGTH: int = 200
 
     # --- 자동확정 근접 병합·audit 표본 (T-167, 로드맵 PR-14 개정판, D6·G9) ---

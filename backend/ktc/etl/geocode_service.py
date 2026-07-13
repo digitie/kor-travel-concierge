@@ -119,7 +119,15 @@ async def apply_geocode_to_candidate(
             ),
         )
         candidate.match_status = MatchStatus.NEEDS_REVIEW
-        candidate.review_note = "description_only"
+        # is_domestic None(미확인)은 fail-closed 신호를 보존해 queue_reason이 FOREIGN 버킷으로
+        # 가도록 domestic_unverified로 표기한다(T-166 대칭, description_only가 국내여부 미확인을
+        # 가리지 않게). 명시적 국내(True)만 description_only로 둔다. is_domestic False는 상위
+        # 배치가 지오코딩 대상에서 제외하므로 여기 도달하지 않는다.
+        candidate.review_note = (
+            "domestic_unverified"
+            if candidate.is_domestic is not True
+            else "description_only"
+        )
         candidate.feature_export_status = FeatureExportStatus.PENDING.value
         await session.commit()
         return None
