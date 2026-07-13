@@ -41,6 +41,7 @@ from ktc.models.public_api_key import PublicApiKey
 from ktc.models.search_keyword import SearchKeyword
 from ktc.models.source_target import SourceTarget, TargetType
 from ktc.models.system_setting import SystemSetting
+from ktc.models.transcript_attempt import TranscriptAttemptRecord
 from ktc.models.travel_place import DescriptionReviewStatus, TravelPlace
 from ktc.models.video_place_mapping import VideoPlaceMapping
 from ktc.models.youtube_channel import YoutubeChannel
@@ -69,6 +70,7 @@ __all__ = [
     "VALID_LANES",
     "CrawlRunStageEvent",
     "StageOutcome",
+    "TranscriptAttemptRecord",
     "AuditLog",
     "SystemSetting",
     "GeminiRateState",
