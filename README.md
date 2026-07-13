@@ -57,7 +57,7 @@
 
 앱 런타임/배포는 **Linux Docker 전용**입니다(ADR-23). 기본 실행은 단일 호스트 Docker Compose이며, Windows 사용자는 WSL2(Ubuntu) + Docker 안에서 동일한 명령을 사용합니다. 에이전트/Codex 작업 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 실행합니다(ADR-33). **E2E Playwright 테스트는 n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행합니다.
 
-REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 admin `BACKEND_API_KEY`를 주입합니다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB에서 발급한 `read` 키로 명시된 공급 GET만 호출하며, query `key`에는 DB read 키만 사용할 수 있습니다. production consumer의 실제 key rotation은 T-176 완료 전까지 대기합니다. 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 operator/BFF용 `API_KEYS`를 설정합니다(ADR-24·ADR-36).
+REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버전 없음) `X-API-Key` 인증을 받습니다. 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 admin `BACKEND_API_KEY`를 주입합니다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB에서 발급한 `read` 키로 명시된 공급 GET만 호출하며, query `key`에는 DB read 키만 사용할 수 있습니다. T-176부터 production consumer는 DB read 키만 사용하고 operator/BFF용 정적 admin 인증 정보와 분리합니다. 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 동작하고, 외부에 노출하는 배포는 `APP_ENV=production`과 operator/BFF용 `API_KEYS`를 설정합니다(ADR-24·ADR-36).
 
 ### 환경 변수 설정
 

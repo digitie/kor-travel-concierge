@@ -257,13 +257,13 @@ list_objects_v2(Bucket="kor-travel-concierge")
   - 신규 kill switch 2종은 아직 양쪽 env에 없음(코드 기본 true) — prod 반영은 사용자
     결정 후.
 
-### 6.3 prod 호스트 인벤토리 — **사용자 확인 필요** (이번 작업에서 접근하지 않음)
+### 6.3 prod 호스트 인벤토리 — **일부 확인** (T-176에서 인증 경계만 확인)
 
 | 항목 | 상태 |
 |---|---|
 | 원격 prod 호스트(주소는 운영 기록 참조)의 RustFS `kor-travel-concierge` 버킷 asset 목록·용량 | ❓ 사용자 확인 필요 |
 | prod에서 실제 로드되는 `.env.production` 값(로컬 사본과 drift 여부) | ❓ 사용자 확인 필요 |
-| prod `API_KEYS` 각 키의 사용 주체 매핑(BFF `BACKEND_API_KEY` / `kor-travel-map` consumer `KOR_TRAVEL_MAP_KOR_TRAVEL_CONCIERGE_API_KEY` / 기타) | ❓ 사용자 확인 필요 (B5/T-176 인벤토리와 연계) |
+| prod BFF/operator `API_KEYS`와 `kor-travel-map` consumer `KOR_TRAVEL_MAP_KOR_TRAVEL_CONCIERGE_API_KEY` 사용 주체 | ✅ T-176 완료: `API_KEYS`에는 BFF/operator 정적 admin만 유지하고, consumer는 별도 DB read key를 사용한다. 구 공유 값을 제거했으며 실제 값은 기록하지 않음 |
 | prod whisper 실제 가동 여부(로그 기준 오디오 다운로드 발생 이력) | ❓ 사용자 확인 필요 |
 
 ## 7. 결정 필요 항목 (대기 항목과 확정 항목)
