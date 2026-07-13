@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -432,11 +431,11 @@ async def run_harvest(
             0.18,
         )
         keyword_generator = generator or default_keyword_generator()
-        # Gemini 검색어 보정은 동기 호출이라 thread로 offload해 워커 이벤트 루프를 막지
-        # 않는다(상태 메시지·heartbeat가 멈추지 않도록). 실패 시 generator 내부에서
-        # 템플릿으로 폴백한다.
-        derived = await asyncio.to_thread(
-            generate_derived_keywords, seed_keyword, season, generator=keyword_generator
+        # Gemini 검색어 보정의 thread 격리·rate limiter 예약은 게이트웨이
+        # (`llm_client`)가 처리한다(T-161). 실패 시 generator 내부에서 템플릿으로
+        # 폴백한다.
+        derived = await generate_derived_keywords(
+            seed_keyword, season, generator=keyword_generator
         )
         await ingest_service.persist_derived_keywords(
             session, seed=seed_keyword, derived=derived, season=season

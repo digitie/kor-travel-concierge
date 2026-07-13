@@ -67,14 +67,14 @@ def test_select_rejects_non_dict():
 # --- suggest_category_code (주입형 llm) ---
 
 
-def test_suggest_returns_code_from_fake_llm():
+async def test_suggest_returns_code_from_fake_llm():
     captured = {}
 
     def fake_llm(prompt: str) -> str:
         captured["prompt"] = prompt
         return json.dumps({"category_code": "01050100", "reason": "해변"})
 
-    code = category_suggestion.suggest_category_code(
+    code = await category_suggestion.suggest_category_code(
         name="월정리 해변", category_label="해변", llm=fake_llm
     )
     assert code == "01050100"
@@ -83,23 +83,23 @@ def test_suggest_returns_code_from_fake_llm():
     assert "월정리 해변" in captured["prompt"]
 
 
-def test_suggest_none_llm_returns_none():
-    assert category_suggestion.suggest_category_code(name="월정리 해변", llm=None) is None
+async def test_suggest_none_llm_returns_none():
+    assert await category_suggestion.suggest_category_code(name="월정리 해변", llm=None) is None
 
 
-def test_suggest_empty_name_returns_none():
-    assert category_suggestion.suggest_category_code(name="", llm=lambda p: "{}") is None
+async def test_suggest_empty_name_returns_none():
+    assert await category_suggestion.suggest_category_code(name="", llm=lambda p: "{}") is None
 
 
-def test_suggest_swallows_llm_error():
+async def test_suggest_swallows_llm_error():
     def boom(prompt: str) -> str:
         raise RuntimeError("gemini down")
 
-    assert category_suggestion.suggest_category_code(name="월정리 해변", llm=boom) is None
+    assert await category_suggestion.suggest_category_code(name="월정리 해변", llm=boom) is None
 
 
-def test_suggest_rejects_hallucinated_code():
+async def test_suggest_rejects_hallucinated_code():
     def fake_llm(prompt: str) -> str:
         return json.dumps({"category_code": "12345678"})
 
-    assert category_suggestion.suggest_category_code(name="월정리 해변", llm=fake_llm) is None
+    assert await category_suggestion.suggest_category_code(name="월정리 해변", llm=fake_llm) is None

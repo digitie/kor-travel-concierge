@@ -8,9 +8,8 @@ T-064는 자막 기반 POI 추출 결과와 별도로 Gemini에 공개 YouTube U
 
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
@@ -20,7 +19,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.etl import llm_client
-from ktc.etl.gemini_client import GeminiRequestError, post_generate_content
 from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -31,8 +29,10 @@ from ktc.models import (
 )
 from ktc.services import settings_service
 
-TextLlmCallable = Callable[[str], str]
-YoutubeUrlLlmCallable = Callable[[str, str], str]
+# llm 콜러블은 동기(str) 또는 awaitable 반환을 모두 지원한다 — production은
+# 게이트웨이(`llm_client`) 경유 async, 테스트 fake는 동기 함수로 주입한다(T-161).
+TextLlmCallable = Callable[[str], "str | Awaitable[str]"]
+YoutubeUrlLlmCallable = Callable[[str, str], "str | Awaitable[str]"]
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 URL_SUMMARY_PROMPT_VERSION = "t064-url-summary-v1"
 RECONCILE_PROMPT_VERSION = "t064-reconcile-v1"
@@ -261,38 +261,27 @@ def make_youtube_url_llm(
 ) -> YoutubeUrlLlmCallable:
     """공개 YouTube URL을 `file_data.file_uri`로 Gemini에 직접 전달한다(Gemini 전용).
 
-    이 경로는 디스패처(`llm_client.complete_json`)를 쓰지 않지만, 사용자 사전 프롬프트는
-    동일하게 prepend한다(`runtime.preprompt`).
+    게이트웨이의 멀티모달 진입점(`llm_client.generate_multimodal`)을 경유한다 —
+    사용자 사전 프롬프트 prepend·rate limiter 예약·thread 격리는 게이트웨이가
+    처리한다(T-161).
     """
 
-    def call(prompt: str, video_url: str) -> str:
-        full = llm_client.compose_prompt(runtime.preprompt, prompt)
+    async def call(prompt: str, video_url: str) -> str:
         try:
-            data = post_generate_content(
-                api_key=runtime.gemini_api_key,
-                model=runtime.model,
-                body={
-                    "contents": [
-                        {
-                            "parts": [
-                                {"file_data": {"file_uri": video_url}},
-                                {"text": full},
-                            ]
-                        }
-                    ],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseSchema": URL_SUMMARY_RESPONSE_JSON_SCHEMA,
-                    },
-                },
+            return await llm_client.generate_multimodal(
+                runtime,
+                [
+                    {"file_data": {"file_uri": video_url}},
+                    {"text": prompt},
+                ],
+                response_schema=URL_SUMMARY_RESPONSE_JSON_SCHEMA,
                 timeout_seconds=timeout_seconds,
             )
-        except GeminiRequestError as exc:
+        except llm_client.LlmRequestError as exc:
             raise VideoAnalysisError(
                 "Gemini YouTube URL summary 호출 실패"
                 f"(status={exc.status_code}, model={runtime.model})"
             ) from exc
-        return _extract_gemini_text(data)
 
     return call
 
@@ -322,9 +311,9 @@ def make_text_llm(
     """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 reconcile text `LlmCallable`을 만든다."""
     schema = response_schema or RECONCILE_RESPONSE_JSON_SCHEMA
 
-    def call(prompt: str) -> str:
+    async def call(prompt: str) -> str:
         try:
-            return llm_client.complete_json(runtime, prompt, response_schema=schema)
+            return await llm_client.complete_json(runtime, prompt, response_schema=schema)
         except llm_client.LlmRequestError as exc:
             raise VideoAnalysisError(
                 f"reconcile 호출 실패(status={exc.status_code}, model={runtime.model})"
@@ -349,24 +338,6 @@ def make_gemini_text_llm(
     if not (runtime.gemini_api_key or runtime.is_deepseek):
         raise ValueError("GEMINI_API_KEY가 필요하다")
     return make_text_llm(runtime, response_schema=response_schema)
-
-
-def _extract_gemini_text(payload: dict[str, Any]) -> str:
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        raise VideoAnalysisError("Gemini 응답에 candidates가 없다")
-    content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
-    parts = content.get("parts") if isinstance(content, dict) else None
-    if not isinstance(parts, list):
-        raise VideoAnalysisError("Gemini 응답에 content.parts가 없다")
-    texts = [
-        part.get("text")
-        for part in parts
-        if isinstance(part, dict) and part.get("text")
-    ]
-    if not texts:
-        raise VideoAnalysisError("Gemini 응답 text가 비어 있다")
-    return "\n".join(str(text) for text in texts)
 
 
 async def _mark_running(
@@ -424,10 +395,9 @@ async def run_url_summary_analysis(
             prompt_version=URL_SUMMARY_PROMPT_VERSION,
         )
         resolved_llm = llm or make_youtube_url_llm(runtime)
-        raw_result = await asyncio.to_thread(
-            resolved_llm,
-            build_url_summary_prompt(video),
-            _video_url(video),
+        # thread 격리·rate limiter 예약은 게이트웨이(`llm_client`)가 처리한다(T-161).
+        raw_result = await llm_client.maybe_await(
+            resolved_llm(build_url_summary_prompt(video), _video_url(video))
         )
         result = parse_url_summary(raw_result)
     except Exception as exc:
@@ -566,7 +536,8 @@ async def run_reconcile_analysis(
             url_summary=video.gemini_url_summary_json,
         )
         resolved_llm = llm or make_text_llm(runtime)
-        raw_result = await asyncio.to_thread(resolved_llm, prompt)
+        # thread 격리·rate limiter 예약은 게이트웨이(`llm_client`)가 처리한다(T-161).
+        raw_result = await llm_client.maybe_await(resolved_llm(prompt))
         result = parse_reconcile(raw_result)
     except Exception as exc:
         return await _mark_failed(session, analysis_run, exc)

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ktc.etl import gemini_client, poi_extraction
+from ktc.etl import gemini_client, gemini_rate_limiter, poi_extraction
 from ktc.etl.poi_extraction import POIExtractionError, build_prompt, extract_pois
 
 _VALID_JSON = json.dumps(
@@ -29,8 +29,8 @@ _VALID_JSON = json.dumps(
 )
 
 
-def test_extract_valid():
-    result = extract_pois(
+async def test_extract_valid():
+    result = await extract_pois(
         timestamped_transcript="[00:30] 월정리 카페", description_raw="원문", llm=lambda _: _VALID_JSON
     )
     assert result.summary == "제주 맛집 영상"
@@ -40,7 +40,7 @@ def test_extract_valid():
     assert result.places[0].category == "카페"
 
 
-def test_retry_then_success():
+async def test_retry_then_success():
     calls = {"n": 0}
 
     def flaky_llm(_prompt):
@@ -49,24 +49,24 @@ def test_retry_then_success():
             return "이건 JSON이 아님"  # 1차 파싱 실패
         return _VALID_JSON
 
-    result = extract_pois(
+    result = await extract_pois(
         timestamped_transcript="t", description_raw=None, llm=flaky_llm, max_retries=2
     )
     assert calls["n"] == 2
     assert len(result.places) == 1
 
 
-def test_all_retries_fail_raises():
+async def test_all_retries_fail_raises():
     with pytest.raises(POIExtractionError):
-        extract_pois(
+        await extract_pois(
             timestamped_transcript="t", description_raw=None, llm=lambda _: "not json", max_retries=1
         )
 
 
-def test_schema_validation_rejects_missing_name():
+async def test_schema_validation_rejects_missing_name():
     bad = json.dumps({"summary": "s", "places": [{"speaker_note": "이름 없음"}]})
     with pytest.raises(POIExtractionError):
-        extract_pois(timestamped_transcript="t", description_raw=None, llm=lambda _: bad, max_retries=0)
+        await extract_pois(timestamped_transcript="t", description_raw=None, llm=lambda _: bad, max_retries=0)
 
 
 def test_response_schema_shape():
@@ -76,7 +76,7 @@ def test_response_schema_shape():
     assert schema["properties"]["places"]["items"]["required"] == ["name"]
 
 
-def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
+async def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -107,13 +107,20 @@ def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
 
     monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
+    async def fake_acquire(*, estimated_tokens):
+        captured["estimated_tokens"] = estimated_tokens
+
+    # 게이트웨이 경유 확인: production 콜러블은 rate limiter 예약을 거친다(T-161).
+    monkeypatch.setattr(gemini_rate_limiter, "acquire", fake_acquire)
+
     llm = poi_extraction.make_gemini_llm(
         api_key="gemini-key",
         model="gemini-flash-latest",
         timeout_seconds=3,
     )
 
-    assert llm("프롬프트") == _VALID_JSON
+    assert await llm("프롬프트") == _VALID_JSON
+    assert captured["estimated_tokens"] > 0
     assert captured["url"].endswith("/models/gemini-flash-latest:generateContent")
     assert captured["headers"]["X-goog-api-key"] == "gemini-key"
     assert captured["json"]["generationConfig"]["responseMimeType"] == "application/json"
@@ -141,7 +148,7 @@ def test_build_prompt_handles_missing_description():
     assert "[영상 설명 원문]\n\n" in prompt
 
 
-def test_extract_validates_category_code_against_catalog():
+async def test_extract_validates_category_code_against_catalog():
     # A안: POI 추출이 장소별 8자리 코드를 함께 받고, 카탈로그 검증 통과분만 남긴다.
     payload = json.dumps(
         {
@@ -154,7 +161,7 @@ def test_extract_validates_category_code_against_catalog():
         },
         ensure_ascii=False,
     )
-    result = extract_pois(
+    result = await extract_pois(
         timestamped_transcript="t",
         description_raw=None,
         llm=lambda _: payload,
@@ -173,7 +180,7 @@ def test_build_prompt_embeds_category_catalog():
     assert "8자리 코드" in prompt
 
 
-def test_extract_pois_passes_description_into_llm_prompt():
+async def test_extract_pois_passes_description_into_llm_prompt():
     captured: dict[str, str] = {}
     description = "성산일출봉 근처 카페 정보는 영상 설명에만 있음"
 
@@ -181,7 +188,7 @@ def test_extract_pois_passes_description_into_llm_prompt():
         captured["prompt"] = prompt
         return _VALID_JSON
 
-    extract_pois(
+    await extract_pois(
         timestamped_transcript="[00:05] 안녕하세요",
         description_raw=description,
         llm=capturing_llm,

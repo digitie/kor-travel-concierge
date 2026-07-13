@@ -6,19 +6,21 @@
 없는 코드는 "제안 없음"(None)으로 취급한다.
 
 실제 Gemini 호출은 주입형 `LlmCallable`(prompt -> JSON 문자열)로 분리해, 키 없이도
-파싱·검증을 테스트할 수 있게 한다(`poi_extraction`과 동일 패턴).
+파싱·검증을 테스트할 수 있게 한다(`poi_extraction`과 동일 패턴). production 콜러블은
+게이트웨이(`llm_client`) 경유 async이며 rate limiter 예약·thread 격리는 게이트웨이가
+처리한다(T-161). 테스트 fake는 동기 함수도 지원한다.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from ktc.core.config import get_settings
 from ktc.etl import category_catalog, llm_client
 
-# llm 시그니처: (prompt) -> JSON 문자열
-LlmCallable = Callable[[str], str]
+# llm 시그니처: (prompt) -> JSON 문자열 (동기 또는 awaitable)
+LlmCallable = Callable[[str], "str | Awaitable[str]"]
 
 # Gemini `response_schema`: 코드 1개 + 사유를 구조화 강제.
 RESPONSE_JSON_SCHEMA: dict = {
@@ -72,7 +74,7 @@ def select_category_code(payload: str) -> str | None:
     return code
 
 
-def suggest_category_code(
+async def suggest_category_code(
     *,
     name: str,
     category_label: str | None = None,
@@ -94,7 +96,7 @@ def suggest_category_code(
         address=address,
     )
     try:
-        payload = llm(prompt)
+        payload = await llm_client.maybe_await(llm(prompt))
     except Exception:
         return None
     return select_category_code(payload)
@@ -103,12 +105,12 @@ def suggest_category_code(
 def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
     """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 카테고리 선택 `LlmCallable`을 만든다."""
 
-    def call(prompt: str) -> str:
+    async def call(prompt: str) -> str:
         try:
             # 카테고리 제안은 best-effort(null 허용)이므로 단발 호출만 한다. 느린
-            # 사람-유사 재시도(15~90s)를 타면 동기 호출이 호출부 이벤트 루프를
-            # 오래 막으므로(검수 저장·harvest), max_attempts=1로 빠르게 실패한다.
-            return llm_client.complete_json(
+            # 사람-유사 재시도(15~90s)를 타면 대화형 호출부(검수 저장·harvest)가
+            # 오래 기다리므로, max_attempts=1로 빠르게 실패한다.
+            return await llm_client.complete_json(
                 runtime,
                 prompt,
                 response_schema=RESPONSE_JSON_SCHEMA,
@@ -150,8 +152,8 @@ def default_category_llm() -> LlmCallable | None:
 
 
 # 장소 컨텍스트로 8자리 코드를 고르는 selector. services 계층(예: place_service)이
-# etl을 직접 import하지 않고 주입받아 쓰도록 callable로 노출한다.
-CategoryCodeSelector = Callable[..., "str | None"]
+# etl을 직접 import하지 않고 주입받아 쓰도록 callable로 노출한다(async — 게이트웨이 경유).
+CategoryCodeSelector = Callable[..., "Awaitable[str | None]"]
 
 
 def make_default_selector() -> CategoryCodeSelector | None:
@@ -164,14 +166,14 @@ def make_default_selector() -> CategoryCodeSelector | None:
     if llm is None:
         return None
 
-    def selector(
+    async def selector(
         *,
         name: str,
         category_label: str | None = None,
         description: str | None = None,
         address: str | None = None,
     ) -> str | None:
-        return suggest_category_code(
+        return await suggest_category_code(
             name=name,
             category_label=category_label,
             description=description,

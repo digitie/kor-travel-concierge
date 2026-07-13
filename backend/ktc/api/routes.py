@@ -27,6 +27,7 @@ from ktc.core.security import (
 )
 from ktc.etl import (
     category_catalog,
+    llm_client,
     media_store,
     place_search,
     postprocess_service,
@@ -783,9 +784,9 @@ async def place_search_opinion_endpoint(
         return {"gemini": None, "error": None}
     try:
         runtime = await settings_service.get_llm_runtime(session)
+        # thread 격리·rate limiter 예약은 게이트웨이(`llm_client`)가 처리한다(T-161).
         gemini_opinion = await asyncio.wait_for(
-            asyncio.to_thread(
-                place_search.gemini_place_opinion,
+            place_search.gemini_place_opinion(
                 runtime,
                 query=query,
                 hits=payload.hits,
@@ -803,7 +804,8 @@ async def place_search_opinion_endpoint(
         status = getattr(exc, "status_code", None)
         message = str(exc)
         if (
-            status == 429
+            isinstance(exc, llm_client.GeminiQuotaExceeded)
+            or status == 429
             or "429" in message
             or "quota" in message.lower()
             or "RESOURCE_EXHAUSTED" in message

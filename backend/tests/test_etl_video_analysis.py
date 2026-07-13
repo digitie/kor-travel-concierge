@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ktc.etl import gemini_client, video_analysis_service
+from ktc.etl import gemini_client, gemini_rate_limiter, video_analysis_service
 from ktc.models import (
     ExtractedPlaceCandidate,
     FeatureExportStatus,
@@ -158,7 +158,7 @@ async def test_run_reconcile_analysis_marks_conflict_candidate_needs_review(sess
     assert candidate.provider_evidence_json["reconcile"]["decision"] == "conflict"
 
 
-def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
+async def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -198,13 +198,19 @@ def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
 
     monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
+    async def fake_acquire(*, estimated_tokens):
+        captured["estimated_tokens"] = estimated_tokens
+
+    # 게이트웨이 경유 확인: 멀티모달 호출도 rate limiter 예약을 거친다(T-161).
+    monkeypatch.setattr(gemini_rate_limiter, "acquire", fake_acquire)
+
     llm = video_analysis_service.make_gemini_youtube_url_llm(
         api_key="gemini-key",
         model="gemini-3.5-flash",
         timeout_seconds=12,
     )
 
-    payload = llm("요약하라", "https://www.youtube.com/watch?v=abc")
+    payload = await llm("요약하라", "https://www.youtube.com/watch?v=abc")
 
     assert json.loads(payload)["summary"] == "테스트 요약"
     assert captured["headers"]["X-goog-api-key"] == "gemini-key"
@@ -213,4 +219,6 @@ def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
     parts = captured["json"]["contents"][0]["parts"]
     assert parts[0]["file_data"]["file_uri"] == "https://www.youtube.com/watch?v=abc"
     assert parts[1]["text"] == "요약하라"
+    # media part 보수적 고정 가산이 예약 추정에 포함된다(근거: llm_client 주석).
+    assert captured["estimated_tokens"] >= video_analysis_service.llm_client.MULTIMODAL_MEDIA_TOKEN_SURCHARGE
     assert captured["json"]["generationConfig"]["responseMimeType"] == "application/json"

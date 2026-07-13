@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -20,7 +19,9 @@ from ktc.etl import llm_client
 from ktc.models import TravelPlace
 from ktc.services import settings_service
 
-LlmCallable = Callable[[str], str]
+# llm 시그니처: (prompt) -> JSON 문자열 (동기 또는 awaitable — production은
+# 게이트웨이 경유 async, 테스트 fake는 동기 지원).
+LlmCallable = Callable[[str], "str | Awaitable[str]"]
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -107,9 +108,9 @@ def parse_deep_research(payload: str) -> DeepResearchResult:
 def make_llm(runtime: llm_client.LlmRuntime) -> LlmCallable:
     """선택된 엔진(Gemini/DeepSeek) + 사전 프롬프트로 Deep Research `LlmCallable`을 만든다."""
 
-    def call(prompt: str) -> str:
+    async def call(prompt: str) -> str:
         try:
-            return llm_client.complete_json(
+            return await llm_client.complete_json(
                 runtime, prompt, response_schema=RESPONSE_JSON_SCHEMA
             )
         except llm_client.LlmRequestError as exc:
@@ -162,7 +163,8 @@ async def research_place(
         f"Gemini에서 {place.name} 상세 조사를 실행 중입니다.",
         0.45,
     )
-    raw_result = await asyncio.to_thread(resolved_llm, request_prompt)
+    # thread 격리·rate limiter 예약은 게이트웨이(`llm_client`)가 처리한다(T-161).
+    raw_result = await llm_client.maybe_await(resolved_llm(request_prompt))
     result = parse_deep_research(raw_result)
 
     place.detailed_research_content = result.detailed_research_content

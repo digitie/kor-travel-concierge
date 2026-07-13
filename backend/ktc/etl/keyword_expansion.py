@@ -9,14 +9,15 @@ generator를 연결한다.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from ktc.core.config import get_settings
 from ktc.etl import llm_client
 from ktc.etl.ranking import SEASON_KO
 
-# generator 시그니처: (seed_keyword, season) -> list[str]
-KeywordGenerator = Callable[[str, str], list[str]]
+# generator 시그니처: (seed_keyword, season) -> list[str] (동기 또는 awaitable —
+# production generator는 게이트웨이 경유 async, 테스트 fake·폴백은 동기).
+KeywordGenerator = Callable[[str, str], "list[str] | Awaitable[list[str]]"]
 
 
 def _fallback_generator(seed: str, season: str) -> list[str]:
@@ -26,11 +27,11 @@ def _fallback_generator(seed: str, season: str) -> list[str]:
     return [f"{seed} {s}".strip() for s in suffixes]
 
 
-def generate_derived_keywords(
+async def generate_derived_keywords(
     seed: str, season: str, *, generator: KeywordGenerator | None = None
 ) -> list[str]:
     """파생 키워드를 생성한다. 중복과 시드 자체는 제거한다."""
-    raw = (generator or _fallback_generator)(seed, season)
+    raw = await llm_client.maybe_await((generator or _fallback_generator)(seed, season))
     seen: set[str] = set()
     result: list[str] = []
     for kw in raw:
@@ -56,7 +57,7 @@ def make_llm(runtime: llm_client.LlmRuntime) -> KeywordGenerator:
     반환해, keyword expansion이 harvest 전체를 막지 않게 한다.
     """
 
-    def generate(seed: str, season: str) -> list[str]:
+    async def generate(seed: str, season: str) -> list[str]:
         season_ko = SEASON_KO.get(season, "")
         prompt = (
             f'여행 검색 시드 키워드 "{seed}"(계절 맥락: {season_ko})에 대해 '
@@ -65,7 +66,7 @@ def make_llm(runtime: llm_client.LlmRuntime) -> KeywordGenerator:
             "반드시 주어진 JSON Schema에 맞는 JSON만 출력하라."
         )
         try:
-            payload = llm_client.complete_json(
+            payload = await llm_client.complete_json(
                 runtime,
                 prompt,
                 response_schema=_DERIVED_KEYWORDS_SCHEMA,

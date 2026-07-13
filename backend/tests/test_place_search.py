@@ -146,14 +146,13 @@ async def test_search_naver_local_converts_and_strips():
     assert hit["storage_block_reason"] is None
 
 
-def test_gemini_place_opinion_parses(monkeypatch):
-    monkeypatch.setattr(
-        llm_client,
-        "complete_json",
-        lambda *a, **k: '{"best_name":"감천문화마을","latitude":35.097,"longitude":129.01,"category":"관광지","confidence":0.9,"reason":"세 provider 일치"}',
-    )
+async def test_gemini_place_opinion_parses(monkeypatch):
+    async def fake_complete_json(*a, **k):
+        return '{"best_name":"감천문화마을","latitude":35.097,"longitude":129.01,"category":"관광지","confidence":0.9,"reason":"세 provider 일치"}'
+
+    monkeypatch.setattr(llm_client, "complete_json", fake_complete_json)
     runtime = llm_client.LlmRuntime(model="gemini-2.5-flash", gemini_api_key="k")
-    out = place_search.gemini_place_opinion(
+    out = await place_search.gemini_place_opinion(
         runtime, query="감천문화마을", hits=[{"provider": "google", "name": "감천문화마을"}]
     )
     assert out is not None
@@ -161,20 +160,20 @@ def test_gemini_place_opinion_parses(monkeypatch):
     assert out["confidence"] == 0.9
 
 
-def test_gemini_place_opinion_failure_returns_none(monkeypatch):
-    def boom(*a, **k):
+async def test_gemini_place_opinion_failure_returns_none(monkeypatch):
+    async def boom(*a, **k):
         raise llm_client.LlmRequestError("fail", status_code=500, model="gemini-2.5-flash")
 
     monkeypatch.setattr(llm_client, "complete_json", boom)
     runtime = llm_client.LlmRuntime(model="gemini-2.5-flash", gemini_api_key="k")
     assert (
-        place_search.gemini_place_opinion(
+        await place_search.gemini_place_opinion(
             runtime, query="x", hits=[{"provider": "kakao", "name": "x"}]
         )
         is None
     )
     # 빈 후보면 호출 없이 None.
-    assert place_search.gemini_place_opinion(runtime, query="x", hits=[]) is None
+    assert await place_search.gemini_place_opinion(runtime, query="x", hits=[]) is None
 
 
 @pytest_asyncio.fixture
@@ -225,7 +224,7 @@ async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
         "category": None,
     }
 
-    def fake_opinion(runtime, *, query, hits, **kwargs):
+    async def fake_opinion(runtime, *, query, hits, **kwargs):
         return {
             "best_name": "감천문화마을",
             "latitude": 35.1,
@@ -245,7 +244,7 @@ async def test_place_search_opinion_endpoint_bounded(api_client, monkeypatch):
     assert ok_body["gemini"]["best_name"] == "감천문화마을"
 
     # LLM 실패는 500이 아니라 gemini=null로 흡수.
-    def boom(runtime, *, query, hits, **kwargs):
+    async def boom(runtime, *, query, hits, **kwargs):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(place_search, "gemini_place_opinion", boom)
