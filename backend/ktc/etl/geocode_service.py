@@ -42,7 +42,7 @@ from ktc.models import (
     VideoPlaceMapping,
     utcnow,
 )
-from ktc.services import place_service
+from ktc.services import feature_export_service, place_service
 
 _CANDIDATE_XMIN = literal_column(
     "extracted_place_candidates.xmin::text::bigint",
@@ -447,6 +447,12 @@ async def apply_geocode_to_candidate(
     candidate = current
 
     candidate.confidence_score = decision.confidence
+    # 자동확정(MATCHED→ready=upsert 대상) 또는 needs_review 확정 어느 경로든 export 상태를
+    # 세팅하므로, 이 함수의 모든 커밋 이전에 후보를 dirty로 표시해 둔다(T-171). 함수가 자체
+    # 트랜잭션을 커밋하므로 마킹은 그 커밋에 함께 실린다.
+    await feature_export_service.mark_candidates_dirty(
+        session, [candidate.id], reason="geocode_apply"
+    )
 
     # description 단독 후보(T-168, 로드맵 PR-17, §1.3 D1): 자막 실패 fallback으로 생성된
     # recall 경로 후보다. 자막보다 근거가 약하므로 T-165/166 게이트 통과 여부와 무관하게

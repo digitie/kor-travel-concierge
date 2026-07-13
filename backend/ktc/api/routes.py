@@ -2019,7 +2019,9 @@ async def delete_place(
         reverted = await place_service.delete_place(session, place_id=place_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    await feature_export_service.sync_feature_exports(session, commit=False)
+    # delete_place가 되돌린 후보를 dirty로 표시했으므로, 전량 sync 대신 dirty consume으로
+    # 그 후보들만 tombstone 회수한다(T-171 — 상시 O(N) sync 제거).
+    await feature_export_service.sync_dirty(session, commit=False)
     await audit_service.record(
         session,
         actor_type="web",
