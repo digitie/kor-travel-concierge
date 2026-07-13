@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-170**: 지오코딩 provider별 캐시 — canonical key(provider·endpoint·전체 파라미터·normalization version), 응답 4분류, positive/negative TTL 분리, 정책 matrix 허용 필드만. 선행: T-158. (PR-21 개정판) — **사용자 결정(2026-07-13)**: NCP Maps 결과는 캐시·저장 대상 제외 확정(`docs/provider-policy.md`)
 - [ ] **T-171**: export durable dirty outbox — 관련 엔터티(candidate·place·video·channel·playlist) 변경을 같은 트랜잭션에 outbox 기록, GET은 consume+스로틀, 주기 full reconciliation 안전망. 선행: T-160. (PR-22 개정판, G1)
 - [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
 - [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9)
@@ -51,6 +50,26 @@
 
 ## 완료
 
+- [x] **T-170**: 지오코딩 provider별 캐시 (S7) — 반복 장소 provider 재호출을 DB 캐시로 감소.
+  **provider-policy allowlist 준수가 핵심**: `PROVIDER_CACHE_POLICY`(감사가능 dict, `{cacheable,
+  positive/negative TTL, allowed_fields}`)로 **Kakao만 캐시**(UX cache 허용+최신 유지 의무, positive
+  14일/negative 1일), **VWorld·Naver(NCP)·Naver Local Search·Google Places는 deny-by-default**(약관상
+  DB 저장 금지 + 사용자 결정 NCP 제외 — 캐시 코드 미개입). `geocode_cache`(query_hash PK·provider·
+  response_class·results_json JSONB·created_at, migration 0024, down_revision 0022). canonical key
+  `sha256(provider|endpoint|canonical_params|NORMALIZATION_VERSION)`(공통 60일 TTL 철회). 응답 4분류
+  (success_nonempty|success_empty|transient_error|permanent_error) — **error를 빈 성공으로 캐시 안 함**,
+  positive/negative TTL 분리. lazy 만료(스케줄러 없음 — 로드맵 명시), 캐시 히트도 evidence JSONB 동일
+  형식(계약 불변), force_refresh 훅. Kakao `search_address`/`search_keyword` HTTP 호출을
+  `run_with_geocode_cache`로 감쌈(별도 세션 팩토리, on_conflict_do_update 멱등). 2렌즈 적대적 리뷰:
+  **확정 MAJOR 2**. ① **캐시 best-effort화**(수정): store/lookup 예외가 이미 fetch된 후보를 폐기·전파
+  → 상위 광역 `except`가 삼켜 matched(1.0)를 needs_review 'no_result'로 강등 → lookup/store를
+  try/except로 감싸 로그 후 진행(결과 불변). ② **migration fork**(미수정·문서화): T-183의 0023이
+  0022에서 갈라져 병합 시 multiple heads — 단, origin/main에 0023 미존재라 0024←0022가 현재 단일·정확,
+  **T-183 rebase에서 0023을 0024 뒤로 재부모화(또는 merge revision)해야 함**(Agent B 조정). MINOR
+  (미수정): 캐시 무한 성장은 로드맵 설계(lazy만), 14일 stale은 보수 트레이드오프(<30일). **VWorld 캐시
+  정책 긴장**: 약관 전문 미확보로 보수적 제외 — 전문 확보 시 정책 dict 한 줄로 재검토 가능. 검증: 격리
+  DB backend 전체 pytest 596 passed(pre-existing 1건 외 0), 캐시 테스트 24 passed, migration round-trip
+  단일 head. (2026-07-13, 로드맵 PR-21 개정·S7, docs/provider-policy.md)
 - [x] **T-169**: whisper 수동 재전사 액션 — 자막 최종 실패 영상을 운영자가 명시적으로 whisper 재전사
   (선별 실행, 기본화 아님, §2.2 ③). **사용자 결정(2026-07-13)**: prod 자동 전사(`TRANSCRIPT_WHISPER_
   ENABLED`)는 현행 ON 유지 — auto 동작·기본값 불변, **수동 force·model 인자·상한만** 구현. `transcript.py`

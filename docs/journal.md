@@ -4,6 +4,44 @@
 
 ---
 
+## 2026-07-13: T-170 — 지오코딩 provider별 캐시 (S7)
+
+- **문제**: 같은 장소가 여러 영상에 반복 등장하면 VWorld/Kakao/Naver를 매번 재호출(S7). 100m 반경
+  재사용은 API 호출 **후** dedup이라 호출 자체는 안 줄인다.
+- **핵심 제약(정책 allowlist)**: `docs/provider-policy.md` 매트릭스 정본으로 **캐싱 허용 provider만**
+  저장. `PROVIDER_CACHE_POLICY`(감사가능 dict)로 **Kakao만 cacheable**(제5조 반대해석 UX cache 허용+
+  최신 유지 의무, positive 14일/negative 1일). **VWorld**(지오코더 가이드 "별도 저장장치/DB 저장 불가",
+  실시간)·**Naver NCP Maps**(제7조⑨⑪ 저장 금지 + 사용자 결정 2026-07-13 캐시·저장 제외)·**Naver
+  Local Search**(7.3.③ 캐시 포함 금지)·**Google Places**(메인 지오코딩 경로 밖)는 **deny-by-default**
+  — lookup·store 모두 no-op, 캐시 코드 미개입.
+- **구현**: `geocode_cache`(query_hash PK·provider·response_class·results_json JSONB·created_at,
+  migration 0024 down_revision 0022). canonical key `sha256(provider|endpoint|canonical_params|
+  NORMALIZATION_VERSION)` — 공통 60일 TTL 철회, 정규화 로직 변경 시 version bump로 key 버스트. 응답
+  4분류(success_nonempty|success_empty|transient_error|permanent_error): `raise_for_status`가 429/5xx/4xx를
+  classify 이전에 던져 **error는 캐시 안 함**(success만 store), positive(nonempty)/negative(empty, 짧게)
+  TTL 분리. lazy 만료(정리 스케줄러 없음 — 로드맵 명시), 캐시 히트도 provider_evidence 동일 형식(계약
+  불변, allowed_fields 화이트리스트가 source·result_kind·좌표 등 전 필드 포함), force_refresh 훅. Kakao
+  `search_address`/`search_keyword` HTTP 호출만 `run_with_geocode_cache`로 감쌈. 별도 세션 팩토리
+  (`session.bind` 파생, 메인 트랜잭션과 분리), `on_conflict_do_update`로 2프로세스 동시 upsert 멱등.
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 MAJOR 2**: ① **캐시 best-effort화**(수정): `run_with_geocode_cache`가
+  `cache.store`를 try/except 없이 await하고 store 성공 후에만 후보 반환 → store/lookup 예외(pool timeout·
+  DB hiccup)가 이미 fetch된 후보를 폐기·전파 → `geocode_service`의 광역 `except Exception: kakao_results=[]`
+  가 삼켜 matched(1.0)를 needs_review 'no_result'로 **조용히 강등**(캐시 투명성 불변식 위배) → lookup/store를
+  try/except로 감싸 로그 후 진행(lookup 실패=miss 폴백, store 실패=후보 그대로 반환), 캐시 예외가 지오코딩
+  결과를 절대 안 바꾸게. 테스트 2건 추가. ② **migration fork**(미수정·문서화): Agent B T-183의 0023도
+  0022에서 갈라져 둘 다 머지되면 alembic multiple heads. **origin/main에 0023 미존재**라 0024←0022가 현재
+  단일·정확 — 0023으로 재부모화하면 미존재 revision 참조로 즉시 깨짐. fork는 T-183 rebase에서 0023을
+  0024 뒤로 재부모화(또는 merge revision)해 해소(Agent B 조정 사안).
+- **MINOR(미수정)**: 캐시 무한 성장은 로드맵 설계(lazy 만료·스케줄러 없음), Kakao 14일 stale은 보수적
+  트레이드오프(<30일, 만료 시 재fetch).
+- **VWorld 캐시 정책 긴장**: 약관 전문 미확보(지오코더 가이드 문면만)로 보수적 캐시 제외. 공공데이터
+  라이선스로 완화 여지 있으나 확인 전 단정 안 함 — 전문 확보 시 `PROVIDER_CACHE_POLICY["vworld"].
+  cacheable` 한 줄로 재검토 가능하게 구조화.
+- **금지 준수**: 캐시 금지 provider 저장 없음(deny-by-default), error를 success로 캐시 안 함, evidence/
+  export 형식 불변, 자동확정 게이트(T-165/166)·100m 재사용 미변경.
+- **검증**: 격리 disposable DB backend 전체 pytest 596 passed(pre-existing 1건 외 0), 캐시 테스트 24 passed,
+  migration upgrade/downgrade round-trip 단일 head, `compileall`·`git diff --check` 통과, origin/main(#199) 0 behind.
+
 ## 2026-07-13: T-169 — whisper 수동 재전사 액션 (D1 STT, 선별 실행)
 
 - **문제**: 자막 최종 실패 영상의 STT 보강 수단이 없다. whisper 기본 ON은 N150 CPU에서 1건 수 분~수십
