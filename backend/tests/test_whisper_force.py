@@ -194,6 +194,32 @@ async def test_reprocess_force_whisper_rejects_over_duration(client, session_fac
     assert "w-long" in resp.json()["detail"]
 
 
+async def test_reprocess_force_whisper_rejects_null_duration(client, session_factory):
+    """duration_seconds가 NULL(라이브 다시보기 등)이면 상한을 우회하지 못하고 400."""
+    await _seed_video(session_factory, "w-null", None)
+    resp = await client.post(
+        "/api/v1/destinations/reprocess",
+        json={"video_ids": ["w-null"], "force_whisper": True},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "w-null" in detail
+    assert "미상" in detail  # 사유 구분(길이 미상/비정상)
+
+
+async def test_reprocess_force_whisper_rejects_nonpositive_duration(
+    client, session_factory
+):
+    """duration_seconds=0(또는 음수)도 비정상으로 보고 400."""
+    await _seed_video(session_factory, "w-zero", 0)
+    resp = await client.post(
+        "/api/v1/destinations/reprocess",
+        json={"video_ids": ["w-zero"], "force_whisper": True},
+    )
+    assert resp.status_code == 400
+    assert "w-zero" in resp.json()["detail"]
+
+
 async def test_reprocess_force_whisper_custom_model_passes_through(
     client, session_factory
 ):

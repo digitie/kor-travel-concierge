@@ -493,9 +493,11 @@ async def reprocess_videos(
             or settings.WHISPER_MANUAL_MODEL_SIZE
         )
         extra_payload = {"force_whisper": True, "whisper_model": model_size}
-        # duration cap: 1건당 상한. duration_seconds가 None/미상인 영상은 보수적으로
-        # 허용한다(길이 미상만으로 재전사를 막지 않는다 — 실제 초과는 whisper 실행 시
-        # 자연히 드러난다). cap 초과가 확실한 영상만 400으로 거절한다.
+        # duration cap: 1건당 상한 — 유일한 per-item 상한이라 우회를 허용하면 안 된다.
+        # whisper는 wall-clock 타임아웃도, to_thread 협조 취소도 없어 수 시간짜리 단일
+        # 영상이 batch 단일 레인을 무한 점유해 harvest/스캔을 굶길 수 있다(T-121-E 재발).
+        # 라이브 다시보기·프리미어 아카이브는 duration_seconds가 NULL로 저장되므로, 강제
+        # whisper는 **알려진 양수 duration이고 cap 이하**인 영상만 허용한다(미상/비정상 거절).
         cap = settings.TRANSCRIPT_WHISPER_FORCE_MAX_DURATION_SECONDS
         rows = await session.execute(
             select(YoutubeVideo.video_id, YoutubeVideo.duration_seconds).where(
@@ -503,18 +505,28 @@ async def reprocess_videos(
             )
         )
         durations = {vid: dur for vid, dur in rows.all()}
+        unknown_or_invalid = [
+            vid
+            for vid in video_ids
+            if durations.get(vid) is None or durations[vid] <= 0
+        ]
         too_long = [
             vid
             for vid in video_ids
             if durations.get(vid) is not None and durations[vid] > cap
         ]
-        if too_long:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"whisper 재전사 상한({cap}초) 초과 영상: {', '.join(too_long)}"
-                ),
-            )
+        if unknown_or_invalid or too_long:
+            reasons: list[str] = []
+            if unknown_or_invalid:
+                reasons.append(
+                    "길이 미상/비정상 영상은 whisper 재전사 대상에서 제외됩니다: "
+                    f"{', '.join(unknown_or_invalid)}"
+                )
+            if too_long:
+                reasons.append(
+                    f"duration이 {cap}초를 초과: {', '.join(too_long)}"
+                )
+            raise HTTPException(status_code=400, detail=". ".join(reasons) + ".")
 
     size = max(1, settings.POI_BATCH_MAX_VIDEOS)
     job_ids: list[str] = []
