@@ -278,9 +278,11 @@ def make_youtube_url_llm(
                 timeout_seconds=timeout_seconds,
             )
         except llm_client.LlmRequestError as exc:
+            # 원인 메시지를 포함해 run 실패 기록(last_error)만으로 사유를 진단할 수 있게 한다
+            # (예: "Gemini 응답에 candidates가 없다").
             raise VideoAnalysisError(
                 "Gemini YouTube URL summary 호출 실패"
-                f"(status={exc.status_code}, model={runtime.model})"
+                f"(status={exc.status_code}, model={runtime.model}): {exc}"
             ) from exc
 
     return call
@@ -315,8 +317,9 @@ def make_text_llm(
         try:
             return await llm_client.complete_json(runtime, prompt, response_schema=schema)
         except llm_client.LlmRequestError as exc:
+            # 원인 메시지 포함 — run 실패 기록만으로 사유 진단(위 URL summary와 동일).
             raise VideoAnalysisError(
-                f"reconcile 호출 실패(status={exc.status_code}, model={runtime.model})"
+                f"reconcile 호출 실패(status={exc.status_code}, model={runtime.model}): {exc}"
             ) from exc
 
     return call

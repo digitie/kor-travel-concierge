@@ -70,8 +70,10 @@ def make_llm(runtime: llm_client.LlmRuntime) -> KeywordGenerator:
                 runtime,
                 prompt,
                 response_schema=_DERIVED_KEYWORDS_SCHEMA,
-                # 단발 호출: 429(쿼터 소진) 시 느린 재시도(~90s)로 harvest가 멈추지 않고
-                # 즉시 템플릿 폴백한다. keyword expansion은 best-effort라 안전하다.
+                # 단발 호출: 429(쿼터 소진) 시 느린 HTTP 재시도(~90s)를 타지 않고 바로
+                # 실패해 템플릿 폴백한다(게이트웨이의 분 윈도우 대기는 발생할 수 있음 —
+                # RPD 소진이면 GeminiQuotaExceeded도 아래 폴백으로 흡수).
+                # keyword expansion은 best-effort라 안전하다.
                 max_attempts=1,
             )
             parsed = json.loads(payload)

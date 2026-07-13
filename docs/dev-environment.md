@@ -464,3 +464,23 @@ caddy run --config deploy/Caddyfile --envfile .env.production
 - `docker compose config`로 prod env substitution을 확인합니다.
 - `https://<api>/health` 200, `https://<web>` 로드, 지도/미디어 URL이 `https://<s3-api>/...`로 나오는지 확인합니다.
 - 인증: 키 없이 공급 API가 401, DB read 키 header로 공급 GET이 200, 같은 키로 내부 GET·안전한 쓰기가 403인지 확인합니다. static admin header는 일반 운영 API에 사용하되 `/admin/*`는 계속 BFF proxy만 통과해야 합니다. 브라우저는 same-origin BFF가 admin 키와 proxy credential을 주입하므로 정상 동작합니다. 외부 소비자에는 static admin 키를 배포하지 않습니다.
+
+## 12. Gemini rate limit 티어 반영 절차 (T-161/PR-05 운영 액션)
+
+LLM 게이트웨이(`backend/ktc/etl/llm_client.py`)는 모든 Gemini 호출 전에
+`gemini_rate_limiter`로 quota를 예약합니다. 한도 값(`GEMINI_RATE_RPM/TPM/RPD`)은
+**계약값이 아니라 예시**이며, 실제 한도는 모델·티어·계정 상태에 따라 다릅니다.
+이 항목만은 코드가 아니라 **운영자 액션**입니다.
+
+1. **결제 티어 확인**: Google AI Studio의 rate limits 화면에서 본인 계정/키의 실제
+   RPM/TPM/RPD를 확인합니다. 확인 전에는 기본값(무료 티어 예시: 10/250k/1,500)을
+   올리지 않습니다 — 근거 없이 올리면 429 폭주(T-101/T-105 재발)로 이어집니다.
+2. **`.env.production` 반영**: 확인한 한도를 gitignore된 `.env.production`(또는 `.env`)의
+   `GEMINI_RATE_RPM/TPM/RPD`에 반영합니다(예: 유료 Tier1 gemini-2.5-flash 기준
+   1,000/1,000k/10,000). 커밋 산출물(`.env.example`)에는 placeholder/예시만 둡니다.
+   주의: `GEMINI_RATE_TPM`을 멀티모달 고정 가산(65,536)+텍스트 추정 여유보다 낮게 두면
+   video_analysis(YouTube URL 분석)가 예약 단계에서 즉시 보류됩니다.
+3. **실측 확인**: 반영 후 backend 로그의 `llm_usage provider=... prompt_tokens=...
+   estimated_tokens=...` 구조화 로그로 실측 토큰 분포를 관찰합니다. 이 로그가
+   추정식(`estimate_tokens`, chars//2+2048)과 멀티모달 가산의 보정 근거입니다 —
+   2주 이상 쌓인 뒤 estimated 대비 실측 편차를 보고 조정합니다.
