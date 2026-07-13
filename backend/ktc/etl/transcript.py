@@ -602,13 +602,22 @@ def fetch_via_ytdlp(
 
 
 def transcribe_via_whisper(
-    video_id: str, *, languages: tuple[str, ...] = ("ko", "en")
+    video_id: str,
+    *,
+    languages: tuple[str, ...] = ("ko", "en"),
+    force: bool = False,
+    model_size: str | None = None,
 ) -> TranscriptAttempt:
     """faster-whisper 로컬 전사 최종 폴백 (지연 import, 환경 플래그로 opt-in).
 
     오디오 다운로드(yt-dlp)와 전사(faster-whisper)는 CPU 집약·블로킹·모델 다운로드를
-    수반하므로 기본 비활성(`TRANSCRIPT_WHISPER_ENABLED`)으로 둔다. 자막이 없는
-    영상까지 커버하려면 운영에서 명시적으로 켠다.
+    수반하므로 auto 폴백은 기본 비활성(`TRANSCRIPT_WHISPER_ENABLED`)으로 둔다. 자막이
+    없는 영상까지 커버하려면 운영에서 명시적으로 켠다.
+
+    `force=True`(T-169)면 운영자의 명시적 수동 재전사 경로라 `TRANSCRIPT_WHISPER_ENABLED`
+    게이트를 우회해 실행한다. `force=False`(기본)일 때의 auto 동작은 그대로다 — 게이트가
+    꺼져 있으면 여전히 `disabled`를 반환한다. `model_size`를 주면 env `WHISPER_MODEL_SIZE`
+    대신 그 값을 쓴다.
     """
     import os
 
@@ -632,7 +641,7 @@ def transcribe_via_whisper(
             tool_version=_dist_version("faster-whisper"),
         )
 
-    if os.getenv("TRANSCRIPT_WHISPER_ENABLED", "").strip().lower() not in (
+    if not force and os.getenv("TRANSCRIPT_WHISPER_ENABLED", "").strip().lower() not in (
         "1",
         "true",
         "yes",
@@ -653,7 +662,7 @@ def transcribe_via_whisper(
     from pathlib import Path
 
     url = f"https://www.youtube.com/watch?v={video_id}"
-    model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+    resolved_model_size = model_size or os.getenv("WHISPER_MODEL_SIZE", "base")
     segments: list[TranscriptSegment] = []
     detected_language: str | None = None
     with tempfile.TemporaryDirectory() as tmp:
@@ -679,7 +688,7 @@ def transcribe_via_whisper(
                 TranscriptOutcomeCode.DOWNLOAD_ERROR.value, detail="오디오 다운로드 실패"
             )
         try:
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            model = WhisperModel(resolved_model_size, device="cpu", compute_type="int8")
             whisper_segments, info = model.transcribe(str(audio))
             detected_language = getattr(info, "language", None)
             segments = [
@@ -696,6 +705,27 @@ def transcribe_via_whisper(
         video_id=video_id, source="whisper", language=language, segments=segments
     )
     return done(TranscriptOutcomeCode.SUCCESS.value, result=result, language=language)
+
+
+def whisper_forced_provider(model_size: str | None = None) -> TranscriptProvider:
+    """게이트를 우회해 whisper로만 강제 전사하는 provider를 만든다(T-169 수동 재전사).
+
+    체인 실행부(`_run_provider`)는 provider를 `fn(video_id)`로만 호출하므로 force·model을
+    클로저로 고정한다. 반환 `TranscriptAttempt.provider`는 whisper라 관측·기록도 그대로다.
+    """
+
+    def _provider(video_id: str) -> TranscriptAttempt:
+        return transcribe_via_whisper(video_id, force=True, model_size=model_size)
+
+    _provider.__name__ = "transcribe_via_whisper_forced"
+    return _provider
+
+
+def whisper_forced_chain(
+    model_size: str | None = None,
+) -> tuple[TranscriptProvider, ...]:
+    """whisper 강제 전사만 담은 단일-provider 체인(수동 재전사 fetcher 주입용)."""
+    return (whisper_forced_provider(model_size),)
 
 
 # 기본 폴백 체인(설정이 비었거나 해석 불가할 때).
