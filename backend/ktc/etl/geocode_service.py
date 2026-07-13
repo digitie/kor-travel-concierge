@@ -105,6 +105,25 @@ async def apply_geocode_to_candidate(
     POI 추출 때 후보 evidence에 저장된 값을 복사한다(별도 Gemini 호출 없음, A안).
     """
     candidate.confidence_score = decision.confidence
+
+    # description 단독 후보(T-168, 로드맵 PR-17, §1.3 D1): 자막 실패 fallback으로 생성된
+    # recall 경로 후보다. 자막보다 근거가 약하므로 T-165/166 게이트 통과 여부와 무관하게
+    # **자동확정하지 않는다** — 지오코딩은 수행해 좌표·주소 후보를 검수 참고용 evidence로
+    # 남기되 상태는 needs_review로 고정한다. queue_reason은 파생 로직이 source_kind=
+    # 'description'을 description_only로(지오코딩 사유가 있으면 그 사유로) 처리한다(T-182).
+    if candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value:
+        candidate.provider_evidence_json = _merge_provider_evidence(
+            candidate.provider_evidence_json,
+            geocoding=_geocode_evidence(
+                decision, selected_candidate=decision.candidate
+            ),
+        )
+        candidate.match_status = MatchStatus.NEEDS_REVIEW
+        candidate.review_note = "description_only"
+        candidate.feature_export_status = FeatureExportStatus.PENDING.value
+        await session.commit()
+        return None
+
     candidate.provider_evidence_json = _merge_provider_evidence(
         candidate.provider_evidence_json,
         geocoding=_geocode_evidence(decision),
