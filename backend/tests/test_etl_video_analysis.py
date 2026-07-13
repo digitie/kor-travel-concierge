@@ -198,7 +198,7 @@ async def test_make_gemini_youtube_url_llm_uses_youtube_file_data(monkeypatch):
 
     monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
-    async def fake_acquire(*, estimated_tokens):
+    async def fake_acquire(*, estimated_tokens, max_wait_seconds=None):
         captured["estimated_tokens"] = estimated_tokens
 
     # 게이트웨이 경유 확인: 멀티모달 호출도 rate limiter 예약을 거친다(T-161).

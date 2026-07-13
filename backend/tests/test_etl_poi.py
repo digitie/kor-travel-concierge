@@ -107,7 +107,7 @@ async def test_make_gemini_llm_sends_schema_and_extracts_text(monkeypatch):
 
     monkeypatch.setattr(gemini_client.requests, "post", fake_post)
 
-    async def fake_acquire(*, estimated_tokens):
+    async def fake_acquire(*, estimated_tokens, max_wait_seconds=None):
         captured["estimated_tokens"] = estimated_tokens
 
     # 게이트웨이 경유 확인: production 콜러블은 rate limiter 예약을 거친다(T-161).

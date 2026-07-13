@@ -19,7 +19,9 @@
   (`chars//2+2048`)의 한국어 실측 계수 보정의 데이터 원천이다.
 - **결과 상태**: 성공은 `LlmResult(outcome="ok")`, 일시 오류 재시도 소진·비재시도
   오류는 `LlmRequestError`, 일일 쿼터 거부는 `gemini_rate_limiter.GeminiQuotaExceeded`
-  전파로 구분한다(기존 예외 클래스 유지).
+  전파로 구분한다(기존 예외 클래스 유지). 대화형 경로는 per-call `quota_max_wait`
+  (0=즉시)로 분 윈도우 대기를 제한할 수 있고, 한도 안에 슬롯이 없으면
+  `GeminiQuotaBusy`가 전파된다.
 
 엔진 문자열이 `deepseek-*`이면 DeepSeek(OpenAI 호환)으로, 그 외(`gemini-*`)는 Gemini로
 보낸다. 사용자 사전 프롬프트(`runtime.preprompt`)는 모든 프롬프트 앞에 prepend한다
@@ -51,17 +53,20 @@ from ktc.etl import deepseek_client, gemini_client, gemini_rate_limiter
 logger = logging.getLogger(__name__)
 
 # 게이트웨이 결과 상태 계약의 일부로 재노출 — 호출부는 llm_client만 import해도
-# 일일 쿼터 거부(GeminiQuotaExceeded)를 구분 처리할 수 있다.
+# 일일 쿼터 거부(GeminiQuotaExceeded)와 분 윈도우 혼잡(GeminiQuotaBusy,
+# `quota_max_wait` 지정 시)을 구분 처리할 수 있다.
 GeminiQuotaExceeded = gemini_rate_limiter.GeminiQuotaExceeded
+GeminiQuotaBusy = gemini_rate_limiter.GeminiQuotaBusy
 
-# 멀티모달(media) part 1개당 보수적 고정 가산 토큰 (quota reservation 용).
+# 멀티모달(media) part 1개당 고정 가산 토큰 (quota reservation 용) — **하한(floor) 추정**.
 #
 # 근거: `file_data`(YouTube URL 영상 등)·이미지 입력의 토큰은 Gemini가 서버 측에서
 # 산정하므로(영상 ≈ 263 tokens/s 기본 해상도) 프롬프트 문자 수 기반 추정식으로는
-# 계산할 수 없다. 텍스트 추정값에 media part당 고정 가산을 더해 TPM 안전 마진을
-# 확보하되, 무료 티어 TPM 기본값(250k)보다 충분히 작게 잡아 호출 자체가 즉시
-# 보류되지는 않게 한다(≈ 기본 해상도 영상 4분 분량). 정밀값은 PR-05 usage 실측
-# 로그(`llm_usage`)가 쌓인 뒤 보정한다.
+# 계산할 수 없다. 이 값은 상한이 아니라 하한이다 — 장영상(10~30분)은 실측 26만~47만
+# 토큰에 달해 **과소 예약**될 수 있고, 그 경우 TPM 초과분은 Google 측 429로 흡수된다
+# (provider 재시도/보류 경로가 처리). 무료 티어 TPM 기본값(250k)보다 작게 잡아 호출
+# 자체가 예약 단계에서 즉시 보류되지는 않게 한다(≈ 기본 해상도 영상 4분 분량).
+# 정밀값은 PR-05 usage 실측 로그(`llm_usage`)가 쌓인 뒤 보정한다.
 MULTIMODAL_MEDIA_TOKEN_SURCHARGE = 65_536
 
 
@@ -340,6 +345,7 @@ async def generate(
     temperature: float | None = None,
     timeout_seconds: float = 120.0,
     max_attempts: int | None = None,
+    quota_max_wait: float | None = None,
 ) -> LlmResult:
     """게이트웨이 코어 — 선택된 엔진으로 호출하고 `LlmResult`를 반환한다.
 
@@ -348,6 +354,9 @@ async def generate(
     `asyncio.to_thread`로 격리한다. 실패는 provider 무관 `LlmRequestError`,
     일일 쿼터 거부는 `GeminiQuotaExceeded`로 전파된다(호출부가 자기 에러로 감싼다).
     `max_attempts`를 주면 provider의 느린 사람-유사 재시도 횟수를 덮어쓴다(대화형은 1).
+    `quota_max_wait`를 주면 분 윈도우 대기를 그 시간으로 제한하고(0=즉시), 한도 안에
+    슬롯이 없으면 HTTP 호출 없이 `GeminiQuotaBusy`를 던진다(대화형 경로용 —
+    None(기본)은 현행대로 윈도우가 풀릴 때까지 대기).
     """
     if (prompt is None) == (parts is None):
         raise ValueError("prompt와 parts 중 정확히 하나를 지정해야 한다")
@@ -386,7 +395,10 @@ async def generate(
             )
             # quota reservation — DeepSeek는 별도 쿼터라 비적용(기존 계약 유지).
             estimated_tokens = _estimate_gemini_tokens(resolved_parts, system_instruction)
-            await gemini_rate_limiter.acquire(estimated_tokens=estimated_tokens)
+            await gemini_rate_limiter.acquire(
+                estimated_tokens=estimated_tokens,
+                max_wait_seconds=quota_max_wait,
+            )
             data = await asyncio.to_thread(
                 gemini_client.post_generate_content,
                 api_key=runtime.gemini_api_key,
@@ -402,6 +414,17 @@ async def generate(
             )
             text = extract_gemini_text(data, model=runtime.model)
             usage = _usage_from_gemini(data)
+    except gemini_rate_limiter.GeminiQuotaBusy:
+        # 분 윈도우 혼잡(quota_max_wait 초과) — HTTP 호출 없이 즉시 반환된 상태.
+        _log_usage(
+            provider=provider,
+            model=runtime.model,
+            outcome="quota_busy",
+            elapsed_seconds=time.monotonic() - started,
+            usage=None,
+            estimated_tokens=estimated_tokens,
+        )
+        raise
     except gemini_rate_limiter.GeminiQuotaExceeded:
         _log_usage(
             provider=provider,
@@ -480,6 +503,7 @@ async def complete_json(
     temperature: float | None = None,
     timeout_seconds: float = 120.0,
     max_attempts: int | None = None,
+    quota_max_wait: float | None = None,
 ) -> str:
     """선택된 엔진으로 prompt를 보내고 문자열 응답을 반환한다(게이트웨이 경유).
 
@@ -488,6 +512,7 @@ async def complete_json(
     `system_instruction`을 주면 사전 프롬프트 대신 그것을 시스템 지시로 쓰고 prepend하지
     않는다(자막 교정·POI 배치처럼 전용 지시문이 있는 경우). `response_schema=None`이면
     JSON 강제 없이 평문 응답을 받는다. `temperature`로 무작위성을 낮출 수 있다(교정 0.1).
+    `quota_max_wait=0`이면 분 윈도우 혼잡 시 대기 없이 `GeminiQuotaBusy`(대화형 경로).
     """
     result = await generate(
         runtime,
@@ -497,6 +522,7 @@ async def complete_json(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
+        quota_max_wait=quota_max_wait,
     )
     return result.text
 
@@ -509,6 +535,7 @@ async def complete_text(
     temperature: float | None = None,
     timeout_seconds: float = 120.0,
     max_attempts: int | None = None,
+    quota_max_wait: float | None = None,
 ) -> str:
     """평문(텍스트) 응답 — JSON 강제 없음. 자막 교정 등에 쓴다(의미적 별칭)."""
     return await complete_json(
@@ -519,6 +546,7 @@ async def complete_text(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
+        quota_max_wait=quota_max_wait,
     )
 
 
@@ -531,13 +559,15 @@ async def generate_multimodal(
     temperature: float | None = None,
     timeout_seconds: float = 120.0,
     max_attempts: int | None = None,
+    quota_max_wait: float | None = None,
 ) -> str:
     """Gemini 멀티모달(parts/file_data pass-through) 호출 — video/이미지 입력용.
 
     `parts`는 Gemini `contents[0].parts` 형식 그대로 전달한다
     (예: `[{"file_data": {"file_uri": url}}, {"text": prompt}]`). 현재 소비자는
     video_analysis(YouTube URL 직접 분석)이며, quota reservation은 텍스트 추정 +
-    media part당 고정 가산(`MULTIMODAL_MEDIA_TOKEN_SURCHARGE`)으로 보수적으로 잡는다.
+    media part당 고정 가산(`MULTIMODAL_MEDIA_TOKEN_SURCHARGE` — 하한 추정, 장영상은
+    과소 예약될 수 있고 초과분은 Google 측 429가 흡수)으로 잡는다.
     DeepSeek 엔진에서는 `ValueError`를 던진다(Gemini 전용).
     """
     result = await generate(
@@ -548,5 +578,6 @@ async def generate_multimodal(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
+        quota_max_wait=quota_max_wait,
     )
     return result.text

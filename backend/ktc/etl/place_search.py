@@ -248,9 +248,11 @@ async def gemini_place_opinion(
 ) -> dict[str, Any] | None:
     """후보 목록을 받아 Gemini가 최적 장소를 고른 의견을 반환한다(게이트웨이 경유).
 
-    검수 검색은 대화형이라 기본을 **단발 호출(max_attempts=1)·짧은 타임아웃**으로 둔다.
-    느린 사람-유사 재시도(15초~)를 타지 않으므로 응답이 빠르고, 실패해도 검색 흐름을
-    막지 않는다. LLM/파싱 실패는 None으로 흡수한다.
+    검수 검색은 대화형이라 기본을 **단발 호출(max_attempts=1)·짧은 타임아웃·리미터
+    무대기(quota_max_wait=0)**로 둔다. 느린 사람-유사 재시도(15초~)나 분 윈도우 대기를
+    타지 않으므로 응답이 빠르고, 실패해도 검색 흐름을 막지 않는다. 윈도우 혼잡은
+    `GeminiQuotaBusy`로 즉시 반환된다(호출부가 정확한 안내 메시지로 매핑).
+    LLM/파싱 실패는 None으로 흡수한다.
     """
     if not hits:
         return None
@@ -262,8 +264,14 @@ async def gemini_place_opinion(
             response_schema=GEMINI_OPINION_SCHEMA,
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
+            # 대화형: 분 윈도우가 꽉 차 있으면 대기하지 않고 즉시 GeminiQuotaBusy.
+            quota_max_wait=0,
         )
-    except (llm_client.LlmRequestError, llm_client.GeminiQuotaExceeded):
+    except (
+        llm_client.LlmRequestError,
+        llm_client.GeminiQuotaExceeded,
+        llm_client.GeminiQuotaBusy,
+    ):
         if raise_on_error:
             raise
         return None

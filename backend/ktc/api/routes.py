@@ -795,6 +795,13 @@ async def place_search_opinion_endpoint(
             timeout=12.0,
         )
         return {"gemini": gemini_opinion, "error": None}
+    except llm_client.GeminiQuotaBusy:
+        # 분 윈도우 혼잡(quota_max_wait=0 즉시 반환) — 오도성 "12초 시간 초과" 대신
+        # 정확한 사유를 안내한다(잠시 후 재시도하면 성공할 수 있는 상태).
+        return {
+            "gemini": None,
+            "error": "Gemini 쿼터 윈도우 대기 중 — 잠시 후 재시도하세요. 검색 결과는 정상입니다.",
+        }
     except (asyncio.TimeoutError, TimeoutError):
         return {
             "gemini": None,

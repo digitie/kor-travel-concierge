@@ -64,7 +64,7 @@ async def test_generate_derived_keywords_custom_generator_dedup():
 async def test_make_gemini_keyword_generator_parses_then_falls_back(monkeypatch):
     from ktc.etl import gemini_client, gemini_rate_limiter, keyword_expansion
 
-    async def fake_acquire(*, estimated_tokens):
+    async def fake_acquire(*, estimated_tokens, max_wait_seconds=None):
         return None
 
     # production generator는 게이트웨이 경유 — rate limiter 예약을 stub한다(T-161).

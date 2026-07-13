@@ -28,13 +28,22 @@ _DEEPSEEK_OK = {
 }
 
 
+class _AcquireRecorder(list):
+    """예약 추정 토큰 목록(list 계약 유지) + per-call `max_wait_seconds` 기록."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.wait_limits: list[float | None] = []
+
+
 @pytest.fixture
 def fake_acquire(monkeypatch):
     """rate limiter 예약을 기록형 fake로 대체한다(DB 미사용)."""
-    calls: list[int] = []
+    calls = _AcquireRecorder()
 
-    async def _acquire(*, estimated_tokens: int) -> None:
+    async def _acquire(*, estimated_tokens: int, max_wait_seconds: float | None = None) -> None:
         calls.append(estimated_tokens)
+        calls.wait_limits.append(max_wait_seconds)
 
     monkeypatch.setattr(gemini_rate_limiter, "acquire", _acquire)
     return calls
@@ -244,7 +253,7 @@ async def test_complete_json_wraps_gemini_error(monkeypatch, fake_acquire):
 
 
 async def test_quota_rejection_propagates_and_skips_http_call(monkeypatch):
-    async def deny(*, estimated_tokens: int) -> None:
+    async def deny(*, estimated_tokens: int, max_wait_seconds: float | None = None) -> None:
         raise gemini_rate_limiter.GeminiQuotaExceeded("일일 한도 소진")
 
     called = {"post": 0}
@@ -261,6 +270,149 @@ async def test_quota_rejection_propagates_and_skips_http_call(monkeypatch):
     with pytest.raises(gemini_rate_limiter.GeminiQuotaExceeded):
         await llm_client.complete_json(runtime, "BODY")
     assert called["post"] == 0
+
+
+async def test_quota_max_wait_passthrough_and_busy_skips_http(monkeypatch, fake_acquire):
+    # per-call quota_max_wait이 리미터 max_wait_seconds로 전달된다.
+    monkeypatch.setattr(gemini_client, "post_generate_content", lambda **k: _GEMINI_OK)
+    runtime = llm_client.LlmRuntime(model="gemini-2.0-flash", gemini_api_key="k")
+    await llm_client.complete_json(runtime, "BODY", quota_max_wait=0)
+    await llm_client.complete_json(runtime, "BODY")
+    assert fake_acquire.wait_limits == [0, None]
+
+
+async def test_quota_busy_propagates_and_skips_http_call(monkeypatch, caplog):
+    async def busy(*, estimated_tokens: int, max_wait_seconds: float | None = None) -> None:
+        raise gemini_rate_limiter.GeminiQuotaBusy("분 윈도우 가득 참")
+
+    called = {"post": 0}
+
+    def fake_post(**kwargs):
+        called["post"] += 1
+        return _GEMINI_OK
+
+    monkeypatch.setattr(gemini_rate_limiter, "acquire", busy)
+    monkeypatch.setattr(gemini_client, "post_generate_content", fake_post)
+    runtime = llm_client.LlmRuntime(model="gemini-2.0-flash", gemini_api_key="k")
+    assert llm_client.GeminiQuotaBusy is gemini_rate_limiter.GeminiQuotaBusy
+    with caplog.at_level(logging.INFO, logger="ktc.etl.llm_client"):
+        with pytest.raises(gemini_rate_limiter.GeminiQuotaBusy):
+            await llm_client.complete_json(runtime, "BODY", quota_max_wait=0)
+    # HTTP 호출 없이 즉시 반환 + outcome=quota_busy 로그.
+    assert called["post"] == 0
+    assert any("outcome=quota_busy" in r.message for r in caplog.records)
+
+
+# --- rate limiter max_wait 동작 (DB 없이 — fake state/session으로 admission 로직 검증) ---
+
+
+class _RateSettings:
+    """리미터 한도 stub — env 의존 없이 작은 값으로 고정."""
+
+    def __init__(self, *, rpm: int, rpd: int, tpm: int) -> None:
+        self.GEMINI_RATE_RPM = rpm
+        self.GEMINI_RATE_RPD = rpd
+        self.GEMINI_RATE_TPM = tpm
+
+
+class _NullAsyncCM:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeRateSession:
+    """acquire가 쓰는 최소 세션 표면(begin/execute→scalar_one)만 흉내낸다."""
+
+    def __init__(self, state) -> None:
+        self._state = state
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def begin(self):
+        return _NullAsyncCM()
+
+    async def execute(self, stmt):
+        state = self._state
+
+        class _Result:
+            @staticmethod
+            def scalar_one():
+                return state
+
+        return _Result()
+
+
+def _patch_rate_limiter_state(monkeypatch, *, rpm: int, rpd: int, tpm: int):
+    """DB 대신 in-memory 상태 행으로 리미터를 구동한다(공유 test DB 경합 회피)."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        minute_window_start=datetime.now(timezone.utc),
+        minute_count=0,
+        minute_tokens=0,
+        day_date="",
+        day_count=0,
+    )
+
+    async def noop_ensure_row():
+        return None
+
+    monkeypatch.setattr(gemini_rate_limiter, "_ensure_row", noop_ensure_row)
+    monkeypatch.setattr(
+        gemini_rate_limiter, "async_session_factory", lambda: _FakeRateSession(state)
+    )
+    monkeypatch.setattr(
+        gemini_rate_limiter,
+        "get_settings",
+        lambda: _RateSettings(rpm=rpm, rpd=rpd, tpm=tpm),
+    )
+    return state
+
+
+async def test_acquire_busy_immediately_when_window_full(monkeypatch):
+    state = _patch_rate_limiter_state(monkeypatch, rpm=1, rpd=100, tpm=10_000)
+    # RPM=1: 첫 예약은 성공(카운터 증가), 같은 분 윈도우의 두 번째 예약은
+    # max_wait_seconds=0이면 대기(sleep) 없이 즉시 GeminiQuotaBusy.
+    await gemini_rate_limiter.acquire(estimated_tokens=10, max_wait_seconds=0)
+    assert state.minute_count == 1 and state.day_count == 1
+    with pytest.raises(gemini_rate_limiter.GeminiQuotaBusy):
+        await gemini_rate_limiter.acquire(estimated_tokens=10, max_wait_seconds=0)
+    # busy 거부는 카운터를 소비하지 않는다.
+    assert state.minute_count == 1 and state.day_count == 1
+
+
+async def test_acquire_default_none_still_waits_for_window(monkeypatch):
+    state = _patch_rate_limiter_state(monkeypatch, rpm=1, rpd=100, tpm=10_000)
+    await gemini_rate_limiter.acquire(estimated_tokens=10)
+
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        # 대기 1회 후 윈도우가 풀린 것으로 만들어 두 번째 loop에서 성공시킨다.
+        state.minute_count = 0
+        state.minute_tokens = 0
+
+    monkeypatch.setattr(gemini_rate_limiter.asyncio, "sleep", fake_sleep)
+    # max_wait_seconds=None(기본)은 현행대로 윈도우가 풀릴 때까지 대기한다.
+    await gemini_rate_limiter.acquire(estimated_tokens=10)
+    assert len(slept) == 1 and slept[0] >= 1.0
+
+
+async def test_acquire_rejects_estimate_over_tpm_with_hint(monkeypatch):
+    _patch_rate_limiter_state(monkeypatch, rpm=10, rpd=100, tpm=1_000)
+    with pytest.raises(gemini_rate_limiter.GeminiQuotaExceeded) as exc:
+        await gemini_rate_limiter.acquire(estimated_tokens=5_000)
+    # 설정 TPM이 요청 추정보다 작다는 힌트를 포함한다(.env 조정 안내).
+    assert "GEMINI_RATE_TPM" in str(exc.value)
 
 
 # --- 멀티모달 (parts/file_data pass-through) ---
