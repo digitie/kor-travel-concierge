@@ -13,6 +13,7 @@ from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.models import (
     CrawlRun,
     ExtractedPlaceCandidate,
+    GroundingStatus,
     MatchStatus,
     RunSource,
     RunState,
@@ -305,12 +306,13 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
 
     cases = [
         (
+            # raw grounding 미확인 transcript 후보(T-165) — 최우선 사유 ungrounded.
             "원문 불일치",
             "transcript",
             {"transcript": {"grounding_status": "unverified"}},
             None,
             True,
-            "extraction_only",
+            "ungrounded",
         ),
         (
             "이름 불일치",
@@ -468,6 +470,13 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
                 provider_evidence_json=evidence,
                 review_note=review_note,
                 is_domestic=is_domestic,
+                # ungrounded 사유를 테스트하는 케이스만 미확인으로 두고, 그 외 transcript
+                # 케이스는 verified_raw로 두어 각자의 의도한 사유를 격리 검증한다(T-165).
+                grounding_status=(
+                    GroundingStatus.UNVERIFIED.value
+                    if expected == "ungrounded"
+                    else GroundingStatus.VERIFIED_RAW.value
+                ),
             )
             for (
                 name,
@@ -560,6 +569,52 @@ async def test_unmatched_lightweight_payload_reason_priority_and_filters(
             "/api/v1/destinations/unmatched", params={"source_kind": "unknown"}
         )
     ).status_code == 422
+
+
+async def test_legacy_unknown_grounding_does_not_mask_queue_reason(client, session):
+    # MAJOR 3: legacy_unknown(재처리 전 기존 후보)은 UNGROUNDED로 표기하지 않고 원래 사유를
+    # 유지한다(행동 불가 사유로 backlog을 덮지 않도록). 실제 판정된 missing만 UNGROUNDED.
+    session.add(
+        YoutubeChannel(channel_id="legacy-channel", title="레거시 채널")
+    )
+    session.add(
+        YoutubeVideo(
+            video_id="legacy-video",
+            title="레거시 사유 영상",
+            url="https://example.invalid/legacy",
+            channel_id="legacy-channel",
+        )
+    )
+    await session.flush()
+    session.add_all(
+        [
+            ExtractedPlaceCandidate(
+                video_id="legacy-video",
+                source_kind="transcript",
+                source_text="레거시 지역 불일치",
+                ai_place_name="레거시 지역 불일치",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                review_note="region_mismatch",
+                grounding_status=GroundingStatus.LEGACY_UNKNOWN.value,
+            ),
+            ExtractedPlaceCandidate(
+                video_id="legacy-video",
+                source_kind="transcript",
+                source_text="재처리 미확인",
+                ai_place_name="재처리 미확인",
+                match_status=MatchStatus.NEEDS_REVIEW,
+                review_note="region_mismatch",
+                grounding_status=GroundingStatus.MISSING.value,
+            ),
+        ]
+    )
+    await session.commit()
+
+    body = (await client.get("/api/v1/destinations/unmatched")).json()
+    by_name = {item["ai_place_name"]: item for item in body["items"]}
+    # legacy는 원래 사유(region_mismatch) 유지, 재처리 판정 missing은 ungrounded 최우선.
+    assert by_name["레거시 지역 불일치"]["queue_reason"] == "region_mismatch"
+    assert by_name["재처리 미확인"]["queue_reason"] == "ungrounded"
 
 
 async def test_destinations_501_stable_tie_break_and_page_outside_detail(

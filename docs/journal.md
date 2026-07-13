@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-13: T-165 — raw grounding 게이트 (B3)
+
+- **문제**: 원 PR-13은 `evidence_quote`를 LLM 교정 자막에서 검사했으나 교정본도 생성 모델 산출물이라
+  원문 증거가 아니다(§10 B3). grounding 실패를 배지로만 표시하고 자동확정을 안 막던 것도 문제(§1.3 D3).
+- **구현**: batch POI 스키마에 evidence_quote·confidence 추가, `grounding.py`가 quote를 **raw 자막
+  segment**(T-164 보존, 교정본 아님)와 대조해 `grounding_status` enum(migration 0021)으로 저장.
+  transcript 후보는 verified_raw 아니면 **자동확정 차단**(geocode MATCHED 직전)·**export 제외**
+  (feature_export)·queue_reason ungrounded. LLM 자가 confidence는 기록만(§2.4-3).
+- **적대적 리뷰(PR 전, 2렌즈) — MAJOR 3건**: ① migration이 기존 export된 transcript 후보를
+  legacy_unknown으로 backfill → export 게이트가 이들을 tombstone 회수 → **PinVi curated plan POI 대량
+  소실 위험**. 수정: export·queue 게이트를 재처리로 실제 판정된 unverified/missing에만 적용, legacy는
+  재처리 전까지 기존 노출·사유 유지(legacy UPSERT 유지 신규 테스트). ② queue_reason UNGROUNDED가 기존
+  후보 전부를 덮어 진짜 사유(name/region_mismatch·reconcile) 마스킹 → legacy 제외. ③ POI 추출 LLM은
+  교정본만 입력받아 evidence_quote가 교정본 표기인데 grounding은 raw 대조 → 장소명 띄어쓰기 교정
+  (`부산역 국밥집`→`부산역국밥집`)으로 정상 POI 대량 오차단 → CJK 인접 공백 제거 정규화로 흡수(영문
+  단어 경계 보존). MINOR 4(haystack 메모이즈·not_applicable 기본값·summarize 주석·raw 부재 인지) 반영.
+- **게이트 일관성**: 자동확정·export·queue 세 게이트가 "legacy는 기존 상태 유지, 새 확정만 verified_raw
+  요구"로 정합. 자동확정 게이트는 legacy도 needs_review 보존(재지오코딩 미재진입).
+- **검증**: 격리 DB backend pytest 505 passed(pre-existing 1건 외 0), alembic 0021 round-trip,
+  최신 main(#193) 리베이스 0 behind, `git diff --check` 통과.
+- **후속**: raw-vs-corrected 근본 해결(추출 LLM에 raw 인용 원천 제공)은 T-169 baseline live yield로
+  잔여 오차단율 실측 후 재검토. raw asset 없이 저장된 과거 자막 캐시 재처리는 전량 unverified(fail-safe).
+
 ## 2026-07-13: T-181 — run-queue 단일 폴링·attention 이력
 
 - **작고 정확한 queue snapshot**: `GET /api/v1/runs/queue`를 동적 `/runs/{job_id}`보다 먼저

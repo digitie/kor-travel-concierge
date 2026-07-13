@@ -2681,6 +2681,7 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "match_status": candidate.match_status,
         "matched_place_id": candidate.matched_place_id,
         "confidence_score": candidate.confidence_score,
+        "grounding_status": candidate.grounding_status,
         "is_domestic": candidate.is_domestic,
         "provider_evidence_json": candidate.provider_evidence_json,
         "feature_export_status": candidate.feature_export_status,

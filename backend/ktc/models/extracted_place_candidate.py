@@ -27,7 +27,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from ktc.models.base import Base, TimestampMixin
-from ktc.models.feature_evidence import EvidenceSourceKind, FeatureExportStatus
+from ktc.models.feature_evidence import (
+    EvidenceSourceKind,
+    FeatureExportStatus,
+    GroundingStatus,
+)
 
 # Gemini가 반환하는 타임스탬프 문자열 컬럼 길이. 과거 16자 제한이 16자 초과 타임스탬프
 # (예: "00:22:00 - 00:35:00")에서 truncation 오류를 냈다(라이브 E2E 발견). 넉넉히 64자로 둔다.
@@ -96,6 +100,19 @@ class ExtractedPlaceCandidate(TimestampMixin, Base):
     )
     source_kind: Mapped[str] = mapped_column(
         String(32), nullable=False, default=EvidenceSourceKind.TRANSCRIPT.value
+    )
+    # 근거(evidence)가 원문 소스에 실존하는지의 기계 검증 상태(T-165, 로드맵 B3·G4).
+    # transcript 후보는 `verified_raw`가 아니면 자동확정·export를 차단한다(표시가 아닌
+    # 상태 전이 게이트). 신규 ORM insert 기본값은 `missing`(근거 미확인 fail-safe)이며,
+    # 이 게이트 도입 전 기존 행은 migration이 `legacy_unknown`으로 backfill한다.
+    # 향후 비-transcript producer(description=T-168, visual=T-173)는 각자의 grounding
+    # 규칙을 적용하거나, 규칙 도입 전까지 생성 시 `not_applicable`을 명시 세팅한다
+    # (현재 게이트는 transcript 전용이라 비-transcript의 `missing` 기본값은 무해).
+    grounding_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=GroundingStatus.MISSING.value,
+        server_default=GroundingStatus.LEGACY_UNKNOWN.value,
     )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     ai_place_name: Mapped[str] = mapped_column(String(255), nullable=False)

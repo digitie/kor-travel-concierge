@@ -21,6 +21,7 @@ from ktc.etl import (
     batch_poi,
     category_catalog,
     gemini_rate_limiter,
+    grounding,
     llm_client,
     media_store,
     transcript_correction,
@@ -170,6 +171,9 @@ async def process_video_batch(
         transcript_source = "cached"
         raw_asset_id: int | None = None
         corrected: str | None = None
+        # raw grounding 대조 원천(원본 자막). 교정본이 아니라 저장된 원본 자막을 쓴다
+        # (T-165). 모든 경로에서 확보하며, 확보 못 하면 grounding은 UNVERIFIED로 fail-close.
+        grounding_raw_text: str | None = None
 
         # POI부터: 저장된 교정본을 그대로 재사용해 fetch·교정을 건너뛴다.
         if start_stage == "poi":
@@ -184,6 +188,14 @@ async def process_video_batch(
                     session, video_id=video.video_id, asset_type=AssetType.TRANSCRIPT
                 )
                 raw_asset_id = raw_asset.id if raw_asset is not None else None
+                # grounding 대조용 원본 자막을 함께 로드한다(교정본만 재사용하는 경로에서도
+                # raw 대조가 가능하도록 — 없으면 None으로 두어 fail-close).
+                grounding_raw_text = await media_store.load_latest_asset_text(
+                    session,
+                    store,
+                    video_id=video.video_id,
+                    asset_type=AssetType.TRANSCRIPT,
+                )
                 # 캐시 교정본 재사용도 성공 자막 확보이므로 요약 캐시를 갱신한다(MINOR-3).
                 _apply_cached_transcript_cache(video, raw_asset)
                 await _report(
@@ -299,6 +311,8 @@ async def process_video_batch(
                     video_id=video.video_id,
                 )
                 raw_asset_id = raw_asset.id
+            # grounding 대조 원천은 교정 전 원본 자막이다(교정본 아님, T-165).
+            grounding_raw_text = raw_text
             await _report(status_reporter, f"{label}의 자막을 교정 중입니다.")
             # 긴 영상 대응 절단(D7 미통지 해소): 원 길이→절단 길이를 작업 로그에 남긴다.
             correction_input = raw_text[:_MAX_TRANSCRIPT_CHARS]
@@ -372,6 +386,7 @@ async def process_video_batch(
             "transcript_source": transcript_source,
             "asset_id": raw_asset_id,
             "corrected": corrected,
+            "raw_text": grounding_raw_text,
         }
     await session.commit()
 
@@ -499,6 +514,12 @@ async def process_video_batch(
             )
         )
         existing_pairs = {(str(v), str(n)) for v, n in rows.all()}
+    # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
+    # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
+    grounding_indexes: dict[str, grounding.GroundingIndex] = {
+        alias: grounding.build_grounding_index(it.get("raw_text"))
+        for alias, it in batch.items()
+    }
     created_candidates: list[ExtractedPlaceCandidate] = []
     for poi in pois:
         item = batch.get(poi.video_id)
@@ -515,6 +536,12 @@ async def process_video_batch(
             or category_catalog.UNKNOWN_CATEGORY_CODE
         )
         category_label = category_catalog.label_for_or_unknown(category_code)
+        # raw 자막 대조 grounding(T-165, B3). 교정본이 아니라 원본 자막과 대조한다.
+        # 실패(unverified/missing) 후보도 폐기하지 않고 저신뢰로 마킹만 하며(사유 표시),
+        # verified_raw가 아니면 아래 지오코딩 자동확정·export가 차단된다.
+        grounded = grounding.evaluate_transcript_grounding(
+            poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
+        )
         candidate = ExtractedPlaceCandidate(
             video_id=video.video_id,
             source_channel_id=video.channel_id,
@@ -528,6 +555,7 @@ async def process_video_batch(
             timestamp_end=poi.timestamp_end,
             candidate_category=category_label,
             match_status=MatchStatus.NEEDS_REVIEW,
+            grounding_status=grounded.status.value,
             is_domestic=poi.is_domestic,
             review_note=(
                 "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
@@ -545,6 +573,16 @@ async def process_video_batch(
                     "category_source": "llm"
                     if poi.category_code
                     else ("default" if normalized_default_category else "unknown"),
+                    # raw grounding 근거(T-165). quote·판정·매칭 세그먼트 ref를 보존한다.
+                    # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
+                    "evidence_quote": grounded.evidence_quote,
+                    "grounding_status": grounded.status.value,
+                    "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
+                    "matched_segment_index": grounded.matched_segment_index,
+                    "matched_segment_start_seconds": (
+                        grounded.matched_segment_start_seconds
+                    ),
+                    "llm_confidence": poi.confidence,
                 }
             },
             feature_export_status=FeatureExportStatus.PENDING.value,

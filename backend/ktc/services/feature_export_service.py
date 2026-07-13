@@ -28,10 +28,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ktc.models import (
+    EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExport,
     FeatureExportOperation,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     TravelPlace,
     YoutubeChannel,
@@ -230,6 +232,30 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return f"sha256:{digest}"
 
 
+# 재처리로 grounding이 **실제 판정**돼 실패한 상태(=근거가 원문에 없음). export 차단·
+# tombstone 회수는 이 두 상태에만 적용한다.
+_GROUNDING_EXPORT_BLOCK = frozenset(
+    {GroundingStatus.UNVERIFIED.value, GroundingStatus.MISSING.value}
+)
+
+
+def _export_grounding_blocked(candidate: ExtractedPlaceCandidate) -> bool:
+    """transcript 후보가 재처리로 grounding 실패(unverified/missing)로 판정되면 export를 막는다.
+
+    T-165 G4의 defense-in-depth. 단, **legacy_unknown은 차단하지 않는다**(코디네이터 MAJOR 2):
+    migration이 기존 MATCHED·export된 후보를 legacy_unknown으로 backfill하는데, 이를 차단하면
+    `_classify`가 대량 TOMBSTONE을 발행해 krtour-map/PinVi에 inactive가 쏟아지고 curated plan
+    POI가 소실된다. "재처리 전까지 기존 노출 유지, 재평가로 unverified/missing이 되면 회수"
+    원칙을 따른다. verified_raw·not_applicable도 허용, 사람 확정(user_corrected)도 허용한다.
+    LLM 자가 보고 confidence는 이 판단에 쓰지 않는다.
+    """
+    if candidate.source_kind != EvidenceSourceKind.TRANSCRIPT.value:
+        return False
+    if candidate.match_status == MatchStatus.USER_CORRECTED.value:
+        return False
+    return candidate.grounding_status in _GROUNDING_EXPORT_BLOCK
+
+
 def _classify(
     candidate: ExtractedPlaceCandidate, *, has_row: bool
 ) -> tuple[str | None, str | None, str | None]:
@@ -251,9 +277,14 @@ def _classify(
                 candidate.review_note,
             )
         return None, None, None
-    if status in EXPORTABLE_STATUSES and candidate.matched_place_id is not None:
+    if (
+        status in EXPORTABLE_STATUSES
+        and candidate.matched_place_id is not None
+        and not _export_grounding_blocked(candidate)
+    ):
         return FeatureExportOperation.UPSERT.value, status, None
-    # pending/needs_review: 과거 export가 있으면 tombstone, 없으면 미노출.
+    # pending/needs_review(또는 grounding 미확인 auto-match): 과거 export가 있으면
+    # tombstone으로 회수, 없으면 미노출.
     if has_row:
         return FeatureExportOperation.TOMBSTONE.value, status, None
     return None, None, None
