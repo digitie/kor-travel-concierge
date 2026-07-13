@@ -372,6 +372,11 @@ async def test_transcript_handler_enqueues_poi_batch(session):
         )
     ).scalars().all()
     assert len(poi_runs) == 1
+    # T-163: transcript splitter가 낳는 poi_batch child는 배치 레인이고
+    # payload에 부모 job_id(source_job_id) lineage가 실린다.
+    child = poi_runs[0]
+    assert child.lane == worker.LANE_BATCH
+    assert json.loads(child.payload_json)["source_job_id"] == claimed.id
 
 
 async def test_run_once_executes_deep_research_default_handler(

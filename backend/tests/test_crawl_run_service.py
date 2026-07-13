@@ -429,3 +429,31 @@ async def test_requeue_stale_preserves_lane(session):
     claimed = await svc.claim_next_pending(session, lane=LANE_INTERACTIVE)
     assert claimed is not None
     assert claimed.id == run.id
+
+
+async def test_requeue_stale_concurrent_no_double_requeue(session_factory):
+    """2 lane 워커가 동시에 requeue_stale해도 같은 stale run을 중복 재투입하지 않는다.
+
+    FOR UPDATE SKIP LOCKED로 한 워커만 stale run을 처리하고 다른 워커는 건너뛴다
+    (retry_count가 2가 아니라 1). 하드닝 회귀(T-163).
+    """
+    async with session_factory() as s:
+        run = await svc.create_run(s, job_type="harvest", source="web", lane=LANE_BATCH)
+        await svc.claim_next_pending(s, lane=LANE_BATCH)
+        run_db = await svc.get_run(s, run.id)
+        run_db.heartbeat_at = utcnow() - timedelta(seconds=600)
+        await s.commit()
+
+    async def requeue_one():
+        async with session_factory() as rs:
+            return await svc.requeue_stale(rs, threshold_seconds=300)
+
+    first, second = await asyncio.gather(requeue_one(), requeue_one())
+
+    # 정확히 한 워커만 처리한다(다른 하나는 SKIP LOCKED 또는 이미 PENDING이라 0건).
+    assert sorted([first, second]) == [0, 1]
+    async with session_factory() as vs:
+        refreshed = await svc.get_run(vs, run.id)
+        assert refreshed.state == RunState.PENDING
+        assert refreshed.retry_count == 1  # 중복 재투입 없음
+        assert refreshed.lane == LANE_BATCH

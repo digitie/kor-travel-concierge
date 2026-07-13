@@ -275,6 +275,7 @@ async def harvest_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any
             post_video_ids,
             source=RunSource.SCHEDULER.value,
             default_category_code=_default_category_code_from_payload(payload),
+            source_job_id=run.id,
         )
         await report_status(
             f"영상 {len(post_video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
@@ -305,6 +306,7 @@ async def transcript_handler(session: AsyncSession, run: CrawlRun) -> dict[str, 
         video_ids,
         source=RunSource.WEB.value,
         default_category_code=_default_category_code_from_payload(payload),
+        source_job_id=run.id,
     )
     await report_status(
         f"영상 {len(video_ids)}개를 POI 배치 작업 {len(batch_run_ids)}건으로 등록했습니다.",
@@ -319,10 +321,16 @@ async def _enqueue_poi_batches(
     *,
     source: str,
     default_category_code: str | None = None,
+    source_job_id: int | None = None,
 ) -> list[int]:
     """video_ids를 ≤POI_BATCH_MAX_VIDEOS개씩 묶어 `poi_batch` 작업으로 enqueue한다.
 
     POI 추출은 묶음 단위라 개별 영상이 아닌 job 단위로만 처리한다(예: 15개→[10,5] 2건).
+
+    `source_job_id`(부모 run의 id)를 받으면 child payload에 `source_job_id`로 실어
+    parent→child lineage를 payload 레벨로 전파한다(PR-04 개정). self-FK 컬럼은 두지
+    않는다 — 추적엔 payload로 충분하다. child(poi_batch_handler)는 이 필드를 읽지
+    않으므로 무시돼도 무해하다.
     """
     unique = list(dict.fromkeys(str(v) for v in video_ids if v))
     if not unique:
@@ -334,6 +342,8 @@ async def _enqueue_poi_batches(
         payload: dict[str, Any] = {"video_ids": chunk}
         if default_category_code:
             payload["default_category_code"] = default_category_code
+        if source_job_id is not None:
+            payload["source_job_id"] = source_job_id
         run = await crawl_run_service.create_run(
             session,
             job_type="poi_batch",
@@ -553,7 +563,7 @@ async def source_scan_handler(session: AsyncSession, run: CrawlRun) -> dict[str,
         )
         if discovered:
             backlog_runs = await _enqueue_poi_batches(
-                session, discovered, source=RunSource.SCHEDULER.value
+                session, discovered, source=RunSource.SCHEDULER.value, source_job_id=run.id
             )
     summary["poi_backlog_runs"] = backlog_runs
     await crawl_run_service.append_status_log(
@@ -909,7 +919,9 @@ async def worker_loop(
     scheduler = AsyncIOScheduler(**scheduler_kwargs)
     # job 등록/제거는 start() 이후에 한다 — persistent SQLAlchemyJobStore는 start()
     # 시점에 연결되므로 구 job id 제거가 실제 store 행에 반영되려면 running 상태여야
-    # 한다(T-163). start()와 register 사이에는 await가 없어 구 job이 한 tick도 못 돈다.
+    # 한다(T-163). 근거: start() 직후 register_worker_jobs(구 job 제거)까지 await가
+    # 없어 이벤트 루프가 job을 dispatch할 틈이 없다 → 구 crawl-run-worker는 단 한 번도
+    # dispatch되기 전에 제거된다.
     scheduler.start()
     register_worker_jobs(
         scheduler,

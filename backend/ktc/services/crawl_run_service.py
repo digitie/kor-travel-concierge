@@ -614,12 +614,20 @@ async def requeue_stale(
 
     재시도 여유가 있으면 `pending`으로 되돌리고 `retry_count`를 증가시킨다.
     최대 재시도를 초과하면 `failed`로 격리한다. 처리한 작업 수를 반환한다.
+
+    2개 lane 워커가 매 tick 이 함수를 동시에 실행하므로(lane 무관 공통), stale 대상
+    select에 `FOR UPDATE SKIP LOCKED`를 걸어 두 워커가 같은 stale run을 중복 재투입하지
+    않게 한다(각자 disjoint 집합만 처리). lane 보존·재투입 semantics는 불변(T-163).
     """
     cutoff = utcnow() - timedelta(seconds=threshold_seconds)
-    stmt = select(CrawlRun).where(
-        CrawlRun.state == RunState.RUNNING,
-        CrawlRun.heartbeat_at.is_not(None),
-        CrawlRun.heartbeat_at < cutoff,
+    stmt = (
+        select(CrawlRun)
+        .where(
+            CrawlRun.state == RunState.RUNNING,
+            CrawlRun.heartbeat_at.is_not(None),
+            CrawlRun.heartbeat_at < cutoff,
+        )
+        .with_for_update(skip_locked=True)
     )
     result = await session.execute(stmt)
     stale_runs = list(result.scalars().all())
