@@ -228,3 +228,7 @@ def test_wants_sources_parses_include_token():
     assert theme_service.wants_sources("sources") is True
     assert theme_service.wants_sources("foo, sources") is True
     assert theme_service.wants_sources("foo") is False
+    # 대소문자 무시.
+    assert theme_service.wants_sources("Sources") is True
+    assert theme_service.wants_sources("SOURCES") is True
+    assert theme_service.wants_sources("foo, SoUrCeS") is True

@@ -182,8 +182,8 @@ X-API-Key: ...
 
 1. **`places` → `items`**: 최상위 `places` 배열이 공통 envelope의 `items`로 이동했다.
    페이지네이션 필드(`next_cursor`/`has_more`/`total`/`newest_id`/`newer_than`)가 추가됐다.
-   `theme` 객체(`kind`/`value`/`poi_count`, 동영상은 `title`·`min_required`·`sufficient` 포함)는
-   유지된다.
+   `theme` 객체(`kind`/`value`/`poi_count`, 동영상은 추가로 `title`)는 유지된다. 동영상
+   테마의 `min_required`·`sufficient`는 `theme` 하위가 아니라 응답 **top-level** 필드다.
 2. **`source_videos` 기본 제외**: POI item의 `source_videos` 배열이 기본 응답에서 빠졌다.
    좌표만 필요한 소비자의 payload가 줄어든다. 출처 근거가 필요하면 `include=sources`로 요청한다.
 

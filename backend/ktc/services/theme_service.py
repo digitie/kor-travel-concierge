@@ -92,11 +92,12 @@ def _theme_place_payload(
 def wants_sources(include: str | None) -> bool:
     """`include` 쿼리에 `sources` 토큰이 있으면 source_videos를 포함한다.
 
-    쉼표로 여러 값을 넣을 수 있으나 현재는 `sources`만 인식한다.
+    쉼표로 여러 값을 넣을 수 있으나 현재는 `sources`만 인식한다. 대소문자는 무시한다
+    (`Sources`/`SOURCES`도 포함으로 처리).
     """
     if not include:
         return False
-    return "sources" in {token.strip() for token in include.split(",")}
+    return "sources" in {token.strip().lower() for token in include.split(",")}
 
 
 _THEME_KIND_ORDER = {"channel": 0, "playlist": 1, "keyword": 2}
@@ -370,9 +371,11 @@ async def get_video_theme_places(
 
     매치/검수 완료된 POI가 `VIDEO_THEME_MIN_POIS`개 이상일 때에만 `items`를 채운다.
     미만이면 `sufficient=false`와 함께 빈 목록을 반환한다(정책상 미공개, 이유 노출).
-    게이트는 snapshot 전체 POI 수(`page.total`)로 판정하므로 페이지를 넘겨도 일관되며,
-    미공개일 때는 `next_cursor`/`has_more`를 노출하지 않는다. `source_videos`는
-    `include_sources`일 때만 포함한다.
+    게이트는 snapshot 전체 POI 수(`page.total`)로 판정하므로 동일 snapshot 하에서는
+    페이지를 넘겨도 일관된다. 다만 pull 진행 중 확정 POI가 동시 삭제되면 나중 페이지의
+    fresh snapshot에서 게이트가 false로 뒤집혀 빈 목록으로 우아하게 축소될 수 있다(손상
+    아님, graceful degradation). 미공개일 때는 `next_cursor`/`has_more`를 노출하지 않으며,
+    `source_videos`는 `include_sources`일 때만 포함한다.
 
     잘못된 cursor 등은 `ValueError`로 올려 라우터가 400으로 변환한다.
     """
