@@ -14,7 +14,7 @@ import pytest
 
 from ktc.etl import batch_poi, gemini_rate_limiter, postprocess_service, transcript_correction
 from ktc.etl.media_store import InMemoryMediaStore
-from ktc.etl.transcript import TranscriptResult, TranscriptSegment
+from ktc.etl.transcript import TranscriptAttempt, TranscriptResult, TranscriptSegment
 from ktc.models import RunState, YoutubeVideo, utcnow
 from ktc.services import crawl_run_service
 from scheduler import worker
@@ -99,8 +99,15 @@ def _seed_video(session, video_id: str = "v1") -> None:
     )
 
 
-def _patch_poi_batch_pipeline(monkeypatch, *, extract=None, geocode_summary=None):
-    """poi_batch handler의 외부 의존(스토리지/자막/교정/LLM/지오코딩)을 fake로 바꾼다."""
+def _patch_poi_batch_pipeline(
+    monkeypatch, *, extract=None, geocode_summary=None, whisper=None
+):
+    """poi_batch handler의 외부 의존(스토리지/자막/교정/LLM/지오코딩)을 fake로 바꾼다.
+
+    T-172부터 caption/whisper fetcher가 분리 배선된다(`_default_caption_fetcher`/
+    `_default_whisper_fetcher`). `whisper`를 안 주면 실제 auto 게이트 off와 동일한
+    `disabled` 단건 stub을 쓴다 — caption 성공 시나리오에서는 애초에 호출되지 않는다.
+    """
     monkeypatch.setattr(
         postprocess_service, "_make_media_store", lambda settings: InMemoryMediaStore()
     )
@@ -112,7 +119,16 @@ def _patch_poi_batch_pipeline(monkeypatch, *, extract=None, geocode_summary=None
             segments=[TranscriptSegment(1.0, "부산역 국밥집에 왔습니다.")],
         )
 
-    monkeypatch.setattr(postprocess_service, "_default_transcript_fetcher", fake_fetch)
+    monkeypatch.setattr(postprocess_service, "_default_caption_fetcher", fake_fetch)
+
+    async def _default_disabled_whisper(video_id: str) -> TranscriptAttempt:
+        return TranscriptAttempt(provider="whisper", outcome="disabled", sequence=1)
+
+    monkeypatch.setattr(
+        postprocess_service,
+        "_default_whisper_fetcher",
+        whisper or _default_disabled_whisper,
+    )
 
     async def fake_correct(runtime, *, transcript, description=None, **kwargs):
         return transcript
@@ -272,7 +288,7 @@ async def test_poi_batch_handler_records_transcript_failure(monkeypatch, session
     async def no_transcript(video_id: str):
         return None
 
-    monkeypatch.setattr(postprocess_service, "_default_transcript_fetcher", no_transcript)
+    monkeypatch.setattr(postprocess_service, "_default_caption_fetcher", no_transcript)
 
     run = await crawl_run_service.create_run(
         session, job_type="poi_batch", source="web", payload={"video_ids": ["v3"]}

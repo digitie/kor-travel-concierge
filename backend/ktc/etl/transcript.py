@@ -735,6 +735,13 @@ DEFAULT_PROVIDERS: tuple[TranscriptProvider, ...] = (
     transcribe_via_whisper,
 )
 
+# 캡션 전용 체인(whisper 제외, T-172). fetch/whisper를 분리 병렬화하는 진입점의
+# 기본값이다 — CPU 집약적인 whisper는 이 체인에 절대 섞이지 않는다.
+CAPTION_PROVIDERS: tuple[TranscriptProvider, ...] = (
+    fetch_via_transcript_api,
+    fetch_via_ytdlp,
+)
+
 # 설정 토큰(`TRANSCRIPT_PROVIDER_ORDER`) → provider 함수. 하이픈/언더스코어/별칭 수용.
 _PROVIDER_REGISTRY: dict[str, TranscriptProvider] = {
     "youtube-transcript-api": fetch_via_transcript_api,
@@ -780,6 +787,21 @@ def _resolve_provider_chain() -> tuple[TranscriptProvider, ...]:
     except Exception:
         order = []
     return resolve_provider_chain(order)
+
+
+def caption_provider_chain() -> tuple[TranscriptProvider, ...]:
+    """캡션 전용 체인(whisper 제외, T-172).
+
+    설정 순서(`TRANSCRIPT_PROVIDER_ORDER`)를 존중하되 `transcribe_via_whisper`만
+    제거한다. whisper는 CPU 집약이라 caption 병렬 fetch(Semaphore 다수)에 절대
+    섞이면 안 되고, 항상 별도 동시성 1 경로(`transcribe_whisper_async`)로만 실행한다.
+    제거 후 남는 provider가 없으면(설정이 whisper 하나만 지정 등) `CAPTION_PROVIDERS`
+    기본값으로 폴백한다(캡션 확보가 통째로 막히지 않도록).
+    """
+    chain = tuple(
+        fn for fn in _resolve_provider_chain() if fn is not transcribe_via_whisper
+    )
+    return chain or CAPTION_PROVIDERS
 
 
 def _provider_label(fn: TranscriptProvider) -> str:
@@ -856,6 +878,83 @@ async def fetch_transcript_async(
 ) -> TranscriptOutcome:
     """블로킹 체인을 executor로 격리해 실행하고 관측 결과를 반환한다."""
     return await asyncio.to_thread(fetch_transcript, video_id, providers=providers)
+
+
+async def fetch_captions_async(video_id: str) -> TranscriptOutcome:
+    """캡션 전용 체인(whisper 제외)만 실행한다(T-172 병렬 fetch 진입점).
+
+    순수 네트워크 I/O만 수행한다 — DB 세션에 접근하지 않으므로 다수 영상을
+    `asyncio.Semaphore`로 동시에 호출해도 안전하다(session race 없음).
+    """
+    return await asyncio.to_thread(fetch_transcript, video_id, providers=caption_provider_chain())
+
+
+def whisper_failure_attempt(
+    exc: BaseException, *, started: float | None = None
+) -> TranscriptAttempt:
+    """raise된 예외를 whisper 실패 `TranscriptAttempt`로 분류한다(T-172).
+
+    구 순차 체인의 `_run_provider` 예외 분기(raise된 provider 예외를 삼켜
+    `_classify_exception`으로 코드화)와 **동일한 매핑**을 whisper 단건 경로에 재현한다.
+    병렬화 이전 whisper는 provider 체인 안에서 실행돼 예외가 이렇게 분류·흡수됐으나,
+    T-172로 whisper가 체인 밖 단건 호출이 되면서 이 안전망이 필요하다. sequence는
+    `merge_outcomes`가 재부여하므로 여기서는 채우지 않는다(기본 0).
+    """
+    return TranscriptAttempt(
+        provider=TranscriptProviderName.WHISPER.value,
+        outcome=_classify_exception(exc),
+        detail=_exc_detail(exc),
+        duration_ms=_elapsed_ms(started) if started is not None else None,
+    )
+
+
+async def transcribe_whisper_async(
+    video_id: str,
+    *,
+    force: bool = False,
+    model_size: str | None = None,
+) -> TranscriptAttempt:
+    """whisper 단건 시도(T-172). `transcribe_via_whisper`의 얇은 async 래퍼다.
+
+    caption과 달리 CPU 집약이라 호출자는 반드시 동시성 1로만 실행해야 한다(gather
+    금지). `force=False`(기본, auto 경로)면 `TRANSCRIPT_WHISPER_ENABLED` 게이트를
+    그대로 따르고, `force=True`(수동 재전사)면 게이트를 우회한다.
+
+    `transcribe_via_whisper`는 대개 내부에서 예외를 삼켜 분류된 attempt를 반환하지만,
+    그 try/except 밖(예: tempdir 생성)에서 예외가 튀어나올 수 있다. 구 순차 체인의
+    `_run_provider`가 그런 예외를 분류·흡수했던 것과 동일하게, 여기서도 예외를 whisper
+    실패 attempt로 변환하고 **절대 re-raise 하지 않는다** — 그래야 병렬화 후에도 whisper
+    예외 하나가 poi_batch 전체를 죽이지 않고 description-fallback으로 이어진다.
+    """
+    started = time.monotonic()
+    try:
+        return await asyncio.to_thread(
+            transcribe_via_whisper, video_id, force=force, model_size=model_size
+        )
+    except Exception as exc:
+        return whisper_failure_attempt(exc, started=started)
+
+
+def merge_outcomes(
+    caption: TranscriptOutcome, whisper_attempt: TranscriptAttempt | None
+) -> TranscriptOutcome:
+    """캡션 outcome과 whisper 단건 시도를 순차 체인과 동일한 형태로 병합한다(T-172).
+
+    `whisper_attempt`가 없으면 `caption`을 그대로 반환한다. 있으면 caption.attempts
+    뒤에 sequence를 재부여해 이어붙이고(순차 체인이 whisper를 마지막 provider로
+    시도했을 때와 동일한 attempts 형태), whisper가 성공하면 `result`를 whisper로
+    승격한다(캡션이 이미 최종 실패했을 때만 호출되므로 caption.result는 항상 None).
+    이렇게 해야 `TranscriptOutcome.success_provider`/`failure_code` 파생과
+    `transcript_attempts` 기록 형태가 병렬 이전 순차 체인과 동일하게 유지된다.
+    """
+    if whisper_attempt is None:
+        return caption
+    from dataclasses import replace
+
+    merged_attempt = replace(whisper_attempt, sequence=len(caption.attempts) + 1)
+    attempts = [*caption.attempts, merged_attempt]
+    result = merged_attempt.result if merged_attempt.succeeded else caption.result
+    return TranscriptOutcome(result=result, attempts=attempts)
 
 
 def get_transcript(

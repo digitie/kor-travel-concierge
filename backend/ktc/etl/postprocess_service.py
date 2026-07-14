@@ -28,8 +28,9 @@ from ktc.etl.transcript import (
     TranscriptAttempt,
     TranscriptOutcome,
     TranscriptResult,
+    fetch_captions_async,
     fetch_transcript_async,
-    whisper_forced_chain,
+    transcribe_whisper_async,
 )
 from ktc.models import (
     CrawlStatus,
@@ -41,10 +42,18 @@ from ktc.services import settings_service
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
 # fetcher는 T-164 이후 `TranscriptOutcome`을 반환한다(구 계약 TranscriptResult|None도
-# `TranscriptOutcome.coerce`로 흡수 — 주입 fake 호환).
+# `TranscriptOutcome.coerce`로 흡수 — 주입 fake 호환). `process_harvest_videos` 전용
+# (순차 harvest 후처리 경로 — T-172 병렬화 대상 아님).
 TranscriptFetcher = Callable[
     [str], Awaitable["TranscriptOutcome | TranscriptResult | None"]
 ]
+# T-172: `process_video_batch`(poi_batch)는 캡션/whisper fetcher를 분리 주입받는다.
+# 캡션 fetcher는 순수 네트워크 I/O만 수행하는 `TranscriptOutcome` 반환 계약이라
+# 다수 영상을 동시에(Semaphore) 호출해도 안전하다.
+CaptionFetcher = Callable[[str], Awaitable["TranscriptOutcome | TranscriptResult | None"]]
+# whisper fetcher는 단건 시도(`TranscriptAttempt`)만 반환한다 — CPU 집약이라 항상
+# 동시성 1로만 호출한다(gather 금지).
+WhisperFetcher = Callable[[str], Awaitable[TranscriptAttempt]]
 AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
 GeocodeDecider = Callable[[ExtractedPlaceCandidate], Awaitable[GeocodeDecision]]
 GeocodeApplier = Callable[
@@ -368,24 +377,49 @@ async def _new_candidates_for_video(
 
 
 async def _default_transcript_fetcher(video_id: str) -> TranscriptOutcome:
-    """설정된 provider 체인으로 자막을 확보하고 provider별 시도를 함께 반환한다(T-164)."""
+    """설정된 provider 체인(캡션+whisper 순차)으로 자막을 확보한다(T-164).
+
+    `process_harvest_videos`(harvest 후처리, 순차) 전용 기본 fetcher다. T-172로 도입된
+    `process_video_batch`(poi_batch)의 병렬 캡션 fetch는 `_default_caption_fetcher`/
+    `_default_whisper_fetcher`로 분리 배선한다 — 이 함수는 건드리지 않는다.
+    """
     return await fetch_transcript_async(video_id)
+
+
+async def _default_caption_fetcher(video_id: str) -> TranscriptOutcome:
+    """`process_video_batch`(poi_batch) 병렬 캡션 fetch 기본 구현(T-172).
+
+    캡션 전용 체인(whisper 제외)만 시도하는 순수 네트워크 I/O라 다수 영상을
+    `asyncio.Semaphore`로 동시 호출해도 안전하다(DB 세션 미접근).
+    """
+    return await fetch_captions_async(video_id)
+
+
+async def _default_whisper_fetcher(video_id: str) -> TranscriptAttempt:
+    """`process_video_batch`(poi_batch) whisper 단건 기본 구현(T-172, auto 경로).
+
+    `TRANSCRIPT_WHISPER_ENABLED` 게이트를 그대로 따른다(꺼져 있으면 `disabled` 즉시
+    반환). 캡션이 최종 실패한 영상에 한해 동시성 1로만 호출된다.
+    """
+    return await transcribe_whisper_async(video_id, force=False, model_size=None)
 
 
 def _whisper_forced_transcript_fetcher(
     model_size: str | None = None,
-) -> TranscriptFetcher:
-    """whisper 강제 전사만 시도하는 fetcher를 만든다(T-169 수동 재전사, 게이트 우회).
+) -> WhisperFetcher:
+    """whisper 강제 전사 단건 fetcher를 만든다(T-169 수동 재전사, 게이트 우회).
 
-    provider 체인을 whisper 하나로 고정해 자막이 최종 실패한 영상을 운영자가 명시적으로
-    재전사할 때만 쓴다. auto whisper 게이트(`TRANSCRIPT_WHISPER_ENABLED`)와 기본 경로
-    (`_default_transcript_fetcher`)는 건드리지 않는다. `model_size`가 없으면 whisper 함수의
-    env 기본값을 따른다(라우트가 config 기본을 주입한다).
+    T-172부터 caption/whisper가 분리되어 이 fetcher는 `TranscriptOutcome`이 아니라
+    whisper 단건 시도(`TranscriptAttempt`)만 반환한다 — `process_video_batch`의
+    `whisper_fetcher` 계약과 정합. `caption_fetcher=None`과 함께 주입되어 force_whisper
+    모드 전용으로 쓰인다(캡션 단계 자체를 건너뛰고 whisper만 동시성 1로 실행).
+    auto whisper 게이트(`TRANSCRIPT_WHISPER_ENABLED`)와 기본 경로
+    (`_default_caption_fetcher`/`_default_whisper_fetcher`)는 건드리지 않는다.
+    `model_size`가 없으면 whisper 함수의 env 기본값을 따른다(라우트가 config 기본을 주입한다).
     """
-    chain = whisper_forced_chain(model_size)
 
-    async def _fetch(video_id: str) -> TranscriptOutcome:
-        return await fetch_transcript_async(video_id, providers=chain)
+    async def _fetch(video_id: str) -> TranscriptAttempt:
+        return await transcribe_whisper_async(video_id, force=True, model_size=model_size)
 
     return _fetch
 

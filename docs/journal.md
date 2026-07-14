@@ -4,7 +4,51 @@
 
 ---
 
-## 2026-07-14: T-192 — 작업 IA 정리 (/jobs 인덱스·nav 재편·홈 배너) (U10/U12/U13)
+## 2026-07-14: T-172 — 자막 fetch 병렬화 (PR-24)
+
+- **범위**: poi_batch 1단계 **자막 캡션 fetch만** 병렬화. 교정·POI 배치 추출·지오코딩(2~4단계)은 순차
+  불변(LLM은 T-161 게이트웨이 리미터 소관). 게이트(§1 판정·§6 G8 측정)는 배포 후 관측이라 이번 코드에서 제외 —
+  사용자 지시로 미측정 상태에서 구현만 진행.
+- **구현**:
+  - `transcript.py`: 캡션 전용 진입점 신설 — `CAPTION_PROVIDERS` 상수(transcript_api+ytdlp, whisper 제외),
+    `caption_provider_chain()`(설정 순서 존중·whisper만 배제·비면 폴백), `async fetch_captions_async(video_id)`
+    (순수 네트워크 I/O, DB 세션 미접근), `async transcribe_whisper_async(video_id, *, force, model_size)`
+    (whisper 단건 얇은 래퍼), `merge_outcomes(caption, whisper_attempt)`(sequence 재부여 이어붙임 + whisper
+    성공 시 result 승격 → `success_provider`/`failure_code` 파생과 `transcript_attempts` 형태를 순차 체인과
+    **동일**하게 유지 = 무회귀 핵심).
+  - **whisper 예외 격리(2렌즈 리뷰 Finding-1)**: `transcribe_whisper_async`가 `to_thread` 밖으로 튀는
+    예외를 삼켜 분류된 whisper 실패 attempt로 변환하고 **절대 re-raise 하지 않는다**(구 순차 체인
+    `_run_provider`의 예외 분기와 동일 `_classify_exception` 매핑 — 공용 `whisper_failure_attempt()` 헬퍼로
+    단일화). Phase 1b도 임의 주입 fetcher가 raise해도 caption Phase 1a와 동일하게 per-video 격리한다.
+    이로써 병렬화 후에도 whisper 예외 하나가 poi_batch 전체를 죽이지 않고 description-fallback으로 이어진다.
+  - `postprocess_service.py`: poi_batch용 `_default_caption_fetcher`/`_default_whisper_fetcher`(auto,
+    `force=False`) 배선. `_whisper_forced_transcript_fetcher`는 **이름 유지**하되 semantics를 whisper 단건
+    (`TranscriptAttempt` 반환)으로 변경(force_whisper 경로 전용). harvest 후처리용 `_default_transcript_fetcher`
+    (캡션+whisper 순차)는 불변.
+  - `batch_poi_service.process_video_batch`: 단일 `transcript_fetcher` → `caption_fetcher: CaptionFetcher|None`
+    (None=캡션 skip=force_whisper) + `whisper_fetcher: WhisperFetcher|None`로 교체(하위호환 shim 없음). 1단계
+    루프를 **Phase 0(순차 캐시 판정)** → **Phase 1a(병렬 캡션, `asyncio.Semaphore(CRAWL_MAX_CONCURRENT_VIDEOS)`
+    + `gather(return_exceptions=True)`)** → **Phase 1b(whisper 순차, `WHISPER_MAX_CONCURRENT=1` 모듈 상수,
+    gather 금지)** → **Phase 1c(순차·공유 세션: attempt 기록·ORM·RustFS 저장·LLM 교정)**로 3분할. 결과는
+    `dict[video_id→outcome]`에 담아 **원본 videos 순서**로 소비(alias `video_{index:03d}`가 gather 완료 순서에
+    묶이지 않도록). 각 task의 monotonic elapsed를 캡처해 `transcript_fetch` stage 이벤트에 실측 소요로 보고
+    (병렬 대기시간 오염 방지 — `_report_stage`에 `elapsed_ms` 직접 주입 경로 추가).
+  - `scheduler/worker.py`: `poi_batch_handler`가 단일 fetcher 대신 caption+whisper 2개 주입. force_whisper는
+    `caption_fetcher=None` + `_whisper_forced_transcript_fetcher(model)`.
+  - `config.py`: `CRAWL_MAX_CONCURRENT_VIDEOS` 소생·기본값 4→3(yt-dlp 동시 다연발 IP 스로틀 완화),
+    사문화 설정 `HTTP_MAX_CONCURRENT_REQUESTS` 삭제(참조 0회 확인). `.env.example`·`docs/dev-environment.md`
+    동기화. whisper 동시성은 신설 설정 없이 모듈 상수 고정.
+- **세션 비공유·입력 순서 불변**(최고위험 회귀 방어): Phase 1a/1b는 공유 `session`·`media_store.store_and_record`·
+  ORM flush·`record_stage_event`·`attempt_recorder`를 절대 호출하지 않는다(전부 1c). 후보 alias/dedup은 원본
+  순서 소비로 gather 완료 순서와 무관.
+- **테스트**: 기존 콜사이트 갱신(`test_etl_batch_poi_service.py`·`test_etl_description_path.py` 새 시그니처,
+  `test_transcript_attempts.py`·`test_crawl_run_stage_events.py` caption/whisper 분리 배선,
+  `test_whisper_force.py` whisper 단건 semantics). 신규 `test_transcript_fetch_parallel.py` 8건: 캡션 동시성
+  상한 가드(1<peak≤3), whisper 동시성 1(auto+force_whisper), 세션 비공유(fetch 전부 → store_and_record),
+  사유코드 분포 병렬==순차 baseline(Semaphore=1), 출력 등가성 golden(이름·순서·evidence·grounding), 벽시계
+  단축(loose), stage 이벤트 영상당 1건.
+- **검증**: 격리 disposable Postgres DB에서 타깃 6파일 53 passed, backend 전체 pytest 통과(신규 8건 포함),
+  변경 `.py` 전부 Ruff clean. E2E는 자막 fetch 미경유라 영향 없음.
 
 - **문제**: 작업 표면이 `/status` 작업 테이블·`/collect` 진행 패널·`/jobs/[id]` 상세에 흩어지고, `/collect`에
   죽은 `detailRun` 상태가 남아 있었다.

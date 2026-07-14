@@ -109,15 +109,20 @@ def test_forced_chain_runs_whisper_even_when_env_off(monkeypatch):
 
 
 async def test_forced_fetcher_factory_injects_model(monkeypatch):
+    """T-172부터 이 fetcher는 `TranscriptOutcome`이 아니라 whisper 단건
+    `TranscriptAttempt`만 반환한다(`process_video_batch`의 `whisper_fetcher` 계약과
+    정합 — force_whisper 모드는 caption_fetcher=None + 이 fetcher만 주입한다)."""
     monkeypatch.delenv("TRANSCRIPT_WHISPER_ENABLED", raising=False)
     captured: dict = {}
     _install_fake_whisper(monkeypatch, captured)
 
     fetcher = postprocess_service._whisper_forced_transcript_fetcher("medium")
-    outcome = await fetcher("vid")
-    assert outcome.result is not None
-    assert outcome.success_provider == "whisper"
+    attempt = await fetcher("vid")
+    assert attempt.outcome == transcript.TranscriptOutcomeCode.SUCCESS.value
+    assert attempt.provider == "whisper"
     assert captured["model_size"] == "medium"
+    assert attempt.result is not None
+    assert attempt.result.segments[0].text == "안녕하세요"
 
 
 # --- API 트리거: (a) duration cap, (b) batch 레인, (d) 기본 interactive ------

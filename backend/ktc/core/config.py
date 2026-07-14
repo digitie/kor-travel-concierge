@@ -266,8 +266,9 @@ class Settings(BaseSettings):
     # --- 4. 스케줄러 및 동시성 ---
     SCHEDULER_ENABLED: bool = True
     CRAWL_DEFAULT_INTERVAL_DAYS: int = 7
-    CRAWL_MAX_CONCURRENT_VIDEOS: int = 4
-    HTTP_MAX_CONCURRENT_REQUESTS: int = 8
+    # 자막 캡션 병렬 fetch(T-172) semaphore 크기. yt-dlp 동시 다연발로 인한 YouTube IP
+    # 스로틀/봇 탐지 위험을 낮추기 위해 3으로 둔다(whisper는 별도 동시성 1 고정).
+    CRAWL_MAX_CONCURRENT_VIDEOS: int = 3
     SCHEDULER_POLL_INTERVAL_SECONDS: int = 5
     SCHEDULER_HEARTBEAT_INTERVAL_SECONDS: int = 30
     SCHEDULER_STALE_THRESHOLD_SECONDS: int = 300

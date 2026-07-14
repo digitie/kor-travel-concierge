@@ -70,7 +70,8 @@ async def _run_single_video_batch(
         InMemoryMediaStore(),
         videos=[video],
         runtime=LlmRuntime(model="gemini-2.5-flash"),
-        transcript_fetcher=fake_fetch,
+        caption_fetcher=fake_fetch,
+        whisper_fetcher=None,
     )
 
 
