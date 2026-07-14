@@ -26,6 +26,10 @@ import {
 import { categoryDisplayLabel } from "@/lib/display-labels";
 import { timestampedVideoUrl } from "@/lib/format";
 import {
+  approximateTranscriptEvidenceScrollTop,
+  cleanTranscript,
+} from "@/lib/transcript";
+import {
   confirmCandidateDeleteDetail,
   deleteResponseMatchesConfirmedDetail,
   waitForCandidateOperationMarker,
@@ -51,25 +55,6 @@ function reviewStateLabel(state: UnmatchedCandidate["review_state"]): string {
   if (state === "matched") return "자동 확정";
   if (state === "user_corrected") return "검수 확정";
   return "검수 대기";
-}
-
-function cleanTranscript(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .replace(/^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]|\d{1,2}:\d{2}(?::\d{2})?)\s*/g, "")
-        .replace(/\[(?:음악|Music|music|박수|웃음)\]/g, "")
-        .trim(),
-    )
-    .filter(Boolean)
-    .join("\n");
-}
-
-function timestampNeedle(value: string | null): string | null {
-  if (!value) return null;
-  const parts = value.split(":").map((part) => part.padStart(2, "0"));
-  return parts.join(":");
 }
 
 class CandidateDeleteAttemptError extends Error {
@@ -170,14 +155,11 @@ export function CandidateDetailView({
   const scrollTranscriptToEvidence = useCallback(() => {
     const element = transcriptRef.current;
     if (!element || !transcriptText) return;
-    const needle = timestampNeedle(evidenceStart);
-    const index = needle ? transcriptText.indexOf(needle) : -1;
-    if (index < 0) {
-      element.scrollTop = 0;
-      return;
-    }
-    const ratio = index / Math.max(transcriptText.length, 1);
-    element.scrollTop = Math.max(0, element.scrollHeight * ratio - 40);
+    element.scrollTop = approximateTranscriptEvidenceScrollTop(
+      transcriptText,
+      evidenceStart,
+      element.scrollHeight,
+    );
   }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
     mutationFn: async (targetCandidateId: number) => {
