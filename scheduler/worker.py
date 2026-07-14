@@ -33,6 +33,7 @@ from ktc.etl import (
     deep_research_service,
     postprocess_service,
     video_analysis_service,
+    visual_extraction,
 )
 from ktc.etl.pipeline import run_harvest
 from ktc.etl.youtube_client import YouTubeClient
@@ -1188,6 +1189,51 @@ async def video_analysis_handler(session: AsyncSession, run: CrawlRun) -> dict[s
     }
 
 
+async def visual_extraction_handler(session: AsyncSession, run: CrawlRun) -> dict[str, Any]:
+    """프레임 비전/OCR 실험 경로 job handler(T-173, 로드맵 PR-19, 기본 게이트 off).
+
+    이 레인 결정은 whisper 수동 재전사(T-169)와 동일하다 — `crawl_run_service.create_run`
+    기본값이 이미 `LANE_BATCH`라 대화형 레인을 잠식하지 않는다(명시 override 없음).
+
+    payload에 `video_ids`가 있으면 그 영상만(명시 재처리), 없으면
+    `visual_extraction.select_visual_targets`가 자막·whisper 최종 실패 + 미시도 영상을
+    `limit`개까지 고른다. 실제 게이트(`VISUAL_EXTRACTION_ENABLED`)·DeepSeek 엔진 가드는
+    `visual_extraction.run_visual_extraction`이 진입 즉시 확인한다(부록 B) — 이 handler는
+    payload를 풀어 그대로 위임하는 얇은 래퍼다.
+    """
+    payload = load_payload(run)
+    settings = get_settings()
+    runtime = await settings_service.get_llm_runtime(session)
+    store = postprocess_service._make_media_store(settings)
+    video_ids = [str(v) for v in (payload.get("video_ids") or [])] or None
+
+    async def report_status(message: str, progress: float | None = None) -> None:
+        await crawl_run_service.append_status_log(
+            session, run.id, message, progress=progress
+        )
+
+    if settings.VISUAL_EXTRACTION_ENABLED:
+        await report_status("프레임 비전/OCR 추출을 시작합니다.", 0.1)
+    summary = await visual_extraction.run_visual_extraction(
+        session,
+        store,
+        runtime=runtime,
+        video_ids=video_ids,
+        limit=_int_from_payload(payload, "limit", 1, maximum=20),
+    )
+    if summary.get("skipped"):
+        await report_status(
+            f"프레임 비전/OCR 추출을 건너뜁니다({summary['skipped']}).", 1.0
+        )
+    else:
+        await report_status(
+            f"프레임 비전/OCR 추출 완료 — 영상 {summary['processed_videos']}개에서 "
+            f"후보 {summary['created_candidates']}개 생성.",
+            1.0,
+        )
+    return summary
+
+
 DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "harvest": harvest_handler,
     "transcript": transcript_handler,
@@ -1195,6 +1241,7 @@ DEFAULT_HANDLERS: dict[str, JobHandler] = {
     "deep_research": deep_research_handler,
     "source_scan": source_scan_handler,
     "video_analysis": video_analysis_handler,
+    "visual_extraction": visual_extraction_handler,
 }
 
 

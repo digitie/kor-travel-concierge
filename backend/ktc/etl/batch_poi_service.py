@@ -47,6 +47,7 @@ from ktc.models import (
     EvidenceSourceKind,
     ExtractedPlaceCandidate,
     FeatureExportStatus,
+    GroundingStatus,
     MatchStatus,
     YoutubePlaylistVideo,
     YoutubeVideo,
@@ -223,6 +224,235 @@ class _VideoPrepState:
     corrected: str | None = None
     grounding_raw_text: str | None = None
     raw_text: str | None = None
+
+
+async def _persist_candidates(
+    session: AsyncSession,
+    *,
+    batch: dict[str, dict[str, Any]],
+    pois: list[Any],
+    normalized_default_category: str | None = None,
+) -> list[ExtractedPlaceCandidate]:
+    """POI 배치 결과를 영상별 `needs_review` 후보로 만든다(T-173 refactor).
+
+    dedup(source_kind 우선순위·supersede)·evidence 조립·dirty outbox 표시를 담당하는
+    공용 persist 로직이다. description(자막 실패 fallback, `process_video_batch` inline
+    경로)과 visual(신규 프레임 비전 job, `ktc.etl.visual_extraction`)이 이 함수를 공유한다.
+
+    `batch`는 alias(예: `video_001`, `batch_poi.extract_batch` 계약의 입력 별칭 — 실제
+    YouTube `video_id`가 아니다) → `{video, transcript_source, asset_id, corrected,
+    raw_text, source_kind, frames?}` 딕셔너리다. `pois`의 각 원소는 `poi.video_id`가
+    이 alias와 일치해야 매칭된다(`batch_poi.BatchExtractedPOI` 계약).
+
+    source_kind가 VISUAL이면 원문 대조 grounding(`grounding.evaluate_transcript_grounding`)을
+    **건너뛰고** `GroundingStatus.NOT_APPLICABLE`로 고정한다(부록 B 보강) — OCR 추출
+    텍스트는 transcript raw segment가 아니라서 그대로 평가하면 근거 없이 missing/
+    unverified로 오판정되고, `geocode_service`의 transcript 전용 grounding 게이트
+    (`_grounding_blocks_autoconfirm`)에도 혼선을 준다. VISUAL evidence는 `frames`
+    (asset_id·timestamp_seconds·frame_index 목록)를 그대로 보존한다.
+
+    후보를 `session.add`하고 flush + dirty outbox 표시까지 하지만 **commit은 호출자
+    책임**이다(caller가 자신의 video/crawl_status 갱신과 함께 한 트랜잭션으로 묶는다).
+    """
+    batch_video_ids = [item["video"].video_id for item in batch.values()]
+    existing_by_pair: dict[tuple[str, str], list[ExtractedPlaceCandidate]] = {}
+    if batch_video_ids:
+        rows = await session.execute(
+            select(ExtractedPlaceCandidate).where(
+                ExtractedPlaceCandidate.video_id.in_(batch_video_ids),
+                ExtractedPlaceCandidate.deleted_at.is_(None),
+            )
+        )
+        for existing in rows.scalars().all():
+            key = (
+                str(existing.video_id),
+                normalize_place_name(existing.ai_place_name),
+            )
+            existing_by_pair.setdefault(key, []).append(existing)
+    # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
+    # 리뷰 MINOR-1). VISUAL 항목은 grounding을 평가하지 않으므로 인덱스를 만들지 않는다
+    # (불필요한 정규화 비용 회피).
+    grounding_indexes: dict[str, grounding.GroundingIndex] = {
+        alias: grounding.build_grounding_index(it.get("raw_text"))
+        for alias, it in batch.items()
+        if it.get("source_kind") != EvidenceSourceKind.VISUAL.value
+    }
+    created_candidates: list[ExtractedPlaceCandidate] = []
+    supersede_conflicted_pairs: set[tuple[str, str]] = set()
+    for poi in pois:
+        item = batch.get(poi.video_id)
+        if item is None:
+            continue
+        video = item["video"]
+        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
+        dedup_key = (video.video_id, normalize_place_name(poi.official_name))
+        if dedup_key in supersede_conflicted_pairs:
+            continue
+        existing = existing_by_pair.get(dedup_key, [])
+        new_priority = _source_kind_priority(source_kind)
+        # 같은/상위 우선순위 후보가 이미 있으면 새 후보를 억제한다(멱등 + 자막 우선).
+        if any(_source_kind_priority(c.source_kind) >= new_priority for c in existing):
+            continue
+        # 여기부터 existing은 전부 하위 우선순위(예: 기존 description, 신규 transcript).
+        # 사람이 손댄(needs_review 아님) 하위 후보가 있으면 그 결정을 존중해 새 후보를
+        # 만들지 않는다(확정 장소·제외 결정 보존).
+        if any(not _is_supersedable(c) for c in existing):
+            continue
+        # 하위 후보가 전부 미검수면 supersede(T-160 soft delete)하고 새 상위 소스 후보 생성.
+        if existing:
+            from ktc.services import place_service  # 지연 import(순환 회피)
+
+            expected_revisions = {
+                candidate.id: candidate.state_revision for candidate in existing
+            }
+            try:
+                await place_service.soft_delete_candidates(
+                    session,
+                    [candidate.id for candidate in existing],
+                    reason="superseded_by_higher_priority_source",
+                    deleted_by="system",
+                    expected_status=MatchStatus.NEEDS_REVIEW,
+                    expected_revisions=expected_revisions,
+                )
+            except (
+                place_service.CandidateRevisionConflictError,
+                place_service.CandidateStatusConflictError,
+            ):
+                # 초기 dedup SELECT 뒤 사람이 ignore/reopen/delete하거나 evidence를
+                # 갱신했다. helper는 lock 아래 선행조건 확인 전 mutation하지 않으므로
+                # transaction은 계속 사용 가능하며, 이 pair의 신규 후보도 만들지 않는다.
+                supersede_conflicted_pairs.add(dedup_key)
+                continue
+        existing_by_pair[dedup_key] = []
+        playlist_id = await _source_playlist_id_for_video(session, video.video_id)
+        category_code = (
+            poi.category_code
+            or normalized_default_category
+            or category_catalog.UNKNOWN_CATEGORY_CODE
+        )
+        category_label = category_catalog.label_for_or_unknown(category_code)
+        category_source = (
+            "llm" if poi.category_code else ("default" if normalized_default_category else "unknown")
+        )
+
+        if source_kind == EvidenceSourceKind.VISUAL.value:
+            # OCR 추출 텍스트는 raw timestamp segment가 아니므로 원문 대조 grounding을
+            # 적용하지 않는다(부록 B 보강) — 잘못된 missing/unverified 판정과 그로 인한
+            # queue_reason=ungrounded 오분류를 막는다. NOT_APPLICABLE은 T-165 게이트가
+            # transcript 전용이라 자동확정에도 영향이 없다(geocode_service의 recall
+            # source_kind 예외가 별도로 VISUAL 자동확정을 막는다).
+            grounding_status_value = GroundingStatus.NOT_APPLICABLE.value
+            common_evidence: dict[str, Any] = {
+                "timestamp_start": poi.timestamp_start,
+                "timestamp_end": poi.timestamp_end,
+                "speaker_note": poi.speaker_note,
+                "location_hint": poi.location_hint,
+                "category_code": category_code,
+                "category_source": category_source,
+                "evidence_quote": poi.evidence_quote,
+                "grounding_status": grounding_status_value,
+                "grounded": False,
+                "matched_segment_index": None,
+                "matched_segment_start_seconds": None,
+                "llm_confidence": poi.confidence,
+            }
+        else:
+            # 원문 대조 grounding(T-165/T-168, B3). transcript 후보는 원본 자막, description
+            # 후보는 원문 설명(raw description)을 haystack으로 대조한다(grounding_indexes가
+            # 영상별 raw_text로 만들어졌으므로 source_kind에 맞는 원천이 자동 반영). 실패
+            # (unverified/missing) 후보도 폐기하지 않고 상태만 기록한다.
+            grounded = grounding.evaluate_transcript_grounding(
+                poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
+            )
+            grounding_status_value = grounded.status.value
+            common_evidence = {
+                "timestamp_start": poi.timestamp_start,
+                "timestamp_end": poi.timestamp_end,
+                "speaker_note": poi.speaker_note,
+                "location_hint": poi.location_hint,
+                "category_code": category_code,
+                "category_source": category_source,
+                "evidence_quote": grounded.evidence_quote,
+                "grounding_status": grounding_status_value,
+                "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
+                "matched_segment_index": grounded.matched_segment_index,
+                "matched_segment_start_seconds": grounded.matched_segment_start_seconds,
+                "llm_confidence": poi.confidence,
+            }
+
+        if source_kind == EvidenceSourceKind.DESCRIPTION.value:
+            # description 단독 후보(T-168): 원문 출처(발췌·영상 id)를 evidence에 남긴다.
+            provider_evidence: dict[str, Any] = {
+                "description": {
+                    "source": "youtube_description",
+                    "video_id": video.video_id,
+                    "excerpt": (item.get("raw_text") or "")[
+                        :_DESCRIPTION_EVIDENCE_EXCERPT_CHARS
+                    ],
+                    **common_evidence,
+                }
+            }
+        elif source_kind == EvidenceSourceKind.VISUAL.value:
+            # 프레임 비전/OCR 후보(T-173): 어느 프레임(asset_id·timestamp)에서 뽑았는지
+            # 근거로 남긴다(description evidence와 대칭 형태).
+            provider_evidence = {
+                "visual": {
+                    "source": "video_frame_ocr",
+                    "video_id": video.video_id,
+                    "frames": item.get("frames") or [],
+                    **common_evidence,
+                }
+            }
+        else:
+            provider_evidence = {
+                "transcript": {
+                    "source": item["transcript_source"],
+                    "asset_id": item["asset_id"],
+                    **common_evidence,
+                }
+            }
+        candidate = ExtractedPlaceCandidate(
+            video_id=video.video_id,
+            source_channel_id=video.channel_id,
+            source_playlist_id=playlist_id,
+            source_kind=source_kind,
+            source_text=poi.speaker_note or poi.official_name,
+            ai_place_name=poi.official_name,
+            speaker_note=poi.speaker_note,
+            location_hint=poi.location_hint,
+            timestamp_start=poi.timestamp_start,
+            timestamp_end=poi.timestamp_end,
+            candidate_category=category_label,
+            match_status=MatchStatus.NEEDS_REVIEW,
+            grounding_status=grounding_status_value,
+            is_domestic=poi.is_domestic,
+            review_note=(
+                "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
+            ),
+            provider_evidence_json=provider_evidence,
+            feature_export_status=FeatureExportStatus.PENDING.value,
+        )
+        session.add(candidate)
+        # 같은 배치 후속 poi가 방금 만든 후보를 같은 우선순위로 dedup하도록 맵에 등록한다.
+        existing_by_pair.setdefault(dedup_key, []).append(candidate)
+        created_candidates.append(candidate)
+
+    if created_candidates:
+        # 신규 후보를 durable dirty outbox에 표시한다(T-171). 대부분 PENDING/needs_review라
+        # 이 시점엔 export 대상이 아니지만(sync 시 no-op consume), outbox를 정본으로 유지한다.
+        # 이후 지오코딩 자동확정 시 apply_geocode가 다시 dirty로 표시한다.
+        await session.flush()  # candidate.id 확보(같은 트랜잭션)
+        from ktc.services import feature_export_service  # 지연 import(순환 회피)
+
+        # 신규 행은 아직 다른 transaction에 보이지 않지만 outbox writer 계약을 일관되게
+        # 유지하고 sync_dirty claim과의 잠금 순서를 고정한다(T-171/T-184).
+        await feature_export_service.acquire_feature_export_lock(session)
+        await feature_export_service.mark_candidates_dirty(
+            session,
+            [c.id for c in created_candidates],
+            reason="candidate_created",
+        )
+    return created_candidates
 
 
 async def process_video_batch(
@@ -726,178 +956,21 @@ async def process_video_batch(
     #    자막 복구 후 transcript)가 기존 미검수 하위 소스 후보(description)만 만나면 그 하위
     #    후보를 supersede(soft delete)하고 새 후보를 만든다. 저품질 description 후보가 고품질
     #    transcript 후보를 영구 차단하던 문제를 막는다.
-    batch_video_ids = [item["video"].video_id for item in batch.values()]
-    existing_by_pair: dict[tuple[str, str], list[ExtractedPlaceCandidate]] = {}
-    if batch_video_ids:
-        rows = await session.execute(
-            select(ExtractedPlaceCandidate).where(
-                ExtractedPlaceCandidate.video_id.in_(batch_video_ids),
-                ExtractedPlaceCandidate.deleted_at.is_(None),
-            )
-        )
-        for existing in rows.scalars().all():
-            key = (
-                str(existing.video_id),
-                normalize_place_name(existing.ai_place_name),
-            )
-            existing_by_pair.setdefault(key, []).append(existing)
-    # grounding haystack은 영상당 1회만 정규화해 재사용한다(350k자×POI 반복 정규화 방지,
-    # 리뷰 MINOR-1). alias(=video) 단위로 캐시한다.
-    grounding_indexes: dict[str, grounding.GroundingIndex] = {
-        alias: grounding.build_grounding_index(it.get("raw_text"))
-        for alias, it in batch.items()
-    }
-    created_candidates: list[ExtractedPlaceCandidate] = []
-    supersede_conflicted_pairs: set[tuple[str, str]] = set()
-    for poi in pois:
-        item = batch.get(poi.video_id)
-        if item is None:
-            continue
-        video = item["video"]
-        source_kind = item.get("source_kind", EvidenceSourceKind.TRANSCRIPT.value)
-        dedup_key = (video.video_id, normalize_place_name(poi.official_name))
-        if dedup_key in supersede_conflicted_pairs:
-            continue
-        existing = existing_by_pair.get(dedup_key, [])
-        new_priority = _source_kind_priority(source_kind)
-        # 같은/상위 우선순위 후보가 이미 있으면 새 후보를 억제한다(멱등 + 자막 우선).
-        if any(_source_kind_priority(c.source_kind) >= new_priority for c in existing):
-            continue
-        # 여기부터 existing은 전부 하위 우선순위(예: 기존 description, 신규 transcript).
-        # 사람이 손댄(needs_review 아님) 하위 후보가 있으면 그 결정을 존중해 새 후보를
-        # 만들지 않는다(확정 장소·제외 결정 보존).
-        if any(not _is_supersedable(c) for c in existing):
-            continue
-        # 하위 후보가 전부 미검수면 supersede(T-160 soft delete)하고 새 상위 소스 후보 생성.
-        if existing:
-            from ktc.services import place_service  # 지연 import(순환 회피)
-
-            expected_revisions = {
-                candidate.id: candidate.state_revision for candidate in existing
-            }
-            try:
-                await place_service.soft_delete_candidates(
-                    session,
-                    [candidate.id for candidate in existing],
-                    reason="superseded_by_higher_priority_source",
-                    deleted_by="system",
-                    expected_status=MatchStatus.NEEDS_REVIEW,
-                    expected_revisions=expected_revisions,
-                )
-            except (
-                place_service.CandidateRevisionConflictError,
-                place_service.CandidateStatusConflictError,
-            ):
-                # 초기 dedup SELECT 뒤 사람이 ignore/reopen/delete하거나 evidence를
-                # 갱신했다. helper는 lock 아래 선행조건 확인 전 mutation하지 않으므로
-                # transaction은 계속 사용 가능하며, 이 pair의 신규 후보도 만들지 않는다.
-                supersede_conflicted_pairs.add(dedup_key)
-                continue
-        existing_by_pair[dedup_key] = []
-        playlist_id = await _source_playlist_id_for_video(session, video.video_id)
-        category_code = (
-            poi.category_code
-            or normalized_default_category
-            or category_catalog.UNKNOWN_CATEGORY_CODE
-        )
-        category_label = category_catalog.label_for_or_unknown(category_code)
-        # 원문 대조 grounding(T-165/T-168, B3). transcript 후보는 원본 자막, description
-        # 후보는 원문 설명(raw description)을 haystack으로 대조한다(grounding_indexes가
-        # 영상별 raw_text로 만들어졌으므로 source_kind에 맞는 원천이 자동 반영). 실패
-        # (unverified/missing) 후보도 폐기하지 않고 상태만 기록한다. transcript는 verified_raw가
-        # 아니면 지오코딩 자동확정·export가 차단되고, description은 grounding과 무관하게 늘
-        # 검수 전용이라(자동확정 금지) grounding_status는 관측용으로만 남는다.
-        grounded = grounding.evaluate_transcript_grounding(
-            poi.evidence_quote, index=grounding_indexes.get(poi.video_id)
-        )
-        # 근거(evidence) 공통 조각: 카테고리·타임스탬프·grounding. transcript/description이
-        # 같은 형태를 공유하고 producer별 출처 필드만 다르게 감싼다.
-        common_evidence = {
-            "timestamp_start": poi.timestamp_start,
-            "timestamp_end": poi.timestamp_end,
-            "speaker_note": poi.speaker_note,
-            "location_hint": poi.location_hint,
-            # POI 배치에서 받은 8자리 코드(확정 시 복사, 변경 금지).
-            "category_code": category_code,
-            "category_source": "llm"
-            if poi.category_code
-            else ("default" if normalized_default_category else "unknown"),
-            # raw grounding 근거. quote·판정·매칭 세그먼트 ref를 보존한다.
-            # llm_confidence는 기록·표시 전용 — 어떤 게이트에도 쓰지 않는다.
-            "evidence_quote": grounded.evidence_quote,
-            "grounding_status": grounded.status.value,
-            "grounded": grounded.status == grounding.GroundingStatus.VERIFIED_RAW,
-            "matched_segment_index": grounded.matched_segment_index,
-            "matched_segment_start_seconds": grounded.matched_segment_start_seconds,
-            "llm_confidence": poi.confidence,
-        }
-        if source_kind == EvidenceSourceKind.DESCRIPTION.value:
-            # description 단독 후보(T-168): 원문 출처(발췌·영상 id)를 evidence에 남긴다.
-            provider_evidence: dict[str, Any] = {
-                "description": {
-                    "source": "youtube_description",
-                    "video_id": video.video_id,
-                    "excerpt": (item.get("raw_text") or "")[
-                        :_DESCRIPTION_EVIDENCE_EXCERPT_CHARS
-                    ],
-                    **common_evidence,
-                }
-            }
-        else:
-            provider_evidence = {
-                "transcript": {
-                    "source": item["transcript_source"],
-                    "asset_id": item["asset_id"],
-                    **common_evidence,
-                }
-            }
-        candidate = ExtractedPlaceCandidate(
-            video_id=video.video_id,
-            source_channel_id=video.channel_id,
-            source_playlist_id=playlist_id,
-            source_kind=source_kind,
-            source_text=poi.speaker_note or poi.official_name,
-            ai_place_name=poi.official_name,
-            speaker_note=poi.speaker_note,
-            location_hint=poi.location_hint,
-            timestamp_start=poi.timestamp_start,
-            timestamp_end=poi.timestamp_end,
-            candidate_category=category_label,
-            match_status=MatchStatus.NEEDS_REVIEW,
-            grounding_status=grounded.status.value,
-            is_domestic=poi.is_domestic,
-            review_note=(
-                "해외(국내 아님) — 검수 필요" if poi.is_domestic is False else None
-            ),
-            provider_evidence_json=provider_evidence,
-            feature_export_status=FeatureExportStatus.PENDING.value,
-        )
-        session.add(candidate)
-        # 같은 배치 후속 poi가 방금 만든 후보를 같은 우선순위로 dedup하도록 맵에 등록한다.
-        existing_by_pair.setdefault(dedup_key, []).append(candidate)
-        created_candidates.append(candidate)
-        summary["created_candidates"] += 1
+    #    실제 dedup·grounding·evidence·dirty outbox 로직은 `_persist_candidates`(T-173
+    #    refactor)에 공용화돼 있다 — visual(신규 프레임 비전 job)도 같은 헬퍼를 쓴다.
+    created_candidates = await _persist_candidates(
+        session,
+        batch=batch,
+        pois=pois,
+        normalized_default_category=normalized_default_category,
+    )
+    summary["created_candidates"] += len(created_candidates)
 
     for item in batch.values():
         video = item["video"]
         if video.crawl_status != CrawlStatus.FAILED:
             video.crawl_status = CrawlStatus.SUMMARIZED
     summary["processed_videos"] = len(batch)
-    if created_candidates:
-        # 신규 후보를 durable dirty outbox에 표시한다(T-171). 대부분 PENDING/needs_review라
-        # 이 시점엔 export 대상이 아니지만(sync 시 no-op consume), outbox를 정본으로 유지한다.
-        # 이후 지오코딩 자동확정 시 apply_geocode가 다시 dirty로 표시한다.
-        await session.flush()  # candidate.id 확보(같은 트랜잭션)
-        from ktc.services import feature_export_service  # 지연 import(순환 회피)
-
-        # 신규 행은 아직 다른 transaction에 보이지 않지만 outbox writer 계약을 일관되게
-        # 유지하고 sync_dirty claim과의 잠금 순서를 고정한다(T-171/T-184).
-        await feature_export_service.acquire_feature_export_lock(session)
-        await feature_export_service.mark_candidates_dirty(
-            session,
-            [c.id for c in created_candidates],
-            reason="candidate_created",
-        )
     await session.commit()
     await _report(
         status_reporter,

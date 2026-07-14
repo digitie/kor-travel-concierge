@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9) — **착수 계획서·게이트 SQL: `docs/plan-t173-vision-ocr.md`**(2렌즈 검증 accurate; VISUAL은 grounding_status=not_applicable·DeepSeek 엔진 가드 필수)
 - [ ] **T-193**: [조건부] 자막 품질 개선 — 사용자 결정(2026-07-13)으로 신설: prod whisper 자동 전사는
   의도된 현행 유지이며, 품질 개선 필요성이 확인되면 착수한다. whisper 모델 크기 상향 평가(base→small
   등), 전사 품질 스코어링, 재전사 정책 개선. T-164의 transcript_attempts 데이터로 필요성 판단.
@@ -28,6 +27,31 @@
 
 ## 완료
 
+- [x] **T-173**: 프레임 비전/OCR 실험 경로 — **게이트 off로 착수**(사용자 지시, `docs/plan-t173-vision-ocr.md`
+  §1 게이트 판정·G9 post-deploy 지표는 측정 작업이라 제외). Agent A(백엔드)만 구현 — Agent B(media asset
+  서빙 BFF/프록시·검수 썸네일 UI, 계획서 §2.2)는 이번 범위 밖(플래그 off라 서빙 라우트가 있어도 프레임이
+  노출되지 않음, 후속 태스크 필요). 착수 전 §1.5 대안 비교(제3안 Gemini URL 분석 승격 대비)를 journal에
+  기록하고 본안(프레임 비전)을 택했다. 신규 `visual_extraction.py`: 자막·whisper 최종 실패 영상 대상
+  선별(새 컬럼 없이 기존 candidates/media_assets로 idempotent 재선별) → 균등 간격 프레임 추출(`frame_extraction`
+  인프라 재사용, 다운로드 없음) → `generate_multimodal` **영상당 정확히 1콜**(N장 inline_data, `VISUAL_FRAME_MAX`
+  clip)로 OCR + 장소명 후보. 진입점이 **플래그 확인을 첫 동작**으로 두고(off면 완전 무개입) 그다음 DeepSeek
+  엔진 가드(`generate_multimodal`은 Gemini 전용, 부록 B 안전장치 ①)를 확인한다. `batch_poi_service.py`의
+  후보 persist 로직을 `_persist_candidates` 공용 헬퍼로 refactor해 description/visual이 공유하며, VISUAL은
+  grounding 평가를 건너뛰고 `GroundingStatus.NOT_APPLICABLE`로 고정한다(부록 B 안전장치 ②, OCR을 transcript
+  grounding으로 오판정 방지). **핵심 수리**: `geocode_service.py`의 자동확정 recall 예외를 DESCRIPTION
+  단일 조건에서 `{DESCRIPTION, VISUAL}` 집합으로 일반화 — 없으면 VISUAL 후보가 자동확정·export까지 흐를
+  수 있었다(회귀 테스트로 pin). `llm_client.py`에 `inline_data` 전용 저-가산 토큰 추정(1,300, 기존
+  `file_data` 65,536 하한과 분리)을 추가해 8프레임 비전 1콜의 TPM 과대예약을 막았다. `config.py`:
+  `VISUAL_EXTRACTION_ENABLED`(기본 **false**)·`VISUAL_FRAME_COUNT_DEFAULT`(6, 계획서 8 대신 비용 가드
+  반영)·`VISUAL_FRAME_MAX`(8)·`VISUAL_MIN_DURATION_SECONDS`(60). `scheduler/worker.py`에 `visual_extraction`
+  job type 등록(기본 `LANE_BATCH`, whisper 수동 재전사와 동일 운영 결정). 마이그레이션 불필요(String 컬럼
+  기존 enum 값 재사용, Alembic head `20260714_0028` 유지 확인). 신규 `test_etl_visual_extraction.py` 12건
+  (프레임 샘플링·**후보 격리 자동확정 차단 회귀 핵심**·플래그 off 완전 무개입·DeepSeek 엔진 가드·비전 1콜
+  상한+clip·evidence 보존·grounding not_applicable 무회귀·dedup 비대칭). 검증: 로컬 disposable PostgreSQL
+  DB에서 타깃 111건 + backend 전체 **804건 전부 통과**(Windows 호스트 10분 tool timeout 제약으로 3개 chunk
+  분할 실행, 실패 0건), 변경 Python 8개 파일 Ruff clean. prod 활성화는 B4/PR-29 provider 정책 승인과 §1
+  게이트 GO 판정이 모두 선행돼야 한다(코드는 병합돼도 플래그 off + 미배포로만 존재). (2026-07-14, 로드맵
+  PR-19 개정판)
 - [x] **T-172**: 자막 fetch 병렬화 (PR-24, G8) — poi_batch 1단계 **캡션 fetch만** 병렬화하고 교정·POI
   배치 추출·지오코딩(2~4단계)은 순차 불변으로 두었다(LLM은 T-161 게이트웨이 리미터 소관). 게이트(§1
   GO/NO-GO·§6 G8)는 배포 후 관측 지표라 코드에서 제외 — 사용자 지시로 미측정 상태에서 구현만 진행.

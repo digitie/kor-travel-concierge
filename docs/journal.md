@@ -4,6 +4,83 @@
 
 ---
 
+## 2026-07-14: T-173 — 프레임 비전/OCR 실험 경로 (PR-19, 게이트 off)
+
+- **범위**: `docs/plan-t173-vision-ocr.md`(부록 B 반영본) 기준 Agent A(백엔드) 전용 구현. 미디어
+  asset 바이트 서빙·검수 썸네일 UI(Agent B §2.2)는 이번 범위 밖 — 플래그가 off라 서빙 라우트가
+  있어도 프레임이 노출되지 않으므로 후속 태스크로 분리했다. 게이트 판정(§1)·G9 post-deploy 지표는
+  측정 작업이라 이번 코드에서 제외했다 — 사용자 지시로 **플래그 off 상태로 구현만** 진행한다.
+- **대안 비교(§1.5 의무 절차, journal 기록)**: 착수 전 대안(제3안: Gemini URL 분석 승격,
+  `video_analysis_service`가 이미 보유한 `url_summary` 경로 재사용)과 비교했다. 비용 측면에서
+  본안(프레임 비전 1콜, 영상당 6~8장 inline image)이 URL 분석의 장영상 토큰 폭증(263 tok/s ×
+  10~30분 = 26만~47만 토큰, `llm_client.py` 문서 주석)보다 상한이 명확하고, 품질 측면에서
+  간판·하드섭 자막·지도 라벨 OCR이 자막 실패 영상의 실질 화면 텍스트를 회수하는 반면 URL 분석은
+  이미 T-064에서 시도되고도 낮은 신뢰도로 남아 있던 경로라 새 신호를 더하지 않는다는 판단으로
+  본안(PR-19 프레임 비전)을 택했다. 구현량·저장 정책(ADR-15/B4) 긴장은 본안이 더 크므로
+  `VISUAL_EXTRACTION_ENABLED` 격리와 B4 승인 게이팅으로 상쇄한다.
+- **구현**:
+  - 신규 `backend/ktc/etl/visual_extraction.py`: 자막·whisper 최종 실패
+    (`transcript_source IS NULL AND transcript_failure_code IS NOT NULL`) + 아직 visual
+    후보/프레임 asset이 없는 영상을 대상 선별(`select_visual_targets`, 새 컬럼 없이 기존
+    `extracted_place_candidates`/`media_assets`로 idempotent 재선별). `frame_extraction`
+    인프라(스트림 URL 1회 확보 + FFmpeg input seeking, 다운로드 없음)를 재사용해 균등 간격
+    프레임(`compute_frame_timestamps`, 앞뒤 5% 트림)을 추출·RustFS 저장하고, `generate_multimodal`
+    **영상당 정확히 1콜**(N장 inline_data + 프롬프트 1개, `VISUAL_FRAME_MAX`로 clip)로 화면 텍스트
+    OCR + 장소명 후보를 뽑는다. 진입점 `run_visual_extraction`이 **플래그 확인이 첫 동작**이고
+    (off면 스트림 취득·비전 호출·프레임 저장 전부 미수행, 로그 1줄만), 그다음 DeepSeek 엔진
+    가드(`generate_multimodal`은 Gemini 전용이라 DeepSeek에서 `ValueError`를 던진다 —
+    `llm_client.py` 문서·`video_analysis_service.make_youtube_url_llm`과 동일 제약)를 확인해
+    엔진이 Gemini가 아니면 no-op한다(부록 B 안전 가드 ①).
+  - `batch_poi_service.py` refactor: 후보 dedup·grounding·evidence·dirty outbox 조립 로직을
+    `_persist_candidates` 공용 헬퍼로 추출해 description(inline, `process_video_batch`)과
+    visual(신규 job)이 공유한다. **부록 B 안전 가드 ②**: 이 헬퍼가 source_kind==VISUAL이면
+    `grounding.evaluate_transcript_grounding` 호출 자체를 건너뛰고
+    `GroundingStatus.NOT_APPLICABLE`로 고정한다 — OCR 텍스트를 transcript raw segment 대조로
+    잘못 missing/unverified 판정하는 것을 막는다. description/transcript 경로의 grounding 평가는
+    무회귀(회귀 테스트로 pin).
+  - `geocode_service.py` **핵심 수리**: 자동확정 recall 예외를
+    `if candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value:` 단일 조건에서
+    `_RECALL_SOURCE_KINDS = {DESCRIPTION, VISUAL}` 집합 조건으로 일반화했다. 이 예외가 없으면
+    VISUAL 후보는 grounding 게이트(`_grounding_blocks_autoconfirm`, transcript 전용이라 VISUAL을
+    막지 않는다)를 그대로 통과해 자동확정·export까지 흐를 수 있었다(치명 리스크, 회귀 테스트로
+    못박음). review_note는 국내 확정 시 `"visual_only"`(미확인 시 기존과 동일하게
+    `"domestic_unverified"`)로 세팅한다. `_prepare_reverse_vworld`의 조기 종료 조건도 같은
+    recall 집합으로 일반화해 VISUAL 후보에서 불필요한 reverse geocoding HTTP를 막는다.
+  - `llm_client.py` 비용 가드: `_estimate_gemini_tokens`에 `inline_data`(정지 이미지) 전용
+    저-가산 상수(`INLINE_IMAGE_TOKEN_ESTIMATE=1,300`)를 추가했다. 기존
+    `MULTIMODAL_MEDIA_TOKEN_SURCHARGE`(65,536)는 `file_data`(스트리밍 영상) 하한 추정이라
+    정지 이미지에 그대로 적용하면 8프레임 비전 1콜이 524,288 토큰을 예약해 무료 티어
+    TPM(250k)을 구조적으로 초과한다(부록 B 비용 리스크). `file_data` 소비자(URL 분석)는 영향 없음.
+  - `config.py`/`.env.example`: `VISUAL_EXTRACTION_ENABLED`(기본 **false**),
+    `VISUAL_FRAME_COUNT_DEFAULT`(계획서 8 대신 **6**, 비용 가드 반영), `VISUAL_FRAME_MAX`(8),
+    `VISUAL_MIN_DURATION_SECONDS`(60) 추가.
+  - `scheduler/worker.py`: `visual_extraction` job type 등록. `crawl_run_service.create_run`
+    기본 lane이 이미 `LANE_BATCH`라 별도 override 없이 whisper 수동 재전사와 동일하게 대화형
+    레인을 잠식하지 않는다. handler는 payload를 풀어 `visual_extraction.run_visual_extraction`에
+    그대로 위임하는 얇은 wrapper다(플래그·엔진 가드는 그 함수 진입부가 소유).
+- **마이그레이션 결정**: **불필요**. source_kind='visual'·AssetType.FRAME 모두 String 컬럼의
+  기존 python enum 값이라 DDL 변경이 없고, 대상 재선별 idempotency는 새 컬럼 없이 기존
+  `extracted_place_candidates`(source_kind=visual)/`media_assets`(asset_type=frame) EXISTS
+  체크로 구현했다. Alembic head는 변경 전후 동일하게 `20260714_0028` 단일 head를 유지한다
+  (`test_migration_graph.py` 통과로 확인).
+- **테스트**: 신규 `backend/tests/test_etl_visual_extraction.py` 12건 — 프레임 샘플링(균등
+  간격·경계 트림·짧은 영상 스킵·이미 시도된 영상 재선별 제외), **후보 격리(자동확정 차단)
+  회귀 핵심**(geocode_service의 VISUAL recall 예외가 없으면 실패하도록 pin), **플래그 off
+  완전 무개입**(stream resolver·vision caller·store_and_record 호출 0회, 후보·media_asset
+  0건), **DeepSeek 엔진 가드**(`generate_multimodal` 미호출), **비전 1콜 상한**(프레임 6장 시
+  parts=7, N>MAX면 8로 clip), **evidence 보존**(frames[].asset_id·timestamp_seconds 실제 저장
+  asset과 일치), **grounding_status=not_applicable**(VISUAL은 `evaluate_transcript_grounding`
+  미호출, description/transcript는 그대로 호출되는 무회귀 확인), **dedup 비대칭**(transcript가
+  미검수 visual 후보를 supersede).
+- **검증**: 로컬 disposable PostgreSQL/PostGIS DB(`kor_travel_concierge_test_t173`)에서 신규
+  12건 + 기존 관련 파일(batch_poi_service·description path·geocode·frame_extraction 등) 포함
+  타깃 111건, backend 전체 pytest **804건 전부 통과**(3개 chunk로 분할 실행 — Windows 호스트
+  10분 tool timeout 제약 때문이며 실패 0건, chunk 간 상태 공유 없음), 변경 Python 8개 파일
+  Ruff clean, `alembic heads`가 변경 전후 동일한 단일 head(`20260714_0028`)임을 확인(마이그레이션
+  미추가 결정과 정합).
+
+---
+
 ## 2026-07-14: T-172 — 자막 fetch 병렬화 (PR-24)
 
 - **범위**: poi_batch 1단계 **자막 캡션 fetch만** 병렬화. 교정·POI 배치 추출·지오코딩(2~4단계)은 순차

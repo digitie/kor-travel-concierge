@@ -176,11 +176,17 @@
 |---|---|---|---|---|
 | `RAW_MEDIA_STORE_ENABLED` | `true` | `false` (ADR-15 재검토 결정 ①까지) | 원본 동영상/오디오 RustFS 저장을 스킵하고 로그 1줄(`store_raw_media` → `None`). 기존 객체는 삭제하지 않음 | `backend/ktc/core/config.py`, `backend/ktc/etl/frame_extraction.py::store_raw_media` |
 | `GOOGLE_PLACE_SEARCH_ENABLED` | `true` | `true` (사용자 결정 2026-07-13 — 현행 유지, §7-2) | `/place-search`의 google 결과가 빈 목록 + `errors.google="disabled: …"` (HTTP 호출 자체를 생략) | `backend/ktc/core/config.py`, `backend/ktc/etl/place_search.py::search_google_places` |
+| `VISUAL_EXTRACTION_ENABLED` | `false` | `false` (§1 게이트 GO ∧ 본 B4 결정 확정 전까지, T-173/ADR-43) | 프레임 스트림 취득(yt-dlp)·비전 OCR 호출·프레임 RustFS 저장을 전혀 수행하지 않고 로그 1줄만 남김(`visual_extraction.run_visual_extraction`이 진입 즉시 확인) | `backend/ktc/core/config.py`, `backend/ktc/etl/visual_extraction.py` |
 
 **범위 주의**: `RAW_MEDIA_STORE_ENABLED`는 **저장** 게이트다 — **다운로드 자체는 이
 플래그가 막지 않는다**. whisper 오디오 다운로드는 `TRANSCRIPT_WHISPER_ENABLED`가
-게이트(사용자 의도로 활성 유지 — §7-8, 품질 개선은 T-193), 프레임 스트림
-취득(yt-dlp)은 현재 게이트가 없다(향후 필요 시 별도 플래그).
+게이트(사용자 의도로 활성 유지 — §7-8, 품질 개선은 T-193). **프레임 스트림 취득
+(yt-dlp)은 T-173(PR-19)부터 `VISUAL_EXTRACTION_ENABLED`가 취득·비전 호출·저장
+전체를 한 번에 게이팅한다**(기본 `false` — 상시 비용·다운로드 0). 이 플래그는
+§1 게이트 SQL(`docs/plan-t173-vision-ocr.md`)이 GO를 내고 아래 §5 ADR-15 재검토가
+확정된 뒤에만 운영자가 켠다 — 프레임 JPEG의 RustFS "저장"은 `RAW_MEDIA_STORE_ENABLED`
+와 별개로 원본 미디어 저장 정책(ADR-15) 대상이며, 대표 프레임의 정책적 지위(§5
+"대표 프레임의 지위는 검토 필요")는 이 플래그를 켜기 전 별도로 재확인해야 한다.
 
 **소관 구분**: provider **cache** kill switch는 캐시가 실제로 생기는 T-170 소관이고
 (현재 지오코딩 cache 자체가 없어 끌 대상이 없다), Google 결과의 **저장** 전용 차단은

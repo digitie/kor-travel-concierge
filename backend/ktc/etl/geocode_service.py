@@ -51,6 +51,23 @@ _CANDIDATE_XMIN = literal_column(
 )
 _PLACE_XMIN = literal_column("travel_places.xmin::text::bigint", type_=BigInteger)
 
+# recall 경로 source_kind(자막 실패 fallback으로 생성되는 저신뢰 후보: description=T-168,
+# visual=T-173). 자막보다 근거가 약하므로 지오코딩 게이트 통과 여부와 무관하게 **절대
+# 자동확정하지 않는다** — 좌표·주소 후보는 검수 참고용 evidence로만 남긴다. 이 상수는
+# `batch_poi_service._RECALL_SOURCE_KINDS`와 같은 집합이지만, 두 모듈이 서로를 import하지
+# 않도록(순환 회피) 독립적으로 정의한다.
+_RECALL_SOURCE_KINDS = frozenset(
+    {EvidenceSourceKind.DESCRIPTION.value, EvidenceSourceKind.VISUAL.value}
+)
+
+# recall source_kind가 국내 확정(is_domestic is True)일 때 남기는 review_note. 국내
+# 미확인(None/False가 상위에서 걸러지지 않은 경우)은 두 소스 모두 공용으로
+# "domestic_unverified"를 쓴다(T-166 대칭, 아래 분기 참고).
+_RECALL_REVIEW_NOTE_BY_SOURCE_KIND: dict[str, str] = {
+    EvidenceSourceKind.DESCRIPTION.value: "description_only",
+    EvidenceSourceKind.VISUAL.value: "visual_only",
+}
+
 
 @dataclass(frozen=True)
 class CandidateGeocodeSnapshot:
@@ -253,13 +270,10 @@ async def _prepare_reverse_vworld(
     stale snapshot으로 자동확정 가능성이 있는 신규 장소만 선조회한다. lock 뒤 최신 후보로
     모든 gate와 근접 중복을 다시 평가하며, 선택 좌표가 달라졌으면 이 결과를 버린다.
     """
-    # description fallback은 forward geocode 결과만 검수 evidence로 남기고 어떤 경우에도
-    # 자동확정하지 않는다(T-168). 뒤의 확정 가능성 preflight가 불필요한 reverse HTTP를
-    # 먼저 실행하지 않도록 여기서 명시적으로 제외한다.
-    if (
-        vworld is None
-        or candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value
-    ):
+    # recall source_kind(description=T-168, visual=T-173)는 forward geocode 결과만 검수
+    # evidence로 남기고 어떤 경우에도 자동확정하지 않는다. 뒤의 확정 가능성 preflight가
+    # 불필요한 reverse HTTP를 먼저 실행하지 않도록 여기서 명시적으로 제외한다.
+    if vworld is None or candidate.source_kind in _RECALL_SOURCE_KINDS:
         return False, None, None
     selected, _, _ = _select_geocode_candidate(candidate, decision)
     if selected is None or _grounding_blocks_autoconfirm(candidate):
@@ -468,12 +482,18 @@ async def apply_geocode_to_candidate(
         session, [candidate.id], reason="geocode_apply"
     )
 
-    # description 단독 후보(T-168, 로드맵 PR-17, §1.3 D1): 자막 실패 fallback으로 생성된
-    # recall 경로 후보다. 자막보다 근거가 약하므로 T-165/166 게이트 통과 여부와 무관하게
-    # **자동확정하지 않는다** — 지오코딩은 수행해 좌표·주소 후보를 검수 참고용 evidence로
-    # 남기되 상태는 needs_review로 고정한다. queue_reason은 파생 로직이 source_kind=
-    # 'description'을 description_only로(지오코딩 사유가 있으면 그 사유로) 처리한다(T-182).
-    if candidate.source_kind == EvidenceSourceKind.DESCRIPTION.value:
+    # recall 경로 후보(description=T-168 로드맵 PR-17 §1.3 D1, visual=T-173 로드맵 PR-19):
+    # 자막 실패 fallback으로 생성된 저신뢰 후보다. 자막보다 근거가 약하므로 T-165/166 게이트
+    # 통과 여부와 무관하게 **자동확정하지 않는다** — 지오코딩은 수행해 좌표·주소 후보를
+    # 검수 참고용 evidence로 남기되 상태는 needs_review로 고정한다. queue_reason은 파생
+    # 로직이 source_kind='description'/'visual'을 각각 description_only/visual_only로
+    # (지오코딩 사유가 있으면 그 사유로) 처리한다(T-182/T-183).
+    #
+    # **핵심 안전장치(T-173 부록 B)**: 이 분기가 없으면 VISUAL 후보는 아래 정상 자동확정
+    # 경로로 흘러 grounding 게이트(`_grounding_blocks_autoconfirm`, transcript 전용이라
+    # VISUAL을 막지 않는다)를 그대로 통과해 자동확정될 수 있다. 이 `in _RECALL_SOURCE_KINDS`
+    # 검사가 VISUAL 자동확정을 막는 유일한 방어선이다.
+    if candidate.source_kind in _RECALL_SOURCE_KINDS:
         candidate.provider_evidence_json = _merge_provider_evidence(
             candidate.provider_evidence_json,
             geocoding=_geocode_evidence(
@@ -482,13 +502,15 @@ async def apply_geocode_to_candidate(
         )
         candidate.match_status = MatchStatus.NEEDS_REVIEW
         # is_domestic None(미확인)은 fail-closed 신호를 보존해 queue_reason이 FOREIGN 버킷으로
-        # 가도록 domestic_unverified로 표기한다(T-166 대칭, description_only가 국내여부 미확인을
-        # 가리지 않게). 명시적 국내(True)만 description_only로 둔다. is_domestic False는 상위
-        # 배치가 지오코딩 대상에서 제외하므로 여기 도달하지 않는다.
+        # 가도록 domestic_unverified로 표기한다(T-166 대칭, description_only/visual_only가
+        # 국내여부 미확인을 가리지 않게). 명시적 국내(True)만 소스별 *_only로 둔다.
+        # is_domestic False는 상위 배치가 지오코딩 대상에서 제외하므로 여기 도달하지 않는다.
         candidate.review_note = (
             "domestic_unverified"
             if candidate.is_domestic is not True
-            else "description_only"
+            else _RECALL_REVIEW_NOTE_BY_SOURCE_KIND.get(
+                candidate.source_kind, "domestic_unverified"
+            )
         )
         candidate.feature_export_status = FeatureExportStatus.PENDING.value
         await session.commit()

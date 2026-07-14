@@ -69,6 +69,17 @@ GeminiQuotaBusy = gemini_rate_limiter.GeminiQuotaBusy
 # 정밀값은 PR-05 usage 실측 로그(`llm_usage`)가 쌓인 뒤 보정한다.
 MULTIMODAL_MEDIA_TOKEN_SURCHARGE = 65_536
 
+# 정지 이미지(`inline_data`, T-173 프레임 비전/OCR) 1장당 저-가산 추정 토큰 — 근사값이며
+# 상한/하한을 주장하지 않는다.
+#
+# 위 `MULTIMODAL_MEDIA_TOKEN_SURCHARGE`(65,536)는 `file_data`(YouTube URL 영상 등) 스트리밍
+# 입력용 **하한**이라 그대로 정지 이미지에 적용하면 과대 예약된다 — 예: 8프레임 비전 1콜이
+# 524,288 토큰을 예약해 무료 티어 TPM(250k, `GEMINI_RATE_TPM`)을 구조적으로 초과하고 예약
+# 단계에서 즉시 stall한다(T-173 계획서 부록 B 비용 리스크). 이 값은 `inline_data` part에만
+# 적용하고 `file_data` 등 기존 media part 추정(위 상수)은 건드리지 않는다. 정밀값은 usage
+# 실측 로그가 쌓인 뒤 보정한다(PR-05와 동일 방침).
+INLINE_IMAGE_TOKEN_ESTIMATE = 1_300
+
 
 class LlmRequestError(RuntimeError):
     """provider 호출이 재시도 후에도 실패한 경우(상태코드/모델 포함)."""
@@ -319,19 +330,25 @@ def _estimate_gemini_tokens(
 ) -> int:
     """quota reservation용 추정 토큰 — 기존 추정식 재사용(변경 금지).
 
-    텍스트는 `gemini_rate_limiter.estimate_tokens`(chars//2+2048) 그대로,
-    media part(file_data 등)는 part당 `MULTIMODAL_MEDIA_TOKEN_SURCHARGE`를 더한다.
+    텍스트는 `gemini_rate_limiter.estimate_tokens`(chars//2+2048) 그대로, `file_data`
+    등 스트리밍 media part는 part당 `MULTIMODAL_MEDIA_TOKEN_SURCHARGE`(하한 추정)를,
+    정지 이미지(`inline_data`, T-173)는 훨씬 낮은 `INLINE_IMAGE_TOKEN_ESTIMATE`를
+    더한다(비용 리스크 방어 — 위 두 상수 문서 참고).
     """
     texts = [system_instruction or ""]
     media_parts = 0
+    inline_image_parts = 0
     for part in parts:
         if isinstance(part, dict) and isinstance(part.get("text"), str):
             texts.append(part["text"])
+        elif isinstance(part, dict) and "inline_data" in part:
+            inline_image_parts += 1
         else:
             media_parts += 1
     return (
         gemini_rate_limiter.estimate_tokens(*texts)
         + media_parts * MULTIMODAL_MEDIA_TOKEN_SURCHARGE
+        + inline_image_parts * INLINE_IMAGE_TOKEN_ESTIMATE
     )
 
 

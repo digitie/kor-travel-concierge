@@ -456,6 +456,65 @@ async def test_generate_multimodal_passes_parts_and_surcharges_quota(
     assert parts[1]["text"] == "요약하라"
 
 
+async def test_generate_multimodal_inline_images_use_low_token_estimate(
+    monkeypatch, fake_acquire
+):
+    """정지 이미지(inline_data)는 file_data 하한(65,536)이 아니라 저-가산(1,300)을 쓴다.
+
+    T-173 프레임 비전/OCR 비용 가드(invariant F): 8프레임 비전 1콜이 65,536×8=524,288
+    토큰을 예약하면 무료 티어 TPM(GEMINI_RATE_TPM 기본 250,000)을 구조적으로 초과해
+    예약 단계에서 stall한다. `elif "inline_data" in part` 분기가 삭제/변형되면 이 테스트가
+    실패한다(TPM 초과).
+    """
+    monkeypatch.setattr(gemini_client, "post_generate_content", lambda **k: _GEMINI_OK)
+    runtime = llm_client.LlmRuntime(model="gemini-2.0-flash", gemini_api_key="k")
+    n_images = 8
+    parts = [
+        {"inline_data": {"mime_type": "image/jpeg", "data": f"b64-{i}"}}
+        for i in range(n_images)
+    ]
+    parts.append({"text": "프레임 화면 텍스트를 OCR하라"})
+
+    await llm_client.generate_multimodal(runtime, parts, response_schema={"type": "object"})
+
+    text_estimate = gemini_rate_limiter.estimate_tokens("", parts[-1]["text"])
+    expected_inline = text_estimate + n_images * llm_client.INLINE_IMAGE_TOKEN_ESTIMATE
+    would_be_surcharge = text_estimate + n_images * llm_client.MULTIMODAL_MEDIA_TOKEN_SURCHARGE
+    assert fake_acquire == [expected_inline]
+    # (a) 저-가산 분기를 실제로 탔다 — 하한 분기를 탔다면 값이 달라진다.
+    assert fake_acquire[0] != would_be_surcharge
+    # 8장이 무료 티어 TPM(250k) 아래에 머문다 — 65,536 분기를 탔다면(524,288) 불가능하다.
+    assert fake_acquire[0] < 250_000
+
+
+async def test_generate_multimodal_discriminates_inline_data_vs_file_data(
+    monkeypatch, fake_acquire
+):
+    """혼합 parts에서 file_data는 하한(65,536)을, inline_data는 저-가산(1,300)을 쓴다.
+
+    branch가 inline_data와 file_data를 정확히 구분함을 양방향으로 못박는다 — file_data가
+    실수로 저-가산을 타거나 inline_data가 하한을 타면 실패한다.
+    """
+    monkeypatch.setattr(gemini_client, "post_generate_content", lambda **k: _GEMINI_OK)
+    runtime = llm_client.LlmRuntime(model="gemini-2.0-flash", gemini_api_key="k")
+    parts = [
+        {"file_data": {"file_uri": "https://www.youtube.com/watch?v=abc"}},
+        {"inline_data": {"mime_type": "image/jpeg", "data": "b64-0"}},
+        {"inline_data": {"mime_type": "image/jpeg", "data": "b64-1"}},
+        {"text": "혼합 입력"},
+    ]
+
+    await llm_client.generate_multimodal(runtime, parts, response_schema={"type": "object"})
+
+    text_estimate = gemini_rate_limiter.estimate_tokens("", parts[-1]["text"])
+    expected = (
+        text_estimate
+        + 1 * llm_client.MULTIMODAL_MEDIA_TOKEN_SURCHARGE  # file_data(영상)는 하한 유지
+        + 2 * llm_client.INLINE_IMAGE_TOKEN_ESTIMATE  # inline_data(이미지)는 저-가산
+    )
+    assert fake_acquire == [expected]
+
+
 async def test_generate_multimodal_rejects_deepseek(fake_acquire):
     runtime = llm_client.LlmRuntime(model="deepseek-v4-flash", deepseek_api_key="k")
     with pytest.raises(ValueError):
