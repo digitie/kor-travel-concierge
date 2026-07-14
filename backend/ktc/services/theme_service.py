@@ -33,6 +33,7 @@ from ktc.services.list_pagination import (
     encode_cursor,
     ensure_repeatable_read,
     filter_fingerprint,
+    page_payload,
 )
 
 # 동영상 테마 공개 최소 POI 수. 매치/검수 완료(=확정) POI가 이 값 이상일 때만 목록을 준다.
@@ -41,10 +42,17 @@ VIDEO_THEME_MIN_POIS = 5
 ThemeKind = Literal["channel", "playlist", "keyword"]
 
 
-def _theme_place_payload(summary: place_service.PlaceSummary) -> dict[str, Any]:
-    """테마 POI 항목. 확정 장소 + 좌표/주소/카테고리 + 출처 동영상 근거."""
+def _theme_place_payload(
+    summary: place_service.PlaceSummary, *, include_sources: bool = False
+) -> dict[str, Any]:
+    """테마 POI 항목. 확정 장소 + 좌표/주소/카테고리(+ opt-in 출처 동영상 근거).
+
+    `source_videos`는 payload를 무겁게 만들고 대부분의 소비자가 좌표/카테고리만
+    필요로 하므로 기본 제외한다(T-152 경량화 철학). 출처 근거가 필요한 소비자는
+    `include=sources`(→ `include_sources=True`)로만 요청한다.
+    """
     place = summary.place
-    return {
+    payload: dict[str, Any] = {
         "place_id": place.place_id,
         "name": place.name,
         "category": place.category,
@@ -64,7 +72,9 @@ def _theme_place_payload(summary: place_service.PlaceSummary) -> dict[str, Any]:
         # 이 POI가 (모든 출처 통틀어) 언급된 고유 영상 수/유튜버 수.
         "mention_count": summary.mention_count,
         "source_channel_count": summary.source_channel_count,
-        "source_videos": [
+    }
+    if include_sources:
+        payload["source_videos"] = [
             {
                 "video_id": mention.video_id,
                 "video_title": mention.video_title,
@@ -75,8 +85,18 @@ def _theme_place_payload(summary: place_service.PlaceSummary) -> dict[str, Any]:
                 "timestamp_end": mention.timestamp_end,
             }
             for mention in summary.source_videos
-        ],
-    }
+        ]
+    return payload
+
+
+def wants_sources(include: str | None) -> bool:
+    """`include` 쿼리에 `sources` 토큰이 있으면 source_videos를 포함한다.
+
+    쉼표로 여러 값을 넣을 수 있으나 현재는 `sources`만 인식한다.
+    """
+    if not include:
+        return False
+    return "sources" in {token.strip() for token in include.split(",")}
 
 
 _THEME_KIND_ORDER = {"channel": 0, "playlist": 1, "keyword": 2}
@@ -283,9 +303,25 @@ async def list_theme_summaries_page(
 
 
 async def get_theme_places(
-    session: AsyncSession, *, kind: ThemeKind, value: str
+    session: AsyncSession,
+    *,
+    kind: ThemeKind,
+    value: str,
+    limit: int = 200,
+    cursor: str | None = None,
+    newer_than_id: int | None = None,
+    include_sources: bool = False,
 ) -> dict[str, Any]:
-    """테마(유튜버/재생목록/보정 검색어) 하나의 확정 POI 목록."""
+    """테마(유튜버/재생목록/보정 검색어) 하나의 확정 POI 목록(공통 envelope).
+
+    T-190: `limit`(기본 200)·opaque `cursor` 기반 공통 envelope(PR-32,
+    `items/next_cursor/has_more/total/newest_id/newer_than`)로 페이지네이션한다.
+    정렬·집계·출처 filter는 결과 보기와 같은 `place_service.list_place_summaries_page`를
+    재사용한다(mention_count 정렬, `video_place_mappings` ↔ `youtube_videos` 조인).
+    `source_videos`는 `include_sources`일 때만 각 항목에 포함한다.
+
+    잘못된 cursor 등은 `ValueError`로 올려 라우터가 400으로 변환한다.
+    """
     filters: dict[str, str] = {}
     if kind == "channel":
         filters["channel_id"] = value
@@ -296,45 +332,90 @@ async def get_theme_places(
     else:  # pragma: no cover - 라우터 pattern이 먼저 막는다.
         raise ValueError(f"지원하지 않는 테마 종류: {kind}")
 
-    summaries = await place_service.list_place_summaries(
-        session, sort="mention_count", limit=None, **filters
+    page = await place_service.list_place_summaries_page(
+        session,
+        sort="mention_count",
+        limit=limit,
+        cursor=cursor,
+        newer_than_id=newer_than_id,
+        **filters,
     )
-    return {
-        "theme": {
-            "kind": kind,
-            "value": value,
-            "poi_count": len(summaries),
-        },
-        "places": [_theme_place_payload(summary) for summary in summaries],
-    }
+    payload = page_payload(
+        ListPage(
+            items=[
+                _theme_place_payload(summary, include_sources=include_sources)
+                for summary in page.items
+            ],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            total=page.total,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
+    )
+    payload["theme"] = {"kind": kind, "value": value, "poi_count": page.total}
+    return payload
 
 
 async def get_video_theme_places(
-    session: AsyncSession, *, video_id: str
+    session: AsyncSession,
+    *,
+    video_id: str,
+    limit: int = 200,
+    cursor: str | None = None,
+    newer_than_id: int | None = None,
+    include_sources: bool = False,
 ) -> dict[str, Any]:
-    """특정 동영상을 테마로 한 확정 POI 목록.
+    """특정 동영상을 테마로 한 확정 POI 목록(공통 envelope).
 
-    매치/검수 완료된 POI가 `VIDEO_THEME_MIN_POIS`개 이상일 때에만 `places`를 채운다.
+    매치/검수 완료된 POI가 `VIDEO_THEME_MIN_POIS`개 이상일 때에만 `items`를 채운다.
     미만이면 `sufficient=false`와 함께 빈 목록을 반환한다(정책상 미공개, 이유 노출).
+    게이트는 snapshot 전체 POI 수(`page.total`)로 판정하므로 페이지를 넘겨도 일관되며,
+    미공개일 때는 `next_cursor`/`has_more`를 노출하지 않는다. `source_videos`는
+    `include_sources`일 때만 포함한다.
+
+    잘못된 cursor 등은 `ValueError`로 올려 라우터가 400으로 변환한다.
     """
-    summaries = await place_service.list_place_summaries(
-        session, sort="mention_count", limit=None, video_id=video_id
+    page = await place_service.list_place_summaries_page(
+        session,
+        sort="mention_count",
+        limit=limit,
+        cursor=cursor,
+        newer_than_id=newer_than_id,
+        video_id=video_id,
     )
-    poi_count = len(summaries)
+    poi_count = page.total
     sufficient = poi_count >= VIDEO_THEME_MIN_POIS
     video = await session.get(YoutubeVideo, video_id)
-    return {
-        "theme": {
-            "kind": "video",
-            "value": video_id,
-            "title": video.title if video is not None else None,
-            "poi_count": poi_count,
-        },
-        "min_required": VIDEO_THEME_MIN_POIS,
-        "sufficient": sufficient,
-        "places": (
-            [_theme_place_payload(summary) for summary in summaries]
-            if sufficient
-            else []
-        ),
+    if sufficient:
+        envelope = ListPage(
+            items=[
+                _theme_place_payload(summary, include_sources=include_sources)
+                for summary in page.items
+            ],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            total=poi_count,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
+    else:
+        # 정책상 미공개: 장소를 노출하지 않는다(빈 목록 + 사유). POI 수만 알린다.
+        envelope = ListPage(
+            items=[],
+            next_cursor=None,
+            has_more=False,
+            total=poi_count,
+            newest_id=page.newest_id,
+            newer_than=page.newer_than,
+        )
+    payload = page_payload(envelope)
+    payload["theme"] = {
+        "kind": "video",
+        "value": video_id,
+        "title": video.title if video is not None else None,
+        "poi_count": poi_count,
     }
+    payload["min_required"] = VIDEO_THEME_MIN_POIS
+    payload["sufficient"] = sufficient
+    return payload

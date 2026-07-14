@@ -3082,29 +3082,67 @@ async def list_themes(
 async def theme_places(
     kind: str = Query(..., pattern="^(channel|playlist|keyword)$"),
     value: str = Query(..., min_length=1),
-    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=200, ge=1, le=500),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    include: str | None = Query(default=None, max_length=64),
+    session: AsyncSession = Depends(get_repeatable_read_session),
 ) -> dict[str, Any]:
     """테마(유튜버/재생목록/보정 검색어) 하나의 확정 POI 목록.
 
     `kind`는 `channel`(유튜버)/`playlist`(재생목록)/`keyword`(보정 검색어),
-    `value`는 채널 ID/재생목록 ID/검색어 문자열이다.
+    `value`는 채널 ID/재생목록 ID/검색어 문자열이다. 공통 envelope(`items`·`next_cursor`
+    등)로 페이지네이션하며(`limit` 기본 200·상한 500), `include=sources`일 때만 각 항목에
+    `source_videos` 출처 근거를 포함한다.
     """
-    return await theme_service.get_theme_places(
-        session, kind=kind, value=value  # type: ignore[arg-type]
-    )
+    try:
+        return await theme_service.get_theme_places(
+            session,
+            kind=kind,  # type: ignore[arg-type]
+            value=value,
+            limit=limit,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+            include_sources=theme_service.wants_sources(include),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/themes/video/{video_id}/places")
 async def video_theme_places(
     video_id: str,
-    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=200, ge=1, le=500),
+    cursor: str | None = Query(
+        default=None, max_length=list_pagination.CURSOR_MAX_LENGTH
+    ),
+    newer_than_id: int | None = Query(
+        default=None, ge=0, le=list_pagination.MAX_DB_INTEGER_ID
+    ),
+    include: str | None = Query(default=None, max_length=64),
+    session: AsyncSession = Depends(get_repeatable_read_session),
 ) -> dict[str, Any]:
     """특정 동영상을 테마로 한 확정 POI 목록.
 
-    매치되거나 검수 완료된 POI가 5개 이상일 때에만 `places`를 채워 반환한다
-    (미만이면 `sufficient=false` + 빈 목록).
+    매치되거나 검수 완료된 POI가 5개 이상일 때에만 `items`를 채워 반환한다
+    (미만이면 `sufficient=false` + 빈 목록). 공통 envelope로 페이지네이션하며
+    (`limit` 기본 200·상한 500), `include=sources`일 때만 `source_videos`를 포함한다.
     """
-    return await theme_service.get_video_theme_places(session, video_id=video_id)
+    try:
+        return await theme_service.get_video_theme_places(
+            session,
+            video_id=video_id,
+            limit=limit,
+            cursor=cursor,
+            newer_than_id=newer_than_id,
+            include_sources=theme_service.wants_sources(include),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # --- 관리자 인증/공개 API 키 ---
