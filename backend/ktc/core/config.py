@@ -286,6 +286,22 @@ class Settings(BaseSettings):
     FEATURE_EXPORT_RECONCILE_ENABLED: bool = True
     FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS: int = 3_600
 
+    # --- 프레임 비전/OCR 실험 경로 (T-173, 로드맵 PR-19, 게이트 대기 — 기본 off) ---
+    # 자막·whisper가 최종 실패한 영상에서 균등 간격 프레임을 뽑아 Gemini 비전 1콜로
+    # 화면 텍스트(간판·하드섭 자막·지도 라벨)를 OCR하고 검수 전용 visual 후보를 만드는
+    # 실험 경로의 kill switch. 기본 false — 꺼져 있으면 스트림 취득·비전 호출·프레임
+    # 저장을 전혀 하지 않는다(상시 비용 0). `docs/plan-t173-vision-ocr.md` §1 게이트
+    # (관측 지표 + B4/PR-29 provider 정책 승인)가 GO일 때만 운영자가 켠다.
+    VISUAL_EXTRACTION_ENABLED: bool = False
+    # 영상 1건당 추출할 프레임 수(기본). 부록 B 비용 리스크(8프레임=524k 예약 토큰이
+    # 무료 티어 TPM 250k를 구조적으로 초과)에 따라 계획서 기본값(8)보다 낮춘 6을 쓴다.
+    VISUAL_FRAME_COUNT_DEFAULT: int = 6
+    # 영상 1건당 프레임 수 상한. 설정 실수로 늘려도 비전 1콜의 media part 수를 이 값에서
+    # clip해 비용 폭증을 구조적으로 막는다.
+    VISUAL_FRAME_MAX: int = 8
+    # 이보다 짧은 영상은 균등 간격 프레임 샘플링이 무의미해 대상에서 제외한다(초).
+    VISUAL_MIN_DURATION_SECONDS: int = 60
+
     @property
     def api_keys(self) -> list[str]:
         """`API_KEYS`를 허용 키 목록으로 파싱한다."""
