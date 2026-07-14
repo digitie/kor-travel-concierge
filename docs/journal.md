@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-14: T-190 — themes 공급 API 마감 (A3)
+
+- **문제**: `/themes/places`·`/themes/video/{id}/places`가 `limit=None` 전량 반환이고 `source_videos`를
+  상시 포함해 무거웠다. `/themes` 목록 envelope는 T-177에서 완료.
+- **구현**: 두 엔드포인트를 **PR-32 공통 envelope**(items/next_cursor/has_more/total/newest_id/newer_than)로
+  전환 — cursor·limit(기본 200·상한 500)은 T-188 `list_place_summaries_page`(sort=mention_count)를 **재사용**.
+  동영상 테마 `sufficient` 게이트(전체수 `page.total >= 5`)와 미공개 사유(빈 items + sufficient/min_required/
+  poi_count, next_cursor/has_more 숨김) 보존(ADR-35). `source_videos` **기본 제외 + `include=sources` opt-in**.
+  `docs/themes-api.md`(엔드포인트 3종·파라미터·게이트·envelope·예시·마이그레이션 노트) 신설, frontend
+  `/api-test` 갱신. **파괴적 변경**(places→items·source_videos 기본 제거)이나 **외부 소비자 0**(kor-travel-map은
+  `/features/*`만, 테마는 /api-test만) — "지금이 마지막 기회" 근거로 문서화.
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: envelope·cursor round-trip·sufficient 게이트 무회귀·
+  source_videos opt-in 누출 없음·파괴적 변경 안전·T-188 재사용 정합 검증. MINOR 3 정리 — `wants_sources`
+  대소문자 무시(`include.lower()`), themes-api.md 산문의 min_required/sufficient top-level 정정, video 게이트
+  docstring 정확화(동일 snapshot 하 일관·동시 삭제 시 graceful degradation).
+- **금지 준수**: `/themes` 목록(T-177)·`list_place_summaries`/`_page`(T-188)·feature export(T-189)·sufficient
+  게이트 미변경(재사용만), migration 없음.
+- **검증**: 격리 disposable DB backend 전체 pytest ~779 passed(실패 0), theme+pagination 23 passed, frontend
+  lint/type-check/build 통과, 단일 head, origin/main(#206) 0 behind.
+
 ## 2026-07-14: T-189 — features 계약 마감 (A5, G10)
 
 - **문제**: feature export payload의 address 행정코드(`sido_code`/`sigungu_code`/`legal_dong_code`)가 하드코딩
