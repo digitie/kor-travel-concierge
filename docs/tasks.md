@@ -16,8 +16,8 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8)
-- [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9)
+- [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8) — **착수 계획서·게이트 SQL: `docs/plan-t172-transcript-parallelization.md`**(2렌즈 검증 partial, 착수 전 정정 3건 반영)
+- [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9) — **착수 계획서·게이트 SQL: `docs/plan-t173-vision-ocr.md`**(2렌즈 검증 accurate; VISUAL은 grounding_status=not_applicable·DeepSeek 엔진 가드 필수)
 - [ ] **T-193**: [조건부] 자막 품질 개선 — 사용자 결정(2026-07-13)으로 신설: prod whisper 자동 전사는
   의도된 현행 유지이며, 품질 개선 필요성이 확인되면 착수한다. whisper 모델 크기 상향 평가(base→small
   등), 전사 품질 스코어링, 재전사 정책 개선. T-164의 transcript_attempts 데이터로 필요성 판단.
