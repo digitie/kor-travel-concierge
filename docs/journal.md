@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-07-14: T-192 — 작업 IA 정리 (/jobs 인덱스·nav 재편·홈 배너) (U10/U12/U13)
+
+- **문제**: 작업 표면이 `/status` 작업 테이블·`/collect` 진행 패널·`/jobs/[id]` 상세에 흩어지고, `/collect`에
+  죽은 `detailRun` 상태가 남아 있었다.
+- **구현(통합·축소, 신규 화면 남발 아님)**: **`/jobs` 인덱스 신설**(`JobsDashboard`) — 상단 진행 중·대기 큐
+  (T-181 `['run-queue']` 재사용), 하단 이력 테이블(T-177 `listRunsPage` cursor pagination·`total` 재사용) +
+  상태·유형·attention 필터 + 더 보기, 행 액션은 상세+`RunActionButtons`(PR-03) 재사용. `jobs-history.ts`는
+  UI filter→`/runs` params 매핑만(`user_jobs_only⊕job_types` 상호배제 존중, 계약 **재구현 없음**). **nav 재편**
+  (AppShell): 주 그룹 결과·수집·검수·**작업**·설정 / 보조 상태·API, `/jobs` 하이라이트(`nav.ts`), `JobStatusLink`·
+  attention 배지 → `/jobs`·`/jobs?attention=open`. **`/status` 축소**: 작업 테이블/탭 제거(→/jobs), 운영 요약·
+  저장소·검수 후보·감사/로그인 유지, 검수 후보 MetricCard→`/review`. **`/collect` 축소**: 죽은 `detailRun`·로컬
+  액션·mutation 제거, 진행=1줄 요약+`/jobs` 링크. **홈 배너**(`HomeActionBanner`): 검수 대기 N(unmatched
+  total·limit=1)→검수 시작, `open_attention_count>0`이면 확인 필요 K→`/jobs?attention=open`. 대시보드 전면
+  개편·`/`→`/places` 이동 없음.
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: 계약 재사용 정확(상호배제·terminal/attention/state
+  매핑·cursor/total·RunActionButtons 재사용), IA 축소 기능 유실 없음(중지/재시작 /jobs 완전 이관·죽은 코드
+  잔존 0·배너 count 정본·nav 활성 판정·모바일 도달), E2E heading/nav 정합. known-MINOR(문서화·후속): ①
+  state 드롭다운+attention 대조 조합(예: 완료+확인필요만)이 무음 빈 이력(UX 엣지·정확성 아님), ② 구 /status
+  `runs_by_state` 집계 뷰가 /jobs로 재이관 안 됨(상태는 /jobs 필터·행으로 확인 가능·backend는 여전히 반환→
+  재노출 용이), ③ /status 실행 큐 MetricCard 텍스트 E2E 어서션 축소(근저 count는 JobStatusLink aria-label로 유지).
+- **금지 준수**: `/runs` 필터·pagination·total·run-queue·attention·failed_recent 재추가 없음(소비만), backend
+  `routes.py` 무변경, 자동 승인·다이얼로그 증설 없음, 대시보드 전면 개편 없음.
+- **검증**: frontend vitest **330 passed**(신규 jobs-history·nav·home-banner), lint/type-check/build green,
+  backend 무변경(migration 없음). E2E heading/nav 어서션 전수 갱신 후 n150 이연. origin/main(#209) 0 behind.
+
 ## 2026-07-14: T-187 — 검수 키보드 단축키 + 처리 모드(triage) + provenance facet (U5/U1)
 
 - **게이트**: PR-16은 건당 인터랙션 측정 게이트(모호 시 본안 채택). 라이브 측정 없음 → 모호 → **본안(처리 모드)

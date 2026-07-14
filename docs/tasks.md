@@ -25,11 +25,22 @@
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
 - [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
-- [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
 ---
 
 ## 완료
 
+- [x] **T-192**: 작업 IA 정리 (/jobs 인덱스·nav 재편·홈 배너) (U10/U12/U13) — 작업 표면을 `/jobs`(목록·이력·
+  액션)로 통합/축소했다. **`/jobs` 인덱스**(JobsDashboard): 상단 진행중·대기 큐(T-181 run-queue 재사용) + 하단
+  이력 테이블(T-177 `listRunsPage` cursor·total 재사용) + 상태/유형/attention 필터 + 더 보기, 행 액션=상세+
+  `RunActionButtons`(PR-03). `jobs-history.ts`는 UI filter→`/runs` params 매핑만(`user_jobs_only⊕job_types`
+  상호배제, 계약 재구현 없음). **nav 재편**(주 결과·수집·검수·작업·설정 / 보조 상태·API, `JobStatusLink`→
+  `/jobs`). **`/status` 축소**(작업 테이블→/jobs, 검수 후보 MetricCard→/review). **`/collect` 축소**(죽은
+  `detailRun` 제거·1줄 요약+/jobs). **홈 배너**(검수 대기 N→검수 시작·attention K→/jobs?attention=open). 2렌즈
+  적대적 리뷰: 확정 BLOCKER/MAJOR 0(계약 재사용·기능 유실 없음·죽은 코드 0·배너 count 정본·E2E 정합). MINOR
+  3(문서화·후속): 대조 필터 조합 무음 빈 이력(UX), 구 `runs_by_state` 집계 뷰 미이관(backend 반환 유지·재노출
+  용이), /status 카드 텍스트 E2E 커버리지 축소(count는 aria-label로 유지). 불변: `/runs`·run-queue·attention
+  계약 재추가 없음, backend routes.py 무변경, migration 없음. 검증: frontend vitest 330 passed·lint/type-check/
+  build green, E2E heading 갱신 후 n150 이연. (2026-07-14, 로드맵 PR-28 개정·U10/U12/U13)
 - [x] **T-187**: 검수 키보드 단축키 + 처리 모드(triage) + provenance facet (U5/U1) — 게이트(건당 인터랙션
   측정) 모호 → **본안(처리 모드) 채택**. `useReviewKeyboard.ts` 전역 keydown(J/K·1~9 번호 배지·Enter·X·U·/·?)
   + **확장 포커스 가드**(IME·modifier·repeat·input/button/role=dialog/menu/listbox/option/combobox/searchbox/
