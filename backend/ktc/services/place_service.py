@@ -1337,6 +1337,126 @@ async def list_place_facets(session: AsyncSession) -> dict[str, list[dict[str, A
     }
 
 
+async def list_review_source_facets(
+    session: AsyncSession,
+    *,
+    is_domestic: bool | None = None,
+    status: ReviewCandidateStatus = ReviewCandidateStatus.NEEDS_REVIEW,
+    query: str | None = None,
+    queue_reason: QueueReason | None = None,
+    source_kind: EvidenceSourceKind | None = None,
+    grounding_status: GroundingStatus | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """검수 큐의 **후보 provenance** 기반 출처 facet을 반환한다(T-187).
+
+    `list_place_facets`(확정 장소 기반)와 달리, 여기서는 아직 확정 장소가 없는
+    검수 후보의 출처(유튜버/재생목록/검색어)도 노출한다. 각 항목의
+    `candidate_count`는 현재 목록 filter(국내 여부·상태·대기 사유·후보 출처·
+    원문 근거·검색어)를 그대로 반영하되, **그룹 차원 자체(channel/playlist/
+    keyword 선택)는 제외**해 사용자가 그룹을 자유롭게 전환할 수 있게 한다.
+    """
+
+    def base():
+        return _unmatched_candidates_stmt(
+            channel_id=None,
+            playlist_id=None,
+            keyword=None,
+            query=query,
+            is_domestic=is_domestic,
+            status=status,
+            queue_reason=queue_reason,
+            source_kind=source_kind,
+            grounding_status=grounding_status,
+        )
+
+    candidate_count = func.count(distinct(ExtractedPlaceCandidate.id))
+    # 후보의 채널 출처는 후보 자체 provenance를 우선하고 없으면 영상의 채널을 쓴다.
+    channel_expr = func.coalesce(
+        ExtractedPlaceCandidate.source_channel_id, YoutubeVideo.channel_id
+    )
+
+    channel_stmt = (
+        base()
+        .with_only_columns(channel_expr.label("value"), candidate_count)
+        .where(channel_expr.isnot(None))
+        .group_by(channel_expr)
+        .order_by(candidate_count.desc(), channel_expr)
+    )
+    playlist_stmt = (
+        base()
+        .with_only_columns(
+            ExtractedPlaceCandidate.source_playlist_id.label("value"),
+            candidate_count,
+        )
+        .where(ExtractedPlaceCandidate.source_playlist_id.isnot(None))
+        .group_by(ExtractedPlaceCandidate.source_playlist_id)
+        .order_by(candidate_count.desc(), ExtractedPlaceCandidate.source_playlist_id)
+    )
+    keyword_stmt = (
+        base()
+        .with_only_columns(
+            YoutubeVideo.source_search_query.label("value"), candidate_count
+        )
+        .where(YoutubeVideo.source_search_query.isnot(None))
+        .group_by(YoutubeVideo.source_search_query)
+        .order_by(candidate_count.desc(), YoutubeVideo.source_search_query)
+    )
+
+    channel_rows = (await session.execute(channel_stmt)).all()
+    playlist_rows = (await session.execute(playlist_stmt)).all()
+    keyword_rows = (await session.execute(keyword_stmt)).all()
+
+    channel_titles: dict[str, str | None] = {}
+    channel_ids = [value for value, _ in channel_rows]
+    if channel_ids:
+        channel_titles = {
+            cid: title
+            for cid, title in (
+                await session.execute(
+                    select(YoutubeChannel.channel_id, YoutubeChannel.title).where(
+                        YoutubeChannel.channel_id.in_(channel_ids)
+                    )
+                )
+            ).all()
+        }
+    playlist_titles: dict[str, str | None] = {}
+    playlist_ids = [value for value, _ in playlist_rows]
+    if playlist_ids:
+        playlist_titles = {
+            pid: title
+            for pid, title in (
+                await session.execute(
+                    select(YoutubePlaylist.playlist_id, YoutubePlaylist.title).where(
+                        YoutubePlaylist.playlist_id.in_(playlist_ids)
+                    )
+                )
+            ).all()
+        }
+
+    return {
+        "channels": [
+            {
+                "value": value,
+                "label": channel_titles.get(value) or value,
+                "candidate_count": int(count),
+            }
+            for value, count in channel_rows
+        ],
+        "playlists": [
+            {
+                "value": value,
+                "label": playlist_titles.get(value) or value,
+                "candidate_count": int(count),
+            }
+            for value, count in playlist_rows
+        ],
+        "keywords": [
+            {"value": value, "label": value, "candidate_count": int(count)}
+            for value, count in keyword_rows
+        ],
+    }
+
+
 def _place_matches_result_filters(
     place: TravelPlace,
     *,
