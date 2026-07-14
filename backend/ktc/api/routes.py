@@ -1428,16 +1428,25 @@ async def export_destinations(
     ids: str | None = None,
     sort: str = "mention_count",
     limit: int = EXPORT_DESTINATION_LIMIT_DEFAULT,
-    geocoded_only: bool = True,
+    geocoded_only: bool | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """선택 또는 전체 장소 목록을 `xlsx`, `gpx`, `kml`로 내보낸다.
 
-    `geocoded_only`(기본 `true`)는 확정 좌표(`is_geocoded`)가 없는 장소를 제외해,
-    미검증/미확정 좌표가 GPX·KML로 유출되는 것을 막는다(T-189). 미검증 좌표까지
-    내보내려면 `geocoded_only=false`로 opt-out 한다.
+    `geocoded_only`는 확정 좌표(`is_geocoded`)가 없는 장소를 제외할지 결정한다(T-189).
+    미지정(`None`)이면 **포맷 기반 기본값**을 쓴다 — 지오 플롯 포맷(`gpx`/`kml`)은 좌표
+    없는 항목이 무의미하므로 `True`(제외), 데이터 포맷(`xlsx`)은 조용한 행 탈락을 피하려
+    `False`(전체 포함). 명시한 `true`/`false`는 포맷과 무관하게 존중한다.
+
+    주의: `ids`로 특정 장소를 선택해도 `gpx`/`kml`에서는 미지오코딩 선택 항목이 결과에서
+    빠질 수 있다(포맷 기본값 `True`). 선택 항목을 반드시 포함하려면 `geocoded_only=false`.
     """
     _validate_destination_sort(sort)
+    effective_geocoded_only = (
+        geocoded_only
+        if geocoded_only is not None
+        else format.lower() in ("gpx", "kml")
+    )
     try:
         place_ids = _parse_place_ids(ids)
         export_limit = _normalize_destination_export_limit(limit)
@@ -1446,7 +1455,7 @@ async def export_destinations(
             sort=sort,
             place_ids=place_ids,
             limit=export_limit,
-            geocoded_only=geocoded_only,
+            geocoded_only=effective_geocoded_only,
         )
         body, media_type, base_filename = await asyncio.to_thread(
             place_export_service.build_place_export, summaries, format

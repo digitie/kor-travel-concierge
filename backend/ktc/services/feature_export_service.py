@@ -189,10 +189,16 @@ def _build_payload(
     직렬화 시점에 ledger row의 `payload_hash`로 주입한다(순환 해시 방지).
     """
     # 행정코드는 place 실데이터에서 주입한다(T-189). `sido_code` 전용 컬럼은 없으므로
-    # 시군구 코드 앞 2자리로 유도한다(법정동/행정표준 시도 코드 규칙). 시군구 코드가
-    # 없으면 유도 결과도 None이다.
+    # 행정표준 코드 앞 2자리가 시도라는 규칙으로 유도한다. 시군구 코드를 우선 쓰고, 없으면
+    # 법정동 코드 앞 2자리로 fallback한다(sigungu 없이 legal_dong만 있는 경우). 둘 다 없으면 None.
     sigungu_code = place.sigungu_code if place else None
-    sido_code = sigungu_code[:2] if sigungu_code else None
+    legal_dong_code = place.legal_dong_code if place else None
+    if sigungu_code:
+        sido_code = sigungu_code[:2]
+    elif legal_dong_code:
+        sido_code = legal_dong_code[:2]
+    else:
+        sido_code = None
     place_block = {
         "name": place.name if place else candidate.ai_place_name,
         "description": place.description if place else None,
@@ -210,7 +216,7 @@ def _build_payload(
         "address": {
             "official_address": place.official_address if place else None,
             "road_address": place.road_address if place else None,
-            "legal_dong_code": place.legal_dong_code if place else None,
+            "legal_dong_code": legal_dong_code,
             "sido_code": sido_code,
             "sigungu_code": sigungu_code,
         },

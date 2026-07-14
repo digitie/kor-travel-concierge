@@ -256,6 +256,68 @@ async def test_snapshot_item_includes_schema_version(client, session_factory):
     assert item["schema_version"] == 1
 
 
+def test_build_payload_includes_schema_version_in_hash(monkeypatch):
+    """T-189: schema_version가 payload 본문(hash 대상)에 실제로 들어간다.
+
+    response_model 기본값이 아니라 payload_hash에 반영됨을 강제한다. SCHEMA_VERSION을 바꾸면
+    같은 후보라도 payload_hash가 달라져 전 item이 재발행된다(재배포 재발행의 근거).
+    """
+    from types import SimpleNamespace
+
+    from ktc.services import feature_export_service as fx
+
+    candidate = SimpleNamespace(
+        id=7,
+        ai_place_name="장소",
+        candidate_category="해변",
+        video_id=None,
+        source_channel_id=None,
+        source_playlist_id=None,
+        timestamp_start=None,
+        timestamp_end=None,
+        source_text=None,
+        provider_evidence_json=None,
+        confidence_score=None,
+    )
+
+    payload = fx._build_payload(
+        candidate, video=None, channel=None, playlist=None, place=None
+    )
+    # top-level 키로 payload에 존재한다(직렬화 시 붙는 메타가 아니라 hash 대상).
+    assert payload["schema_version"] == fx.SCHEMA_VERSION
+    baseline_hash = fx._payload_hash(payload)
+
+    monkeypatch.setattr(fx, "SCHEMA_VERSION", fx.SCHEMA_VERSION + 1)
+    bumped = fx._build_payload(
+        candidate, video=None, channel=None, playlist=None, place=None
+    )
+    assert bumped["schema_version"] == fx.SCHEMA_VERSION
+    # schema_version만 달라져도 payload_hash가 바뀐다.
+    assert fx._payload_hash(bumped) != baseline_hash
+
+
+async def test_snapshot_derives_sido_from_legal_dong_when_no_sigungu(
+    client, session_factory
+):
+    """T-189: sigungu_code 없이 legal_dong_code만 있으면 sido_code를 legal_dong_code 앞 2자리로 유도한다."""
+    from ktc.models import TravelPlace
+
+    candidate_id, place_id = await _seed_ready_candidate(session_factory)
+    async with session_factory() as s:
+        place = await s.get(TravelPlace, place_id)
+        place.sigungu_code = None
+        place.legal_dong_code = "5011025626"
+        await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
+
+    resp = await client.get("/api/v1/features/snapshot")
+    addr = resp.json()["items"][0]["place"]["address"]
+    assert addr["sigungu_code"] is None
+    assert addr["legal_dong_code"] == "5011025626"
+    # legal_dong_code[:2] fallback.
+    assert addr["sido_code"] == "50"
+
+
 async def test_snapshot_injects_admin_codes_with_derived_sido(client, session_factory):
     """T-189: 행정코드는 place 실데이터에서 주입하고, sido_code는 sigungu_code 앞 2자리로 유도한다."""
     from ktc.models import TravelPlace
