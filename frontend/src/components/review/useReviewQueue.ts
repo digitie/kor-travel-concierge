@@ -12,7 +12,7 @@ import {
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import {
-  listDestinationFacets,
+  listReviewSourceFacets,
   listUnmatchedCandidatesPage,
   type DestinationGroupDim,
   type ReviewGroundingStatus,
@@ -29,11 +29,14 @@ import {
   DEFAULT_REVIEW_LIST_STATE,
   hasReviewListStateParams,
   parseReviewListState,
+  parseReviewMode,
   reviewListStateHasFilters,
   reviewListStateScopeKey,
   reviewListStateToFilter,
   writeReviewListState,
+  writeReviewMode,
   type ReviewListState,
+  type ReviewMode,
 } from "@/lib/review-list-state";
 
 const INITIAL_REVIEW_CANDIDATE_LIMIT = 300;
@@ -100,6 +103,7 @@ export function useReviewQueue() {
     groundingStatus,
     status: reviewStatus,
   } = reviewListState;
+  const reviewMode = parseReviewMode(reviewSearchParams);
   const isRemovedView = reviewStatus === "removed";
   const hasReviewFilters = reviewListStateHasFilters({
     ...reviewListState,
@@ -131,6 +135,14 @@ export function useReviewQueue() {
   const updateReviewQuery = useCallback(
     (query: string) => updateReviewListState({ query }),
     [updateReviewListState],
+  );
+  // 모드는 filter가 아니라 뷰 concern이라 목록 상태와 분리해 URL만 갱신한다.
+  const setReviewMode = useCallback(
+    (mode: ReviewMode) => {
+      const current = new URL(window.location.href);
+      commitReviewUrl(writeReviewMode(current.searchParams, mode));
+    },
+    [commitReviewUrl],
   );
 
   // URL에 목록 상태가 전혀 없는 최초 진입에서만 sessionStorage를 기본값으로 승격한다.
@@ -189,16 +201,29 @@ export function useReviewQueue() {
     }
   }, [hasListUrlState, reviewListState]);
 
-  const facetsQuery = useQuery({
-    queryKey: ["destination-facets"],
-    queryFn: listDestinationFacets,
-    staleTime: 10 * 60 * 1000,
-    refetchInterval: 10 * 60 * 1000,
-  });
   const filter = useMemo(
     () => reviewListStateToFilter(reviewListState),
     [reviewListState],
   );
+  // T-187: 확정 장소 기반(`/destinations/facets`)이 아니라 후보 provenance 기반
+  // facet을 쓴다. count는 그룹 차원(channel/playlist/keyword 선택)을 제외한 현재
+  // 목록 filter만 반영하므로, 그룹 값을 바꿔도 재조회하지 않도록 key에서 뺀다.
+  const facetsQuery = useQuery({
+    queryKey: [
+      "review-source-facets",
+      reviewQuery,
+      isDomestic,
+      queueReason,
+      sourceKind,
+      groundingStatus,
+      reviewStatus,
+    ],
+    queryFn: () => listReviewSourceFacets(filter),
+    enabled: hasListUrlState,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const candidatesKey = useMemo<ReviewCandidatesKey>(
     () => [
       "unmatched-candidates",
@@ -339,10 +364,12 @@ export function useReviewQueue() {
     queueScopeRef,
     reviewListState,
     reviewListStateRef,
+    reviewMode,
     reviewQuery,
     reviewSearchParams,
     reviewSort,
     reviewStatus,
+    setReviewMode,
     sourceKind,
     updateReviewListState,
     updateReviewQuery,

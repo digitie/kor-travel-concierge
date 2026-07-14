@@ -827,6 +827,41 @@ export async function listDestinationFacets(): Promise<DestinationFacets> {
   return requestJson<DestinationFacets>("/api/v1/destinations/facets");
 }
 
+/** 검수 큐 그룹화용 **후보 provenance** facet(T-187): 확정 장소가 없는 출처도 노출. */
+export type ReviewSourceFacetItem = {
+  value: string;
+  label: string;
+  candidate_count: number;
+};
+
+export type ReviewSourceFacets = {
+  channels: ReviewSourceFacetItem[];
+  playlists: ReviewSourceFacetItem[];
+  keywords: ReviewSourceFacetItem[];
+};
+
+/**
+ * 검수 큐 provenance facet을 조회한다. 그룹 차원(channel/playlist/keyword 선택)은
+ * 보내지 않아 count가 그룹 전환과 무관하게 현재 목록 filter만 반영한다(T-187).
+ */
+export async function listReviewSourceFacets(
+  filter?: ReviewCandidateFilter,
+): Promise<ReviewSourceFacets> {
+  const params = new URLSearchParams();
+  if (filter?.query) params.set("q", filter.query);
+  if (filter?.isDomestic != null) {
+    params.set("is_domestic", String(filter.isDomestic));
+  }
+  if (filter?.status) params.set("status", filter.status);
+  if (filter?.queueReason) params.set("reason", filter.queueReason);
+  if (filter?.sourceKind) params.set("source_kind", filter.sourceKind);
+  if (filter?.grounding) params.set("grounding", filter.grounding);
+  const qs = params.toString();
+  return requestJson<ReviewSourceFacets>(
+    `/api/v1/destinations/review-facets${qs ? `?${qs}` : ""}`,
+  );
+}
+
 export function buildDestinationExportUrl({
   format,
   placeIds,

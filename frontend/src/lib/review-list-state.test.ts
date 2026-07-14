@@ -18,6 +18,9 @@ import {
   reviewListStateToFilter,
   reviewListStateToForeignBulkFilter,
   writeReviewListState,
+  DEFAULT_REVIEW_MODE,
+  parseReviewMode,
+  writeReviewMode,
 } from "./review-list-state";
 
 const LIST_ITEM: UnmatchedCandidate = {
@@ -562,5 +565,36 @@ describe("검수 workflow 세대", () => {
         currentEpoch: 9,
       }),
     ).toBe(true);
+  });
+});
+
+describe("review mode (T-187)", () => {
+  it("기본 모드는 처리 모드(triage)다", () => {
+    expect(DEFAULT_REVIEW_MODE).toBe("triage");
+    expect(parseReviewMode(new URLSearchParams())).toBe("triage");
+    expect(parseReviewMode(new URLSearchParams("mode=nonsense"))).toBe("triage");
+  });
+
+  it("mode=table만 table로 해석한다", () => {
+    expect(parseReviewMode(new URLSearchParams("mode=table"))).toBe("table");
+  });
+
+  it("table은 URL에 명시하고 triage(기본)는 파라미터를 제거한다", () => {
+    expect(writeReviewMode(new URLSearchParams("sort=oldest"), "table").toString()).toBe(
+      "sort=oldest&mode=table",
+    );
+    expect(
+      writeReviewMode(new URLSearchParams("sort=oldest&mode=table"), "triage").toString(),
+    ).toBe("sort=oldest");
+  });
+
+  it("모드는 목록 상태와 독립적이라 filter rewrite에도 보존된다", () => {
+    const withMode = writeReviewMode(new URLSearchParams(), "table");
+    const next = writeReviewListState(withMode, {
+      ...DEFAULT_REVIEW_LIST_STATE,
+      isDomestic: false,
+    });
+    expect(parseReviewMode(next)).toBe("table");
+    expect(next.get("is_domestic")).toBe("false");
   });
 });

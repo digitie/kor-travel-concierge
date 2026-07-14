@@ -17,6 +17,7 @@ import {
 import {
   ExternalLinkIcon,
   InfoIcon,
+  KeyboardIcon,
   Loader2Icon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -38,7 +39,6 @@ import {
   type CandidateReviewState,
   type CandidateUndoDescriptor,
   type DeleteCandidateResult,
-  type DestinationFacets,
   type DestinationGroupDim,
   type DestinationSummary,
   type PlaceOpinion,
@@ -48,6 +48,7 @@ import {
   type ReviewGroundingStatus,
   type ReviewBulkScope,
   type ReviewQueueReason,
+  type ReviewSourceFacets,
   type ReviewSourceKind,
   type UnmatchedCandidate,
 } from "@/lib/api";
@@ -147,6 +148,10 @@ import {
 import { ConfirmForm } from "@/components/review/ConfirmForm";
 import { SearchResultsPanel } from "@/components/review/SearchResultsPanel";
 import { useCandidateSearch } from "@/components/review/useCandidateSearch";
+import {
+  REVIEW_SHORTCUTS,
+  useReviewKeyboard,
+} from "@/components/review/useReviewKeyboard";
 import {
   useReviewQueue,
   type ReviewCandidatesKey,
@@ -507,10 +512,12 @@ export function ReviewWorkspace() {
     queueScopeRef,
     reviewListState,
     reviewListStateRef,
+    reviewMode,
     reviewQuery,
     reviewSearchParams,
     reviewSort,
     reviewStatus,
+    setReviewMode,
     sourceKind,
     updateReviewListState,
     updateReviewQuery,
@@ -873,6 +880,9 @@ export function ReviewWorkspace() {
   }, [result]);
 
   const isMobile = useIsMobile();
+  // 단축키 `/` 포커스 대상과 `?` 도움말 오버레이 상태(T-187).
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [detailId, setDetailIdState] = useState<number | null>(null);
   const detailIdRef = useRef<number | null>(null);
   const detailGenerationRef = useRef(0);
@@ -1136,6 +1146,28 @@ export function ReviewWorkspace() {
       reviewListStateRef,
       updatePendingCandidateAdvance,
     ],
+  );
+
+  // J/K 단축키: 현재 표시된 후보 목록에서 상대 이동. 수동 목록 클릭과 동일하게
+  // pickCandidate(자동 검색·딥링크 해제)를 쓴다(T-187).
+  const pickCandidateOffset = useCallback(
+    (offset: number) => {
+      if (candidates.length === 0) return;
+      const currentId = selectedCandidateIdRef.current;
+      const currentIndex =
+        currentId == null
+          ? -1
+          : candidates.findIndex((candidate) => candidate.id === currentId);
+      const nextIndex =
+        currentIndex < 0
+          ? offset > 0
+            ? 0
+            : candidates.length - 1
+          : currentIndex + offset;
+      if (nextIndex < 0 || nextIndex >= candidates.length) return;
+      pickCandidate(candidates[nextIndex]);
+    },
+    [candidates, pickCandidate],
   );
 
   const continueCandidateAdvance = useCallback(
@@ -2128,6 +2160,9 @@ export function ReviewWorkspace() {
       if (command.action === "create_place") {
         queryClient.invalidateQueries({ queryKey: ["destination-facets"] });
       }
+      // 저장·제외 모두 needs_review 후보를 큐에서 빼므로 provenance facet count를
+      // 갱신한다(T-187).
+      queryClient.invalidateQueries({ queryKey: ["review-source-facets"] });
       updateReviewUndoState((current) =>
         applyReviewActionSuccess(current, {
           candidateId: command.candidateId,
@@ -2805,6 +2840,42 @@ export function ReviewWorkspace() {
     detailDeletePending ||
     deepLinkValidationPending ||
     bulkBlocksCandidateActions;
+
+  // 처리 단축키(T-187). 개별 액션은 각자의 가드(canSave·selectedActionable·undo
+  // 존재)를 다시 확인해, 전역 keydown 가드를 통과해도 부적합 상태에서는 무해하다.
+  useReviewKeyboard({
+    enabled: hasListUrlState,
+    onNextCandidate: () => pickCandidateOffset(1),
+    onPrevCandidate: () => pickCandidateOffset(-1),
+    onSelectHit: (ordinal) => {
+      const hit = allHits[ordinal - 1];
+      if (hit) selectHit(hit);
+    },
+    onSave: () => {
+      if (canSave && !candidateActionPending) resolveSelected("create_place");
+    },
+    onExclude: () => {
+      if (selected && selectedActionable && !candidateActionPending) {
+        requestCandidateDelete(selected);
+      }
+    },
+    onUndo: () => {
+      const entry = reviewUndoStateRef.current.current;
+      if (!entry || candidateActionPending) return;
+      requestCandidateReopen(
+        {
+          id: entry.descriptor.candidate_id,
+          ai_place_name: entry.candidateName,
+          review_state: entry.expectedReviewState,
+          undo: entry.descriptor,
+        },
+        "snackbar",
+      );
+    },
+    onFocusSearch: () => searchInputRef.current?.focus(),
+    onToggleHelp: () => setShortcutHelpOpen((open) => !open),
+  });
+
   const candidateInitialLoading =
     !hasListUrlState ||
     (candidates.length === 0 && candidatesQuery.isLoading) ||
@@ -2854,18 +2925,161 @@ export function ReviewWorkspace() {
     void restartCandidateSnapshot();
   }
 
+  // 처리 모드(triage) 진행 지표: n/m은 T-182 filtered total 기준, 남은 수는 현재
+  // 위치 이후 후보 수의 근사다(스냅숏 total - 현재 위치).
+  const isTriage = reviewMode === "triage";
+  const triageQueueIndex = selected
+    ? candidates.findIndex((candidate) => candidate.id === selected.id)
+    : -1;
+  const triagePosition = triageQueueIndex >= 0 ? triageQueueIndex + 1 : 0;
+  const triageRemaining = Math.max(
+    candidateTotal - (triagePosition > 0 ? triagePosition : 0),
+    0,
+  );
+  const lastProcessed = reviewUndoState.current;
+  const modeToggle = (
+    <div
+      role="group"
+      aria-label="검수 화면 모드"
+      className="inline-flex overflow-hidden rounded-lg border"
+    >
+      {(["triage", "table"] as const).map((mode) => (
+        <button
+          key={mode}
+          type="button"
+          aria-pressed={reviewMode === mode}
+          onClick={() => setReviewMode(mode)}
+          className="px-2.5 py-1 text-xs font-medium transition-colors aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+        >
+          {mode === "triage" ? "처리 모드" : "목록/관리"}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <AppShell
       title="검수 큐"
       actions={
-        <Badge variant="secondary">
-          {candidates.length}/{candidateTotal}개 불러옴
-        </Badge>
+        <div className="flex items-center gap-2">
+          {modeToggle}
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="검수 단축키 도움말"
+            title="단축키 도움말 (?)"
+            onClick={() => setShortcutHelpOpen(true)}
+          >
+            <KeyboardIcon />
+          </Button>
+          <Badge variant="secondary">
+            {candidates.length}/{candidateTotal}개 불러옴
+          </Badge>
+        </div>
       }
       contentClassName="flex min-h-0 flex-1 flex-col p-0"
       viewportLocked
     >
-      <div className="grid h-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-3 lg:overflow-hidden">
+      <div
+        className={
+          isTriage
+            ? "grid h-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)_minmax(0,1fr)] lg:overflow-hidden"
+            : "grid h-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-3 lg:overflow-hidden"
+        }
+      >
+        {isTriage ? (
+          <aside className="flex min-h-0 max-h-[40vh] flex-col gap-3 overflow-y-auto border-b p-3 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="px-1 text-xs font-medium text-muted-foreground">
+                처리 진행
+              </p>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="검수 후보 수동 새로고침"
+                title="현재 조건을 첫 페이지부터 새로고침"
+                disabled={candidatesQuery.isFetching}
+                onClick={() => {
+                  void restartCandidateSnapshot();
+                  void facetsQuery.refetch();
+                }}
+              >
+                <RefreshCwIcon
+                  className={
+                    candidatesQuery.isFetching ? "animate-spin" : undefined
+                  }
+                />
+              </Button>
+            </div>
+            <div className="rounded-xl border p-3">
+              <p className="text-2xl font-semibold tabular-nums">
+                {triagePosition > 0 ? triagePosition : "–"}
+                <span className="text-sm font-normal text-muted-foreground">
+                  {" "}
+                  / {candidateTotal}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {queueCompleted
+                  ? "현재 조건을 모두 처리했습니다."
+                  : `남은 후보 약 ${triageRemaining}건`}
+              </p>
+            </div>
+            {lastProcessed ? (
+              <div className="flex flex-col gap-2 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <p className="text-xs font-medium">최근 처리</p>
+                <p className="truncate text-sm" title={lastProcessed.candidateName}>
+                  {lastProcessed.candidateName}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {lastProcessed.action === "create_place" ||
+                  lastProcessed.action === "match_existing"
+                    ? "저장됨"
+                    : lastProcessed.action === "ignore"
+                      ? "제외됨"
+                      : "삭제됨"}
+                </p>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={candidateActionPending}
+                  onClick={() => {
+                    const entry = reviewUndoStateRef.current.current;
+                    if (!entry) return;
+                    requestCandidateReopen(
+                      {
+                        id: entry.descriptor.candidate_id,
+                        ai_place_name: entry.candidateName,
+                        review_state: entry.expectedReviewState,
+                        undo: entry.descriptor,
+                      },
+                      "snackbar",
+                    );
+                  }}
+                >
+                  <RotateCcwIcon data-icon="inline-start" />
+                  되돌리기 (U)
+                </Button>
+                {reviewUndoError ? (
+                  <p role="alert" className="text-xs text-destructive">
+                    {reviewUndoError}
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="rounded-xl border p-3 text-xs text-muted-foreground">
+                처리한 후보가 여기에 표시되고 U로 되돌릴 수 있습니다.
+              </p>
+            )}
+            <p className="mt-auto rounded-lg border border-dashed p-2 text-[11px] leading-relaxed text-muted-foreground">
+              J/K 다음·이전 · 1–9 검색결과 · Enter 저장 · X 제외 · U 되돌리기 · /
+              검색 · ? 도움말. 필터·일괄 처리는 &ldquo;목록/관리&rdquo; 모드에서.
+            </p>
+          </aside>
+        ) : (
         <aside className="flex min-h-0 max-h-[48vh] flex-col gap-2 overflow-hidden border-b p-3 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between gap-2">
             <p className="px-1 text-xs font-medium text-muted-foreground">
@@ -3372,6 +3586,7 @@ export function ReviewWorkspace() {
             />
           </div>
         </aside>
+        )}
 
         <section className="flex min-h-0 flex-col gap-4 overflow-y-auto p-5">
           {selected ? (
@@ -3525,6 +3740,7 @@ export function ReviewWorkspace() {
                 <>
               <div className="flex gap-2">
                 <Input
+                  ref={searchInputRef}
                   aria-label="외부 장소 검색어"
                   value={query}
                   placeholder="장소명으로 검색 (Google·Kakao·Naver·Gemini)"
@@ -3624,6 +3840,7 @@ export function ReviewWorkspace() {
                 result={result}
                 loading={searchQuery.isFetching}
                 selectableHitCount={allHits.length}
+                orderedHits={allHits}
                 selectedHit={activeSelectedHit?.hit ?? null}
                 opinionRequested={opinionRequested}
                 opinion={gemini}
@@ -3994,6 +4211,31 @@ export function ReviewWorkspace() {
           }}
         />
       ) : null}
+
+      <Dialog open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>검수 단축키</DialogTitle>
+          </DialogHeader>
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {REVIEW_SHORTCUTS.map((shortcut) => (
+              <li
+                key={shortcut.keys}
+                className="flex items-center justify-between gap-3"
+              >
+                <span className="text-muted-foreground">{shortcut.label}</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">
+                  {shortcut.keys}
+                </kbd>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            입력창·버튼·대화상자에 포커스가 있거나 한글 조합 중에는 단축키가
+            동작하지 않습니다.
+          </p>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }
@@ -4144,34 +4386,29 @@ function groupDimLabel(dim: DestinationGroupDim) {
 
 function groupOptions(
   dim: DestinationGroupDim,
-  facets: DestinationFacets | undefined,
+  facets: ReviewSourceFacets | undefined,
 ): { value: string; label: string; count: number }[] {
   if (!facets) return [];
-  if (dim === "channel")
-    return facets.channels.map((c) => ({
-      value: c.id,
-      label: c.title,
-      count: c.place_count,
-    }));
-  if (dim === "playlist")
-    return facets.playlists.map((p) => ({
-      value: p.id,
-      label: p.title,
-      count: p.place_count,
-    }));
-  if (dim === "keyword")
-    return facets.keywords.map((k) => ({
-      value: k.value,
-      label: k.value,
-      count: k.place_count,
-    }));
-  return [];
+  // T-187: 후보 provenance facet은 세 차원 모두 {value,label,candidate_count} 통일형.
+  const items =
+    dim === "channel"
+      ? facets.channels
+      : dim === "playlist"
+        ? facets.playlists
+        : dim === "keyword"
+          ? facets.keywords
+          : [];
+  return items.map((item) => ({
+    value: item.value,
+    label: item.label,
+    count: item.candidate_count,
+  }));
 }
 
 function groupValueLabel(
   dim: DestinationGroupDim,
   value: string | null,
-  facets: DestinationFacets | undefined,
+  facets: ReviewSourceFacets | undefined,
 ) {
   if (!value) return "";
   const option = groupOptions(dim, facets).find((opt) => opt.value === value);
