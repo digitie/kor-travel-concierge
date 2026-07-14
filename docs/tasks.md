@@ -24,13 +24,24 @@
   (T-158 결정 ⑧ 파생)
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
-- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
 - [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
 - [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
 ---
 
 ## 완료
 
+- [x] **T-187**: 검수 키보드 단축키 + 처리 모드(triage) + provenance facet (U5/U1) — 게이트(건당 인터랙션
+  측정) 모호 → **본안(처리 모드) 채택**. `useReviewKeyboard.ts` 전역 keydown(J/K·1~9 번호 배지·Enter·X·U·/·?)
+  + **확장 포커스 가드**(IME·modifier·repeat·input/button/role=dialog/menu/listbox/option/combobox/searchbox/
+  alertdialog…). **triage 모드**(URL `?mode=triage|table`, 기본 triage — mode를 뷰 concern으로 분리해 전환 시
+  큐 재조회·선택 초기화 없음): 진행 레일+중앙 후보 카드(T-186 컴포넌트 재사용)+지도, table=기존 테이블/bulk.
+  저장·제외 후 자동 다음(PR-02)·debounce·abort·undo·bulk·URL 정본 **배선만 재사용**. **서버 facet 전환**:
+  `list_review_source_facets`+`GET /destinations/review-facets`(admin)로 후보 provenance별 count·**확정 장소
+  없는 출처 노출**·현재 filter 반영, 기존 결과보기 `/destinations/facets`(place) 보존, n/m·모두 처리=T-182
+  filtered total. 2렌즈 적대적 리뷰: 확정 BLOCKER/MAJOR 0, MINOR 3 정리(1~9 번호를 선택 가능 hit 단일 정본으로
+  통일·배지/키보드/지도 정합, 포커스 role 보강, 그룹 라벨 raw fallback). 불변: T-186 동작 계약·table·bulk
+  보존, 자동 승인 없음, migration 없음. 검증: backend 782 passed(신규 facet 3건), frontend vitest 314 passed·
+  lint/type-check/build green, E2E n150 이연. (2026-07-14, 로드맵 PR-16 개정·U5/U1)
 - [x] **T-186**: review 페이지 구조 분해 (S8, 동작 보존) — `review/page.tsx`(단일 5065줄)를 **19줄 조립
   전용**으로 축소하고 상태 소유를 `components/review/`로 완전 분해했다. **codex 완전판 인수**(착수 시 codex가
   main 워크트리에서 더 완전한 분해를 미커밋 진행 중임을 발견 → 사용자 결정으로 codex 완전판을 현행 main
