@@ -24,11 +24,6 @@
   (T-158 결정 ⑧ 파생)
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
-- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리. 현행 300ms provider
-  debounce·abort·candidate/request identity·동일 검색 재실행 `searchNonce`는 보존하고, 후보 선택 강조·
-  폼 초기화는 즉시 처리한 뒤 provider query 활성화만 `startTransition`으로 분리한다. 과거 120ms
-  workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
-  T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
 - [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
 - [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
@@ -36,6 +31,19 @@
 
 ## 완료
 
+- [x] **T-186**: review 페이지 구조 분해 (S8, 동작 보존) — `review/page.tsx`(단일 5065줄)를 **19줄 조립
+  전용**으로 축소하고 상태 소유를 `components/review/`로 완전 분해했다. **codex 완전판 인수**(착수 시 codex가
+  main 워크트리에서 더 완전한 분해를 미커밋 진행 중임을 발견 → 사용자 결정으로 codex 완전판을 현행 main
+  위로 인수·검증). 분해: `useReviewQueue`(큐·필터·선택·mutation·undo·URL 정본)·`useCandidateSearch`(provider·
+  opinion 검색 reducer·300ms debounce·abort·generation)·`ConfirmForm`·`CandidateTable`·`SearchResultsPanel`·
+  `types`·`ReviewWorkspace`(조립 루트), `lib/transcript.ts`(cleanTranscript·근거 스크롤 공용 유틸, 상세 뷰
+  중복 제거). startTransition은 후보 강조·폼 초기화 뒤 provider query 활성화만 분리. **UX 무변경·순수 동작
+  보존**. 2렌즈 적대적 리뷰: 원본과 line-level 대조로 6개 동작 계약(debounce/abort/generation·startTransition
+  경계·자동 다음 후보 T-179·undo T-184·bulk T-185·URL 딥링크·removed provider 0회) 전부 보존 확인, 확정
+  BLOCKER/MAJOR 0. codex 신규 테스트 1건 기대값 오류(Google 저장 정책 제외 미반영) 1줄 정정. known-MINOR
+  (문서화): hook effect 배선 단위 테스트 부재(repo jsdom/RTL 미사용→E2E n150 가드), React Query 캐시 엔트리
+  누적(gcTime GC로 유한·회귀 아님). 검증: frontend lint·type-check·build green, vitest 256/256, backend
+  무변경. E2E n150 이연. (2026-07-14, 로드맵 PR-15 개정·S8)
 - [x] **T-190**: themes 공급 API 마감 (A3) — `/themes/places`·`/themes/video/{id}/places`를 `limit=None`
   전량 반환에서 **PR-32 공통 envelope**(items/next_cursor/has_more/total/newest_id/newer_than)로 전환했다.
   cursor·limit(기본 200·상한 500)은 T-188 `list_place_summaries_page`(sort=mention_count) 재사용. 동영상 테마

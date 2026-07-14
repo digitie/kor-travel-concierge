@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-07-14: T-186 — review 페이지 구조 분해 (S8, 동작 보존)
+
+- **문제**: `frontend/src/app/review/page.tsx`가 단일 컴포넌트 **5065줄**로 선택/URL/딥링크/큐/mutation/undo/
+  bulk/검색/폼 상태가 refs·generation·epoch로 촘촘히 얽혀 후속 검수 작업의 수정 단가가 컸다.
+- **경위(codex 완전판 인수)**: 착수 시 codex(Agent B)가 main 워크트리에서 **동일 태스크의 더 완전한 분해**를
+  미커밋 진행 중임을 발견(page.tsx 19줄 조립 전용, 전 컴포넌트 추출). 병렬로 만든 부분 분해 대신 **사용자
+  결정으로 codex 완전판을 인수** — 그 스냅샷을 현행 main(review 파일이 codex base와 동일) 위로 clean 적용,
+  frontend gate로 완전성 검증 후 채택했다.
+- **구현(동작 보존 리팩터·UX 무변경)**: page.tsx **5065→19줄**(Suspense→`<ReviewWorkspace/>`). 상태 소유 분해 —
+  `components/review/useReviewQueue`(큐·필터·선택·mutation·undo·URL 정본)·`useCandidateSearch`(provider·opinion
+  검색 reducer·300ms debounce·abort·generation/searchNonce)·`ConfirmForm`(확정 폼)·`CandidateTable`·
+  `SearchResultsPanel`·`types`·`ReviewWorkspace`(조립 루트). `lib/transcript.ts`로 cleanTranscript·근거
+  스크롤 공용 유틸 추출(CandidateDetailView·PlaceDetailView 중복 제거). startTransition은 후보 강조·폼
+  초기화(urgent) 뒤 **provider query 활성화만** 분리하는 경계로 신설(로드맵 요구).
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: 원본 5065줄 page.tsx와 신규 추출을 line-level 대조 —
+  6개 동작 계약(300ms debounce·abort·generation 동일검색 재실행·후보 강조 urgent/provider transition·자동 다음
+  후보 T-179·undo T-184·bulk T-185·URL 단일 정본/딥링크·removed provider 0회) **전부 보존** 확인. mutation
+  scope fencing(candidatesKeyRef·queueScopeRef·epoch)도 원본과 동일 지점. codex 신규 테스트 1건의 기대값 오류
+  (Google 저장 정책 제외를 미반영) 1줄 정정(`isPlaceHitStorageAllowed`가 provider!=="google" 제외 — 원본
+  allHits와 정합). known-MINOR(문서화·미수정): hook effect 배선(startTransition/debounce useEffect) 단위
+  테스트 부재(repo가 jsdom/RTL 미사용·순수함수 테스트 관례 → E2E n150이 정본 가드), React Query 후보 전환
+  시 캐시 엔트리 누적(gcTime GC로 유한, 회귀 아님).
+- **검증**: frontend **lint·type-check·build green**, **vitest 256/256**(신규 useCandidateSearch·transcript
+  스위트 포함). E2E는 n150 회귀로 이연(로컬은 vitest+build 가드). backend 무변경. origin/main(#207) 0 behind.
+
 ## 2026-07-14: T-190 — themes 공급 API 마감 (A3)
 
 - **문제**: `/themes/places`·`/themes/video/{id}/places`가 `limit=None` 전량 반환이고 `source_videos`를

@@ -16,6 +16,10 @@ import {
   RUN_QUEUE_QUERY_KEY,
   triggerDeepResearch,
 } from "@/lib/api";
+import {
+  approximateTranscriptEvidenceScrollTop,
+  cleanTranscript,
+} from "@/lib/transcript";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,25 +28,6 @@ import { Metric } from "@/components/panels";
 
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
-}
-
-function cleanTranscript(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .replace(/^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]|\d{1,2}:\d{2}(?::\d{2})?)\s*/g, "")
-        .replace(/\[(?:음악|Music|music|박수|웃음)\]/g, "")
-        .trim(),
-    )
-    .filter(Boolean)
-    .join("\n");
-}
-
-function timestampNeedle(value: string | null): string | null {
-  if (!value) return null;
-  const parts = value.split(":").map((part) => part.padStart(2, "0"));
-  return parts.join(":");
 }
 
 export function PlaceDetailView({
@@ -80,14 +65,11 @@ export function PlaceDetailView({
   const scrollTranscriptToEvidence = useCallback(() => {
     const element = transcriptRef.current;
     if (!element || !transcriptText) return;
-    const needle = timestampNeedle(evidenceStart);
-    const index = needle ? transcriptText.indexOf(needle) : -1;
-    if (index < 0) {
-      element.scrollTop = 0;
-      return;
-    }
-    const ratio = index / Math.max(transcriptText.length, 1);
-    element.scrollTop = Math.max(0, element.scrollHeight * ratio - 40);
+    element.scrollTop = approximateTranscriptEvidenceScrollTop(
+      transcriptText,
+      evidenceStart,
+      element.scrollHeight,
+    );
   }, [evidenceStart, transcriptText]);
   const deleteMutation = useMutation({
     mutationFn: () => deletePlace(placeId),
