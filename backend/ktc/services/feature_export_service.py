@@ -50,6 +50,18 @@ PROVIDER = "kor-travel-concierge-youtube"
 DATASET_KEY = "youtube_place_candidates"
 SOURCE_ENTITY_TYPE = "extracted_place_candidate"
 
+# item payload 계약 버전(T-189). additive 확장이므로 소비자는 이 값을 무시해도 되고,
+# 파괴적 스키마 변경이 필요할 때만 증가한다. payload 본문에 넣어 hash에 반영하므로,
+# 이 값이 바뀌면 전 export가 새 sequence로 자연 재발행되고 consumer가 재수신한다.
+SCHEMA_VERSION = 1
+
+
+class InvalidCursorError(ValueError):
+    """opaque cursor 디코드 실패. routes가 error `code`를 구분하는 데 쓴다(T-189).
+
+    `ValueError`를 상속해 기존 `except ValueError` 경로와 호환된다.
+    """
+
 EXPORTABLE_STATUSES = {
     FeatureExportStatus.READY.value,
     FeatureExportStatus.EXPORTED.value,
@@ -99,7 +111,7 @@ def _decode_cursor(cursor: str | None) -> int | None:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
         return int(raw.decode("ascii"))
     except (ValueError, binascii.Error) as exc:
-        raise ValueError(f"유효하지 않은 cursor: {cursor}") from exc
+        raise InvalidCursorError(f"유효하지 않은 cursor: {cursor}") from exc
 
 
 def normalize_limit(limit: int) -> int:
@@ -176,6 +188,17 @@ def _build_payload(
     `source_record.raw_payload_hash`는 payload_hash 자체이므로 여기서는 넣지 않고,
     직렬화 시점에 ledger row의 `payload_hash`로 주입한다(순환 해시 방지).
     """
+    # 행정코드는 place 실데이터에서 주입한다(T-189). `sido_code` 전용 컬럼은 없으므로
+    # 행정표준 코드 앞 2자리가 시도라는 규칙으로 유도한다. 시군구 코드를 우선 쓰고, 없으면
+    # 법정동 코드 앞 2자리로 fallback한다(sigungu 없이 legal_dong만 있는 경우). 둘 다 없으면 None.
+    sigungu_code = place.sigungu_code if place else None
+    legal_dong_code = place.legal_dong_code if place else None
+    if sigungu_code:
+        sido_code = sigungu_code[:2]
+    elif legal_dong_code:
+        sido_code = legal_dong_code[:2]
+    else:
+        sido_code = None
     place_block = {
         "name": place.name if place else candidate.ai_place_name,
         "description": place.description if place else None,
@@ -193,9 +216,9 @@ def _build_payload(
         "address": {
             "official_address": place.official_address if place else None,
             "road_address": place.road_address if place else None,
-            "legal_dong_code": None,
-            "sido_code": None,
-            "sigungu_code": None,
+            "legal_dong_code": legal_dong_code,
+            "sido_code": sido_code,
+            "sigungu_code": sigungu_code,
         },
     }
     youtube_block = {
@@ -235,6 +258,9 @@ def _build_payload(
         "source_entity_id": str(candidate.id),
     }
     return {
+        # 계약 버전을 payload에 두어 hash에 반영한다(additive). 소비자는 무시해도 되며,
+        # 이 값 변경 시 전 item이 재발행된다.
+        "schema_version": SCHEMA_VERSION,
         "candidate_id": candidate.id,
         "place": place_block,
         "youtube": youtube_block,

@@ -24,7 +24,32 @@
   (T-158 결정 ⑧ 파생)
 
 ### Agent B — 검수 UX·공급 API·보안 표면 (T-174~T-192)
+- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리. 현행 300ms provider
+  debounce·abort·candidate/request identity·동일 검색 재실행 `searchNonce`는 보존하고, 후보 선택 강조·
+  폼 초기화는 즉시 처리한 뒤 provider query 활성화만 `startTransition`으로 분리한다. 과거 120ms
+  workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
+  T-183. (PR-15 개정판)
+- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
+- [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
+- [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
+- [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
+---
 
+## 완료
+
+- [x] **T-189**: features 계약 마감 (A5, G10) — feature export payload·목록 계약을 additive로 마감했다.
+  `_build_payload` address block의 하드코딩 None을 제거해 `sigungu_code`·`legal_dong_code`를 place
+  실데이터로 주입하고, `sido_code`는 컬럼이 없어 `sigungu_code[:2]`(없으면 `legal_dong_code[:2]`) 유도
+  규칙으로 계약화(migration 없음). item에 `schema_version=1`(payload 본문·hash 반영), `/features/snapshot`·
+  `changes`에 `FeatureExportPageResponse` response_model(item은 `extra=allow` 개방형이라 기존 필드 보존),
+  cursor 오류를 `{code,message}`(invalid_cursor·invalid_params, 한국어 message 유지)로. `/destinations/export`에
+  `geocoded_only` 파라미터 — 미지정 시 **포맷 기반 기본값**(gpx/kml=True 미검증 좌표 제외, xlsx=False 전체
+  포함), 명시값 존중. 재발행: 행정코드·schema_version으로 전 payload_hash가 바뀌어 T-171 시간당 reconcile
+  안전망이 최대 1h 내 새 sequence로 재발행(cursor·operation·sequence 계약 불변). 2렌즈 적대적 리뷰: 확정
+  BLOCKER/MAJOR 0. 병합 전 보강 — geocoded_only 포맷 기반(xlsx 조용한 행 탈락 방지)·sido legal_dong
+  fallback·schema_version hash 테스트. 문서화: 에러 body 형태·저트래픽 배포 권고·reconcile 의존
+  (`docs/feature-export-api.md`). 검증: 격리 DB backend 전체 pytest 774 passed(실패 0), migration 없음·단일
+  head. (2026-07-14, 로드맵 PR-25 개정·A5·G10)
 - [x] **T-174**: 검수 선택 provenance 보존 — 선택 `PlaceSearchHit`을 typed state로 유지하고 provider native ID·query·검색/선택 시각·원본 이름/주소/좌표/카테고리와 실제 확정값을 `provider_evidence_json.review.resolutions[]`에 분리 누적한다. 허용 provider의 주소와 서버 도출 `api_source`를 전달하며 Google 저장·VWorld marker·Gemini 우회는 차단한다. 100m 근접 장소는 이름·provider ID·거리 identity gate와 명시적 병합/신규 결정으로 처리하고, 후보 row lock+신규 생성 advisory lock으로 동시 검수 중복을 방지한다. 웹 409는 최초 요청 snapshot으로 재시도하고 MCP도 같은 구조화 후보/결정 계약을 지원한다. category 요청 abort·candidate identity, 폼 소유 후보 검증, 원본/수정 표시와 접근성 근거를 보강했다. n150에서 backend 타깃 17건, 기준선 실패 2건 제외 전체 회귀, frontend lint/type-check/Vitest 33건/build, Playwright 5건 통과. (2026-07-13, PR-31, §10 B2, G3)
 - [x] **T-175**: API 키 read/admin 스코프 — `public_api_keys.scope`를 기존 행 `read` backfill·NOT NULL·CHECK로 추가하고, immutable scope(변경은 revoke+재발급), generation-safe `key_hash→scope` cache, create/revoke+audit 단일 transaction을 적용했다. 공급 GET 11경로만 read exact allowlist로 열고 내부 GET·모든 write는 deny-by-default 403, `?key=`는 DB read만, DB/static admin은 header만, CIDR 우회는 read, `/admin/*`는 proxy 전용으로 유지했다. 발급 UI 기본 read·admin 위험 안내·scope 표시, 직접 API origin curl, ADR-36·공급 계약을 함께 갱신했다. production 소비자 key rotation은 후속 T-176에서 완료했다. n150에서 auth 42건, 기준선 2건 제외 backend 전체, migration upgrade/backfill/CHECK/downgrade, frontend lint/type-check/Vitest 33건/build, 설정 scope E2E 통과. (2026-07-13, PR-01 개정판, §10 B5)
 - [x] **T-176**: 소비자 read key 회전 rollout — DB read key를 발급해 docker-manager 단일 원천에서 kor-travel-map Dagster·daemon에만 주입하고 Map API에서는 제거했다. snapshot/changes는 n150 prod 실데이터를 `limit=1` 2페이지 cursor 확인 후 `limit=200` 8페이지·1,416개 전체 순회했으며 실제 Dagster 가져오기 경로도 각 1,416개를 확인했다. read 공급 GET 200·write/내부 GET 403, 구 정적 admin key 401·신규 BFF/operator admin GET 200, UI 로그인 POST 200+Set-Cookie/session BFF 200·틀린 비밀번호 401을 검증했다. 중첩 전환 뒤 구 값을 제거하고 평문 임시 파일·백업·복원 지점을 삭제했으며 key 값은 문서화하지 않았다. Concierge PR #182, kor-travel-map PR #664, docker-manager PR #51. (2026-07-13, PR-33, §10 B5, G2)
@@ -49,20 +74,6 @@
   frontend lint/type-check/Vitest 159건/build, Playwright 22건 통과(live 4건 skip)를 검증했다. backend
   전체는 664건 통과, n150 optional transcript library 설치 상태와 가정이 다른 기존 2건만 실패했다.
   (2026-07-13, PR-08 개정판, G5)
-- [ ] **T-186**: review 컴포넌트 분해 — 동작 보존/UX 변경 커밋 분리. 현행 300ms provider
-  debounce·abort·candidate/request identity·동일 검색 재실행 `searchNonce`는 보존하고, 후보 선택 강조·
-  폼 초기화는 즉시 처리한 뒤 provider query 활성화만 `startTransition`으로 분리한다. 과거 120ms
-  workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
-  T-183. (PR-15 개정판)
-- [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
-- [ ] **T-189**: features 계약 마감 — 행정코드 주입(sido는 유도 규칙 결정), `schema_version`, response_model+binary content schema, 재발급 canary·cursor drain·rollback 계획, `geocoded_only`. 전역 export advisory lock의 빈 GET·dirty batch·전량 reconcile p95를 n150에서 측정하고, bounded dirty claim과 writer 지연 상한을 계약화한다. (PR-25 개정판, G10)
-- [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
-- [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
-- [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
-
----
-
-## 완료
 
 - [x] **T-188**: `/destinations` SQL 푸시다운 (S5, G8) — 목록 `list_place_summaries`가 확정 장소·mention을
   Python으로 전량 로드·집계·정렬 후 자르던 것을 **SQL 푸시다운**으로 O(전체)→O(limit)로 바꿨다. 필터
@@ -576,3 +587,4 @@
 - 결정 기록: `docs/decisions.md`
 - 작업 일지: `docs/journal.md`
 - 개발 환경: `docs/dev-environment.md`
+

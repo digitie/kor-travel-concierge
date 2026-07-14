@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-07-14: T-189 — features 계약 마감 (A5, G10)
+
+- **문제**: feature export payload의 address 행정코드(`sido_code`/`sigungu_code`/`legal_dong_code`)가 하드코딩
+  None이고, `/features/*` 목록에 response_model이 없어 OpenAPI 스키마가 비었으며, 미검증 좌표가 GPX export로
+  유출될 수 있었다.
+- **구현(additive 마감)**: `_build_payload`에서 `sigungu_code`·`legal_dong_code`를 place 실데이터 주입,
+  `sido_code`는 전용 컬럼이 없어 `sigungu_code[:2]`(없으면 `legal_dong_code[:2]`, 둘 다 없으면 None) 유도
+  규칙으로 계약화(스키마 변경 없음). `schema_version=1`을 payload 본문 top-level로(hash 반영 → 배포 후 전 item
+  재발행). `/features/snapshot`·`changes`에 `FeatureExportPageResponse` response_model — item은 `extra=allow`
+  개방형이라 place/youtube/evidence/source_record 등 기존 필드가 응답에서 탈락하지 않는다. cursor 오류를
+  `InvalidCursorError`로 분리해 routes가 한국어 detail을 `{code,message}`(invalid_cursor·invalid_params)로 감싼다.
+  `/destinations/export`에 `geocoded_only: bool | None` — 미지정 시 **포맷 기반**(gpx/kml=True 미검증 좌표 제외,
+  xlsx=False 전체 포함), 명시 true/false는 포맷 무관 존중.
+- **재발행**: 행정코드·schema_version 주입으로 전 payload_hash가 바뀐다 → T-171 dirty outbox + 시간당 전량
+  reconcile 안전망이 최대 1h 내 전 item을 새 sequence로 재발행. cursor·operation·sequence 계약 불변이라
+  krtour-map은 재수신만 하면 되고 cursor는 계속 유효. canary/cursor-drain/rollback·저트래픽 배포 권고는
+  `docs/feature-export-api.md`에 문서화(코드 canary 미구현).
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: additive 비파괴(response_model extra=allow·operation/
+  cursor/sequence 불변), sido 유도 정확성, geocoded_only push down, 재발행 reconcile 실효 검증. 병합 전 보강 —
+  ① `geocoded_only` 기본값을 **포맷 기반**으로(리뷰가 xlsx 강제 True의 조용한 확정-미지오코딩 행 탈락을 지적 →
+  gpx/kml만 True, xlsx는 False), ② `sido_code` legal_dong fallback(sigungu 없고 legal_dong만 있는 place 회복),
+  ③ schema_version이 payload_hash에 실제 반영됨을 강제하는 단위 테스트. known-MINOR(문서화): 에러 body
+  string→object(로드맵 요구·정상 소비자 미도달), 배포 시 전량 reconcile이 advisory lock을 잡아 GET 잠깐 대기
+  (저트래픽 배포 권고), 재발행의 reconcile 활성 의존.
+- **금지 준수**: 응답 additive만(새 필드·code), operation/base64 cursor/sequence 불변, 자동확정·grounding·T-171
+  outbox/reconcile 로직 미변경, 테마 엔드포인트(T-190)·place_service 목록(T-188) 미변경. migration 없음.
+- **검증**: 격리 disposable DB backend 전체 pytest 774 passed(실패 0), 신규 테스트(schema_version hash·sido
+  legal_dong 유도·geocoded_only 포맷 기본값·재발행 hash), `compileall` clean, T-188 위 rebase 후 origin/main
+  (#204) 0 behind.
+
 ## 2026-07-14: T-172·T-173 게이트 착수 계획서 작성 (구현 아님)
 
 - **배경**: Agent A 구현 트랙(T-158~T-171) 완료 후 남은 T-172(자막 fetch 병렬화)·T-173(프레임 비전/

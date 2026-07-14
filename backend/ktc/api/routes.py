@@ -1428,15 +1428,34 @@ async def export_destinations(
     ids: str | None = None,
     sort: str = "mention_count",
     limit: int = EXPORT_DESTINATION_LIMIT_DEFAULT,
+    geocoded_only: bool | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    """선택 또는 전체 장소 목록을 `xlsx`, `gpx`, `kml`로 내보낸다."""
+    """선택 또는 전체 장소 목록을 `xlsx`, `gpx`, `kml`로 내보낸다.
+
+    `geocoded_only`는 확정 좌표(`is_geocoded`)가 없는 장소를 제외할지 결정한다(T-189).
+    미지정(`None`)이면 **포맷 기반 기본값**을 쓴다 — 지오 플롯 포맷(`gpx`/`kml`)은 좌표
+    없는 항목이 무의미하므로 `True`(제외), 데이터 포맷(`xlsx`)은 조용한 행 탈락을 피하려
+    `False`(전체 포함). 명시한 `true`/`false`는 포맷과 무관하게 존중한다.
+
+    주의: `ids`로 특정 장소를 선택해도 `gpx`/`kml`에서는 미지오코딩 선택 항목이 결과에서
+    빠질 수 있다(포맷 기본값 `True`). 선택 항목을 반드시 포함하려면 `geocoded_only=false`.
+    """
     _validate_destination_sort(sort)
+    effective_geocoded_only = (
+        geocoded_only
+        if geocoded_only is not None
+        else format.lower() in ("gpx", "kml")
+    )
     try:
         place_ids = _parse_place_ids(ids)
         export_limit = _normalize_destination_export_limit(limit)
         summaries = await place_service.list_place_summaries(
-            session, sort=sort, place_ids=place_ids, limit=export_limit
+            session,
+            sort=sort,
+            place_ids=place_ids,
+            limit=export_limit,
+            geocoded_only=effective_geocoded_only,
         )
         body, media_type, base_filename = await asyncio.to_thread(
             place_export_service.build_place_export, summaries, format
@@ -2931,7 +2950,56 @@ async def get_video_transcript(
 # --- 범용 feature 수집 API (ADR-26) ---
 
 
-@router.get("/features/snapshot")
+class FeatureExportItem(BaseModel):
+    """feature export item의 OpenAPI 응답 스키마(T-189).
+
+    계약은 additive 확장이라 새 필드는 스키마 변경 없이 추가될 수 있다. 명시 필드 외의
+    키(place/youtube/evidence의 하위 필드, 향후 추가 필드)를 보존하기 위해 `extra=allow`로
+    두어 어떤 필드도 응답에서 탈락하지 않는다(비파괴 계약).
+    """
+
+    model_config = {"extra": "allow"}
+
+    export_id: str
+    operation: str
+    schema_version: int = feature_export_service.SCHEMA_VERSION
+    candidate_id: int | None = None
+    updated_at: str | None = None
+    place: dict[str, Any] | None = None
+    youtube: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
+    source_record: dict[str, Any] | None = None
+    # reject/tombstone item에만 포함된다.
+    rejection_reason: str | None = None
+
+
+class FeatureExportPageResponse(BaseModel):
+    """`/features/snapshot`·`/features/changes` 공통 응답 envelope(T-189)."""
+
+    items: list[FeatureExportItem]
+    next_cursor: str | None
+    has_more: bool
+
+
+def _feature_cursor_http_error(exc: ValueError) -> HTTPException:
+    """cursor/파라미터 오류를 additive `code`가 붙은 400으로 변환한다(T-189).
+
+    `detail`은 기존과 같이 한국어 메시지를 유지하되, `_candidate_conflict`(:305)와 동일한
+    `{"code", "message"}` 형태로 감싼다. cursor 디코드 실패는 `invalid_cursor`, 그 외
+    ValueError는 `invalid_params`로 최소 code 셋을 노출한다.
+    """
+    code = (
+        "invalid_cursor"
+        if isinstance(exc, feature_export_service.InvalidCursorError)
+        else "invalid_params"
+    )
+    return HTTPException(
+        status_code=400,
+        detail={"code": code, "message": str(exc)},
+    )
+
+
+@router.get("/features/snapshot", response_model=FeatureExportPageResponse)
 async def features_snapshot(
     cursor: str | None = None,
     limit: int = Query(
@@ -2951,7 +3019,7 @@ async def features_snapshot(
             session, cursor=cursor, limit=limit
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _feature_cursor_http_error(exc) from exc
     return {
         "items": page.items,
         "next_cursor": page.next_cursor,
@@ -2959,7 +3027,7 @@ async def features_snapshot(
     }
 
 
-@router.get("/features/changes")
+@router.get("/features/changes", response_model=FeatureExportPageResponse)
 async def features_changes(
     cursor: str | None = None,
     limit: int = Query(
@@ -2975,7 +3043,7 @@ async def features_changes(
             session, cursor=cursor, limit=limit
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _feature_cursor_http_error(exc) from exc
     return {
         "items": page.items,
         "next_cursor": page.next_cursor,
