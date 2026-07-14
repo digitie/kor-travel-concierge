@@ -1963,8 +1963,11 @@ async def test_destination_export_caps_limit_and_serializes_in_thread(client, mo
 
     captured: dict[str, int] = {}
 
-    async def fake_list_place_summaries(session, *, sort, place_ids, limit):
+    async def fake_list_place_summaries(
+        session, *, sort, place_ids, limit, geocoded_only=False
+    ):
         captured["limit"] = limit
+        captured["geocoded_only"] = geocoded_only
         return []
 
     def fake_build_place_export(summaries, export_format):
@@ -1984,11 +1987,53 @@ async def test_destination_export_caps_limit_and_serializes_in_thread(client, mo
     assert response.status_code == 200
     assert response.content == b"export"
     assert captured["limit"] == routes.EXPORT_DESTINATION_LIMIT_MAX
+    # export는 기본적으로 확정 좌표만 내보낸다(T-189, 미검증 좌표 유출 방지).
+    assert captured["geocoded_only"] is True
     assert captured["thread_id"] != main_thread_id
     assert re.fullmatch(
         r'attachment; filename="export-all-0-sort-mention-count-\d{8}T\d{6}Z\.txt"',
         response.headers["content-disposition"],
     )
+
+
+async def test_destination_export_geocoded_only_filters_unverified(
+    client, session_factory
+):
+    """T-189: export 기본값은 확정 좌표(is_geocoded)만 내보내고, false로 opt-out한다."""
+    from ktc.models import TravelPlace
+
+    async with session_factory() as s:
+        s.add_all(
+            [
+                TravelPlace(
+                    name="확정 좌표 장소",
+                    latitude=33.5,
+                    longitude=126.5,
+                    is_geocoded=True,
+                ),
+                TravelPlace(
+                    name="미확정 좌표 장소",
+                    latitude=37.5,
+                    longitude=127.0,
+                    is_geocoded=False,
+                ),
+            ]
+        )
+        await s.commit()
+
+    # 기본값(geocoded_only=true): 미확정 좌표 장소는 제외된다.
+    default_gpx = await client.get("/api/v1/destinations/export?format=gpx")
+    assert default_gpx.status_code == 200
+    assert "확정 좌표 장소" in default_gpx.text
+    assert "미확정 좌표 장소" not in default_gpx.text
+
+    # opt-out(geocoded_only=false): 미확정 좌표까지 포함한다.
+    optout_gpx = await client.get(
+        "/api/v1/destinations/export?format=gpx&geocoded_only=false"
+    )
+    assert optout_gpx.status_code == 200
+    assert "확정 좌표 장소" in optout_gpx.text
+    assert "미확정 좌표 장소" in optout_gpx.text
 
 
 async def test_operations_endpoints_return_runs_audits_and_storage(client, session_factory):

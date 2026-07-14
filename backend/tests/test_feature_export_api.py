@@ -247,6 +247,85 @@ async def test_snapshot_surfaces_category_code_suggestion(client, session_factor
     assert item["place"]["category_code_suggestion"] == "01050100"
 
 
+async def test_snapshot_item_includes_schema_version(client, session_factory):
+    """T-189: 모든 item에 additive `schema_version`이 포함된다."""
+    await _seed_ready_candidate(session_factory)
+    resp = await client.get("/api/v1/features/snapshot")
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["schema_version"] == 1
+
+
+async def test_snapshot_injects_admin_codes_with_derived_sido(client, session_factory):
+    """T-189: 행정코드는 place 실데이터에서 주입하고, sido_code는 sigungu_code 앞 2자리로 유도한다."""
+    from ktc.models import TravelPlace
+
+    candidate_id, place_id = await _seed_ready_candidate(session_factory)
+
+    # 시드 place는 행정코드가 없어 주입 결과도 None이다(하드코딩 None 제거 회귀).
+    baseline = await client.get("/api/v1/features/snapshot")
+    addr0 = baseline.json()["items"][0]["place"]["address"]
+    assert addr0["sigungu_code"] is None
+    assert addr0["legal_dong_code"] is None
+    assert addr0["sido_code"] is None
+
+    async with session_factory() as s:
+        place = await s.get(TravelPlace, place_id)
+        place.sigungu_code = "11680"
+        place.legal_dong_code = "1168010100"
+        await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
+
+    resp = await client.get("/api/v1/features/snapshot")
+    addr = resp.json()["items"][0]["place"]["address"]
+    assert addr["sigungu_code"] == "11680"
+    assert addr["legal_dong_code"] == "1168010100"
+    # 유도 규칙: sigungu_code[:2].
+    assert addr["sido_code"] == "11"
+
+
+async def test_admin_code_injection_reissues_export(client, session_factory):
+    """T-189: 행정코드 주입으로 payload_hash가 바뀌면 changes가 같은 export_id의 새 upsert로 재발행한다.
+
+    cursor는 재발행 후에도 계속 유효하다(단조 전진).
+    """
+    from ktc.models import TravelPlace
+
+    candidate_id, place_id = await _seed_ready_candidate(session_factory)
+
+    first = await client.get("/api/v1/features/changes")
+    first_items = first.json()["items"]
+    assert [i["operation"] for i in first_items] == ["upsert"]
+    old_hash = first_items[0]["source_record"]["raw_payload_hash"]
+    cursor = first.json()["next_cursor"]
+
+    async with session_factory() as s:
+        place = await s.get(TravelPlace, place_id)
+        place.sigungu_code = "26110"
+        await s.commit()
+    await _mark_dirty(session_factory, candidate_id)
+
+    changes = await client.get(f"/api/v1/features/changes?cursor={cursor}")
+    items = changes.json()["items"]
+    assert [i["operation"] for i in items] == ["upsert"]
+    assert items[0]["export_id"] == f"ytpc_{candidate_id}"
+    assert items[0]["place"]["address"]["sigungu_code"] == "26110"
+    assert items[0]["place"]["address"]["sido_code"] == "26"
+    # 재발행: payload_hash가 바뀌고 새 sequence로 전진한다.
+    assert items[0]["source_record"]["raw_payload_hash"] != old_hash
+    assert _decode_cursor(changes.json()["next_cursor"]) > _decode_cursor(cursor)
+
+
+async def test_invalid_cursor_returns_code_invalid_cursor(client, session_factory):
+    """T-189: cursor 오류는 한국어 detail을 유지하면서 additive `code`를 노출한다."""
+    await _seed_ready_candidate(session_factory)
+    resp = await client.get("/api/v1/features/changes?cursor=!!not-base64!!")
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["code"] == "invalid_cursor"
+    assert "cursor" in detail["message"]
+
+
 async def test_snapshot_has_pinvi_feature_linked_poi_inputs(client, session_factory):
     """T-068: PinVi feature 연계 POI row까지 이어질 입력을 보존한다."""
     await _seed_ready_candidate(session_factory)

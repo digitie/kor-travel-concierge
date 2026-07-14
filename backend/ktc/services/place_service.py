@@ -713,11 +713,15 @@ async def list_place_summaries(
     category: str | None = None,
     query: str | None = None,
     district: str | None = None,
+    geocoded_only: bool = False,
 ) -> list[PlaceSummary]:
     """확정 장소 목록과 영상·유튜버 언급 근거를 함께 조회한다.
 
     `channel_id`/`playlist_id`/`keyword`/`video_id`가 주어지면 해당 출처(유튜버/재생목록/
     검색어/영상)에서 수집된 장소만 반환한다(결과 보기 그룹화·필터, 영상별 필터).
+
+    `geocoded_only=True`면 확정 좌표(`is_geocoded`)가 있는 장소만 반환한다(T-189, export의
+    미검증 좌표 유출 방지). 기본값 False라 결과 보기·테마 등 기존 호출자는 영향을 받지 않는다.
 
     T-188: 필터·정렬·`LIMIT`를 SQL로 밀어 넣는다. 확정 장소 전량을 로드·집계한 뒤
     자르던 경로를 없애고, 무거운 언급 근거(`_list_mentions_by_place`)는 limit 적용 후
@@ -736,6 +740,8 @@ async def list_place_summaries(
     )
     if where is None:
         return []
+    if geocoded_only:
+        where = [*where, TravelPlace.is_geocoded.is_(True)]
     places = await _ordered_place_query(
         session,
         sort=sort,
