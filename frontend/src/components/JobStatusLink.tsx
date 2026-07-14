@@ -45,9 +45,7 @@ export function JobStatusLink({
   const pending = runs.filter((run) => run.state.toLowerCase() === "pending");
   const current = running[0] ?? pending[0] ?? null;
   const statusHref =
-    openAttentionCount > 0
-      ? "/status?tab=history&attention=open"
-      : "/status";
+    openAttentionCount > 0 ? "/jobs?attention=open" : "/jobs";
   const summary = queueQuery.isError
     ? "작업 상태 오류"
     : current

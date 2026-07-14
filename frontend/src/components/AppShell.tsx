@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   ClipboardCheckIcon,
   DownloadCloudIcon,
+  ListChecksIcon,
   LogOutIcon,
   MapIcon,
   PlugIcon,
@@ -15,26 +16,27 @@ import {
 
 import { JobStatusLink } from "@/components/JobStatusLink";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { pickActiveNavHref } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+// 주 그룹: 일상 흐름(결과·수집·검수·작업·설정). 보조 그룹: 진단·개발 도구(상태·API 테스트).
+const primaryNavItems = [
   { href: "/", label: "결과", icon: MapIcon },
   { href: "/collect", label: "수집", icon: DownloadCloudIcon },
   { href: "/review", label: "검수", icon: ClipboardCheckIcon },
-  { href: "/status", label: "상태", icon: ActivityIcon },
-  { href: "/api-test", label: "API", icon: PlugIcon },
+  { href: "/jobs", label: "작업", icon: ListChecksIcon },
   { href: "/settings", label: "설정", icon: SettingsIcon },
 ] as const;
 
-function isActive(pathname: string, href: string) {
-  if (href === "/") {
-    return pathname === "/";
-  }
-  if (href === "/status") {
-    return pathname === href || pathname.startsWith("/jobs/");
-  }
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
+const secondaryNavItems = [
+  { href: "/status", label: "상태", icon: ActivityIcon },
+  { href: "/api-test", label: "API", icon: PlugIcon },
+] as const;
+
+const navHrefs = [
+  ...primaryNavItems.map((item) => item.href),
+  ...secondaryNavItems.map((item) => item.href),
+];
 
 export function AppShell({
   title,
@@ -53,15 +55,38 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const activeHref = [...navItems]
-    .filter((item) => isActive(pathname, item.href))
-    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+  const activeHref = pickActiveNavHref(pathname, navHrefs);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     router.replace("/login");
     router.refresh();
   }
+
+  const renderNavLink = (item: {
+    href: string;
+    label: string;
+    icon: typeof MapIcon;
+  }) => {
+    const Icon = item.icon;
+    const active = item.href === activeHref;
+    return (
+      <Link
+        className={cn(
+          buttonVariants({
+            variant: active ? "secondary" : "ghost",
+            size: "sm",
+          }),
+          "justify-start whitespace-nowrap",
+        )}
+        href={item.href}
+        key={item.href}
+      >
+        <Icon data-icon="inline-start" />
+        {item.label}
+      </Link>
+    );
+  };
 
   return (
     <main className="min-h-screen bg-surface-page text-text-primary">
@@ -93,26 +118,12 @@ export function AppShell({
               </Button>
             </div>
             <nav className="flex max-w-full gap-1 overflow-x-auto lg:max-h-[calc(100vh-6rem)] lg:flex-col lg:overflow-y-auto lg:pr-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const active = item.href === activeHref;
-                return (
-                  <Link
-                    className={cn(
-                      buttonVariants({
-                        variant: active ? "secondary" : "ghost",
-                        size: "sm",
-                      }),
-                      "justify-start whitespace-nowrap",
-                    )}
-                    href={item.href}
-                    key={item.href}
-                  >
-                    <Icon data-icon="inline-start" />
-                    {item.label}
-                  </Link>
-                );
-              })}
+              {primaryNavItems.map(renderNavLink)}
+              <div
+                aria-hidden
+                className="hidden lg:my-1 lg:block lg:border-t lg:border-surface-muted"
+              />
+              {secondaryNavItems.map(renderNavLink)}
             </nav>
           </div>
         </aside>

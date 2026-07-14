@@ -885,6 +885,15 @@ export async function listUnmatchedCandidates(
   return (await listUnmatchedCandidatesPage(filter, { limit })).items;
 }
 
+/**
+ * 홈 배너(T-192)용 검수 대기 건수. 기본 필터(needs_review)의 envelope `total`만
+ * 쓰고, 무거운 후보 payload는 limit=1로 최소화한다(목록 계약 재사용, 재구현 아님).
+ */
+export async function getReviewPendingCount(): Promise<number> {
+  const page = await listUnmatchedCandidatesPage(undefined, { limit: 1 });
+  return page.total;
+}
+
 export async function listUnmatchedCandidatesPage(
   filter?: ReviewCandidateFilter,
   pagination: ListPagination = {},

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { CheckCircle2Icon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -82,20 +83,22 @@ export function PanelHeader({
   );
 }
 
-/** KPI 카드(아이콘 + uppercase 라벨 + 굵은 값). */
+/** KPI 카드(아이콘 + uppercase 라벨 + 굵은 값). href를 주면 카드 전체가 링크가 된다. */
 export function MetricCard({
   icon,
   label,
   value,
   tone = "neutral",
+  href,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   tone?: "neutral" | "active" | "warn";
+  href?: string;
 }) {
-  return (
-    <div className="flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]">
+  const body = (
+    <>
       <span
         className={
           tone === "active"
@@ -115,8 +118,24 @@ export function MetricCard({
           {value}
         </span>
       </span>
-    </div>
+    </>
   );
+  const className =
+    "flex min-w-0 items-start gap-3 rounded-lg border border-surface-muted bg-card p-4 shadow-[var(--shadow-card)]";
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className={cn(
+          className,
+          "transition-colors hover:border-brand/40 hover:bg-brand-tint/40",
+        )}
+      >
+        {body}
+      </Link>
+    );
+  }
+  return <div className={className}>{body}</div>;
 }
 
 /** 작은 라벨/값 셀(요약 그리드·다이얼로그 요약 공용). KPI 숫자는 size="lg"로 크게(규칙 8). */
