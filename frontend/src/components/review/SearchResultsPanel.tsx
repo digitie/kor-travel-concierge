@@ -9,6 +9,7 @@ import type {
   PlaceSearchResult,
 } from "@/lib/api";
 import { placeHitStorageBlockReason } from "@/lib/review-provenance";
+import { searchHitShortcutNumber } from "@/components/review/searchHitNumber";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +23,11 @@ export type SearchResultsPanelProps = {
   result: PlaceSearchResult | null | undefined;
   loading: boolean;
   selectableHitCount: number;
+  /**
+   * 렌더 순서와 동일한 평탄 hit 목록(`allHits`). 각 행의 1–9 서수 배지와 키보드
+   * 단축키 선택이 이 배열 순서(reference)를 단일 출처로 쓴다(T-187).
+   */
+  orderedHits?: readonly PlaceSearchHit[];
   selectedHit: PlaceSearchHit | null;
   opinionRequested: boolean;
   opinion: PlaceOpinion | null;
@@ -39,6 +45,7 @@ export function SearchResultsPanel({
   result,
   loading,
   selectableHitCount,
+  orderedHits,
   selectedHit,
   opinionRequested,
   opinion,
@@ -95,6 +102,7 @@ export function SearchResultsPanel({
           hits={result?.[provider] ?? []}
           error={result?.errors?.[provider]}
           loading={loading}
+          orderedHits={orderedHits}
           selectedHit={selectedHit}
           onSelect={onSelectHit}
         />
@@ -146,6 +154,7 @@ function ProviderSection({
   hits,
   error,
   loading,
+  orderedHits,
   selectedHit,
   onSelect,
 }: {
@@ -153,6 +162,7 @@ function ProviderSection({
   hits: readonly PlaceSearchHit[];
   error?: string;
   loading: boolean;
+  orderedHits?: readonly PlaceSearchHit[];
   selectedHit: PlaceSearchHit | null;
   onSelect: (hit: PlaceSearchHit) => void;
 }) {
@@ -174,18 +184,37 @@ function ProviderSection({
           const storageBlockReason = placeHitStorageBlockReason(hit);
           const selectable = hasCoords && storageBlockReason == null;
           const isSelected = selectedHit === hit;
+          // 서수는 선택 가능 hit(orderedHits, 좌표+저장 허용) reference 순서를 단일
+          // 출처로 쓴다. 키보드 1–9·지도 번호와 동일 순서/번호이며, 선택 불가 행에는
+          // 배지·단축키를 붙이지 않는다(로딩 중 재정렬로도 어긋나지 않음).
+          const shortcutNumber = searchHitShortcutNumber(
+            orderedHits,
+            hit,
+            selectable,
+          );
           return (
             <button
               key={`${hit.provider}-${hit.native_id ?? index}`}
               type="button"
               disabled={!selectable}
               aria-pressed={isSelected}
+              aria-keyshortcuts={shortcutNumber ? String(shortcutNumber) : undefined}
               title={storageBlockReason ?? undefined}
               onClick={() => onSelect(hit)}
               className="flex flex-col gap-0.5 rounded-lg border p-2 text-left text-xs transition-colors hover:border-primary hover:bg-muted aria-pressed:border-primary aria-pressed:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="flex items-center justify-between gap-2">
-                <span className="truncate font-medium">{hit.name}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {shortcutNumber ? (
+                    <Badge
+                      variant="secondary"
+                      className="shrink-0 px-1.5 font-mono tabular-nums"
+                    >
+                      {shortcutNumber}
+                    </Badge>
+                  ) : null}
+                  <span className="truncate font-medium">{hit.name}</span>
+                </span>
                 {hit.category ? (
                   <span className="shrink-0 text-muted-foreground">
                     {hit.category}

@@ -4,6 +4,7 @@ import {
   deleteCandidate,
   executeReviewBulk,
   groupThemeItems,
+  listReviewSourceFacets,
   listRunQueue,
   listUnmatchedCandidatesPage,
   previewReviewBulk,
@@ -68,6 +69,55 @@ describe("groupThemeItems", () => {
       playlists: [{ value: "p1", title: "재생목록", poi_count: 2 }],
       keywords: [{ value: "부산 여행", title: "부산 여행", poi_count: 1 }],
     });
+  });
+});
+
+describe("listReviewSourceFacets", () => {
+  function stubFacets() {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ channels: [], playlists: [], keywords: [] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("그룹 차원(channel/playlist/keyword)은 빼고 목록 filter만 직렬화한다", async () => {
+    const fetchMock = stubFacets();
+
+    await listReviewSourceFacets({
+      channelId: "channel-1",
+      playlistId: "playlist-1",
+      keyword: "제주 여행",
+      query: "성산",
+      sort: "oldest",
+      isDomestic: false,
+      status: "needs_review",
+      queueReason: "name_mismatch",
+      sourceKind: "transcript",
+      grounding: "unverified",
+    });
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toBe(
+      "/api/v1/destinations/review-facets?q=%EC%84%B1%EC%82%B0&is_domestic=false&status=needs_review&reason=name_mismatch&source_kind=transcript&grounding=unverified",
+    );
+    // count가 그룹 전환과 무관하도록 그룹 차원 파라미터는 절대 보내지 않는다.
+    expect(url).not.toContain("channel_id");
+    expect(url).not.toContain("playlist_id");
+    expect(url).not.toContain("keyword");
+  });
+
+  it("filter가 없으면 query string 없이 호출한다", async () => {
+    const fetchMock = stubFacets();
+
+    await listReviewSourceFacets();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/v1/destinations/review-facets",
+    );
   });
 });
 

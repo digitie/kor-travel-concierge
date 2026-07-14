@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-07-14: T-187 — 검수 키보드 단축키 + 처리 모드(triage) + provenance facet (U5/U1)
+
+- **게이트**: PR-16은 건당 인터랙션 측정 게이트(모호 시 본안 채택). 라이브 측정 없음 → 모호 → **본안(처리 모드)
+  채택**. 단축키 + triage 모드 모두 구현.
+- **구현(T-186 분해 컴포넌트 위 배선)**: `useReviewKeyboard.ts` 전역 keydown — J/K 다음·이전(pickCandidate),
+  1~9 검색 hit(**선택 가능 hit 기준 번호**, 행 배지·aria-keyshortcuts), Enter 저장(canSave), X 제외, U 마지막
+  undo(T-184), / 검색 포커스, ? 도움말. **확장 포커스 가드**(defaultPrevented·repeat·ctrl/meta/alt·IME
+  isComposing/229·input/textarea/select/contenteditable·button/a·role=dialog/menu/listbox/option/textbox/
+  combobox/searchbox/menuitem/alertdialog·컨테이너). **triage 모드**(URL `?mode=triage|table`, 기본 triage) —
+  mode는 뷰 concern이라 ReviewListState/scopeKey/candidates 쿼리키와 분리(모드 전환이 큐 재조회·선택 초기화
+  안 함). 진행 레일(n/m·남은 수·최근 처리+undo) + 중앙 후보 카드(T-186 컴포넌트 재사용) + 지도. table=기존
+  테이블/필터/bulk(T-185). 저장·제외 후 자동 다음(PR-02/T-179)·debounce·abort·generation·undo·bulk·URL 정본
+  **배선만 재사용**. **서버 facet**: `list_review_source_facets` + `GET /destinations/review-facets`(admin,
+  read-scope 미포함) — 후보 provenance(channel/playlist/keyword)별 count, **확정 장소 없는 출처도 노출**,
+  현재 filter 반영. 기존 결과보기 `/destinations/facets`(place 기반) 보존. n/m·"모두 처리"는 T-182 filtered
+  total.
+- **적대적 리뷰(PR 전, 2렌즈) — 확정 BLOCKER/MAJOR 0**: 단축키 서수/배지 정합·Enter/X/U 게이트·triage 무재조회·
+  facet count(목록 total과 동일 base stmt·distinct·no-place 노출)·auth 경계(admin) 검증. MINOR 3 정리 —
+  ① 1~9 배지/키보드/지도 번호를 **선택 가능 hit 단일 정본**(`searchHitNumber.ts`)으로 통일(좌표 없는 행 배지
+  없음), ② 포커스 가드 role allowlist에 listbox/option/alertdialog 보강, ③ 그룹값 라벨 facet lookup 실패 시
+  raw 값 fallback(공백 방지).
+- **금지 준수**: T-186 동작 계약·table·bulk 보존(재사용·배선만), 자동 승인 없음, migration 없음(facet 쿼리 전용).
+- **검증**: backend pytest 782 passed(실패 0, 신규 `test_review_source_facets` 3건), frontend vitest 314 passed
+  (신규 useReviewKeyboard·searchHitNumber·reviewGroupFacets·review-list-state·api facet 스펙), lint/type-check/
+  build green. E2E는 기존 스펙 `?mode=table` 배선 + triage/단축키 시나리오 추가 후 n150 이연. origin/main(#208) 0 behind.
+
 ## 2026-07-14: T-186 — review 페이지 구조 분해 (S8, 동작 보존)
 
 - **문제**: `frontend/src/app/review/page.tsx`가 단일 컴포넌트 **5065줄**로 선택/URL/딥링크/큐/mutation/undo/

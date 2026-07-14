@@ -1422,6 +1422,41 @@ async def list_destination_facets(
     return await place_service.list_place_facets(session)
 
 
+@router.get("/destinations/review-facets")
+async def list_review_source_facets(
+    q: str | None = Query(default=None, max_length=255),
+    is_domestic: place_service.ReviewCandidateDomesticFilter = Query(
+        default=place_service.ReviewCandidateDomesticFilter.ALL
+    ),
+    status: place_service.ReviewCandidateStatus = Query(
+        default=place_service.ReviewCandidateStatus.NEEDS_REVIEW
+    ),
+    reason: place_service.QueueReason | None = Query(default=None),
+    source_kind: EvidenceSourceKind | None = Query(default=None),
+    grounding: GroundingStatus | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """검수 큐 그룹화용 **후보 provenance** facet을 반환한다(T-187).
+
+    확정 장소가 아직 없는 출처도 노출하며, `candidate_count`는 그룹 차원을 뺀
+    현재 목록 filter를 반영한다. 검수용 내부 GET이라 read 공급 allowlist에 넣지
+    않고 BFF/operator admin 인증 경계를 따른다(`/destinations/unmatched`와 동일).
+    """
+    return await place_service.list_review_source_facets(
+        session,
+        is_domestic=(
+            None
+            if is_domestic is place_service.ReviewCandidateDomesticFilter.ALL
+            else is_domestic is place_service.ReviewCandidateDomesticFilter.TRUE
+        ),
+        status=status,
+        query=q,
+        queue_reason=reason,
+        source_kind=source_kind,
+        grounding_status=grounding,
+    )
+
+
 @router.get("/destinations/export")
 async def export_destinations(
     format: str = "xlsx",

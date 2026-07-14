@@ -72,6 +72,29 @@ export const DEFAULT_REVIEW_LIST_STATE: ReviewListState = {
   status: "needs_review",
 };
 
+/**
+ * 검수 화면 표시 모드(T-187). filter가 아니라 뷰 concern이므로 `ReviewListState`나
+ * `reviewListStateScopeKey`에 넣지 않는다 — 모드 전환이 큐 재조회·선택 초기화를
+ * 유발하지 않아야 한다. URL `?mode=`가 단일 정본이고 기본은 처리 모드(triage)다.
+ */
+export type ReviewMode = "triage" | "table";
+export const DEFAULT_REVIEW_MODE: ReviewMode = "triage";
+
+export function parseReviewMode(params: SearchParamsReader): ReviewMode {
+  return params.get("mode") === "table" ? "table" : "triage";
+}
+
+/** 기본값(triage)은 URL에서 생략해 링크를 깔끔하게 유지한다. */
+export function writeReviewMode(
+  current: URLSearchParams,
+  mode: ReviewMode,
+): URLSearchParams {
+  const next = new URLSearchParams(current);
+  if (mode === "table") next.set("mode", "table");
+  else next.delete("mode");
+  return next;
+}
+
 /** 객체/배열 identity와 무관하게 같은 검수 목록 조건인지 비교할 stable key다. */
 export function reviewListStateScopeKey(state: ReviewListState): string {
   return JSON.stringify([
