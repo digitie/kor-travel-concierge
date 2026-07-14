@@ -107,12 +107,28 @@ async def test_make_transcript_attempt_recorder_binds_run(session):
 # --- poi_batch handler을 통한 end-to-end 기록·파생 --------------------------
 
 
-def _patch_pipeline(monkeypatch, fetcher):
-    """poi_batch handler 외부 의존을 fake로 바꾸고 transcript fetcher를 지정한다."""
+def _patch_pipeline(monkeypatch, caption_fetcher, whisper_fetcher=None):
+    """poi_batch handler 외부 의존을 fake로 바꾸고 caption/whisper fetcher를 지정한다.
+
+    T-172부터 poi_batch는 `_default_caption_fetcher`/`_default_whisper_fetcher`를
+    분리 배선한다(과거 단일 `_default_transcript_fetcher`는 harvest 후처리 전용으로
+    남고 이 경로에서는 더 이상 쓰이지 않는다). `whisper_fetcher`를 안 주면 실제 auto
+    게이트 off 상태와 동일한 `disabled` 단건을 반환하는 기본 stub을 쓴다 — caption이
+    최종 실패한 시나리오에서 merge_outcomes가 이 attempt를 자동으로 이어붙인다.
+    """
     monkeypatch.setattr(
         postprocess_service, "_make_media_store", lambda settings: InMemoryMediaStore()
     )
-    monkeypatch.setattr(postprocess_service, "_default_transcript_fetcher", fetcher)
+    monkeypatch.setattr(postprocess_service, "_default_caption_fetcher", caption_fetcher)
+
+    async def _default_disabled_whisper(video_id: str) -> TranscriptAttempt:
+        return TranscriptAttempt(provider="whisper", outcome="disabled", sequence=1)
+
+    monkeypatch.setattr(
+        postprocess_service,
+        "_default_whisper_fetcher",
+        whisper_fetcher or _default_disabled_whisper,
+    )
 
     async def fake_correct(runtime, *, transcript, description=None, **kwargs):
         return transcript
@@ -214,6 +230,9 @@ async def test_poi_batch_records_failure_cache_on_total_failure(monkeypatch, ses
     await session.commit()
 
     async def fetch_fail(video_id):
+        # 캡션 전용 체인(whisper 제외, T-172) 최종 실패. whisper "disabled" 3번째
+        # 시도는 `_patch_pipeline`의 기본 whisper stub이 merge_outcomes로 자동
+        # 이어붙인다(순차 체인이었던 과거 동작과 동일한 attempts 형태 재현).
         return TranscriptOutcome(
             result=None,
             attempts=[
@@ -228,12 +247,6 @@ async def test_poi_batch_records_failure_cache_on_total_failure(monkeypatch, ses
                     outcome="no_captions",
                     sequence=2,
                     duration_ms=200,
-                ),
-                TranscriptAttempt(
-                    provider="whisper",
-                    outcome="disabled",
-                    sequence=3,
-                    duration_ms=1,
                 ),
             ],
         )

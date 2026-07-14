@@ -3,7 +3,12 @@
 영상 묶음(≤10)에 대해: 각 영상 자막 확보 → 교정(영상 설명 활용) → raw/교정본 RustFS 저장,
 교정본을 한 번에 묶어 POI 배치 추출, 결과를 영상별 `needs_review` 후보로 생성한다. 카테고리는
 AI가 마스터 코드표에서 고른 8자리 코드를 그대로 후보 evidence에 싣는다(확정 시 복사, 변경 금지).
-순차 처리(병렬 없음)이며 Gemini 호출은 키 전역 rate limiter를 통과한다.
+
+1단계 자막 캡션 fetch만 병렬화한다(T-172, PR-24). 캡션은 순수 네트워크 I/O라
+`CRAWL_MAX_CONCURRENT_VIDEOS` semaphore로 다수 영상을 동시에 시도하고, 캡션이 최종
+실패한 영상만 CPU 집약적인 whisper로 동시성 1 폴백한다(gather 금지). 그 외(교정·POI
+배치 추출·지오코딩)는 여전히 순차이며 Gemini 호출은 키 전역 rate limiter(T-161)를
+통과한다 — 병렬 구간은 공유 `AsyncSession`에 절대 접근하지 않는다.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -32,6 +38,8 @@ from ktc.etl.transcript import (
     TranscriptOutcome,
     TranscriptResult,
     canonical_provider,
+    merge_outcomes,
+    whisper_failure_attempt,
 )
 from ktc.models import (
     AssetType,
@@ -45,11 +53,16 @@ from ktc.models import (
 )
 
 StatusReporter = Callable[[str, float | None], Awaitable[None]]
-# fetcher는 T-164 이후 `TranscriptOutcome`(성공 result + provider별 시도)을 반환한다.
-# 구 계약(TranscriptResult|None)도 `TranscriptOutcome.coerce`로 흡수한다(주입 호환).
-TranscriptFetcher = Callable[
+# T-172: 캡션/whisper fetcher를 분리 주입받는다(과거 단일 transcript_fetcher 대체,
+# 하위호환 shim 없음). 캡션 fetcher는 순수 네트워크 I/O(`TranscriptOutcome` 반환)라
+# 병렬(Semaphore) 호출이 안전하다. 구 계약(TranscriptResult|None)도
+# `TranscriptOutcome.coerce`로 흡수한다(주입 fake 호환).
+CaptionFetcher = Callable[
     [str], Awaitable["TranscriptOutcome | TranscriptResult | None"]
 ]
+# whisper fetcher는 단건 시도(`TranscriptAttempt`)만 반환한다 — CPU 집약이라 항상
+# 동시성 1(순차)로만 호출한다(gather 금지).
+WhisperFetcher = Callable[[str], Awaitable[TranscriptAttempt]]
 # durable 단계 이벤트 콜백(T-162, crawl_run_service.StageReporter 계약과 동일):
 # (stage, *, outcome, provider=None, attempt=None, item_ref=None,
 #  elapsed_ms=None, detail=None). 주입형으로 두어 ETL 계층이 crawl_run에
@@ -58,6 +71,10 @@ StageReporter = Callable[..., Awaitable[None]]
 # transcript 시도 기록 콜백(T-164, crawl_run_service.AttemptRecorder 계약과 동일):
 # (video_id, attempts) — provider별 시도를 transcript_attempts에 durable하게 남긴다.
 AttemptRecorder = Callable[[str, list[TranscriptAttempt]], Awaitable[None]]
+
+# whisper는 CPU 집약(로컬 전사)이라 캡션과 별개로 항상 동시성 1로만 실행한다(T-172
+# §5 위험 방어). 노출 설정이 아니라 정책 상수로 고정한다(전역 CPU 폭주 방지가 핵심).
+WHISPER_MAX_CONCURRENT = 1
 
 
 def _attempts_one_line(outcome: TranscriptOutcome) -> str:
@@ -150,18 +167,24 @@ async def _report_stage(
     *,
     outcome: str,
     started: float | None = None,
+    elapsed_ms: int | None = None,
     provider: str | None = None,
     attempt: int | None = None,
     item_ref: str | None = None,
     detail: str | None = None,
 ) -> None:
-    """단계 이벤트를 best-effort로 보고한다. `started`는 `time.monotonic()` 시각이며
-    elapsed_ms를 monotonic 실측으로 계산한다(§7 지표·T-172 게이트의 정확성 요건)."""
+    """단계 이벤트를 best-effort로 보고한다.
+
+    `elapsed_ms`를 직접 주면 그대로 쓴다(T-172 병렬 caption fetch처럼 실측 소요를
+    다른 시점 — Phase 1a/1b — 에서 이미 캡처해 둔 경우). 없으면 `started`
+    (`time.monotonic()` 시각)로부터 elapsed_ms를 실측 계산한다(§7 지표·T-172 게이트의
+    정확성 요건 — 병렬 구간에서는 `started` 기준 계산이 다른 동시 요청의 대기시간까지
+    끌어들이므로 반드시 사전 계산한 `elapsed_ms`를 넘겨야 한다).
+    """
     if reporter is None:
         return
-    elapsed_ms = (
-        int((time.monotonic() - started) * 1000) if started is not None else None
-    )
+    if elapsed_ms is None and started is not None:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
     await reporter(
         stage,
         outcome=outcome,
@@ -183,13 +206,33 @@ async def _source_playlist_id_for_video(session: AsyncSession, video_id: str) ->
     return result.scalar_one_or_none()
 
 
+@dataclass
+class _VideoPrepState:
+    """Phase 0(순차 캐시 판정) → Phase 1c(순차 소비)로 넘기는 영상별 작업 상태(T-172).
+
+    캐시 재사용 판정(DB/RustFS 읽기, 공유 세션)은 Phase 0에서 순차로 끝내 두고, fresh
+    fetch가 필요한 영상만 `raw_text=None`으로 남겨 Phase 1a/1b(병렬 caption + 순차
+    whisper)의 대상으로 표시한다.
+    """
+
+    video: YoutubeVideo
+    alias: str
+    label: str
+    transcript_source: str = "cached"
+    raw_asset_id: int | None = None
+    corrected: str | None = None
+    grounding_raw_text: str | None = None
+    raw_text: str | None = None
+
+
 async def process_video_batch(
     session: AsyncSession,
     store: media_store.MediaStore,
     *,
     videos: list[YoutubeVideo],
     runtime: llm_client.LlmRuntime,
-    transcript_fetcher: TranscriptFetcher,
+    caption_fetcher: CaptionFetcher | None,
+    whisper_fetcher: WhisperFetcher | None,
     status_reporter: StatusReporter | None = None,
     stage_reporter: StageReporter | None = None,
     attempt_recorder: AttemptRecorder | None = None,
@@ -203,6 +246,15 @@ async def process_video_batch(
     - "correction": 저장된 원본 자막을 재사용해 자막 fetch를 건너뛰고 교정→POI.
     - "poi": 저장된 교정본을 재사용해 fetch·교정을 건너뛰고 POI만 다시 추출.
     저장된 자막/교정본이 없으면 한 단계 앞(없으면 fetch)으로 자동 폴백한다.
+
+    1단계 자막 fetch만 병렬화한다(T-172): fresh fetch가 필요한 영상들을
+    `caption_fetcher`로 `CRAWL_MAX_CONCURRENT_VIDEOS` semaphore 아래 동시에 시도하고
+    (Phase 1a, 순수 네트워크 I/O), 캡션이 최종 실패한 영상만 `whisper_fetcher`로
+    동시성 1 순차 폴백한다(Phase 1b, CPU 집약이라 gather 금지). `caption_fetcher`가
+    None이면(force_whisper 수동 재전사) 캡션 단계를 건너뛰고 전부 whisper로만
+    처리하고, `whisper_fetcher`가 None이면 whisper 폴백 없이 캡션 결과로 확정한다.
+    attempt 기록·ORM 반영·RustFS 저장·LLM 교정 등 나머지는 전부 순차(공유 세션,
+    Phase 1c)로 처리한다 — 병렬 구간(1a/1b)은 `session`에 절대 접근하지 않는다.
     """
     summary = {
         "processed_videos": 0,
@@ -214,17 +266,14 @@ async def process_video_batch(
         "skipped_state_changed_candidates": 0,
     }
     normalized_default_category = category_catalog.normalize_code(default_category_code)
-    # 1) 영상별 자막 확보 → 교정 → raw/교정본 저장. (alias, video, asset_id, corrected) 수집.
-    batch: dict[str, dict[str, Any]] = {}
+
+    # --- Phase 0(순차): 캐시 재사용 판정. DB/RustFS 읽기라 공유 세션이 필요하다 ---
+    prep: dict[str, _VideoPrepState] = {}
+    fresh_video_ids: list[str] = []
     for index, video in enumerate(videos, start=1):
         alias = f"video_{index:03d}"
         label = video.title or video.video_id
-        transcript_source = "cached"
-        raw_asset_id: int | None = None
-        corrected: str | None = None
-        # raw grounding 대조 원천(원본 자막). 교정본이 아니라 저장된 원본 자막을 쓴다
-        # (T-165). 모든 경로에서 확보하며, 확보 못 하면 grounding은 UNVERIFIED로 fail-close.
-        grounding_raw_text: str | None = None
+        state = _VideoPrepState(video=video, alias=alias, label=label)
 
         # POI부터: 저장된 교정본을 그대로 재사용해 fetch·교정을 건너뛴다.
         if start_stage == "poi":
@@ -238,10 +287,10 @@ async def process_video_batch(
                 raw_asset = await media_store.load_latest_asset(
                     session, video_id=video.video_id, asset_type=AssetType.TRANSCRIPT
                 )
-                raw_asset_id = raw_asset.id if raw_asset is not None else None
+                state.raw_asset_id = raw_asset.id if raw_asset is not None else None
                 # grounding 대조용 원본 자막을 함께 로드한다(교정본만 재사용하는 경로에서도
                 # raw 대조가 가능하도록 — 없으면 None으로 두어 fail-close).
-                grounding_raw_text = await media_store.load_latest_asset_text(
+                state.grounding_raw_text = await media_store.load_latest_asset_text(
                     session,
                     store,
                     video_id=video.video_id,
@@ -261,10 +310,10 @@ async def process_video_batch(
                         item_ref=video.video_id,
                         detail="저장된 교정본 재사용(fetch·교정 생략)",
                     )
+                state.corrected = corrected
 
-        # 교정본이 없으면(또는 transcript/correction 단계면) 원본 자막을 확보해 교정한다.
-        if corrected is None:
-            raw_text: str | None = None
+        # 교정본이 없으면(또는 transcript/correction 단계면) 원본 자막이 필요하다.
+        if state.corrected is None:
             # 교정부터/POI부터(교정본 없음): 저장된 원본 자막을 재사용해 fetch를 건너뛴다.
             if start_stage in ("correction", "poi"):
                 raw_asset = await media_store.load_latest_asset(
@@ -274,8 +323,8 @@ async def process_video_batch(
                     raw_bytes = await asyncio.to_thread(
                         store.get_object, raw_asset.bucket, raw_asset.object_key
                     )
-                    raw_text = raw_bytes.decode("utf-8")
-                    raw_asset_id = raw_asset.id
+                    state.raw_text = raw_bytes.decode("utf-8")
+                    state.raw_asset_id = raw_asset.id
                     # 캐시 원본 자막 재사용도 성공 확보이므로 요약 캐시를 갱신한다(MINOR-3).
                     _apply_cached_transcript_cache(video, raw_asset)
                     await _report(
@@ -288,24 +337,114 @@ async def process_video_batch(
                         item_ref=video.video_id,
                         detail="저장된 원본 자막 재사용(fetch 생략)",
                     )
-            # 자막부터 또는 저장된 자막이 없으면: YouTube에서 새로 가져온다.
+            # 자막부터 또는 저장된 자막이 없으면: fresh fetch가 필요하다(Phase 1a/1b 대상).
+            if state.raw_text is None:
+                fresh_video_ids.append(video.video_id)
+
+        prep[video.video_id] = state
+
+    # --- Phase 1a(병렬, 순수 네트워크 I/O): caption fetch. 공유 세션에 절대 접근하지
+    #     않는다(session race 방지) — 결과는 dict[video_id -> ...]에 담아 Phase 1c에서
+    #     반드시 원본 videos 순서로 소비한다(gather 완료 순서 비의존) ---
+    caption_outcomes: dict[str, tuple[TranscriptOutcome, int]] = {}
+    caption_exceptions: dict[str, tuple[BaseException, int | None]] = {}
+    if fresh_video_ids:
+        if caption_fetcher is not None:
+            sem = asyncio.Semaphore(get_settings().CRAWL_MAX_CONCURRENT_VIDEOS)
+
+            async def _fetch_one_caption(
+                video_id: str,
+            ) -> tuple[str, TranscriptOutcome | None, BaseException | None, int]:
+                async with sem:
+                    started = time.monotonic()
+                    try:
+                        raw = await caption_fetcher(video_id)
+                    except Exception as exc:  # 개별 영상 실패를 격리해 elapsed까지 보존
+                        return video_id, None, exc, int((time.monotonic() - started) * 1000)
+                    elapsed_ms = int((time.monotonic() - started) * 1000)
+                    return video_id, TranscriptOutcome.coerce(raw), None, elapsed_ms
+
+            gathered = await asyncio.gather(
+                *(_fetch_one_caption(vid) for vid in fresh_video_ids),
+                return_exceptions=True,
+            )
+            for vid, item in zip(fresh_video_ids, gathered, strict=True):
+                if isinstance(item, BaseException):
+                    # _fetch_one_caption이 못 삼킨 치명적 예외(취소 등)만 여기로 온다.
+                    caption_exceptions[vid] = (item, None)
+                    continue
+                _vid, outcome, exc, elapsed_ms = item
+                if exc is not None:
+                    caption_exceptions[_vid] = (exc, elapsed_ms)
+                elif outcome is not None:
+                    caption_outcomes[_vid] = (outcome, elapsed_ms)
+        else:
+            # force_whisper 모드: 캡션 단계 자체를 건너뛰고 whisper 전용으로 처리한다.
+            for vid in fresh_video_ids:
+                caption_outcomes[vid] = (TranscriptOutcome(result=None, attempts=[]), 0)
+
+    # --- Phase 1b(순차, 동시성 1): 캡션이 최종 실패한 영상만 whisper 폴백. CPU 집약
+    #     이라 gather 금지 — 반드시 한 번에 한 영상씩 실행한다(WHISPER_MAX_CONCURRENT) ---
+    whisper_outcomes: dict[str, tuple[TranscriptAttempt, int]] = {}
+    if whisper_fetcher is not None:
+        for vid in fresh_video_ids:
+            if vid in caption_exceptions:
+                continue  # 예외 영상은 Phase 1c에서 그대로 전파한다(whisper 불필요).
+            outcome, _elapsed = caption_outcomes.get(
+                vid, (TranscriptOutcome(result=None, attempts=[]), 0)
+            )
+            if outcome.result is not None:
+                continue  # 캡션 성공 — whisper 불필요.
+            started = time.monotonic()
+            try:
+                attempt = await whisper_fetcher(vid)
+            except Exception as exc:
+                # 기본 fetcher(`transcribe_whisper_async`)는 예외를 이미 삼키지만, 임의
+                # 주입 fetcher가 raise해도 배치 전체를 죽이지 않도록 caption Phase 1a와
+                # 동일하게 per-video 격리한다. 구 순차 체인 `_run_provider`와 동일 분류로
+                # whisper 실패 attempt를 만들어 merge→description-fallback으로 잇는다.
+                attempt = whisper_failure_attempt(exc, started=started)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            whisper_outcomes[vid] = (attempt, elapsed_ms)
+
+    # 1) 영상별 자막 확보 → 교정 → raw/교정본 저장(Phase 1c, 순차·공유 세션).
+    #    (alias, video, asset_id, corrected) 수집.
+    batch: dict[str, dict[str, Any]] = {}
+    for index, video in enumerate(videos, start=1):
+        alias = f"video_{index:03d}"
+        state = prep[video.video_id]
+        label = state.label
+        transcript_source = state.transcript_source
+        raw_asset_id = state.raw_asset_id
+        corrected = state.corrected
+        grounding_raw_text = state.grounding_raw_text
+        raw_text = state.raw_text
+
+        # 교정본이 없으면(또는 transcript/correction 단계면) 원본 자막을 확보해 교정한다.
+        if corrected is None:
+            # 자막부터 또는 저장된 자막이 없으면: Phase 1a/1b prefetch 결과를 소비한다.
             if raw_text is None:
-                fetch_started = time.monotonic()
-                try:
-                    fetched = await transcript_fetcher(video.video_id)
-                except Exception as exc:
+                if video.video_id in caption_exceptions:
+                    exc, exc_elapsed_ms = caption_exceptions[video.video_id]
                     await _report_stage(
                         stage_reporter,
                         "transcript_fetch",
                         outcome="failure",
-                        started=fetch_started,
+                        elapsed_ms=exc_elapsed_ms,
                         item_ref=video.video_id,
                         detail=str(exc),
                     )
-                    raise
+                    raise exc
+                caption_outcome, elapsed_ms = caption_outcomes[video.video_id]
+                whisper_entry = whisper_outcomes.get(video.video_id)
+                if whisper_entry is not None:
+                    whisper_attempt, whisper_elapsed_ms = whisper_entry
+                    outcome = merge_outcomes(caption_outcome, whisper_attempt)
+                    elapsed_ms += whisper_elapsed_ms
+                else:
+                    outcome = caption_outcome
                 # provider별 시도(성공 전 실패 포함)를 durable하게 기록하고, 영상의
                 # 요약 캐시(성공 provider·최종 실패 코드)를 attempts에서 파생 갱신한다.
-                outcome = TranscriptOutcome.coerce(fetched)
                 if attempt_recorder is not None and outcome.attempts:
                     await attempt_recorder(video.video_id, outcome.attempts)
                 video.transcript_source = outcome.success_provider
@@ -322,7 +461,7 @@ async def process_video_batch(
                         stage_reporter,
                         "transcript_fetch",
                         outcome="failure",
-                        started=fetch_started,
+                        elapsed_ms=elapsed_ms,
                         item_ref=video.video_id,
                         detail=detail,
                     )
@@ -366,7 +505,7 @@ async def process_video_batch(
                     stage_reporter,
                     "transcript_fetch",
                     outcome="success",
-                    started=fetch_started,
+                    elapsed_ms=elapsed_ms,
                     # G7 조인 위해 stage 이벤트 provider도 canonical로 통일한다
                     # (transcript_attempts·요약 캐시와 동일 어휘 — 리뷰 MINOR-2).
                     provider=outcome.success_provider,

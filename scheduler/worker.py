@@ -387,16 +387,20 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
     start_stage = str(payload.get("start_stage") or "transcript")
     reprocess = bool(payload.get("start_stage"))
     default_category_code = _default_category_code_from_payload(payload)
-    # 수동 whisper 재전사(T-169): payload에 force_whisper가 실리면 자막 fetcher를
-    # whisper 강제 버전으로 바꿔 auto 게이트를 우회한다. 없으면 기본 경로 그대로.
+    # 수동 whisper 재전사(T-169): payload에 force_whisper가 실리면 캡션 단계를 건너뛰고
+    # whisper 강제 fetcher만 주입해 auto 게이트를 우회한다(T-172부터 캡션/whisper 분리
+    # 주입 — force 경로는 caption_fetcher=None + whisper_fetcher만 담당). 없으면 기본
+    # 경로대로 캡션 병렬 fetch + whisper auto 폴백을 그대로 쓴다.
     force_whisper = bool(payload.get("force_whisper"))
     whisper_model = payload.get("whisper_model")
     if force_whisper:
-        transcript_fetcher = postprocess_service._whisper_forced_transcript_fetcher(
+        caption_fetcher = None
+        whisper_fetcher = postprocess_service._whisper_forced_transcript_fetcher(
             str(whisper_model) if whisper_model else None
         )
     else:
-        transcript_fetcher = postprocess_service._default_transcript_fetcher
+        caption_fetcher = postprocess_service._default_caption_fetcher
+        whisper_fetcher = postprocess_service._default_whisper_fetcher
 
     async def report_status(message: str, progress: float | None = None) -> None:
         await crawl_run_service.append_status_log(
@@ -437,7 +441,8 @@ async def poi_batch_handler(session: AsyncSession, run: CrawlRun) -> dict[str, A
             store,
             videos=videos,
             runtime=runtime,
-            transcript_fetcher=transcript_fetcher,
+            caption_fetcher=caption_fetcher,
+            whisper_fetcher=whisper_fetcher,
             status_reporter=report_status,
             # durable 단계 이벤트(T-162): 영상 단위 자막 fetch/교정, 배치 단위 LLM 추출/
             # 지오코딩의 provider·elapsed_ms·outcome을 crawl_run_stage_events에 남긴다.

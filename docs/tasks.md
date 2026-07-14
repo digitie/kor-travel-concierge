@@ -16,7 +16,6 @@
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)
 
-- [ ] **T-172**: [게이트] 자막 fetch 병렬화 — caption network I/O만 semaphore(상한 3), whisper 별도 concurrency 1, session 비공유, 전후 실패율·429 비교. 게이트: T-162 stage events에서 자막 fetch가 배치 시간 30%+. (PR-24 개정판, G8) — **착수 계획서·게이트 SQL: `docs/plan-t172-transcript-parallelization.md`**(2렌즈 검증 partial, 착수 전 정정 3건 반영)
 - [ ] **T-173**: [게이트] 프레임 OCR/vision 2실험 — corroboration(기존 후보 타임스탬프 프레임)과 source recovery(자막 없는 영상 균등 프레임) 분리, gateway 경유·asset BFF·썸네일. 게이트: 원료 전무 영상 비율 20%+ ∧ T-158 승인 ∧ T-161 완료, Gemini URL 분석 승격안과 의무 비교. (PR-19 개정판, G9) — **착수 계획서·게이트 SQL: `docs/plan-t173-vision-ocr.md`**(2렌즈 검증 accurate; VISUAL은 grounding_status=not_applicable·DeepSeek 엔진 가드 필수)
 - [ ] **T-193**: [조건부] 자막 품질 개선 — 사용자 결정(2026-07-13)으로 신설: prod whisper 자동 전사는
   의도된 현행 유지이며, 품질 개선 필요성이 확인되면 착수한다. whisper 모델 크기 상향 평가(base→small
@@ -29,6 +28,29 @@
 
 ## 완료
 
+- [x] **T-172**: 자막 fetch 병렬화 (PR-24, G8) — poi_batch 1단계 **캡션 fetch만** 병렬화하고 교정·POI
+  배치 추출·지오코딩(2~4단계)은 순차 불변으로 두었다(LLM은 T-161 게이트웨이 리미터 소관). 게이트(§1
+  GO/NO-GO·§6 G8)는 배포 후 관측 지표라 코드에서 제외 — 사용자 지시로 미측정 상태에서 구현만 진행.
+  `transcript.py`에 캡션 전용 진입점 신설(`CAPTION_PROVIDERS`·`caption_provider_chain()`·
+  `fetch_captions_async`·`transcribe_whisper_async`·`merge_outcomes`) — merge는 sequence 재부여·whisper
+  성공 승격으로 `success_provider`/`failure_code` 파생과 `transcript_attempts` 형태를 순차 체인과 동일하게
+  유지(무회귀 핵심). `process_video_batch`는 단일 `transcript_fetcher`를 `caption_fetcher|None`
+  (None=force_whisper) + `whisper_fetcher|None`로 교체(shim 없음)하고, 1단계를 Phase 0(순차 캐시 판정)→
+  1a(병렬 캡션 `Semaphore(CRAWL_MAX_CONCURRENT_VIDEOS)`+`gather`)→1b(whisper 순차 `WHISPER_MAX_CONCURRENT=1`)→
+  1c(순차·공유 세션)로 3분할했다. 결과를 `dict[video_id]`에 담아 **원본 videos 순서**로 소비(alias가 gather
+  완료 순서에 안 묶임), task별 monotonic elapsed로 `transcript_fetch` stage 이벤트 실측 보고. 병렬 구간은
+  공유 `session`·`store_and_record`·ORM·`record_stage_event`·`attempt_recorder`를 절대 호출하지 않는다(전부
+  1c). `worker.poi_batch_handler`는 caption+whisper 2개 주입(force_whisper=caption None). `config.py`는
+  `CRAWL_MAX_CONCURRENT_VIDEOS` 소생·기본 4→3, 사문화 `HTTP_MAX_CONCURRENT_REQUESTS` 삭제(참조 0회),
+  `.env.example`·`docs/dev-environment.md` 동기화. `_whisper_forced_transcript_fetcher`는 **이름 유지**·whisper
+  단건 semantics로 변경. **2렌즈 리뷰 Finding-1(whisper 예외 격리)**: `transcribe_whisper_async`가 예외를
+  삼켜 분류된 whisper 실패 attempt로 변환(공용 `whisper_failure_attempt` 헬퍼, 구 `_run_provider` 동일 매핑,
+  절대 re-raise 금지) + Phase 1b per-video 격리로 whisper 예외가 배치 전체를 죽이지 않고 description-fallback
+  으로 이어진다. 신규 `test_transcript_fetch_parallel.py` 10건(캡션 동시성 상한·whisper 동시성 1 auto+force·
+  세션 비공유·사유코드 분포 병렬==순차·출력 등가 golden·벽시계 단축·stage 영상당 1건 + caption raise 격리·
+  전파·whisper raise→description fallback) + 기존 5파일 콜사이트/배선 갱신. 검증: 격리 disposable Postgres에서
+  타깃 6파일 **55 passed**, backend 전체 **792 passed**(1 warning), 변경 `.py` 전부 Ruff clean. migration
+  없음. E2E는 자막 fetch 미경유라 무영향. (2026-07-14, PR-24 개정판)
 - [x] **T-192**: 작업 IA 정리 (/jobs 인덱스·nav 재편·홈 배너) (U10/U12/U13) — 작업 표면을 `/jobs`(목록·이력·
   액션)로 통합/축소했다. **`/jobs` 인덱스**(JobsDashboard): 상단 진행중·대기 큐(T-181 run-queue 재사용) + 하단
   이력 테이블(T-177 `listRunsPage` cursor·total 재사용) + 상태/유형/attention 필터 + 더 보기, 행 액션=상세+
