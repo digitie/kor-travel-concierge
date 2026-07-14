@@ -40,10 +40,11 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       'fallback',
     );
     await expect(page.getByRole('link', { name: /작업 상태/ })).toBeVisible();
-    // 멀티페이지 내비(결과/수집/검수) 링크를 접근성 role로 확인한다.
+    // 멀티페이지 내비(결과/수집/검수/작업) 링크를 접근성 role로 확인한다(T-192 IA 재편).
     const nav = page.getByRole('navigation');
     await expect(nav.getByRole('link', { name: '수집' })).toBeVisible();
     await expect(nav.getByRole('link', { name: '검수' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: '작업' })).toBeVisible();
 
     expectRelevantConsoleErrors(errors).toEqual([]);
   });
@@ -197,7 +198,8 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       }
     });
 
-    await loginAsAdmin(page, '/status');
+    // T-192: 작업 큐/이력은 /jobs 인덱스로 통합됐다. 헤더 작업 상태 링크도 /jobs를 가리킨다.
+    await loginAsAdmin(page, '/jobs');
 
     const statusLink = page.getByRole('link', {
       name: /작업 상태: 실행 101, 대기 17, 확인 필요 81\./,
@@ -205,9 +207,6 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     await expect(statusLink).toBeVisible();
     await expect(statusLink.getByText('118', { exact: true })).toBeVisible();
     await expect(statusLink.getByText('확인 81', { exact: true })).toBeVisible();
-    await expect(
-      page.getByText('실행 101 · 대기 17 · 확인 필요 81', { exact: true }),
-    ).toBeVisible();
     await expect(
       page.getByText('활성 작업 총 118건 중 1건 표시', { exact: true }),
     ).toBeVisible();
@@ -252,14 +251,12 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       ),
     ).toBe(true);
 
-    // attention 배지는 단순 상태 페이지가 아니라 확인할 실패 이력으로 바로 이동한다.
+    // attention 배지는 단순 상태 페이지가 아니라 확인할 실패 이력(/jobs?attention=open)으로 바로 이동한다.
     const attentionLink = page.getByRole('link', {
       name: /작업 상태: 실행 101, 대기 17, 확인 필요 81\./,
     });
     await attentionLink.click();
-    await expect(page).toHaveURL(
-      /\/status\?tab=history&attention=open$/,
-    );
+    await expect(page).toHaveURL(/\/jobs\?attention=open$/);
     await expect
       .poll(() =>
         historyRequests.some(
@@ -267,8 +264,9 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
         ),
       )
       .toBe(true);
-    const historyTab = page.getByRole('tab', { name: /확인 필요/ });
-    await expect(historyTab).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      page.getByText('아직 확인하지 않은 종료 작업만 표시합니다.'),
+    ).toBeVisible();
     await expect(
       page.getByRole('row', { name: /실패 재시작 E2E/ }),
     ).toBeVisible();
@@ -306,13 +304,13 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       }
     });
 
-    await loginAsAdmin(page, '/status');
+    await loginAsAdmin(page, '/jobs');
     const statusLink = page.getByRole('link', {
       name: /작업 상태: 실행 0, 대기 0, 확인 필요 0\. 작업 상태 오류/,
     });
     await expect(statusLink.getByText('오류', { exact: true })).toBeVisible();
     expect(historyRequestCount).toBeGreaterThanOrEqual(1);
-    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    // /jobs는 이력 테이블을 항상 노출하므로 탭 전환 없이 종료 작업 행이 보인다.
     await expect(
       page.getByRole('row', { name: /실패 재시작 E2E/ }),
     ).toBeVisible();
@@ -352,7 +350,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       }
     });
 
-    await loginAsAdmin(page, '/status');
+    await loginAsAdmin(page, '/jobs');
     await expect.poll(() => historyRequestCount).toBe(1);
 
     await page.waitForTimeout(61_500);
@@ -364,8 +362,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
     page,
   }) => {
     const errors = collectConsoleErrors(page);
-    await loginAsAdmin(page, '/status');
-    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    await loginAsAdmin(page, '/jobs');
 
     const failedRow = page.getByRole('row', { name: /실패 재시작 E2E/ });
     await expect(failedRow).toBeVisible();
@@ -434,8 +431,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       `/jobs/${firstResult.restart_of_run_id}`,
     );
 
-    await page.goto('/status');
-    await page.getByRole('tab', { name: /완료 이력/ }).click();
+    await page.goto('/jobs');
     const deferredRow = page.getByRole('row', { name: /쿼터 보류 E2E/ });
     await expect(deferredRow.getByText('쿼터 보류', { exact: true })).toBeVisible();
     const deferredDetailLink = deferredRow.getByRole('link', {
@@ -506,14 +502,14 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       hideRunningQueue = true;
       await route.fulfill({ response });
     });
-    // 결과 화면에서 facet cache를 먼저 만든 뒤 상태 화면으로 이동한다.
+    // 결과 화면에서 facet cache를 먼저 만든 뒤 작업 화면(/jobs)으로 이동한다.
     await loginAsAdmin(page, '/');
     await expect.poll(() => facetRequests.length).toBe(1);
     await page
       .getByRole('navigation')
-      .getByRole('link', { name: '상태', exact: true })
+      .getByRole('link', { name: '작업', exact: true })
       .click();
-    await expect(page).toHaveURL(/\/status$/);
+    await expect(page).toHaveURL(/\/jobs$/);
 
     const runningRow = page.getByRole('row', { name: /부산 맛집/ });
     await expect(runningRow).toBeVisible();
