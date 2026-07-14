@@ -30,13 +30,23 @@
   workaround는 이미 제거됐으므로 되살리거나 이를 300ms network debounce와 혼동하지 않는다. 선행:
   T-183. (PR-15 개정판)
 - [ ] **T-187**: [게이트] 키보드 단축키 + triage 모드 — 확장 포커스 가드(IME·modifier·repeat), 1~9 번호 배지·재정렬 방지, n/m=filtered total, 모바일 acceptance. 장소 기반 channel/playlist/keyword facet 재사용을 후보 provenance 기반 서버 facet·filter별 count로 교체해 확정 장소가 없는 source도 노출한다. 게이트: T-179~T-185 후 건당 인터랙션 측정(모호 시 본안 채택). (PR-16 개정판)
-- [ ] **T-190**: themes 보강 — `/themes` envelope는 T-177 완료. `/themes/places`·video 장소 목록의 pagination·metadata를 마감하고, `source_videos` 기본 제거는 소비자 inventory 확인 또는 opt-in 전환 기간을 거쳐 소비자용 계약 문서에 반영한다. (PR-26 개정판)
 - [ ] **T-191**: MCP 검수 도구 — `list_review_candidates` + `get_review_candidate_detail`, resolve 감사 actor·review evidence 서버 검증(자동 승인 경로 금지). 강제 Whisper 재전사·재교정의 transcript/media asset은 content hash가 같을 때만 재사용하고, 내용이 바뀌면 versioned object key와 새 asset row를 발급해 candidate evidence가 실제 추출 원문을 가리키도록 한다(기존 RustFS 객체 무기한 보존). (PR-27 개정판)
 - [ ] **T-192**: 작업 IA 정리 — `/jobs` 인덱스가 T-177의 `listRunsPage` pagination·total을 직접 소비하고 attention 필터를 결합한다. nav 재편, `/status` 축소, `JobStatusLink` 이동, 모바일 job action, 홈 행동 배너를 포함한다. 선행: T-180·T-181. (PR-28 개정판)
 ---
 
 ## 완료
 
+- [x] **T-190**: themes 공급 API 마감 (A3) — `/themes/places`·`/themes/video/{id}/places`를 `limit=None`
+  전량 반환에서 **PR-32 공통 envelope**(items/next_cursor/has_more/total/newest_id/newer_than)로 전환했다.
+  cursor·limit(기본 200·상한 500)은 T-188 `list_place_summaries_page`(sort=mention_count) 재사용. 동영상 테마
+  `sufficient` 게이트(`page.total>=5`)와 미공개 사유(빈 items+sufficient/min_required/poi_count, next_cursor/
+  has_more 숨김) 보존(ADR-35). `source_videos` 기본 제외 + `include=sources` opt-in. `docs/themes-api.md`
+  계약 문서 신설, frontend `/api-test` 갱신. 파괴적 변경(places→items·source_videos 기본 제거)이나 외부
+  소비자 0(kor-travel-map은 `/features/*`만). 2렌즈 적대적 리뷰: 확정 BLOCKER/MAJOR 0, MINOR 3 정리
+  (`include` 대소문자 무시·themes-api.md 산문 정정·video 게이트 docstring 정확화). 불변: `/themes` 목록
+  (T-177)·`list_place_summaries`/`_page`(T-188)·feature export(T-189)·sufficient 게이트 미변경(재사용만).
+  검증: 격리 DB backend ~779 passed(실패 0), theme+pagination 23 passed, frontend build 통과, migration 없음.
+  (2026-07-14, 로드맵 PR-26 개정·A3)
 - [x] **T-189**: features 계약 마감 (A5, G10) — feature export payload·목록 계약을 additive로 마감했다.
   `_build_payload` address block의 하드코딩 None을 제거해 `sigungu_code`·`legal_dong_code`를 place
   실데이터로 주입하고, `sido_code`는 컬럼이 없어 `sigungu_code[:2]`(없으면 `legal_dong_code[:2]`) 유도

@@ -26,7 +26,13 @@ import { CopyButton } from "@/components/CopyButton";
 import { HelpTip } from "@/components/HelpTip";
 import { EmptyState, Panel } from "@/components/panels";
 
-type ParamKind = "kind" | "value" | "video_id" | "cursor" | "limit";
+type ParamKind =
+  | "kind"
+  | "value"
+  | "video_id"
+  | "cursor"
+  | "limit"
+  | "include";
 
 type EndpointDef = {
   id: string;
@@ -50,19 +56,34 @@ const ENDPOINTS: EndpointDef[] = [
     id: "theme-places",
     label: "GET /themes/places — 테마 POI",
     method: "GET",
-    params: ["kind", "value"],
-    description: "유튜버/재생목록/보정 검색어 하나의 확정 POI 목록.",
-    buildPath: (p) =>
-      `/api/v1/themes/places?kind=${encodeURIComponent(p.kind ?? "channel")}&value=${encodeURIComponent(p.value ?? "")}`,
+    params: ["kind", "value", "limit", "cursor", "include"],
+    description:
+      "유튜버/재생목록/보정 검색어 하나의 확정 POI 목록. 공통 envelope(items·next_cursor)로 페이지네이션하며 source_videos는 기본 제외, include=sources일 때만 포함.",
+    buildPath: (p) => {
+      const q = new URLSearchParams();
+      q.set("kind", p.kind ?? "channel");
+      q.set("value", p.value ?? "");
+      if (p.limit) q.set("limit", p.limit);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.include && p.include !== "none") q.set("include", p.include);
+      return `/api/v1/themes/places?${q.toString()}`;
+    },
   },
   {
     id: "video-theme",
     label: "GET /themes/video/{id}/places — 동영상 테마 POI",
     method: "GET",
-    params: ["video_id"],
-    description: "특정 동영상 테마 POI. 매치/검수 완료 POI 5개 이상일 때만 공개.",
-    buildPath: (p) =>
-      `/api/v1/themes/video/${encodeURIComponent(p.video_id ?? "")}/places`,
+    params: ["video_id", "limit", "cursor", "include"],
+    description:
+      "특정 동영상 테마 POI. 매치/검수 완료 POI 5개 이상일 때만 공개(items·envelope). source_videos는 include=sources 옵트인.",
+    buildPath: (p) => {
+      const q = new URLSearchParams();
+      if (p.limit) q.set("limit", p.limit);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.include && p.include !== "none") q.set("include", p.include);
+      const qs = q.toString();
+      return `/api/v1/themes/video/${encodeURIComponent(p.video_id ?? "")}/places${qs ? `?${qs}` : ""}`;
+    },
   },
   {
     id: "features-snapshot",
@@ -100,6 +121,7 @@ const PARAM_LABELS: Record<ParamKind, string> = {
   video_id: "영상 ID",
   cursor: "cursor(선택)",
   limit: "limit(선택)",
+  include: "출처 포함(include)",
 };
 
 export function ApiTestPanel() {
@@ -183,8 +205,36 @@ export function ApiTestPanel() {
           </Field>
         ) : null}
 
+        {endpoint.params.includes("include") ? (
+          <Field>
+            <FieldLabel htmlFor="api-test-include">
+              {PARAM_LABELS.include}
+            </FieldLabel>
+            <Select
+              value={params.include ?? "none"}
+              onValueChange={(value) =>
+                setParams((prev) => ({ ...prev, include: value ?? "none" }))
+              }
+            >
+              <SelectTrigger id="api-test-include" className="w-full">
+                <SelectValue>
+                  {params.include === "sources"
+                    ? "sources (출처 포함)"
+                    : "기본 (출처 제외)"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="none">기본 (출처 제외)</SelectItem>
+                  <SelectItem value="sources">sources (출처 포함)</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+
         {endpoint.params
-          .filter((p) => p !== "kind")
+          .filter((p) => p !== "kind" && p !== "include")
           .map((paramKind) => (
             <Field key={paramKind}>
               <FieldLabel htmlFor={`api-test-${paramKind}`}>
@@ -308,11 +358,10 @@ function prettyBody(result: ApiProbeResult): string {
 
 function ResponseView({ result }: { result: ApiProbeResult }) {
   const pretty = prettyBody(result);
-  const count = Array.isArray((result.body as { places?: unknown[] })?.places)
-    ? (result.body as { places: unknown[] }).places.length
-    : Array.isArray((result.body as { items?: unknown[] })?.items)
-      ? (result.body as { items: unknown[] }).items.length
-      : null;
+  // features·themes 모두 공통 envelope의 `items` 배열을 반환한다.
+  const count = Array.isArray((result.body as { items?: unknown[] })?.items)
+    ? (result.body as { items: unknown[] }).items.length
+    : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
