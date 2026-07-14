@@ -20,32 +20,40 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(page.getByRole('link', { name: /결과/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /수집/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /검수/ }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: /작업/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /상태/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /설정/ }).first()).toBeVisible();
 
+    // T-192: 헤더 작업 상태 링크는 큐/이력 통합 인덱스(/jobs)로 이동한다.
     const statusLink = page.getByRole('link', { name: /작업 상태/ }).first();
     await expect(statusLink).toBeVisible();
     await statusLink.click();
-    await page.waitForURL('**/status');
-    await expect(page.getByRole('heading', { name: '상태', exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '작업 테이블' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /진행 중/ })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /완료 이력/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '저장소 상세' })).toBeVisible();
+    await page.waitForURL(/\/jobs(\?|$)/);
+    await expect(
+      page.getByRole('heading', { name: '작업', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '진행 중 · 대기' }),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '작업 이력' })).toBeVisible();
 
-    await page.getByRole('tab', { name: /완료 이력/ }).click();
     const detailLinks = page.getByRole('link', { name: '상세' });
     if ((await detailLinks.count()) > 0) {
       await detailLinks.first().click();
       await page.waitForURL('**/jobs/*');
       await expect(page.getByRole('heading', { name: '작업 상세', exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '뒤로' })).toBeVisible();
-      await expect(page.getByRole('heading', { name: '작업', exact: true })).toBeVisible();
       await expect(page.getByRole('heading', { name: '로그와 결과' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '영상 처리' })).toBeVisible();
       await page.goBack();
-      await page.waitForURL('**/status');
+      await page.waitForURL(/\/jobs(\?|$)/);
     }
+
+    // /status는 시스템 메트릭·저장소·감사 로그 전용으로 축소됐다.
+    await page.getByRole('link', { name: '상태', exact: true }).first().click();
+    await page.waitForURL('**/status');
+    await expect(page.getByRole('heading', { name: '상태', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '저장소 상세' })).toBeVisible();
 
     await page.getByRole('link', { name: /설정/ }).first().click();
     await page.waitForURL('**/settings');

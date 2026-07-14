@@ -1,13 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ListChecksIcon,
   PencilIcon,
-  RotateCcwIcon,
-  SquareIcon,
   Trash2Icon,
   ZapIcon,
 } from "lucide-react";
@@ -16,11 +14,9 @@ import {
   deleteSourceTarget,
   listRunQueue,
   listSourceTargets,
-  restartRun,
   RUN_QUEUE_OBSERVER_OPTIONS,
   RUN_QUEUE_QUERY_KEY,
   runSourceTargetNow,
-  stopRun,
   triggerPoiBatch,
   type CrawlRunSummary,
   type SourceTargetSummary,
@@ -28,14 +24,13 @@ import {
 import {
   categoryDisplayLabel,
   jobTypeDisplayLabel,
-  runProgressBarClass,
   runStateBadgeVariant,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
 import { formatDateTime, formatTime, intervalLabel } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
@@ -62,14 +57,9 @@ import { RecurringEditDialog } from "@/components/RecurringEditDialog";
 
 export function CollectWorkspace() {
   const queryClient = useQueryClient();
-  const router = useRouter();
-  const [detailRun, setDetailRun] = useState<CrawlRunSummary | null>(null);
   const [detailTarget, setDetailTarget] = useState<SourceTargetSummary | null>(
     null,
   );
-  // 1회성 작업 상세는 다이얼로그 대신 별도 페이지(/jobs/[id])로 이동한다.
-  const openRunDetail = (run: CrawlRunSummary) =>
-    router.push(`/jobs/${run.job_id}`);
   const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
 
   const runQueueQuery = useQuery({
@@ -87,8 +77,6 @@ export function CollectWorkspace() {
     queryClient.invalidateQueries({ queryKey: ["runs"] });
     queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
   };
-  const stopRunMutation = useMutation({ mutationFn: stopRun, onSuccess: invalidateJobs });
-  const restartRunMutation = useMutation({ mutationFn: restartRun, onSuccess: invalidateJobs });
   const poiBatchMutation = useMutation({
     mutationFn: triggerPoiBatch,
     onSuccess: invalidateJobs,
@@ -107,12 +95,14 @@ export function CollectWorkspace() {
     },
   });
 
-  const isMutating = stopRunMutation.isPending || restartRunMutation.isPending;
   const queueRuns = runQueueQuery.data?.items ?? [];
   const activeRun =
     queueRuns.find((run) => run.state.toLowerCase() === "running") ??
     queueRuns.find((run) => run.state.toLowerCase() === "pending") ??
     null;
+  const activeCount =
+    (runQueueQuery.data?.running_count ?? 0) +
+    (runQueueQuery.data?.pending_count ?? 0);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
@@ -121,13 +111,10 @@ export function CollectWorkspace() {
           <HarvestConsole />
         </div>
         <div className="flex min-h-0 flex-col lg:overflow-y-auto">
-          <ActiveRunPanel
+          <ActiveRunSummary
             run={activeRun}
+            activeCount={activeCount}
             errorMessage={runQueueQuery.error?.message ?? null}
-            onStop={(jobId) => stopRunMutation.mutate(jobId)}
-            onRestart={(jobId) => restartRunMutation.mutate(jobId)}
-            onDetail={openRunDetail}
-            isMutating={isMutating}
           />
           <div className="flex flex-col gap-1.5 border-t p-3">
             <Button
@@ -168,12 +155,8 @@ export function CollectWorkspace() {
       </div>
 
       <JobDetailDialog
-        run={detailRun}
         target={detailTarget}
-        onClose={() => {
-          setDetailRun(null);
-          setDetailTarget(null);
-        }}
+        onClose={() => setDetailTarget(null)}
       />
       <RecurringEditDialog
         target={editTarget}
@@ -185,9 +168,6 @@ export function CollectWorkspace() {
 
 // ─── labels ───────────────────────────────────────────────────────────────
 
-function runTargetType(run: CrawlRunSummary): string {
-  return run.target_type_label ?? targetTypeDisplayLabel(run.target_type);
-}
 function runTargetValue(run: CrawlRunSummary): string {
   return run.target_label ?? run.target_id ?? "-";
 }
@@ -196,35 +176,27 @@ function latestRunLog(run: CrawlRunSummary) {
   return run.status_logs.at(-1)?.message ?? null;
 }
 
-function runProgressPercent(run: CrawlRunSummary) {
-  return `${Math.round(run.progress * 100)}%`;
-}
-
 // ─── panels ───────────────────────────────────────────────────────────────
 
-function ActiveRunPanel({
+// 진행 패널 축소(T-192): 현재 작업 요약 1줄 + /jobs 링크. 상세·중지·재시작 액션은
+// /jobs 인덱스로 이동해 수집 화면은 등록만 담당한다.
+function ActiveRunSummary({
   run,
+  activeCount,
   errorMessage,
-  onStop,
-  onRestart,
-  onDetail,
-  isMutating,
 }: {
   run: CrawlRunSummary | null;
+  activeCount: number;
   errorMessage: string | null;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
-  onDetail: (run: CrawlRunSummary) => void;
-  isMutating: boolean;
 }) {
   return (
     <section
       aria-label="진행 중 작업"
-      className="flex flex-col gap-3 border-t p-3"
+      className="flex flex-col gap-2 border-t p-3"
     >
       <PanelHeader
         title="진행 중 작업"
-        count={run ? "1" : "0"}
+        count={activeCount}
         icon={<ListChecksIcon className="size-4 text-muted-foreground" />}
       />
       {errorMessage ? (
@@ -232,72 +204,36 @@ function ActiveRunPanel({
           {errorMessage}
         </p>
       ) : null}
-      {run ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>상태</TableHead>
-              <TableHead>대상</TableHead>
-              <TableHead>진행</TableHead>
-              <TableHead>최근 메시지</TableHead>
-              <TableHead className="text-right">액션</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow>
-              <TableCell>
-                <Badge variant={runStateBadgeVariant(run.state)}>
-                  {runStateLabel(run.state)}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <button
-                  type="button"
-                  className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                  onClick={() => onDetail(run)}
-                >
-                  <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                    {runTargetType(run)}
-                  </span>
-                  <span className="font-bold leading-snug">{runTargetValue(run)}</span>
-                  <span className="w-fit rounded bg-surface-subtle px-1.5 py-0.5 text-[11px] text-text-secondary">
-                    {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
-                  </span>
-                </button>
-              </TableCell>
-              <TableCell>
-                <div className="flex w-24 flex-col gap-1">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
-                    <div
-                      className={runProgressBarClass(run.state)}
-                      style={{ width: runProgressPercent(run) }}
-                    />
-                  </div>
-                  <span className="text-[12px] text-text-secondary">
-                    {runProgressPercent(run)}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <p className="line-clamp-2 max-w-[14rem] whitespace-normal text-[13px] text-text-secondary">
-                  {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
-                </p>
-              </TableCell>
-              <TableCell>
-                <RunActionButtons
-                  run={run}
-                  onStop={onStop}
-                  onRestart={onRestart}
-                  onDetail={onDetail}
-                  isMutating={isMutating}
-                />
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      ) : (
-        <EmptyState>실행 중이거나 대기 중인 작업이 없습니다.</EmptyState>
-      )}
+      <div className="flex items-center justify-between gap-2">
+        {run ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Badge variant={runStateBadgeVariant(run.state)}>
+              {runStateLabel(run.state)}
+            </Badge>
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-[13px] font-bold leading-snug">
+                {runTargetValue(run)}
+                <span className="ml-1 font-normal text-text-secondary">
+                  · {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
+                </span>
+              </span>
+              <span className="truncate text-[12px] text-text-secondary">
+                {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <span className="text-[13px] text-text-secondary">
+            실행 중이거나 대기 중인 작업이 없습니다.
+          </span>
+        )}
+        <Link
+          href="/jobs"
+          className={`${buttonVariants({ variant: "outline", size: "xs" })} shrink-0`}
+        >
+          작업 보기
+        </Link>
+      </div>
     </section>
   );
 }
@@ -521,64 +457,5 @@ function JobsPanel({
         </DialogContent>
       </Dialog>
     </section>
-  );
-}
-
-function RunActionButtons({
-  run,
-  onStop,
-  onRestart,
-  onDetail,
-  isMutating,
-}: {
-  run: CrawlRunSummary;
-  onStop: (jobId: string) => void;
-  onRestart: (jobId: string) => void;
-  onDetail: (run: CrawlRunSummary) => void;
-  isMutating: boolean;
-}) {
-  const normalized = run.state.toLowerCase();
-  const isActive = normalized === "pending" || normalized === "running";
-  const isTerminal =
-    normalized === "done" ||
-    normalized === "failed" ||
-    normalized === "cancelled" ||
-    normalized === "canceled";
-
-  return (
-    <div className="flex justify-end gap-1">
-      {isActive ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={isMutating}
-          onClick={() => onStop(run.job_id)}
-        >
-          <SquareIcon data-icon="inline-start" />
-          중지
-        </Button>
-      ) : null}
-      {isTerminal ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={isMutating}
-          onClick={() => onRestart(run.job_id)}
-        >
-          <RotateCcwIcon data-icon="inline-start" />
-          다시 시작
-        </Button>
-      ) : null}
-      <Button
-        type="button"
-        size="xs"
-        variant="outline"
-        onClick={() => onDetail(run)}
-      >
-        상세
-      </Button>
-    </div>
   );
 }
