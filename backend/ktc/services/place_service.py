@@ -21,7 +21,9 @@ from uuid import UUID, uuid4
 
 from geoalchemy2 import Geography
 from sqlalchemy import (
+    ARRAY,
     Numeric,
+    Text,
     and_,
     case,
     cast,
@@ -716,7 +718,94 @@ async def list_place_summaries(
 
     `channel_id`/`playlist_id`/`keyword`/`video_id`가 주어지면 해당 출처(유튜버/재생목록/
     검색어/영상)에서 수집된 장소만 반환한다(결과 보기 그룹화·필터, 영상별 필터).
+
+    T-188: 필터·정렬·`LIMIT`를 SQL로 밀어 넣는다. 확정 장소 전량을 로드·집계한 뒤
+    자르던 경로를 없애고, 무거운 언급 근거(`_list_mentions_by_place`)는 limit 적용 후
+    페이지 대상 장소에 대해서만 로드한다(O(전체)→O(limit)).
     """
+    where = await _place_summary_where(
+        session,
+        place_ids=place_ids,
+        channel_id=channel_id,
+        playlist_id=playlist_id,
+        keyword=keyword,
+        video_id=video_id,
+        category=category,
+        query=query,
+        district=district,
+    )
+    if where is None:
+        return []
+    places = await _ordered_place_query(
+        session,
+        sort=sort,
+        where_conditions=where,
+        snapshot_id=None,
+        keyset_keys=None,
+        limit=limit,
+    )
+    return await _build_summaries_for_places(session, places)
+
+
+def _place_search_text_expr():
+    """`_place_search_text`와 동일한 SQL 표현식(빈 문자열/NULL 필드는 제외)."""
+    return func.concat_ws(
+        " ",
+        func.nullif(TravelPlace.name, ""),
+        func.nullif(TravelPlace.official_address, ""),
+        func.nullif(TravelPlace.road_address, ""),
+        func.nullif(TravelPlace.description, ""),
+        func.nullif(TravelPlace.gemini_enriched_description, ""),
+    )
+
+
+def _place_district_expr():
+    """`sigungu_code or _district_label_from_address(road||official)`의 SQL 표현식.
+
+    주소 라벨은 공백 기준 앞 두 토큰의 결합이며, 토큰이 2개 미만이면 NULL이다
+    (`str.split()[:2]`와 동치). ``regexp_match``는 매치가 없으면 NULL을 돌려주고 그
+    NULL은 문자열 결합을 통해 전파되므로 별도 CASE가 필요 없다.
+    """
+    addr = func.coalesce(
+        func.nullif(TravelPlace.road_address, ""),
+        func.nullif(TravelPlace.official_address, ""),
+    )
+    tokens = func.regexp_match(addr, r"^\s*(\S+)\s+(\S+)", type_=ARRAY(Text))
+    label = tokens[1].concat(" ").concat(tokens[2])
+    return func.coalesce(func.nullif(TravelPlace.sigungu_code, ""), label)
+
+
+def _result_filter_conditions(
+    *, category: str | None, query: str | None, district: str | None
+) -> list[Any]:
+    """`_place_matches_result_filters`와 동일한 category/query/district 필터의 SQL 조건."""
+    conditions: list[Any] = []
+    if category:
+        conditions.append(func.coalesce(TravelPlace.category, "") == category)
+    if district:
+        conditions.append(_place_district_expr() == district)
+    if query:
+        needle = query.strip().lower()
+        if needle:
+            conditions.append(
+                func.strpos(func.lower(_place_search_text_expr()), needle) > 0
+            )
+    return conditions
+
+
+async def _place_summary_where(
+    session: AsyncSession,
+    *,
+    place_ids: list[int] | None,
+    channel_id: str | None,
+    playlist_id: str | None,
+    keyword: str | None,
+    video_id: str | None,
+    category: str | None,
+    query: str | None,
+    district: str | None,
+) -> list[Any] | None:
+    """장소 요약 조회의 공통 WHERE 조건을 만든다. 결과가 반드시 비면 ``None``."""
     matched = await _filtered_place_ids(
         session,
         channel_id=channel_id,
@@ -732,34 +821,141 @@ async def list_place_summaries(
     elif matched is not None:
         effective_ids = list(matched)
 
-    stmt = select(TravelPlace)
+    where: list[Any] = []
     if effective_ids is not None:
         if not effective_ids:
-            return []
-        stmt = stmt.where(TravelPlace.place_id.in_(effective_ids))
-    result = await session.execute(stmt)
-    places = list(result.scalars().all())
-    places = [
-        place
-        for place in places
-        if _place_matches_result_filters(
-            place,
-            category=category,
-            query=query,
-            district=district,
+            return None
+        where.append(TravelPlace.place_id.in_(sorted(set(effective_ids))))
+    where.extend(
+        _result_filter_conditions(
+            category=category, query=query, district=district
         )
-    ]
+    )
+    return where
+
+
+def _mention_aggregate_subquery():
+    """장소별 고유 영상 수·유튜버 수 집계 서브쿼리.
+
+    ``_list_mentions_by_place``와 동일하게 실재 영상(inner join)만 센다. mention_count는
+    고유 `video_id` 수, source_channel_count는 NULL이 아닌 고유 `channel_id` 수다.
+    """
+    return (
+        select(
+            VideoPlaceMapping.place_id.label("place_id"),
+            func.count(distinct(VideoPlaceMapping.video_id)).label("mention_count"),
+            func.count(distinct(YoutubeVideo.channel_id)).label("channel_count"),
+        )
+        .join(YoutubeVideo, VideoPlaceMapping.video_id == YoutubeVideo.video_id)
+        .group_by(VideoPlaceMapping.place_id)
+        .subquery()
+    )
+
+
+async def _ordered_place_query(
+    session: AsyncSession,
+    *,
+    sort: str,
+    where_conditions: list[Any],
+    snapshot_id: int | None,
+    keyset_keys: tuple[Any, ...] | None,
+    limit: int | None,
+) -> list[TravelPlace]:
+    """필터·정렬·(watermark·keyset·)LIMIT를 SQL로 적용한 확정 장소 행을 반환한다.
+
+    정렬 키 문자열 비교는 Python 코드포인트 순서(`COLLATE "C"` == UTF-8 바이트 순서)로
+    맞춰 재작성 전 Python 정렬과 동일한 순서를 보장한다. cursor keyset은 재작성 전
+    음수 튜플 계약(`_place_summary_cursor_key`)의 실제 값을 복원해 자연 방향 비교로 만든다.
+    """
+    conditions = list(where_conditions)
+    if snapshot_id is not None:
+        conditions.append(TravelPlace.place_id <= snapshot_id)
+
+    name_c = TravelPlace.name.collate("C")
+    stmt = select(TravelPlace)
+
+    if sort == "mention_count":
+        agg = _mention_aggregate_subquery()
+        mc = func.coalesce(agg.c.mention_count, 0)
+        cc = func.coalesce(agg.c.channel_count, 0)
+        stmt = stmt.outerjoin(agg, agg.c.place_id == TravelPlace.place_id)
+        order_by = [mc.desc(), cc.desc(), name_c.asc(), TravelPlace.place_id.desc()]
+        if keyset_keys is not None:
+            a_mc, a_cc, a_name, a_pid = (
+                -keyset_keys[0],
+                -keyset_keys[1],
+                keyset_keys[2],
+                -keyset_keys[3],
+            )
+            conditions.append(
+                or_(
+                    mc < a_mc,
+                    and_(mc == a_mc, cc < a_cc),
+                    and_(mc == a_mc, cc == a_cc, name_c > a_name),
+                    and_(
+                        mc == a_mc,
+                        cc == a_cc,
+                        name_c == a_name,
+                        TravelPlace.place_id < a_pid,
+                    ),
+                )
+            )
+    elif sort == "name":
+        order_by = [name_c.asc(), TravelPlace.place_id.desc()]
+        if keyset_keys is not None:
+            a_name, a_pid = keyset_keys[0], -keyset_keys[1]
+            conditions.append(
+                or_(
+                    name_c > a_name,
+                    and_(name_c == a_name, TravelPlace.place_id < a_pid),
+                )
+            )
+    elif sort == "category":
+        cat_c = func.coalesce(
+            func.nullif(TravelPlace.category, ""), "미분류"
+        ).collate("C")
+        order_by = [cat_c.asc(), name_c.asc(), TravelPlace.place_id.desc()]
+        if keyset_keys is not None:
+            a_cat, a_name, a_pid = keyset_keys[0], keyset_keys[1], -keyset_keys[2]
+            conditions.append(
+                or_(
+                    cat_c > a_cat,
+                    and_(cat_c == a_cat, name_c > a_name),
+                    and_(
+                        cat_c == a_cat,
+                        name_c == a_name,
+                        TravelPlace.place_id < a_pid,
+                    ),
+                )
+            )
+    else:  # latest
+        order_by = [TravelPlace.place_id.desc()]
+        if keyset_keys is not None:
+            conditions.append(TravelPlace.place_id < -keyset_keys[0])
+
+    stmt = stmt.where(*conditions).order_by(*order_by)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def _build_summaries_for_places(
+    session: AsyncSession, places: list[TravelPlace]
+) -> list[PlaceSummary]:
+    """정렬·LIMIT를 마친 장소들에 대해서만 언급 근거를 로드해 요약을 만든다.
+
+    mention_count/source_channel_count는 재작성 전과 동일하게 로드된 언급에서 계산한다
+    (매핑 행 수가 아니라 고유 영상/유튜버 수).
+    """
     if not places:
         return []
-
     mentions_by_place = await _list_mentions_by_place(
         session, place_ids=[place.place_id for place in places]
     )
-    summaries = [
+    return [
         PlaceSummary(
             place=place,
-            # 한 영상에서 여러 번 언급돼도 1회로 센다(동영상 distinct). 반복 언급으로
-            # 횟수가 부풀지 않도록 매핑 행 수가 아니라 고유 영상 수로 계산한다.
             mention_count=len(
                 {
                     mention.video_id
@@ -777,10 +973,6 @@ async def list_place_summaries(
         )
         for place in places
     ]
-    summaries.sort(key=_place_summary_sort_key(sort))
-    if limit is not None:
-        return summaries[:limit]
-    return summaries
 
 
 def _place_summary_cursor_key(summary: PlaceSummary, sort: str) -> tuple[Any, ...]:
@@ -848,9 +1040,9 @@ async def list_place_summaries_page(
 ) -> ListPage[PlaceSummary]:
     """장소 집계 목록에 공통 envelope와 안정적인 복합 cursor를 적용한다.
 
-    T-188의 SQL pushdown 전까지 기존 집계·filter semantics를 그대로 재사용한다. cursor
-    scope에 버전을 넣어 T-188에서 PostgreSQL collation으로 바꿀 때 구 cursor를 명시적으로
-    거부할 수 있게 한다.
+    T-188: watermark·total·newer_than·keyset 페이지를 모두 SQL로 계산한다. 정렬 문자열
+    비교를 PostgreSQL `COLLATE "C"`(코드포인트 순서)로 옮겼으므로 cursor scope를
+    ``destinations-sql-v2``로 올려 구 Python-정렬 cursor를 명시적으로 거부한다.
     """
     await ensure_repeatable_read(session)
     normalized_query = (query or "").strip().lower() or None
@@ -864,7 +1056,7 @@ async def list_place_summaries_page(
         "district": district or None,
     }
     fingerprint = filter_fingerprint(
-        scope="destinations-python-v1", sort=sort, filters=filters
+        scope="destinations-sql-v2", sort=sort, filters=filters
     )
     key_count = {
         "latest": 1,
@@ -882,10 +1074,9 @@ async def list_place_summaries_page(
     ):
         raise ValueError("유효하지 않은 장소 목록 cursor입니다")
 
-    summaries = await list_place_summaries(
+    where = await _place_summary_where(
         session,
-        sort=sort,
-        limit=None,
+        place_ids=None,
         channel_id=filters["channel_id"],
         playlist_id=filters["playlist_id"],
         keyword=filters["keyword"],
@@ -894,32 +1085,54 @@ async def list_place_summaries_page(
         query=filters["query"],
         district=filters["district"],
     )
-    current_newest_id = max(
-        (summary.place.place_id for summary in summaries), default=0
-    )
-    snapshot_id = decoded.snapshot_id if decoded is not None else current_newest_id
-    snapshot_items = [
-        summary for summary in summaries if summary.place.place_id <= snapshot_id
-    ]
-    total = len(snapshot_items)
-    newer_than = (
-        sum(
-            1
-            for summary in summaries
-            if summary.place.place_id > newer_than_id
+    if where is None:
+        # 출처 필터가 아무 장소도 매치하지 못하면 반드시 빈 결과다. cursor가 있으면 그
+        # snapshot watermark를 보존해 재작성 전과 동일한 envelope를 돌려준다.
+        empty_snapshot = decoded.snapshot_id if decoded is not None else 0
+        return ListPage(
+            items=[],
+            next_cursor=None,
+            has_more=False,
+            total=0,
+            newest_id=empty_snapshot or None,
+            newer_than=0,
         )
-        if newer_than_id is not None
-        else 0
-    )
+
     if decoded is not None:
-        snapshot_items = [
-            summary
-            for summary in snapshot_items
-            if _place_summary_cursor_key(summary, sort) > decoded.keys
-        ]
-    page_rows = snapshot_items[: limit + 1]
-    has_more = len(page_rows) > limit
-    items = page_rows[:limit]
+        snapshot_id = decoded.snapshot_id
+    else:
+        snapshot_id = (
+            await session.execute(
+                select(func.max(TravelPlace.place_id)).where(*where)
+            )
+        ).scalar() or 0
+    total = (
+        await session.execute(
+            select(func.count())
+            .select_from(TravelPlace)
+            .where(*where, TravelPlace.place_id <= snapshot_id)
+        )
+    ).scalar() or 0
+    newer_than = 0
+    if newer_than_id is not None:
+        newer_than = (
+            await session.execute(
+                select(func.count())
+                .select_from(TravelPlace)
+                .where(*where, TravelPlace.place_id > newer_than_id)
+            )
+        ).scalar() or 0
+
+    page_places = await _ordered_place_query(
+        session,
+        sort=sort,
+        where_conditions=where,
+        snapshot_id=snapshot_id,
+        keyset_keys=decoded.keys if decoded is not None else None,
+        limit=limit + 1,
+    )
+    has_more = len(page_places) > limit
+    items = await _build_summaries_for_places(session, page_places[:limit])
     next_cursor = (
         encode_cursor(
             fingerprint=fingerprint,
@@ -1125,6 +1338,11 @@ def _place_matches_result_filters(
     query: str | None,
     district: str | None,
 ) -> bool:
+    """category/query/district 필터의 Python 판정 정본.
+
+    T-188에서 이 판정은 `_result_filter_conditions`로 SQL에 밀어 넣었지만, 함수는
+    골든 비교 테스트가 SQL 결과를 대조하는 참조 오라클로 남겨 둔다(단일 의미 출처).
+    """
     if category and (place.category or "") != category:
         return False
     if district:
