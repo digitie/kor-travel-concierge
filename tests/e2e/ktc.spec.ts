@@ -577,7 +577,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       .toBe(true);
 
     // Part B: 검수 화면에서 후보를 확정 저장
-    await page.goto('/review');
+    await page.goto('/review?mode=table');
     await page.getByRole('row', { name: /성산 일출봉 카페/ }).click();
     await page.getByLabel('확정 장소명').fill('성산 일출봉 카페');
     await page.getByLabel('위도').fill('33.4581');
@@ -682,7 +682,7 @@ test.describe('Kor Travel Concierge E2E 검증', () => {
       await route.continue();
     });
 
-    await loginAsAdmin(page, '/review');
+    await loginAsAdmin(page, '/review?mode=table');
     await page.getByRole('row', { name: /성산 일출봉 카페/ }).click();
     const googleHit = page.getByRole('button', { name: /Google 정책 장소/ });
     await expect(googleHit).toBeDisabled();
@@ -951,6 +951,54 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     'live 모드에서는 browser API mock 기반 스펙을 건너뛴다.',
   );
 
+  test('T-187 처리 모드(triage)가 기본이고 목록/관리 전환·단축키가 동작한다', async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+    await installReviewQueueMock(page);
+    await loginAsAdmin(page, '/review');
+
+    // 기본은 처리 모드: 진행 레일이 보이고 큰 후보 테이블 헤더는 없다.
+    await expect(page.getByRole('heading', { name: '검수 큐' })).toBeVisible();
+    await expect(page.getByText('처리 진행')).toBeVisible();
+    const modeGroup = page.getByRole('group', { name: '검수 화면 모드' });
+    await expect(
+      modeGroup.getByRole('button', { name: '처리 모드' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByText('검수 대기 후보')).toHaveCount(0);
+
+    // 중앙 후보 카드는 두 모드 공통 — 첫 후보가 자동 선택돼 검색어가 채워진다.
+    const searchInput = page.getByLabel('외부 장소 검색어');
+    await expect(searchInput).toHaveValue('자동 후보 1');
+
+    // 단축키 `/`로 검색 입력 포커스.
+    await page.getByText('처리 진행').click();
+    await page.keyboard.press('/');
+    await expect(searchInput).toBeFocused();
+
+    // 단축키 `?`로 도움말 오버레이(입력 포커스에서는 무시되므로 먼저 blur).
+    await searchInput.blur();
+    await page.getByText('처리 진행').click();
+    await page.keyboard.press('?');
+    await expect(
+      page.getByRole('heading', { name: '검수 단축키' }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // 목록/관리 모드 전환: URL에 mode=table, 테이블 후보 행과 헤더가 나타난다.
+    await modeGroup.getByRole('button', { name: '목록/관리' }).click();
+    await expect(page).toHaveURL(/mode=table/);
+    await expect(page.getByText('검수 대기 후보')).toBeVisible();
+    await expect(
+      page.getByRole('row', { name: /자동 후보 1(?!\d)/ }),
+    ).toBeVisible();
+
+    // 다시 처리 모드로 돌아오면 URL에서 mode=table가 사라진다.
+    await modeGroup.getByRole('button', { name: '처리 모드' }).click();
+    await expect(page).not.toHaveURL(/mode=table/);
+    await expect(page.getByText('처리 진행')).toBeVisible();
+  });
+
   test('저장·제외·page 끝 개별 삭제 뒤 다음 page 후보를 자동 선택한다', async ({
     page,
   }) => {
@@ -958,7 +1006,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
-    await loginAsAdmin(page, '/review');
+    await loginAsAdmin(page, '/review?mode=table');
 
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
@@ -1096,7 +1144,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
     const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
     await firstRow.getByRole('checkbox').click();
@@ -1159,7 +1207,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
     const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
     await firstRow.getByRole('checkbox').click();
@@ -1229,7 +1277,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
     const secondRow = page.getByRole('row', { name: /자동 후보 2(?!\d)/ });
     const firstCheckbox = firstRow.getByRole('checkbox');
@@ -1308,7 +1356,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?sort=oldest&group=channel&group_value=review-source-channel-foreign&q=%ED%95%B4%EC%99%B8+%EC%A7%80%EC%97%AD+%ED%9E%8C%ED%8A%B8&grounding=verified_raw',
+      '/review?sort=oldest&group=channel&group_value=review-source-channel-foreign&q=%ED%95%B4%EC%99%B8+%EC%A7%80%EC%97%AD+%ED%9E%8C%ED%8A%B8&grounding=verified_raw&mode=table',
     );
     await page
       .getByRole('button', {
@@ -1430,7 +1478,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       holdFirstBulkExecuteResponse: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=newest');
+    await loginAsAdminWithQuery(page, '/review?sort=newest&mode=table');
     const targetName = '해외 일괄 후보 1';
     const targetRow = page.getByRole('row', {
       name: new RegExp(`${targetName}(?!\\d)`),
@@ -1484,7 +1532,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       holdBulkSettlementList: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     for (const candidateId of [1, 2, 3]) {
       await page
         .getByRole('row', {
@@ -1552,7 +1600,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       holdFirstBulkExecuteResponse: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const firstRow = page.getByRole('row', { name: /자동 후보 1(?!\d)/ });
     await firstRow.scrollIntoViewIfNeeded();
     await expect(firstRow).toBeVisible();
@@ -1624,7 +1672,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
         secondBulkExecuteFailure: scenario.failure,
       });
 
-      await loginAsAdminWithQuery(page, '/review?sort=oldest');
+      await loginAsAdminWithQuery(page, '/review?sort=oldest&mode=table');
       await page
         .getByRole('button', {
           name: '현재 필터의 해외 판정 후보 모두 제외',
@@ -1659,7 +1707,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       standardDomesticCandidateCount: 501,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '후보 더 불러오기' }).click();
     await expect(page.getByText('501/501개 불러옴').first()).toBeVisible();
     await page
@@ -1697,7 +1745,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       bulkForeignCandidateCount: 0,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&mode=table');
     await page
       .getByRole('button', {
         name: '현재 필터의 해외 판정 후보 모두 제외',
@@ -1724,7 +1772,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     const errors = collectConsoleErrors(page);
     const requests = await installReviewQueueMock(page);
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await expect(
       page.getByPlaceholder('장소명으로 검색 (Google·Kakao·Naver·Gemini)'),
     ).toHaveValue('자동 후보 1');
@@ -1755,7 +1803,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstResolveCommitsThenFails: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
 
     await expect(
@@ -1784,7 +1832,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstResolveReturnsMismatchedSuccess: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
 
     await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
@@ -1803,7 +1851,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstResolveForeignCommitThenFails: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
 
     await expect.poll(() => requests.resolveCandidateIds).toEqual([1]);
@@ -1832,7 +1880,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstReopenFailsWithoutProcessing: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
     await page.getByRole('button', { name: '되돌리기', exact: true }).click();
     await expect(
@@ -1866,7 +1914,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstReopenStale: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
     await page.getByRole('button', { name: '되돌리기', exact: true }).click();
     await expect.poll(() => requests.reopenCandidateIds).toEqual([1]);
@@ -1887,7 +1935,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       videoExcludedCandidateId: 2,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '제외', exact: true }).click();
     await page
       .getByRole('button', { name: '자동 후보 2 후보 삭제', exact: true })
@@ -2008,7 +2056,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       includeDetailSiblings: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '자동 후보 1 상세' }).click();
     await expect(page).toHaveURL(/\/review\/1$/);
 
@@ -2055,7 +2103,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       initialHiddenOnly: true,
     });
 
-    await loginAsAdmin(page, '/review');
+    await loginAsAdmin(page, '/review?mode=table');
 
     const domesticFilter = page.getByRole('combobox', {
       name: '국내 여부 필터',
@@ -2097,7 +2145,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstResolveExternallyProcessed: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
     );
@@ -2137,7 +2185,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       holdFirstResolveExternallyProcessed: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
     );
@@ -2188,7 +2236,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?candidate=301&sort=oldest&is_domestic=true',
+      '/review?candidate=301&sort=oldest&is_domestic=true&mode=table',
     );
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
@@ -2236,7 +2284,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?candidate=301&sort=oldest&is_domestic=true',
+      '/review?candidate=301&sort=oldest&is_domestic=true&mode=table',
     );
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
@@ -2280,7 +2328,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?candidate=301&sort=oldest&is_domestic=true',
+      '/review?candidate=301&sort=oldest&is_domestic=true&mode=table',
     );
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
@@ -2332,7 +2380,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       firstDeleteAlreadySoftDeleted: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     const searchInput = page.getByPlaceholder(
       '장소명으로 검색 (Google·Kakao·Naver·Gemini)',
     );
@@ -2380,7 +2428,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
       deletePreflightFindsExternalDelete: true,
     });
 
-    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true');
+    await loginAsAdminWithQuery(page, '/review?sort=oldest&is_domestic=true&mode=table');
     await page.getByRole('button', { name: '자동 후보 1 상세' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('button', { name: '후보 삭제' }).click();
@@ -2511,7 +2559,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?sort=oldest&q=%ED%91%9C%EC%8B%9D&is_domestic=true&grounding=verified_raw',
+      '/review?sort=oldest&q=%ED%91%9C%EC%8B%9D&is_domestic=true&grounding=verified_raw&mode=table',
     );
 
     await expect(
@@ -2738,7 +2786,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
 
     await loginAsAdminWithQuery(
       page,
-      '/review?candidate=999&sort=oldest&group=channel&group_value=channel-filter&q=%ED%95%84%ED%84%B0%EA%B2%80%EC%83%89&grounding=unverified',
+      '/review?candidate=999&sort=oldest&group=channel&group_value=channel-filter&q=%ED%95%84%ED%84%B0%EA%B2%80%EC%83%89&grounding=unverified&mode=table',
     );
 
     await expect(
