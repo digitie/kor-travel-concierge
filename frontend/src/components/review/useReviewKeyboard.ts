@@ -136,7 +136,23 @@ export function runReviewShortcut(
   }
 }
 
-function isInteractiveElement(element: Element | null): boolean {
+const INTERACTIVE_ROLES = new Set([
+  "textbox",
+  "combobox",
+  "searchbox",
+  "listbox",
+  "option",
+  "menu",
+  "menuitem",
+  "dialog",
+  "alertdialog",
+]);
+
+const INTERACTIVE_CONTAINER_SELECTOR =
+  "[role='dialog'],[role='alertdialog'],[role='menu'],[role='listbox'],dialog";
+
+/** 포커스 요소가 편집/상호작용/오버레이 컨테이너인지 판정한다(순수, 단위 테스트 대상). */
+export function isInteractiveElement(element: Element | null): boolean {
   if (!element) return false;
   const tag = element.tagName?.toLowerCase();
   if (
@@ -150,20 +166,12 @@ function isInteractiveElement(element: Element | null): boolean {
   }
   if ((element as HTMLElement).isContentEditable) return true;
   const role = element.getAttribute?.("role");
-  if (
-    role === "textbox" ||
-    role === "combobox" ||
-    role === "searchbox" ||
-    role === "menu" ||
-    role === "menuitem" ||
-    role === "dialog"
-  ) {
-    return true;
-  }
-  // dialog/menu 컨테이너 안쪽에 포커스가 있어도(닫기 버튼 등) 단축키를 막는다.
+  if (role && INTERACTIVE_ROLES.has(role)) return true;
+  // dialog/alertdialog/menu/listbox 컨테이너 안쪽에 포커스가 있어도(닫기 버튼·
+  // combobox 옵션 등) 단축키를 막는다.
   if (
     typeof element.closest === "function" &&
-    element.closest("[role='dialog'],[role='menu'],dialog")
+    element.closest(INTERACTIVE_CONTAINER_SELECTOR)
   ) {
     return true;
   }

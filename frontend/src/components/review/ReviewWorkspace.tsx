@@ -48,7 +48,6 @@ import {
   type ReviewGroundingStatus,
   type ReviewBulkScope,
   type ReviewQueueReason,
-  type ReviewSourceFacets,
   type ReviewSourceKind,
   type UnmatchedCandidate,
 } from "@/lib/api";
@@ -146,6 +145,11 @@ import {
   candidateReviewStateLabel,
 } from "@/components/review/CandidateTable";
 import { ConfirmForm } from "@/components/review/ConfirmForm";
+import {
+  groupOptions,
+  groupValueLabel,
+} from "@/components/review/reviewGroupFacets";
+import { selectableSearchHits } from "@/components/review/searchHitNumber";
 import { SearchResultsPanel } from "@/components/review/SearchResultsPanel";
 import { useCandidateSearch } from "@/components/review/useCandidateSearch";
 import {
@@ -1950,17 +1954,13 @@ export function ReviewWorkspace() {
 
   const activeSelectedHit =
     selectedHit?.candidateId === selected?.id ? selectedHit : null;
+  // 선택 가능 hit(저장 허용 + 좌표 존재)만 렌더 순서대로 모은 단일 정본. 키보드 1–9,
+  // 행 번호 배지, 지도 번호가 모두 이 배열의 같은 index+1을 쓴다(T-187 정합).
+  const selectableHits = useMemo(() => selectableSearchHits(allHits), [allHits]);
   const mapHitEntries = useMemo(
     () =>
-      allHits
-        .filter(
-          (hit) =>
-            isPlaceHitStorageAllowed(hit) &&
-            hit.latitude != null &&
-            hit.longitude != null,
-        )
-        .map((hit, index) => ({ placeId: index + 1, hit })),
-    [allHits],
+      selectableHits.map((hit, index) => ({ placeId: index + 1, hit })),
+    [selectableHits],
   );
   const mapPlaces = useMemo<DestinationSummary[]>(() => {
     if (!externalResolutionEnabled) return [];
@@ -2848,7 +2848,7 @@ export function ReviewWorkspace() {
     onNextCandidate: () => pickCandidateOffset(1),
     onPrevCandidate: () => pickCandidateOffset(-1),
     onSelectHit: (ordinal) => {
-      const hit = allHits[ordinal - 1];
+      const hit = selectableHits[ordinal - 1];
       if (hit) selectHit(hit);
     },
     onSave: () => {
@@ -3840,7 +3840,7 @@ export function ReviewWorkspace() {
                 result={result}
                 loading={searchQuery.isFetching}
                 selectableHitCount={allHits.length}
-                orderedHits={allHits}
+                orderedHits={selectableHits}
                 selectedHit={activeSelectedHit?.hit ?? null}
                 opinionRequested={opinionRequested}
                 opinion={gemini}
@@ -4384,33 +4384,3 @@ function groupDimLabel(dim: DestinationGroupDim) {
   return "전체";
 }
 
-function groupOptions(
-  dim: DestinationGroupDim,
-  facets: ReviewSourceFacets | undefined,
-): { value: string; label: string; count: number }[] {
-  if (!facets) return [];
-  // T-187: 후보 provenance facet은 세 차원 모두 {value,label,candidate_count} 통일형.
-  const items =
-    dim === "channel"
-      ? facets.channels
-      : dim === "playlist"
-        ? facets.playlists
-        : dim === "keyword"
-          ? facets.keywords
-          : [];
-  return items.map((item) => ({
-    value: item.value,
-    label: item.label,
-    count: item.candidate_count,
-  }));
-}
-
-function groupValueLabel(
-  dim: DestinationGroupDim,
-  value: string | null,
-  facets: ReviewSourceFacets | undefined,
-) {
-  if (!value) return "";
-  const option = groupOptions(dim, facets).find((opt) => opt.value === value);
-  return option ? `${option.label} (${option.count})` : value;
-}

@@ -1,12 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isInteractiveElement,
   resolveReviewShortcut,
   runReviewShortcut,
   shouldIgnoreReviewShortcut,
   type ReviewKeyboardHandlers,
   type ReviewShortcutGuardContext,
 } from "./useReviewKeyboard";
+
+function fakeElement({
+  tag = "div",
+  role = null,
+  contentEditable = false,
+  insideContainer = false,
+}: {
+  tag?: string;
+  role?: string | null;
+  contentEditable?: boolean;
+  insideContainer?: boolean;
+} = {}): Element {
+  return {
+    tagName: tag.toUpperCase(),
+    isContentEditable: contentEditable,
+    getAttribute: (name: string) => (name === "role" ? role : null),
+    closest: () => (insideContainer ? ({} as Element) : null),
+  } as unknown as Element;
+}
 
 function guard(
   overrides: Partial<ReviewShortcutGuardContext> = {},
@@ -47,6 +67,47 @@ describe("shouldIgnoreReviewShortcut", () => {
   it("shift 조합은 허용한다(? 등 shift 문자 입력)", () => {
     // shiftKey는 가드 컨텍스트에 없다 — 즉 shift는 무시 사유가 아니다.
     expect(shouldIgnoreReviewShortcut(guard())).toBe(false);
+  });
+});
+
+describe("isInteractiveElement", () => {
+  it("일반 비상호작용 요소는 false다", () => {
+    expect(isInteractiveElement(null)).toBe(false);
+    expect(isInteractiveElement(fakeElement({ tag: "div" }))).toBe(false);
+    expect(isInteractiveElement(fakeElement({ tag: "span" }))).toBe(false);
+  });
+
+  it.each(["input", "textarea", "select", "button", "a"])(
+    "%s 태그는 true다",
+    (tag) => {
+      expect(isInteractiveElement(fakeElement({ tag }))).toBe(true);
+    },
+  );
+
+  it("contenteditable은 true다", () => {
+    expect(
+      isInteractiveElement(fakeElement({ contentEditable: true })),
+    ).toBe(true);
+  });
+
+  it.each([
+    "textbox",
+    "combobox",
+    "searchbox",
+    "listbox",
+    "option",
+    "menu",
+    "menuitem",
+    "dialog",
+    "alertdialog",
+  ])("role=%s는 true다(combobox 옵션·? alertdialog 오발화 방지)", (role) => {
+    expect(isInteractiveElement(fakeElement({ role }))).toBe(true);
+  });
+
+  it("dialog/menu/listbox 컨테이너 내부(closest 매칭) 포커스는 true다", () => {
+    expect(
+      isInteractiveElement(fakeElement({ tag: "div", insideContainer: true })),
+    ).toBe(true);
   });
 });
 
