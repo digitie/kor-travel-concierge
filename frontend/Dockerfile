@@ -1,5 +1,5 @@
 # Kor Travel Concierge 프론트엔드 이미지 (초안)
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 

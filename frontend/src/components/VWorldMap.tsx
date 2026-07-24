@@ -1,6 +1,7 @@
 "use client";
 
-import maplibregl, { type Map as MapLibreMap, type Marker } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import type { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { useEffect, useMemo, useRef } from "react";
 
 import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
