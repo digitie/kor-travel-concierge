@@ -27,6 +27,10 @@
 
 ## 완료
 
+- [x] **의존성 업데이트**: maplibre-gl 5→6(MAJOR, ESM-only 마이그레이션), react/react-dom
+  19.2.8 패치, python-vworld-api pin 최신화(PR #213). 로드맵 T-번호 없이 사용자 지시로 착수한
+  유지보수 작업. 2렌즈 적대적 리뷰에서 확정 결함 1건(Dockerfile Node 20 vs maplibre-gl 6 전이
+  의존성 `engines.node >=22` 불일치)을 발견·수정. 상세는 `docs/journal.md` 2026-07-24 항목 참조.
 - [x] **T-173**: 프레임 비전/OCR 실험 경로 — **게이트 off로 착수**(사용자 지시, `docs/plan-t173-vision-ocr.md`
   §1 게이트 판정·G9 post-deploy 지표는 측정 작업이라 제외). Agent A(백엔드)만 구현 — Agent B(media asset
   서빙 BFF/프록시·검수 썸네일 UI, 계획서 §2.2)는 이번 범위 밖(플래그 off라 서빙 라우트가 있어도 프레임이

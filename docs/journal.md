@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-07-24: 의존성 업데이트 — maplibre-gl 6, react 19.2.8 패치, python-vworld-api pin 갱신 (PR #213)
+
+- **범위**: 사용자 지시로 `maplibre-gl`/`python-vworld-api`/`react`를 최신으로 업데이트. 로드맵
+  작업이 아닌 유지보수성 의존성 업데이트라 별도 T-번호 없이 `codex/deps-maplibre-react-vworld`
+  브랜치로 진행했다.
+- **변경**: `maplibre-gl` 5.0.0→6.0.0(MAJOR — v6가 ESM-only 배포로 전환되며 default export가
+  사라져 `VWorldMap.tsx`의 `import maplibregl, {...}`를 `import * as maplibregl from "maplibre-gl"`
+  namespace import로 마이그레이션). `react`/`react-dom` 19.2.7→19.2.8 패치. `python-vworld-api`
+  git-archive pin을 최신 main 커밋(a1fea84)으로 갱신 — upstream diff 확인 결과 코드 변경 없음
+  (Codex agent/skill 문서만 추가).
+- **2렌즈 적대적 리뷰(find→verify, 11 agent)에서 확정 결함 1건 발견·수정**: maplibre-gl 6가
+  전이 의존성 `@mapbox/jsonlint-lines-primitives`를 2.0.2→2.0.3로 끌어올렸는데 신버전이
+  `engines.node >=22`를 요구했다. 기존 `frontend/Dockerfile`은 `node:20-slim`, `package.json`
+  `engines.node`는 `>=20.9.0`로 남아 있어 정합성이 깨졌음을 확인 — 둘 다 Node 22로 올려 해소했다.
+- **검증**: frontend lint/type-check/vitest(330/330)/`next build --webpack` 통과, `npm audit`
+  신규 취약점 0건(기존 9건과 동일 — next/shadcn 전이 의존성 무관 부채). backend는 새 vworld pin을
+  격리 venv에 설치해 `AsyncVworldClient`/`VworldError`/`VworldNoDataError` import와 메서드
+  표면이 그대로임을 확인. 공식 Playwright E2E는 세션 중 발생한 개발 머신 디스크 위기(C: 0바이트,
+  F: 98% 사용 — 무관한 다른 프로젝트 worktree 수백 개 누적, WSL vhdx 462GB)로 인해 생략하고,
+  대신 실제 production build(`next start`)를 로컬 기동해 실 로그인 플로우로 인증한 뒤
+  `#vworld-map-container`에 `<canvas>` 1개가 정상 렌더되고 확대/축소·나침반 컨트롤이 동작하며
+  maplibre 관련 콘솔 에러가 0건임을 스크린샷으로 확인했다.
+- **디스크 위기 대응**: WSL2 Docker 미사용 이미지·볼륨·빌드 캐시, apt/journal 캐시를 정리(약
+  7GB 회수)했다. `wsl --manage --set-sparse`는 데이터 손상 경고가 있는 실험 기능이라 보류했고,
+  `diskpart compact vdisk`는 관리자 권한이 없어 실행하지 못했다 — 사용자가 직접 관리자 권한으로
+  수행해야 한다. F: 드라이브 대부분은 수십 개 프로젝트의 실제 작업 worktree(orphan/backup 표시
+  다수)였고, 캐시가 아니라 판단 근거 없이 삭제할 수 없어 손대지 않았다.
+- **prod 배포**: PR #213 머지 후 n150 prod에 배포(backend+frontend 모두 재빌드 — UI 소스
+  변경 포함).
+
 ## 2026-07-14: T-173 — 프레임 비전/OCR 실험 경로 (PR-19, 게이트 off)
 
 - **범위**: `docs/plan-t173-vision-ocr.md`(부록 B 반영본) 기준 Agent A(백엔드) 전용 구현. 미디어
