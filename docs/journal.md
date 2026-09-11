@@ -48,7 +48,16 @@
 - **검증**: backend pytest 319건 통과(신규/보강 테스트 다수 포함: youtube_client
   청크 분할, gemini/deepseek_client 재시도 확대·상세 추출·마스킹·설정오류 즉시실패,
   llm_client 메시지 보존), ruff clean(기존 파일의 무관한 pre-existing 경고 4건
-  제외). n150 배포는 다음 기록 참조.
+  제외).
+- **배포**: PR #230 머지 후 n150에 rsync로 backend 소스를 반영하고
+  `kor-travel-concierge-api`/`scheduler`/`mcp`(단일 `Dockerfile.python` 공유
+  이미지) 3종을 재빌드·재기동했다. 재빌드 첫 시도 2회는 `nohup ... & disown`으로
+  detach했음에도 원격 SSH 세션 종료와 함께 빌드 프로세스가 로그 진행 없이 소리
+  없이 사라졌다(원인 미확정 — OOM/dmesg 근거는 없었다); `setsid nohup ... </dev/null`
+  으로 완전히 분리한 세 번째 시도에서 정상 완료했다. 재기동 후 `/app/backend`
+  내 신규 코드(`deepseek-flash`, `channels_list` 청크 분할 등) 반영과 `/health`
+  200, 세 컨테이너 정상 기동 로그(에러 없음)를 확인했다. harvest 반복 실패
+  target의 실제 재확인은 다음 스케줄 주기 이후 가능하다.
 
 ---
 
