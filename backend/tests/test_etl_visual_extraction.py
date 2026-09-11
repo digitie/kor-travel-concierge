@@ -308,7 +308,7 @@ async def test_run_visual_extraction_noop_for_deepseek_engine(session, monkeypat
     summary = await visual_extraction.run_visual_extraction(
         session,
         InMemoryMediaStore(),
-        runtime=LlmRuntime(model="deepseek-v4-flash"),
+        runtime=LlmRuntime(model="deepseek-flash"),
     )
     assert summary == {
         "skipped": "engine_not_gemini",
