@@ -30,6 +30,13 @@
   (`kor_travel_concierge_pytest_verify`, 검증 후 DROP)를 만들어 세 파일 48건을
   전부 통과 확인했다(다른 무관 파일들의 기존 실패는 이 일회성 검증 환경 자체의
   결함으로 보이며 범위 밖).
+- **배포**: PR #232 머지 후 rsync로 backend/docs/.env.example을 n150에 반영하고
+  `kor-travel-concierge-api`/`scheduler`/`mcp`를 재빌드·재기동했다(이번엔
+  `setsid nohup ... </dev/null` 형태로 첫 시도부터 정상 완료, 캐시 적중으로
+  1분 내). 재기동 후 prod `system_settings.gemini_engine_version` 값을
+  `deepseek-v4-flash` → `deepseek-flash`로 UPDATE했다(before/after 조회로
+  실제 전환 확인). `/health` 200, 세 컨테이너 정상 기동 로그, 컨테이너 내
+  `config.py`에 `deepseek-v4-flash`가 더 이상 유효 옵션으로 없음을 확인했다.
 
 ## 2026-09-11: job 실패 진단 어려움 원인 3건 수정 + DeepSeek-V4.1-Flash 대응
 
