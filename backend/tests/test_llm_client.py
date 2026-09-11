@@ -229,7 +229,7 @@ async def test_generate_returns_result_with_deepseek_usage(monkeypatch, fake_acq
 async def test_complete_json_wraps_provider_error(monkeypatch, fake_acquire):
     def boom(**kwargs):
         raise deepseek_client.DeepSeekRequestError(
-            "fail", status_code=503, model="deepseek-v4-flash"
+            "fail detail from deepseek client", status_code=503, model="deepseek-v4-flash"
         )
 
     monkeypatch.setattr(deepseek_client, "post_chat_completion_payload", boom)
@@ -237,12 +237,15 @@ async def test_complete_json_wraps_provider_error(monkeypatch, fake_acquire):
     with pytest.raises(llm_client.LlmRequestError) as exc:
         await llm_client.complete_json(runtime, "BODY")
     assert exc.value.status_code == 503
+    # DeepSeekRequestError의 원본 detail(재시도/원인 예외 정보)이 재구성 중 사라지지
+    # 않고 LlmRequestError 메시지에 그대로 남아야 last_error에서 원인을 알 수 있다.
+    assert "fail detail from deepseek client" in str(exc.value)
 
 
 async def test_complete_json_wraps_gemini_error(monkeypatch, fake_acquire):
     def boom(**kwargs):
         raise gemini_client.GeminiRequestError(
-            "fail", status_code=429, model="gemini-2.0-flash"
+            "fail detail from gemini client", status_code=429, model="gemini-2.0-flash"
         )
 
     monkeypatch.setattr(gemini_client, "post_generate_content", boom)
@@ -250,6 +253,7 @@ async def test_complete_json_wraps_gemini_error(monkeypatch, fake_acquire):
     with pytest.raises(llm_client.LlmRequestError) as exc:
         await llm_client.complete_json(runtime, "BODY")
     assert exc.value.status_code == 429
+    assert "fail detail from gemini client" in str(exc.value)
 
 
 async def test_quota_rejection_propagates_and_skips_http_call(monkeypatch):

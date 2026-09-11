@@ -25,6 +25,16 @@
 
 ## 완료
 
+- [x] **job 실패 진단 어려움 원인 3건 수정 + DeepSeek-V4.1-Flash 대응**: n150 prod
+  `crawl_runs` 실측으로 harvest 반복 실패(YouTube `channels.list`/`playlists.list`
+  id 50개 상한 미분할, 결정적·영구 실패)와 진단 불가능한 last_error(provider 오류
+  상세가 `llm_client.py` 재구성 과정에서 소실, `ChunkedEncodingError`가 좁은 재시도
+  catch를 건너뛰어 상세 없이 전파) 원인을 확인하고 모두 수정했다. 적대적 리뷰(fork)로
+  API 키 마스킹 누락과 429 판정 문자열 오탐 가능성을 추가로 발견·반영했다. DeepSeek
+  신규 공식 식별자 `deepseek-flash`(DeepSeek-V4.1-Flash)를 옵션에 추가(legacy
+  `deepseek-v4-flash`는 prod 호환을 위해 유지). 상세는 `docs/journal.md` 2026-09-11
+  항목 참조.
+
 - [x] **VWorld 지도를 공용 vworld-map-web 라이브러리로 교체**: 형제 모노레포
   `maplibre-vworld-react`의 `vworld-map-web`(pinvi가 이미 소비 중)을 vendor tarball로
   도입해 `VWorldMap.tsx`의 명령형 maplibre-gl 구현을 선언형 API로 교체했다. 적대적 리뷰

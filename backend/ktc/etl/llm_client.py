@@ -461,8 +461,11 @@ async def generate(
             usage=None,
             estimated_tokens=estimated_tokens,
         )
+        # exc(DeepSeekRequestError) 메시지에 이미 status/재시도 소진 여부/원인 예외 detail이
+        # 담겨 있다 — 여기서 status/model만으로 재구성하면 그 detail이 사라져 last_error가
+        # "status=None"처럼 진단 불가능해진다(원인 파악 어려움 이슈). 원본 메시지를 그대로 싣는다.
         raise LlmRequestError(
-            f"DeepSeek 호출 실패(status={exc.status_code}, model={runtime.model})",
+            str(exc),
             status_code=exc.status_code,
             model=runtime.model,
         ) from exc
@@ -475,8 +478,9 @@ async def generate(
             usage=None,
             estimated_tokens=estimated_tokens,
         )
+        # DeepSeek 분기와 동일하게 exc(GeminiRequestError)의 원본 detail을 보존한다.
         raise LlmRequestError(
-            f"Gemini 호출 실패(status={exc.status_code}, model={runtime.model})",
+            str(exc),
             status_code=exc.status_code,
             model=runtime.model,
         ) from exc

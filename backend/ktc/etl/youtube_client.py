@@ -178,12 +178,24 @@ class YouTubeClient:
         return {"items": items}
 
     async def channels_list(self, channel_ids: str | list[str]) -> dict[str, Any]:
-        """채널 snippet/statistics/contentDetails 조회 (쿼터 1)."""
-        ids = ",".join(channel_ids) if isinstance(channel_ids, list) else channel_ids
-        return await self._get(
-            "channels",
-            {"part": "snippet,statistics,contentDetails", "id": ids},
-        )
+        """채널 snippet/statistics/contentDetails 조회 (쿼터 1개씩, 최대 50개/요청으로 분할).
+
+        YouTube `channels.list`는 `id`에 최대 50개까지만 허용하고 초과분은 항상 400을
+        반환한다(재시도 무의미). 호출부가 중복 제거한 채널 ID를 통째로 넘겨도 안전하도록
+        `videos_list`와 동일하게 50개 단위로 나눠 호출하고 결과를 합친다.
+        """
+        ids = channel_ids.split(",") if isinstance(channel_ids, str) else list(channel_ids)
+        ids = [cid for cid in ids if cid]
+        items: list[dict[str, Any]] = []
+        for chunk in _chunks(ids, 50):
+            data = await self._get(
+                "channels",
+                {"part": "snippet,statistics,contentDetails", "id": ",".join(chunk)},
+            )
+            chunk_items = data.get("items", [])
+            if isinstance(chunk_items, list):
+                items.extend(item for item in chunk_items if isinstance(item, dict))
+        return {"items": items}
 
     async def channels_list_by_handle(self, handle: str) -> dict[str, Any]:
         """`@handle`로 채널을 조회한다 (channels.list forHandle, 쿼터 1)."""
@@ -214,12 +226,22 @@ class YouTubeClient:
         )
 
     async def playlists_list(self, playlist_ids: str | list[str]) -> dict[str, Any]:
-        """재생목록 snippet/contentDetails 조회 (쿼터 1)."""
-        ids = ",".join(playlist_ids) if isinstance(playlist_ids, list) else playlist_ids
-        return await self._get(
-            "playlists",
-            {"part": "snippet,contentDetails", "id": ids},
-        )
+        """재생목록 snippet/contentDetails 조회 (쿼터 1개씩, 최대 50개/요청으로 분할).
+
+        `channels_list`와 동일한 이유(`playlists.list`도 `id` 최대 50개)로 분할한다.
+        """
+        ids = playlist_ids.split(",") if isinstance(playlist_ids, str) else list(playlist_ids)
+        ids = [pid for pid in ids if pid]
+        items: list[dict[str, Any]] = []
+        for chunk in _chunks(ids, 50):
+            data = await self._get(
+                "playlists",
+                {"part": "snippet,contentDetails", "id": ",".join(chunk)},
+            )
+            chunk_items = data.get("items", [])
+            if isinstance(chunk_items, list):
+                items.extend(item for item in chunk_items if isinstance(item, dict))
+        return {"items": items}
 
     async def playlist_items_list(
         self, playlist_id: str, *, max_results: int = 25, page_token: str | None = None
