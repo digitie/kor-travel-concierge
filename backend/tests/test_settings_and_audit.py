@@ -53,6 +53,35 @@ async def test_set_many_commits_allowed_settings_together(session):
     assert merged2["gemini_engine_version"] == "gemini-2.0-flash"
 
 
+async def test_deepseek_flash_is_current_default_and_v4_flash_retired(session):
+    """deepseek-flash(V4.1-Flash)가 옵션에 있고 선택 가능해야 하며, 구 식별자
+    deepseek-v4-flash(V4.0-Flash)는 지원을 완전히 내려 더 이상 유효하지 않아야 한다."""
+    from ktc.core.config import DEEPSEEK_ENGINE_OPTIONS
+
+    assert DEEPSEEK_ENGINE_OPTIONS[0] == "deepseek-flash"
+    assert "deepseek-v4-flash" not in DEEPSEEK_ENGINE_OPTIONS
+
+    await settings_service.set_setting(session, "gemini_engine_version", "deepseek-flash")
+    assert await settings_service.get_setting(session, "gemini_engine_version") == "deepseek-flash"
+
+    with pytest.raises(ValueError, match="지원하지 않는 AI 엔진"):
+        await settings_service.set_setting(session, "gemini_engine_version", "deepseek-v4-flash")
+
+
+async def test_get_all_falls_back_to_gemini_default_for_stale_deepseek_v4_flash_row(session):
+    """마이그레이션을 거치지 않고 deepseek-v4-flash 값이 남아 있는(예: 배포 전 상태를
+    흉내낸) 기존 행은 조용히 Gemini 기본값으로 폴백한다 — provider가 말없이 바뀌는
+    이 안전망 동작 자체를 명시적으로 고정해 둔다(실제 배포에서는 DB 값을 직접
+    deepseek-flash로 마이그레이션해 이 폴백이 발동하지 않도록 한다)."""
+    from ktc.models import SystemSetting
+
+    session.add(SystemSetting(key="gemini_engine_version", value="deepseek-v4-flash"))
+    await session.commit()
+
+    merged = await settings_service.get_all(session)
+    assert merged["gemini_engine_version"] == settings_service.GEMINI_ENGINE_VERSION_DEFAULT
+
+
 async def test_get_secret_db_override_and_env_fallback(session, monkeypatch):
     fake = types.SimpleNamespace(YOUTUBE_API_KEY="env-youtube")
     monkeypatch.setattr(settings_service, "get_settings", lambda: fake)

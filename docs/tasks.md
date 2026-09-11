@@ -25,6 +25,13 @@
 
 ## 완료
 
+- [x] **DeepSeek-V4.0-Flash(`deepseek-v4-flash`) 지원 제거, V4.1-Flash 단일 기본화**:
+  legacy alias `deepseek-v4-flash`를 `DEEPSEEK_ENGINE_OPTIONS`에서 제거하고
+  `deepseek-flash`(V4.1-Flash)만 flash 옵션으로 남겼다. prod가 실제로 구 값을
+  쓰고 있어, 옵션 제거만으로는 `settings_service.get_all()`이 조용히 Gemini
+  기본값으로 폴백하는 문제를 막기 위해 prod DB의 저장값을 `deepseek-flash`로
+  함께 마이그레이션했다. n150 실제 Postgres에 disposable DB를 만들어 관련
+  테스트 48건을 통과 확인했다. 상세는 `docs/journal.md` 2026-09-11 항목 참조.
 - [x] **job 실패 진단 어려움 원인 3건 수정 + DeepSeek-V4.1-Flash 대응**: n150 prod
   `crawl_runs` 실측으로 harvest 반복 실패(YouTube `channels.list`/`playlists.list`
   id 50개 상한 미분할, 결정적·영구 실패)와 진단 불가능한 last_error(provider 오류

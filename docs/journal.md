@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-09-11: DeepSeek-V4.0-Flash(`deepseek-v4-flash`) 지원 완전 제거, V4.1-Flash를 단일 기본으로
+
+- **배경**: 직전 커밋(PR #230)에서 DeepSeek-V4.1-Flash 신규 식별자 `deepseek-flash`를
+  추가하면서, prod가 이미 쓰고 있던 구 식별자 `deepseek-v4-flash`(DeepSeek이
+  V4.1-Flash로 자동 라우팅하는 legacy alias)는 호환을 위해 옵션에 남겨뒀다.
+  사용자가 "deepseek 4.0 지원 삭제, 4.1을 기본으로" 요청해 그 legacy alias를
+  완전히 제거하고 4.1을 유일한 flash 옵션으로 정리했다.
+- **변경**: `config.DEEPSEEK_ENGINE_OPTIONS`에서 `"deepseek-v4-flash"`를 제거했다
+  (`("deepseek-flash", "deepseek-v4-pro")`만 남음, `deepseek-v4-pro`는 별개
+  모델 라인이라 영향 없음). `.env.example`의 안내 주석도 함께 갱신했다.
+- **prod 무음 provider 전환 방지**: 옵션에서 값을 빼기만 하면
+  `settings_service.get_all()`이 유효하지 않은 `gemini_engine_version` 값을
+  조용히 Gemini 기본값(`gemini-2.5-flash`)으로 폴백한다 — prod의 실제 저장값이
+  `deepseek-v4-flash`였으므로, 배포 직전 n150 `system_settings` DB 행을
+  `deepseek-flash`로 직접 UPDATE해 이 폴백이 발동하지 않고 DeepSeek Flash를
+  계속(정확히는 이미 실제로 라우팅되던 V4.1 모델을 이제 올바른 이름으로) 쓰도록
+  마이그레이션했다.
+- **테스트**: `deepseek-flash`가 여전히 유효하고 `deepseek-v4-flash`는 거부되는지,
+  그리고 마이그레이션 없이 구 값이 남아 있으면 실제로 Gemini 기본값 폴백이
+  발동하는지(안전망 동작 자체)를 `test_settings_and_audit.py`에 추가했다.
+  기존 `test_llm_client.py`/`test_etl_visual_extraction.py`의 예시 모델 문자열도
+  `deepseek-flash`로 갱신했다. 로컬은 PostGIS 미구성으로 DB 픽스처 테스트가
+  스킵되는 환경이라, n150의 실제 Postgres/PostGIS 인스턴스에 별도 disposable DB
+  (`kor_travel_concierge_pytest_verify`, 검증 후 DROP)를 만들어 세 파일 48건을
+  전부 통과 확인했다(다른 무관 파일들의 기존 실패는 이 일회성 검증 환경 자체의
+  결함으로 보이며 범위 밖).
+
 ## 2026-09-11: job 실패 진단 어려움 원인 3건 수정 + DeepSeek-V4.1-Flash 대응
 
 - **배경**: "job 에러 발생 시 어떤 에러 때문인지 파악이 어렵다. 에러 빈도가 높고 정상

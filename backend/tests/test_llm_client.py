@@ -62,7 +62,7 @@ def test_compose_prompt_prepends_preprompt():
 
 
 def test_runtime_is_deepseek():
-    assert llm_client.LlmRuntime(model="deepseek-v4-flash").is_deepseek is True
+    assert llm_client.LlmRuntime(model="deepseek-flash").is_deepseek is True
     assert llm_client.LlmRuntime(model="deepseek-v4-pro").is_deepseek is True
     assert llm_client.LlmRuntime(model="gemini-2.0-flash").is_deepseek is False
 
@@ -88,12 +88,12 @@ async def test_complete_json_dispatches_to_deepseek(monkeypatch, fake_acquire):
 
     monkeypatch.setattr(deepseek_client, "post_chat_completion_payload", fake_chat)
     runtime = llm_client.LlmRuntime(
-        model="deepseek-v4-flash", deepseek_api_key="ds-key", preprompt="PRE"
+        model="deepseek-flash", deepseek_api_key="ds-key", preprompt="PRE"
     )
     out = await llm_client.complete_json(runtime, "BODY", response_schema={"type": "object"})
 
     assert out == '{"summary": "x", "places": []}'
-    assert captured["model"] == "deepseek-v4-flash"
+    assert captured["model"] == "deepseek-flash"
     assert captured["api_key"] == "ds-key"
     assert captured["json_mode"] is True
     # 사전 프롬프트 + 스키마가 프롬프트에 포함된다.
@@ -211,7 +211,7 @@ async def test_generate_returns_result_with_deepseek_usage(monkeypatch, fake_acq
     monkeypatch.setattr(
         deepseek_client, "post_chat_completion_payload", lambda **k: _DEEPSEEK_OK
     )
-    runtime = llm_client.LlmRuntime(model="deepseek-v4-flash", deepseek_api_key="k")
+    runtime = llm_client.LlmRuntime(model="deepseek-flash", deepseek_api_key="k")
     result = await llm_client.generate(runtime, "BODY")
 
     assert result.provider == "deepseek"
@@ -229,11 +229,11 @@ async def test_generate_returns_result_with_deepseek_usage(monkeypatch, fake_acq
 async def test_complete_json_wraps_provider_error(monkeypatch, fake_acquire):
     def boom(**kwargs):
         raise deepseek_client.DeepSeekRequestError(
-            "fail detail from deepseek client", status_code=503, model="deepseek-v4-flash"
+            "fail detail from deepseek client", status_code=503, model="deepseek-flash"
         )
 
     monkeypatch.setattr(deepseek_client, "post_chat_completion_payload", boom)
-    runtime = llm_client.LlmRuntime(model="deepseek-v4-flash", deepseek_api_key="k")
+    runtime = llm_client.LlmRuntime(model="deepseek-flash", deepseek_api_key="k")
     with pytest.raises(llm_client.LlmRequestError) as exc:
         await llm_client.complete_json(runtime, "BODY")
     assert exc.value.status_code == 503
@@ -520,7 +520,7 @@ async def test_generate_multimodal_discriminates_inline_data_vs_file_data(
 
 
 async def test_generate_multimodal_rejects_deepseek(fake_acquire):
-    runtime = llm_client.LlmRuntime(model="deepseek-v4-flash", deepseek_api_key="k")
+    runtime = llm_client.LlmRuntime(model="deepseek-flash", deepseek_api_key="k")
     with pytest.raises(ValueError):
         await llm_client.generate_multimodal(runtime, [{"text": "x"}])
     assert fake_acquire == []
