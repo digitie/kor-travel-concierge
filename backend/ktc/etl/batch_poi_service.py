@@ -909,7 +909,11 @@ async def process_video_batch(
         # Google 측 429(키 쿼터 소진)도 하드 실패 대신 보류로 처리한다(작업 실패 스팸 방지).
         # 그 외 LLM 오류는 실제 실패로 전파한다.
         message = str(exc)
-        if exc.status_code == 429 or "429" in message or "quota" in message.lower():
+        # status_code는 이제 재시도 소진 경로에서도 신뢰 가능하다(gemini/deepseek_client가
+        # last_status를 보존) — bare "429" 부분일치는 상세 detail이 풍부해진 메시지에서
+        # URL/응답 텍스트에 우연히 "429"가 섞여 오탐(실제 실패를 쿼터 보류로 묻음)할 수
+        # 있어 "status=429" 형식으로 좁힌다("quota"는 상태코드 무관 provider 표현이라 유지).
+        if exc.status_code == 429 or "status=429" in message or "quota" in message.lower():
             await _report_stage(
                 stage_reporter,
                 "poi_extract",

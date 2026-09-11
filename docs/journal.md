@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-09-11: job 실패 진단 어려움 원인 3건 수정 + DeepSeek-V4.1-Flash 대응
+
+- **배경**: "job 에러 발생 시 어떤 에러 때문인지 파악이 어렵다. 에러 빈도가 높고 정상
+  진행이 안되는 job이 적지 않다"는 지적으로 n150 prod `crawl_runs`를 직접 조회했다(27건
+  harvest 실패, 상세 last_error 샘플 30건 확인).
+- **원인 1 — YouTube `channels.list`/`playlists.list` id 50개 상한 미분할(결정적,
+  영구 실패)**: `pipeline.py`가 검색 결과에서 뽑은 중복 제거 채널 ID를
+  `channels_list()`에 통째로 넘기는데(실측 148개), YouTube API는 `id`에 50개 초과 시
+  항상 400을 반환한다. 재시도해도 절대 성공하지 않아, 특정 키워드 소스(대구/부산
+  맛집 등)의 harvest가 매 스케줄 주기마다 반복 실패했다. `videos_list()`가 이미 쓰던
+  50개 청크 분할을 `channels_list`/`playlists_list`에도 적용해 결과를 병합하도록 고쳤다
+  (`youtube_client.py`).
+- **원인 2 — provider 오류 상세가 재구성 과정에서 소실**: 실제 prod last_error가
+  `"DeepSeek 호출 실패(status=None, model=deepseek-v4-flash)"`처럼 원인을 전혀 알 수
+  없었다. `gemini_client.py`/`deepseek_client.py`의 `GeminiRequestError`/
+  `DeepSeekRequestError`는 이미 상세(재시도 소진 여부·원인 예외)를 메시지에 담고
+  있었지만, `llm_client.py`가 이를 버리고 `status`/`model`만으로 새 메시지를
+  재구성해 `LlmRequestError`로 던졌다. 원본 메시지를 그대로 싣도록 고쳤다.
+- **원인 3 — 응답 중 끊김 예외가 재시도·상세화를 모두 건너뜀**: 실제 prod
+  last_error에 `"Response ended prematurely"`(컨텍스트 전혀 없음)가 그대로 남은
+  사례가 있었다. `requests.exceptions.ChunkedEncodingError`는 `(Timeout,
+  ConnectionError)`의 하위가 아니라 좁은 재시도 catch를 건너뛰어 재시도 없이,
+  아무 상세 없이 그대로 전파됐다. `gemini_client.py`/`deepseek_client.py`의 재시도
+  catch를 `requests.exceptions.RequestException`으로 넓히고, Gemini/DeepSeek
+  표준 오류 응답(`{"error": {"message": ...}}`)에서 message를 추출해 상세에 포함했다.
+  단, `MissingSchema`/`InvalidURL` 등 재시도해도 항상 같은 방식으로 실패하는 설정
+  버그성 예외는 제외해 즉시 실패하도록(수십 초 재시도 낭비 방지) 별도 처리했다.
+- **적대적 리뷰(fork 1인)에서 발견·반영한 delta**: (a) 새로 추가한 provider 오류
+  상세 추출이 YouTube 클라이언트의 `_mask_api_key`와 달리 API 키를 마스킹하지 않아
+  `last_error`(DB·운영 콘솔 노출)에 키가 노출될 수 있었다 — 동일한 마스킹 헬퍼를
+  Gemini/DeepSeek 클라이언트에도 추가. (b) `batch_poi_service.py`의 429 쿼터 보류
+  판정이 `"429" in message` 부분일치였는데, 상세가 풍부해진 메시지에서 우연한 오탐
+  가능성이 생겨 `"status=429"` 형식으로 좁혔다(`status_code` 필드는 재시도 소진
+  경로에서도 이제 신뢰 가능해 1차 판정으로 충분하다). (c) 넓힌 `RequestException`
+  캐치가 위 설정 버그성 예외까지 재시도하던 문제(원인 3 서술의 즉시 실패 처리로 반영).
+- **DeepSeek-V4.1-Flash 대응**: DeepSeek가 2026-09-09 `DeepSeek-V4.1-Flash`를
+  출시하며 공식 식별자를 `deepseek-flash`로 바꿨다(api-docs.deepseek.com 확인).
+  기존 `deepseek-v4-flash`는 legacy alias로 계속 동작하고(같은 모델로 자동 라우팅,
+  동일 Flash 가격) prod 런타임 설정이 실제로 이 값을 쓰고 있어 옵션에서 제거하지
+  않았다. `config.DEEPSEEK_ENGINE_OPTIONS`에 `deepseek-flash`를 추가했다
+  (`deepseek-v4-pro`는 이름 변경 없음).
+- **검증**: backend pytest 319건 통과(신규/보강 테스트 다수 포함: youtube_client
+  청크 분할, gemini/deepseek_client 재시도 확대·상세 추출·마스킹·설정오류 즉시실패,
+  llm_client 메시지 보존), ruff clean(기존 파일의 무관한 pre-existing 경고 4건
+  제외). n150 배포는 다음 기록 참조.
+
+---
+
 ## 2026-09-11: UI Dockerfile이 vendor tarball보다 먼저 npm ci를 실행하는 문제 긴급 수정
 
 - **장애**: vworld-map-web 마이그레이션(PR #228)을 n150에 배포하며 UI 이미지를 재빌드하자

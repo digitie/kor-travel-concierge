@@ -22,11 +22,17 @@ GEMINI_ENGINE_OPTIONS: tuple[str, ...] = (
     # gemini-1.5-flash / gemini-1.5-pro는 Google이 API에서 은퇴시켜 404가 나므로 제외(T-115).
 )
 
-# DeepSeek V4 (OpenAI 호환, base_url=https://api.deepseek.com). 두 모델 모두 1M context,
-# JSON 출력·tool call 지원. api-docs.deepseek.com 기준.
+# DeepSeek V4 계열(OpenAI 호환, base_url=https://api.deepseek.com). JSON 출력·tool call
+# 지원. api-docs.deepseek.com 기준.
+# - "deepseek-flash": DeepSeek-V4.1-Flash(2026-09-09 출시)의 현재 공식 식별자. vision 지원.
+# - "deepseek-v4-pro": DeepSeek-V4-Pro-0813, 이름 변경 없음.
+# - "deepseek-v4-flash": 구 식별자. DeepSeek 측이 V4.1-Flash로 자동 라우팅(같은 Flash 가격)하는
+#   legacy alias라 계속 동작하지만, 이미 이 값으로 저장된 기존 런타임 설정과의 호환을 위해서만
+#   옵션에 남겨둔다 — 신규 선택은 "deepseek-flash"를 쓴다.
 DEEPSEEK_ENGINE_OPTIONS: tuple[str, ...] = (
-    "deepseek-v4-flash",
+    "deepseek-flash",
     "deepseek-v4-pro",
+    "deepseek-v4-flash",
 )
 
 # 웹 설정의 AI 엔진 선택지 = Gemini + DeepSeek 통합 목록(순서 보존).
