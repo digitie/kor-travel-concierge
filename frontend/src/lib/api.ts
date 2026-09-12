@@ -241,6 +241,8 @@ export type CrawlRunSummary = {
   max_videos?: number | null;
   default_category_code?: string | null;
   default_category_label?: string | null;
+  // 반복 대상으로 등록된 harvest면 그 source_target id, 1회성이면 null.
+  source_target_id?: number | null;
   status_logs: RunStatusLog[];
   retry_count: number;
   last_error: string | null;
@@ -1156,6 +1158,19 @@ export async function listRunsPage({
 
 export async function listRunQueue(): Promise<RunQueueSnapshot> {
   return requestJson<RunQueueSnapshot>("/api/v1/runs/queue");
+}
+
+// "수집" 화면 "최근 1회성 수집" 패널 전용 — 반복 대상 실행과 페이지 예산을
+// 공유하는 일반 `listRunsPage({jobTypes:["harvest"]})`와 달리, 서버가 최근 harvest를
+// 넓게 훑어 반복 등록 없는 것만 대상별 최신 1건씩 이미 걸러 돌려준다.
+export async function listOneTimeHarvestRuns({
+  limit = 20,
+}: { limit?: number } = {}): Promise<CrawlRunSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const { items } = await requestJson<{ items: CrawlRunSummary[] }>(
+    `/api/v1/runs/one-time-harvest?${params.toString()}`,
+  );
+  return items;
 }
 
 export async function runSourceTargetNow(

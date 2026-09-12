@@ -977,6 +977,59 @@ async def list_run_queue(
     }
 
 
+# GET /runs?job_types=harvest는 반복 대상 실행과 한 페이지(기본 20~100건)를
+# 공유한다 — 반복 스캔이 잦으면 최근 1회성 이력이 그 페이지 예산 밖으로 밀려날 수
+# 있다("수집" 화면 "최근 1회성 수집" 패널이 비어 보이는 원인이 될 수 있음). 여기서는
+# 최근 harvest를 이 값만큼 따로 넓게 훑어 그 안에서만 대상별 최신 1건씩 고르므로,
+# 반복 실행 트래픽과 이 패널의 표시 예산이 분리된다(완전한 해결은 아니고, 이 상한을
+# 넘는 반복 실행이 몰리면 여전히 밀릴 수 있다 — 현재 실사용 빈도 기준 충분히 넓은
+# 값으로 완화한 것).
+ONE_TIME_HARVEST_SCAN_LIMIT = 200
+
+
+@router.get("/runs/one-time-harvest")
+async def list_one_time_harvest_runs(
+    limit: int = Query(default=20, ge=1, le=50),
+    session: AsyncSession = Depends(get_repeatable_read_session),
+) -> dict[str, Any]:
+    """반복 등록 없이("반복 검색" 미체크) 실행한 최근 harvest를 대상별 최신 1건만
+    골라 반환한다("수집" 화면의 "최근 1회성 수집" 패널 전용).
+    """
+    rows = list(
+        (
+            await session.execute(
+                select(CrawlRun)
+                .where(CrawlRun.job_type == "harvest")
+                .order_by(CrawlRun.id.desc())
+                .limit(ONE_TIME_HARVEST_SCAN_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    seen: set[tuple[str, str]] = set()
+    one_time: list[CrawlRun] = []
+    for run in rows:
+        if _run_source_target_id(run) is not None:
+            continue
+        key = (_enum_value(run.target_type), run.target_id or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        one_time.append(run)
+        if len(one_time) >= limit:
+            break
+    titles = await _resolve_title_map(
+        session, [(run.target_type, run.target_id) for run in one_time]
+    )
+    return {
+        "items": [
+            _run_summary_dict(run, titles, include_details=False)
+            for run in one_time
+        ]
+    }
+
+
 PLACE_SEARCH_PROVIDER_TIMEOUT_SECONDS = 3.0
 
 
@@ -2906,6 +2959,15 @@ def _run_default_category_code(run: CrawlRun) -> str | None:
     return category_catalog.normalize_code(str(value)) if value is not None else None
 
 
+def _run_source_target_id(run: CrawlRun) -> int | None:
+    """이 harvest가 반복 대상으로 등록된 실행이면 그 source_target id, 1회성이면 None.
+
+    수집 화면이 "1회성 수집"과 "반복 작업"을 구분해 보여주는 데 쓴다.
+    """
+    value = _run_payload(run).get("source_target_id")
+    return int(value) if isinstance(value, (int, float)) else None
+
+
 def _run_summary_dict(
     run: CrawlRun,
     titles: dict[Any, Any],
@@ -2932,6 +2994,7 @@ def _run_summary_dict(
         "default_category_label": category_catalog.label_for(
             _run_default_category_code(run)
         ),
+        "source_target_id": _run_source_target_id(run),
         "status_logs": (
             crawl_run_service.load_status_logs(run) if include_details else []
         ),

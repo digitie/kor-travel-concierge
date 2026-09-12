@@ -222,6 +222,24 @@ async def test_run_harvest_persists_and_scores(session, yt_client):
     assert all(k.season_context == "summer" for k in kws)
 
 
+async def test_one_time_run_harvest_creates_no_source_target(session, yt_client):
+    """반복 등록 없이(수집 화면에서 "반복 검색"을 켜지 않고) 실행한 harvest는
+    source_targets 행을 만들면 안 된다 — 만들면 is_active 기본값(True) 때문에
+    스케줄러가 이후 이 대상을 영구히 재실행하는 버그가 재발한다."""
+    await pipeline.run_harvest(
+        session, yt_client, seed_keyword="제주도 맛집", max_videos=10, now=NOW
+    )
+    targets = (
+        await session.execute(
+            select(SourceTarget).where(
+                SourceTarget.target_type == "keyword",
+                SourceTarget.source_value == "제주도 맛집",
+            )
+        )
+    ).scalars().all()
+    assert targets == []
+
+
 async def test_run_harvest_reports_detailed_status(session, yt_client):
     reported: list[tuple[str, float | None]] = []
 

@@ -138,6 +138,83 @@ async def test_recurring_source_target_lifecycle(client):
     assert deleted_run.status_code == 409
 
 
+async def test_one_time_harvest_run_has_no_source_target_id(client):
+    """"반복 검색"을 켜지 않은 1회성 harvest는 어떤 source_target에도 묶이지
+    않아야 한다(수집 화면이 1회성/반복을 구분하는 근거)."""
+    resp = await client.post("/api/v1/harvest", json={"query": "제주도 맛집", "max_videos": 5})
+    assert resp.status_code == 200
+    run = await _run_by_job_id(client, resp.json()["job_id"])
+    assert run["source_target_id"] is None
+    assert (await client.get("/api/v1/source-targets")).json() == []
+
+
+async def test_recurring_harvest_run_carries_source_target_id(client):
+    cid = "UCnV8h6ZzQnLoFBFXqHGtxBg"
+    resp = await client.post(
+        "/api/v1/harvest",
+        json={"channel_id": cid, "max_videos": 3, "repeat_interval_minutes": 60},
+    )
+    assert resp.status_code == 200
+    run = await _run_by_job_id(client, resp.json()["job_id"])
+    target = (await client.get("/api/v1/source-targets")).json()[0]
+    assert run["source_target_id"] == target["id"]
+
+
+async def test_one_time_harvest_endpoint_excludes_recurring_and_dedupes_by_target(
+    client,
+):
+    """"최근 1회성 수집" 패널 전용 endpoint — 반복 대상으로 등록된 실행은
+    제외하고, 같은 대상의 여러 1회성 실행은 최신 1건만 남긴다."""
+    first = await client.post(
+        "/api/v1/harvest", json={"query": "제주도 맛집", "max_videos": 5}
+    )
+    assert first.status_code == 200
+    second = await client.post(
+        "/api/v1/harvest", json={"query": "제주도 맛집", "max_videos": 5}
+    )
+    assert second.status_code == 200
+    other = await client.post(
+        "/api/v1/harvest", json={"query": "여수 밤바다", "max_videos": 5}
+    )
+    assert other.status_code == 200
+    recurring = await client.post(
+        "/api/v1/harvest",
+        json={
+            "channel_id": "UCnV8h6ZzQnLoFBFXqHGtxBg",
+            "max_videos": 3,
+            "repeat_interval_minutes": 60,
+        },
+    )
+    assert recurring.status_code == 200
+
+    listing = await client.get("/api/v1/runs/one-time-harvest")
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+
+    job_ids = [item["job_id"] for item in items]
+    assert recurring.json()["job_id"] not in job_ids
+    # "제주도 맛집"은 두 번 실행했지만 최신(second) 1건만 남아야 한다.
+    assert second.json()["job_id"] in job_ids
+    assert first.json()["job_id"] not in job_ids
+    assert other.json()["job_id"] in job_ids
+    assert all(item["source_target_id"] is None for item in items)
+
+
+async def test_one_time_harvest_endpoint_respects_limit(client):
+    for query in ("검색어1", "검색어2", "검색어3"):
+        resp = await client.post(
+            "/api/v1/harvest", json={"query": query, "max_videos": 3}
+        )
+        assert resp.status_code == 200
+
+    listing = await client.get("/api/v1/runs/one-time-harvest?limit=2")
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert len(items) == 2
+    # 최신순 — 가장 최근 두 검색어만 남아야 한다.
+    assert {item["target_id"] for item in items} == {"검색어3", "검색어2"}
+
+
 async def test_stop_pending_run_cancels(client):
     resp = await client.post("/api/v1/harvest", json={"query": "부산 카페", "max_videos": 3})
     job_id = resp.json()["job_id"]
@@ -3007,6 +3084,7 @@ async def test_run_queue_static_route_uses_run_summary_contract(client, session)
         "max_videos",
         "default_category_code",
         "default_category_label",
+        "source_target_id",
         "status_logs",
         "retry_count",
         "last_error",
