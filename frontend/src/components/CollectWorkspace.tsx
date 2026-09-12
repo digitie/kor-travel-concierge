@@ -13,6 +13,7 @@ import {
 import {
   ApiRequestError,
   deleteSourceTarget,
+  listOneTimeHarvestRuns,
   listRunQueue,
   listSourceTargets,
   RUN_QUEUE_OBSERVER_OPTIONS,
@@ -25,11 +26,18 @@ import {
 import {
   categoryDisplayLabel,
   jobTypeDisplayLabel,
+  runOutcomeBadgeVariant,
+  runOutcomeLabel,
   runStateBadgeVariant,
   runStateLabel,
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
-import { formatDateTime, formatTime, intervalLabel } from "@/lib/format";
+import {
+  formatDateTime,
+  formatDateTimeShort,
+  formatTime,
+  intervalLabel,
+} from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -51,10 +59,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { HelpTip } from "@/components/HelpTip";
 import { EmptyState, PanelHeader } from "@/components/panels";
 import { HarvestConsole } from "@/components/HarvestConsole";
 import { JobDetailDialog } from "@/components/JobDetailDialog";
 import { RecurringEditDialog } from "@/components/RecurringEditDialog";
+import {
+  ACTION_BUTTON_WIDTH_CLASS,
+  RunActionButtons,
+} from "@/components/RunActionButtons";
 
 export function CollectWorkspace() {
   const queryClient = useQueryClient();
@@ -72,6 +85,15 @@ export function CollectWorkspace() {
   const sourceTargetsQuery = useQuery({
     queryKey: ["source-targets"],
     queryFn: listSourceTargets,
+    refetchInterval: 15_000,
+  });
+  // 반복 등록 없이 실행한(source_target_id가 없는) 최근 harvest — "반복 검색"을
+  // 켜지 않은 1회성 수집은 source_targets에 남지 않아 위 목록에 보이지 않는다.
+  // 서버가 대상별 최신 1건만 이미 걸러 돌려준다(listOneTimeHarvestRuns 참고 —
+  // 반복 대상 실행과 페이지 예산을 공유하지 않도록 별도 endpoint를 쓴다).
+  const oneTimeRunsQuery = useQuery({
+    queryKey: ["runs", "one-time-harvest"],
+    queryFn: () => listOneTimeHarvestRuns({ limit: 20 }),
     refetchInterval: 15_000,
   });
 
@@ -110,6 +132,8 @@ export function CollectWorkspace() {
       queryClient.invalidateQueries({ queryKey: ["source-targets"] });
     },
   });
+
+  const oneTimeRuns = oneTimeRunsQuery.data ?? [];
 
   const queueRuns = runQueueQuery.data?.items ?? [];
   const activeRun =
@@ -157,7 +181,15 @@ export function CollectWorkspace() {
           </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {oneTimeRuns.length > 0 || oneTimeRunsQuery.error ? (
+          <div className="max-h-56 shrink-0 overflow-y-auto border-b border-border">
+            <OneTimeJobsPanel
+              runs={oneTimeRuns}
+              errorMessage={oneTimeRunsQuery.error?.message ?? null}
+            />
+          </div>
+        ) : null}
         <JobsPanel
           targets={sourceTargetsQuery.data ?? []}
           errorMessage={targetActionError ?? sourceTargetsQuery.error?.message ?? null}
@@ -254,6 +286,89 @@ function ActiveRunSummary({
   );
 }
 
+// "반복 검색"을 켜지 않고 실행한 최근 1회성 harvest 목록. source_targets에 남지
+// 않아 예전에는 이 화면에서 완전히 사라졌다 — 대상별 최신 1건만 보여주고 같은
+// 입력으로 바로 재실행("다시 시작")할 수 있게 한다.
+function OneTimeJobsPanel({
+  runs,
+  errorMessage,
+}: {
+  runs: CrawlRunSummary[];
+  errorMessage: string | null;
+}) {
+  return (
+    <section aria-label="최근 1회성 수집" className="flex flex-col gap-3 pt-3">
+      <div className="px-3">
+        <PanelHeader title="최근 1회성 수집" count={runs.length} />
+      </div>
+      {errorMessage ? (
+        <p role="alert" className="px-3 text-xs text-destructive">
+          {errorMessage}
+        </p>
+      ) : null}
+      {runs.length > 0 ? (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>대상</TableHead>
+                <TableHead>상태</TableHead>
+                <TableHead>최근 실행</TableHead>
+                <TableHead className="text-right">액션</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => (
+                <TableRow key={run.job_id}>
+                  <TableCell>
+                    <div className="flex max-w-[18rem] flex-col gap-1 whitespace-normal">
+                      <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
+                        {run.target_type_label ??
+                          targetTypeDisplayLabel(run.target_type)}
+                      </span>
+                      <span className="font-bold leading-snug">
+                        {runTargetValue(run)}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={runOutcomeBadgeVariant(run)}>
+                      {runOutcomeLabel(run)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-[13px] text-text-secondary">
+                      {formatDateTimeShort(run.finished_at ?? run.created_at)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap items-start justify-end gap-1">
+                      <Link
+                        href={`/jobs/${run.job_id}`}
+                        className={`${buttonVariants({ variant: "outline", size: "xs" })} ${ACTION_BUTTON_WIDTH_CLASS}`}
+                      >
+                        상세
+                      </Link>
+                      <RunActionButtons run={run} />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="px-3">
+          <EmptyState>
+            최근 1회성 수집 이력이 없습니다. &ldquo;반복 검색&rdquo;을 끄고
+            수집을 시작하면 여기 표시됩니다.
+          </EmptyState>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function JobsPanel({
   targets,
   errorMessage,
@@ -281,7 +396,7 @@ function JobsPanel({
   return (
     <section
       aria-label="반복 작업"
-      className="flex h-full min-h-0 flex-col gap-3 pt-3"
+      className="flex min-h-0 flex-1 flex-col gap-3 pt-3"
     >
       <div className="px-3">
         <PanelHeader title="반복 작업" count={targets.length} />
@@ -298,7 +413,17 @@ function JobsPanel({
               <TableRow>
                 <TableHead>대상</TableHead>
                 <TableHead>주기</TableHead>
-                <TableHead>기본</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center gap-1">
+                    기본 카테고리
+                    <HelpTip>
+                      새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할
+                      값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지 않아,
+                      자동 분류에 실패한 장소가 카테고리 없이 검수 큐에
+                      남는다는 뜻입니다.
+                    </HelpTip>
+                  </span>
+                </TableHead>
                 <TableHead>누적</TableHead>
                 <TableHead>일정</TableHead>
                 <TableHead>상태</TableHead>
@@ -375,10 +500,11 @@ function JobsPanel({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-1">
+                      <div className="flex flex-wrap items-start justify-end gap-1">
                         <Button
                           type="button"
                           size="xs"
+                          className={ACTION_BUTTON_WIDTH_CLASS}
                           disabled={isRunningNow}
                           onClick={() => {
                             setRunNowForce(false);
@@ -392,6 +518,7 @@ function JobsPanel({
                           type="button"
                           size="xs"
                           variant="outline"
+                          className={ACTION_BUTTON_WIDTH_CLASS}
                           onClick={() => onEditTarget(target)}
                         >
                           <PencilIcon data-icon="inline-start" />
@@ -406,6 +533,7 @@ function JobsPanel({
                               type="button"
                               size="xs"
                               variant="destructive"
+                              className={ACTION_BUTTON_WIDTH_CLASS}
                               disabled={isDeleting}
                               aria-label={`${targetName} 반복 삭제`}
                             >

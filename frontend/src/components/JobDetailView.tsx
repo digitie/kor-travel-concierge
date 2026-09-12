@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -94,12 +95,20 @@ export function JobDetailView({
   run,
   target,
   hideVideos,
+  hideLog,
+  afterDetails,
   onNavigate,
   variant = "compact",
 }: {
   run?: CrawlRunSummary | null;
   target?: SourceTargetSummary | null;
   hideVideos?: boolean;
+  // 로그를 화면 맨 아래로 옮기고 싶은 페이지가 직접 렌더할 수 있도록 여기서는
+  // 숨긴다(JobLogView는 계속 export해 재사용한다).
+  hideLog?: boolean;
+  // "작업"(진행·세부 정보) 섹션 바로 다음, "추출된 POI"/로그 앞에 끼워 넣을 내용.
+  // 중요도가 높은 섹션(예: 영상 처리)을 위로 올리고 싶은 페이지가 쓴다.
+  afterDetails?: ReactNode;
   onNavigate?: () => void;
   variant?: "compact" | "page";
 }) {
@@ -130,7 +139,7 @@ export function JobDetailView({
   }
 
   const result = (run?.result ?? {}) as Record<string, unknown>;
-  const fields: { label: string; value: string }[] = run
+  const fields: { label: string; value: string; wrap?: boolean }[] = run
     ? [
         { label: "재시도", value: `${run.retry_count}회` },
         { label: "등록", value: formatDateTime(run.created_at) },
@@ -150,6 +159,9 @@ export function JobDetailView({
               target.target_label ??
               target.display_name ??
               target.source_value,
+            // 검색어/제목처럼 길이가 정해지지 않은 값 — 한 줄로 자르면 실제 대상을
+            // 알아볼 수 없게 될 수 있어 줄바꿈을 허용한다.
+            wrap: true,
           },
           {
             label: "기본 카테고리",
@@ -167,7 +179,13 @@ export function JobDetailView({
           { label: "다음 실행", value: formatDateTime(target.next_crawl_at) },
           { label: "최근 실행", value: formatDateTime(target.last_crawled_at) },
           { label: "최근 스캔", value: formatDateTime(target.last_scan_at) },
-          { label: "최근 오류", value: target.last_scan_error ?? "-" },
+          {
+            label: "최근 오류",
+            value: target.last_scan_error ?? "-",
+            // 오류 메시지는 길 수 있어(한 줄 자르기+hover title은 터치 기기에서
+            // 확인할 방법이 없다) 줄바꿈을 허용한다.
+            wrap: true,
+          },
         ]
       : [];
   const detailGridClass =
@@ -196,7 +214,22 @@ export function JobDetailView({
         </section>
       </Section>
 
-      {run ? (
+      {afterDetails}
+
+      {run && hideLog ? (
+        // 로그는 이 화면에서 숨기고(호출부가 맨 아래에 직접 배치), 추출된 POI만 둔다.
+        <Section title="추출된 POI">
+          <Panel title="추출된 POI">
+            <RunPlacesTable
+              places={places}
+              isLoading={placesQuery.isLoading}
+              error={placesQuery.error}
+              onRetry={() => void placesQuery.refetch()}
+              onOpenPlace={openPlace}
+            />
+          </Panel>
+        </Section>
+      ) : run ? (
         <Section title="로그와 결과">
           <section className={detailGridClass}>
             <Panel title="상태 로그·오류">
@@ -547,22 +580,44 @@ function CollectedVideosTable({
   );
 }
 
+// 라벨:값을 한 줄로 붙여 표시한다(예전엔 라벨/값이 각자 줄을 차지하는 2줄짜리
+// 카드였다 — 재시도/등록/시작/종료처럼 짧은 값에는 불필요하게 넓은 면적이었다).
+// `wrap`(대상/최근 오류처럼 길이가 정해지지 않은 값)은 한 줄로 자르지 않고
+// 줄바꿈한다 — hover 전용 title 툴팁은 터치 기기에서 확인할 방법이 없다.
+// `singleColumn`(페이지의 "작업" 세부 정보처럼 좁은 xl: 사이드바 칼럼에 들어갈 때):
+// `sm:grid-cols-2`는 뷰포트 폭 기준이라 실제 렌더 폭이 좁아도 2열을 강제해
+// 등록/시작/종료 같은 날짜 값이 눌릴 수 있다 — 이럴 땐 1열로 고정한다.
 function MetricGrid({
   fields,
   singleColumn,
 }: {
-  fields: { label: string; value: string }[];
+  fields: { label: string; value: string; wrap?: boolean }[];
   singleColumn?: boolean;
 }) {
   return (
-    <div className={`grid gap-2 ${singleColumn ? "grid-cols-1" : "grid-cols-2"}`}>
+    <div
+      className={`grid grid-cols-1 gap-x-4 ${singleColumn ? "" : "sm:grid-cols-2"}`}
+    >
       {fields.map((field) => (
         <div
           key={field.label}
-          className="flex min-w-0 flex-col gap-0.5 rounded-control border border-border bg-surface-subtle p-2.5"
+          className={`flex min-w-0 gap-3 border-b border-border py-1.5 last:border-b-0 ${
+            singleColumn ? "" : "sm:[&:nth-last-child(-n+2)]:border-b-0"
+          } ${field.wrap ? "items-start" : "items-baseline justify-between"}`}
         >
-          <span className="text-[12px] text-text-secondary">{field.label}</span>
-          <span className="break-words text-[13px] font-bold">{field.value}</span>
+          <span className="shrink-0 text-[12px] text-text-secondary">
+            {field.label}
+          </span>
+          <span
+            className={
+              field.wrap
+                ? "min-w-0 flex-1 text-right text-[13px] font-bold break-words whitespace-normal"
+                : "truncate text-[13px] font-bold"
+            }
+            title={field.wrap ? undefined : field.value}
+          >
+            {field.value}
+          </span>
         </div>
       ))}
     </div>

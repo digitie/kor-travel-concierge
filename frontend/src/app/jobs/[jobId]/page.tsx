@@ -22,8 +22,9 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { DataLoadError, JobDetailView } from "@/components/JobDetailView";
+import { JobLogView } from "@/components/JobLogDialog";
 import { RunActionButtons } from "@/components/RunActionButtons";
-import { EmptyState, MetricCard, Panel } from "@/components/panels";
+import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { categoryDisplayLabel } from "@/lib/display-labels";
@@ -101,7 +102,25 @@ export default function JobDetailPage() {
             />
           </Panel>
         ) : run ? (
-          <JobDetailView run={run} hideVideos variant="page" />
+          // 중요도 순 배치: 세부 정보 다음에 영상 처리(afterDetails)를 끼워 위로
+          // 올리고, 로그는 hideLog로 여기서 숨긴 뒤 화면 맨 아래에 따로 둔다.
+          <JobDetailView
+            run={run}
+            hideVideos
+            hideLog
+            variant="page"
+            afterDetails={
+              <VideoStatsSection
+                stats={stats}
+                isLoading={statsQuery.isLoading}
+                error={statsQuery.error}
+                onRetry={() => void statsQuery.refetch()}
+                defaultCategory={categoryDisplayLabel(
+                  run.default_category_label ?? run.default_category_code,
+                )}
+              />
+            }
+          />
         ) : (
           <Panel title="작업">
             <EmptyState>작업을 찾을 수 없습니다.</EmptyState>
@@ -109,15 +128,11 @@ export default function JobDetailPage() {
         )}
 
         {!runQuery.error && run ? (
-          <VideoStatsSection
-            stats={stats}
-            isLoading={statsQuery.isLoading}
-            error={statsQuery.error}
-            onRetry={() => void statsQuery.refetch()}
-            defaultCategory={categoryDisplayLabel(
-              run.default_category_label ?? run.default_category_code,
-            )}
-          />
+          <Section title="로그">
+            <Panel title="상태 로그·오류">
+              <JobLogView status={run} />
+            </Panel>
+          </Section>
         ) : null}
       </div>
     </AppShell>

@@ -14,6 +14,7 @@ from ktc.models import (
     FeatureExportStatus,
     GroundingStatus,
     MatchStatus,
+    SourceTarget,
     TravelPlace,
     YoutubeChannel,
     YoutubePlaylist,
@@ -219,6 +220,50 @@ async def test_channel_watermark(session):
     wm = await ingest_service.get_channel_watermark(session, "UC1")
     assert wm is not None
     assert wm.month == 5
+
+
+async def test_mark_source_target_crawled_does_not_create_new_row(session):
+    """1회성 수집(반복 등록 없이 harvest만 실행)은 SourceTarget 행을 새로 만들면
+    안 된다 — `is_active` 기본값이 True라 스케줄러가 이후 영구히 재실행하게 된다."""
+    result = await ingest_service.mark_source_target_crawled(
+        session,
+        target_type="keyword",
+        source_value="1회성 검색어",
+        crawled_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    assert result is None
+    existing = (
+        await session.execute(
+            select(SourceTarget).where(
+                SourceTarget.target_type == "keyword",
+                SourceTarget.source_value == "1회성 검색어",
+            )
+        )
+    ).scalar_one_or_none()
+    assert existing is None
+
+
+async def test_mark_source_target_crawled_updates_existing_recurring_row(session):
+    """반복 등록된(source_targets에 이미 행이 있는) 대상은 last_crawled_at만
+    갱신한다(기존 계약 유지)."""
+    session.add(
+        SourceTarget(
+            target_type="keyword",
+            source_value="반복 검색어",
+            scan_interval_minutes=1440,
+        )
+    )
+    await session.commit()
+
+    crawled_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    result = await ingest_service.mark_source_target_crawled(
+        session,
+        target_type="keyword",
+        source_value="반복 검색어",
+        crawled_at=crawled_at,
+    )
+    assert result is not None
+    assert result.last_crawled_at == crawled_at
 
 
 async def test_ingest_candidates_summary(session):

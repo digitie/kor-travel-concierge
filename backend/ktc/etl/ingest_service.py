@@ -298,25 +298,30 @@ async def mark_source_target_crawled(
     target_type: str,
     source_value: str,
     crawled_at: datetime,
-) -> SourceTarget:
-    """수집 대상의 마지막 성공 크롤 시각을 갱신한다."""
+) -> SourceTarget | None:
+    """반복 대상으로 이미 등록된 수집 대상의 마지막 성공 크롤 시각을 갱신한다.
+
+    행이 없으면(=반복 등록 없이 1회성으로 수집한 대상) 아무것도 만들지 않고
+    `None`을 반환한다. 여기서 새 `SourceTarget` 행을 만들면 `is_active` 기본값이
+    `True`라 1회성 수집도 조용히 반복 대상이 되어 스케줄러(`source_scan_service`)가
+    영구히 재실행한다 — 반복 대상 등록은 오직 `source_scan_service.upsert_recurring_target`
+    (사용자가 "반복 검색"을 켰을 때)만 담당해야 한다.
+    """
     stmt = select(SourceTarget).where(
         SourceTarget.target_type == target_type,
         SourceTarget.source_value == source_value,
     )
     result = await session.execute(stmt)
     target = result.scalar_one_or_none()
-    if target is None:
-        target = SourceTarget(target_type=target_type, source_value=source_value)
-        session.add(target)
-
-    target.last_crawled_at = crawled_at
+    if target is not None:
+        target.last_crawled_at = crawled_at
     if target_type == "playlist":
         playlist = await session.get(YoutubePlaylist, source_value)
         if playlist is not None:
             playlist.last_crawled_at = crawled_at
     await session.commit()
-    await session.refresh(target)
+    if target is not None:
+        await session.refresh(target)
     return target
 
 

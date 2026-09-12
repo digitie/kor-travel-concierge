@@ -4,6 +4,65 @@
 
 ---
 
+## 2026-09-12: 1회성 수집 이력 노출 + phantom 반복 대상 버그 수정, 작업/작업 상세 UI 정리
+
+- **배경**: "수집 페이지에는 없는데 작업 페이지에 이력은 계속 남는 수집작업이 있다"는
+  지적('대구 맛집' 등)으로 조사한 결과, `ingest_service.mark_source_target_crawled`가
+  1회성 harvest(반복 검색 미체크)에도 `SourceTarget` 행을 무조건 생성하고 있었다.
+  `SourceTarget.is_active` 기본값이 `True`라 이 phantom 행이
+  `source_scan_service.list_due_targets`(스캐줄러 실행 대상 조회)에는 계속 걸리면서도,
+  `list_recurring_targets`(수집 화면 "반복 작업" 목록)는 `scan_interval_minutes IS NOT NULL`
+  조건으로 필터링해 화면에서는 완전히 보이지 않았다 — "관리할 방법이 없는 채로 계속
+  재실행되는" 정확한 원인이었다. 실제 prod DB에서 부산 맛집·대구 맛집(키워드)과
+  채널 2개·재생목록 1개, 총 5건의 phantom 행을 확인했다(가장 오래된 건 2026-06-21
+  생성, 3개월째 재실행 중).
+- **수정 1 — 근본 원인**: `mark_source_target_crawled`가 이미 등록된 `SourceTarget`
+  행이 있을 때만 `last_crawled_at`을 갱신하도록 바꾸고, 없으면 아무것도 만들지 않고
+  `None`을 반환하도록 고쳤다(`backend/ktc/etl/ingest_service.py`). 반복 등록은 오직
+  `source_scan_service.upsert_recurring_target`(사용자가 "반복 검색"을 켰을 때,
+  `routes.py::start_harvest`에서 호출)만 담당한다.
+- **수정 2 — 1회성 수집 이력을 수집 화면에 노출**: `routes.py`에
+  `_run_source_target_id()`(payload의 `source_target_id`를 읽어 반복/1회성을
+  구분)와 신규 `GET /runs/one-time-harvest` endpoint를 추가했다. 이 endpoint는 최근
+  harvest 200건을 넓게 훑어 반복 대상에 묶이지 않은 것만 대상별 최신 1건씩 골라
+  돌려준다(일반 `GET /runs?job_types=harvest`에 그대로 얹으면 반복 대상 실행과 페이지
+  예산을 공유해, 반복 스캔이 잦으면 최근 1회성 이력이 밀려날 수 있어 별도 endpoint로
+  분리). `CollectWorkspace.tsx`에 "최근 1회성 수집" 패널을 추가해 대상·상태·최근
+  실행·상세/다시 시작/삭제 액션을 보여준다.
+- **수정 3 — "기본"/"미분류" 설명 보완**: 수집 화면 "반복 작업" 표와 작업 화면
+  "작업 이력" 표 양쪽의 "기본" 칼럼 헤더를 "기본 카테고리"로 바꾸고 `HelpTip`으로
+  "새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할 값 — '미분류'는 이 값을
+  지정하지 않아 자동 분류 실패 장소가 카테고리 없이 검수 큐에 남는다는 뜻"이라는 설명을
+  달았다.
+- **수정 4 — 작업 이력 표 UI 일관성**: 상세/다시 시작/삭제/중지 버튼에 공용
+  `ACTION_BUTTON_WIDTH_CLASS`(`RunActionButtons.tsx`에서 export, 8곳 중복 제거)를
+  적용해 라벨 길이(2~4자)에 무관하게 폭을 통일했다. 행 padding을 `py-2`→`py-3`로
+  늘리고 액션 칸을 `flex-wrap items-start`로 바꿔 버튼 수가 행마다 달라도 위치가
+  들쭉날쭉하지 않게 했다.
+- **수정 5 — 작업 상세 화면 밀도·배치**: "세부 정보"의 재시도/등록/시작/종료를
+  라벨:값 한 줄(`MetricGrid`)로 바꾸고(페이지 변형은 단일 컬럼 유지 — `xl:` 좁은
+  사이드바 폭에서 2컬럼 강제 시 등록/시작/종료 같은 날짜 값이 눌리는 문제를 피함),
+  "영상 처리" 섹션을 "세부 정보" 바로 다음으로 올리고 "로그"는 화면 맨 아래로
+  내렸다(`JobDetailView`에 `hideLog`/`afterDetails` prop 추가). 대상/최근 오류처럼
+  길이가 정해지지 않은 값은 한 줄로 자르지 않고 줄바꿈하도록(`wrap` 필드) 예외를 뒀다
+  (hover 전용 title 툴팁은 터치 기기에서 확인할 수 없어 위험 회피).
+- **검증**: 2인의 독립적 적대적 리뷰(백엔드/프런트)에서 실질 결함 없음을 확인했고,
+  리뷰가 지적한 미세 이슈(1회성 패널이 반복 실행 트래픽과 페이지 예산을 공유해
+  밀려날 수 있는 문제, 대상/최근 오류 필드의 한 줄 자르기 회귀, 버튼 폭 클래스
+  8곳 중복)를 모두 반영했다. backend는 n150 실제 Postgres에 disposable DB를 만들어
+  101건(신규 7건 포함) 통과, frontend는 lint·type-check·Vitest 336건·프로덕션
+  build를 통과했다. n150에 배포해 실브라우저로 세 화면(수집/작업/작업 상세)을 모두
+  확인했고, prod DB의 phantom `source_targets` 5건(부산 맛집·대구 맛집 포함)을
+  실제 삭제 API(`DELETE /source-targets/{id}`)로 비활성화했다.
+- **인프라 참고**: 배포 중 `nohup ... & disown`(및 `setsid` 추가)로 백그라운드
+  실행한 원격 빌드가 SSH 연결 종료와 함께 또 소리 없이 사라지는 문제를 이번엔 근본
+  원인까지 확인했다 — n150의 `digitie` 계정이 `Linger=no`라 로그인 세션이 끝나면
+  systemd-logind가 그 세션의 cgroup(및 그 안의 모든 프로세스)을 정리한다.
+  `setsid`는 새 POSIX 세션만 만들 뿐 이 cgroup에서는 벗어나지 못한다. 해결책은
+  `sudo systemd-run --unit=<name> --collect --property=StandardOutput=append:<log> -- <cmd>`
+  로 로그인 세션과 무관한 system-level transient unit을 띄우는 것이며, 이후 모든
+  재빌드를 이 방식으로 전환해 안정적으로 완료했다.
+
 ## 2026-09-11: DeepSeek-V4.0-Flash(`deepseek-v4-flash`) 지원 완전 제거, V4.1-Flash를 단일 기본으로
 
 - **배경**: 직전 커밋(PR #230)에서 DeepSeek-V4.1-Flash 신규 식별자 `deepseek-flash`를

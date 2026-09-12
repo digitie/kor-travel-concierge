@@ -25,6 +25,15 @@
 
 ## 완료
 
+- [x] **1회성 수집 이력 노출 + phantom 반복 대상 버그 수정, 작업/작업 상세 UI 정리**:
+  `mark_source_target_crawled`가 1회성 harvest에도 무조건 `SourceTarget`을 만들어
+  `is_active=True` 기본값 때문에 영구 재실행되던 버그(수집 화면 "반복 작업" 목록에는
+  안 보이는 채로)를 수정했다. 신규 `GET /runs/one-time-harvest`로 1회성 수집 이력을
+  "수집" 화면에 노출(상세/다시 시작/삭제)하고, "기본"→"기본 카테고리"+HelpTip으로
+  미분류 의미를 설명하고, 작업 이력 표 액션 버튼 폭 일관화, 작업 상세 "세부 정보"를
+  한 줄 표기+영상 처리 섹션 상단 이동+로그 최하단 배치로 정리했다. prod의 phantom
+  반복 대상 5건(부산/대구 맛집 포함)을 비활성화했다. 상세는 `docs/journal.md`
+  2026-09-12 항목 참조.
 - [x] **DeepSeek-V4.0-Flash(`deepseek-v4-flash`) 지원 제거, V4.1-Flash 단일 기본화**:
   legacy alias `deepseek-v4-flash`를 `DEEPSEEK_ENGINE_OPTIONS`에서 제거하고
   `deepseek-flash`(V4.1-Flash)만 flash 옵션으로 남겼다. prod가 실제로 구 값을

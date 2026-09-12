@@ -42,10 +42,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  ACTION_BUTTON_WIDTH_CLASS,
   RunActionButtons,
   type RunActionFeedback,
 } from "@/components/RunActionButtons";
 import { DataLoadError } from "@/components/JobDetailView";
+import { HelpTip } from "@/components/HelpTip";
 import { EmptyState, Panel } from "@/components/panels";
 
 function targetLabel(run: CrawlRunSummary): string {
@@ -328,7 +330,17 @@ function RunStatusTable({
           <tr>
             <th className="px-3 py-2">상태</th>
             <th className="px-3 py-2">작업/대상</th>
-            <th className="px-3 py-2">기본</th>
+            <th className="px-3 py-2 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1">
+                기본 카테고리
+                <HelpTip>
+                  새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할
+                  값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지 않아, 자동
+                  분류에 실패한 장소가 카테고리 없이 검수 큐에 남는다는
+                  뜻입니다.
+                </HelpTip>
+              </span>
+            </th>
             <th className="px-3 py-2">진행</th>
             <th className="px-3 py-2">메시지</th>
             <th className="px-3 py-2">시간</th>
@@ -338,7 +350,7 @@ function RunStatusTable({
         <tbody>
           {runs.map((run) => (
             <tr key={run.job_id} className="border-t border-border">
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <div className="flex max-w-36 flex-wrap gap-1">
                   <Badge variant={runOutcomeBadgeVariant(run)}>
                     {runOutcomeLabel(run)}
@@ -350,7 +362,7 @@ function RunStatusTable({
                   ) : null}
                 </div>
               </td>
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <div className="flex max-w-[20rem] flex-col gap-1 whitespace-normal">
                   <span className="text-[11px] font-bold text-text-secondary">
                     {run.target_type_label ?? targetTypeDisplayLabel(run.target_type)}
@@ -371,14 +383,14 @@ function RunStatusTable({
                   ) : null}
                 </div>
               </td>
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <Badge variant="outline">
                   {categoryDisplayLabel(
                     run.default_category_label ?? run.default_category_code,
                   )}
                 </Badge>
               </td>
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <div className="flex w-28 flex-col gap-1">
                   <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
@@ -391,7 +403,7 @@ function RunStatusTable({
                   </span>
                 </div>
               </td>
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <div className="max-w-[22rem] text-text-secondary">
                   <p className="line-clamp-2 whitespace-normal">
                     {run.current_message ?? run.status_logs.at(-1)?.message ?? "-"}
@@ -403,18 +415,18 @@ function RunStatusTable({
                   ) : null}
                 </div>
               </td>
-              <td className="px-3 py-2 align-top">
+              <td className="px-3 py-3 align-top">
                 <div className="flex flex-col text-[12px] text-text-secondary">
                   <span>등록 {formatDateTimeShort(run.created_at)}</span>
                   <span>시작 {formatDateTimeShort(run.started_at)}</span>
                   <span>종료 {formatDateTimeShort(run.finished_at)}</span>
                 </div>
               </td>
-              <td className="px-3 py-2 align-top">
-                <div className="flex flex-col items-end gap-1">
+              <td className="px-3 py-3 align-top">
+                <div className="flex flex-wrap items-start justify-end gap-1">
                   <Link
                     href={`/jobs/${run.job_id}`}
-                    className={buttonVariants({ variant: "outline", size: "xs" })}
+                    className={`${buttonVariants({ variant: "outline", size: "xs" })} ${ACTION_BUTTON_WIDTH_CLASS}`}
                   >
                     상세
                   </Link>

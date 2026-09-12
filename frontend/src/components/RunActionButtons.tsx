@@ -23,6 +23,12 @@ import { isTerminalRun } from "@/lib/display-labels";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { Button } from "@/components/ui/button";
 
+// 작업 목록/상세의 상세·중지·다시 시작·삭제 버튼이 함께 쓰는 최소 너비 — 라벨
+// 길이가 제각각(2자~4자)이라 없으면 액션 칼럼에서 버튼 폭이 행마다 들쭉날쭉해
+// 보인다. 여러 파일(CollectWorkspace/JobsDashboard)이 같은 값을 반복하지 않도록
+// 여기서 export한다.
+export const ACTION_BUTTON_WIDTH_CLASS = "min-w-[4.5rem] justify-center";
+
 export type RunActionFeedback =
   | { kind: "stopped"; jobId: string }
   | { kind: "deleted"; jobId: string }
@@ -154,6 +160,7 @@ export function RunActionButtons({
                 type="button"
                 size={size}
                 variant="destructive"
+                className={ACTION_BUTTON_WIDTH_CLASS}
                 disabled={isPending}
               >
                 {stopMutation.isPending ? (
@@ -179,6 +186,7 @@ export function RunActionButtons({
                   type="button"
                   size={size}
                   variant="outline"
+                  className={ACTION_BUTTON_WIDTH_CLASS}
                   disabled={isPending}
                 >
                   {restartMutation.isPending ? (
@@ -200,6 +208,7 @@ export function RunActionButtons({
                   type="button"
                   size={size}
                   variant="destructive"
+                  className={ACTION_BUTTON_WIDTH_CLASS}
                   disabled={isPending}
                 >
                   {deleteMutation.isPending ? (
