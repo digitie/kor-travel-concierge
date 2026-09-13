@@ -24,6 +24,15 @@ def test_batch_system_instruction_embeds_catalog_and_rules():
     assert "01050100" in sys  # 카탈로그 코드 포함
 
 
+def test_batch_system_instruction_fails_closed_on_uncertain_domestic():
+    """국내/해외 불확실 시 기본값이 true(국내로 간주)가 아니라 false(제외)여야
+    한다 — 이 서비스는 국내 여행지만 다루므로, 확실하지 않은 장소는 국내로
+    잘못 들이는 것보다 보수적으로 걸러내는 쪽이 안전하다."""
+    sys = batch_poi.batch_system_instruction()
+    assert "확실하지 않으면 false로 둔다" in sys
+    assert "확실하지 않으면 true로 둔다" not in sys
+
+
 def test_parse_batch_drops_unknown_alias_and_validates_code():
     payload = json.dumps(
         {

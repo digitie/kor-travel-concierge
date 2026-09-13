@@ -67,12 +67,18 @@ export function VWorldMap({
   // state. cameraTarget이 undefined가 되면 vworld-map-web은 이를 base center/zoom
   // props로 취급해 그쪽으로 다시 easeTo한다(선택 해제 = 예상치 못한 카메라 이동).
   const [lastCameraTarget, setLastCameraTarget] = useState<CameraTarget | undefined>(undefined);
-  // activeCameraTarget과의 참조 비교로 "새로 계산된 진짜 초점"만 잡아내기 위한 이전값
-  // 스냅샷. 렌더 중 조건부 setState(React가 명시적으로 허용하는 "파생 state 조정"
-  // 패턴)로 갱신해 useEffect의 추가 렌더 cascade를 피한다.
-  const [prevActiveCameraTarget, setPrevActiveCameraTarget] = useState<CameraTarget | undefined>(
-    undefined,
-  );
+  // 선택 대상이 "새로" 바뀐(장소·focusKey·좌표 중 하나라도 달라진) 시점에만 그
+  // 순간의 줌을 한 번 캡처해 카메라를 고정한다. pinnedSignature가 같으면 더 이상
+  // 재계산하지 않는다 — 예전엔 activeCameraTarget이 currentZoom에 계속 의존해
+  // 지도의 모든 zoomend/moveend마다 다시 계산됐고, Math.max(currentZoom, FOCUS_ZOOM)가
+  // 매번 재적용돼 선택된 장소가 있는 동안 FOCUS_ZOOM 아래로 축소하면 지도가 즉시
+  // 다시 튕겨 올라왔다(사용자가 지도에서 직접 줌을 바꿀 수 없었던 원인). focusKey는
+  // 목록 재클릭(DestinationWorkspace)을, 좌표 자체는 focusKey 없이 좌표만 바뀌는
+  // 소비처(ReviewWorkspace — 폼에서 좌표를 고치는 동안 selectedPlaceId는 고정 sentinel)를
+  // 함께 커버한다. 렌더 중 조건부 setState(React가 명시적으로 허용하는 "파생 state
+  // 조정" 패턴)로 갱신해 useEffect의 추가 렌더 cascade를 피한다.
+  const [pinnedSignature, setPinnedSignature] = useState<string | undefined>(undefined);
+  const [pinnedFocusTarget, setPinnedFocusTarget] = useState<CameraTarget | undefined>(undefined);
 
   const visiblePlaces = useMemo<VisiblePlace[]>(
     () =>
@@ -94,19 +100,25 @@ export function VWorldMap({
     return entry ? { place: entry.place, lngLat: entry.lngLat } : null;
   }, [visiblePlaces, selectedPlaceId]);
 
-  const activeCameraTarget = useMemo<CameraTarget | undefined>(() => {
-    if (!selectedPlaceCoordinates) {
-      return undefined;
+  if (selectedPlaceCoordinates) {
+    const signature = `${selectedPlaceId}:${focusKey}:${selectedPlaceCoordinates.lngLat[0]}:${selectedPlaceCoordinates.lngLat[1]}`;
+    if (signature !== pinnedSignature) {
+      setPinnedSignature(signature);
+      // focusKey가 같은 장소로 다시 증가해도(재중심 요청) vworld-map-web의 값 기반
+      // sameCamera 비교가 "동일 카메라"로 합쳐 애니메이션을 건너뛰지 않도록, 화면에
+      // 보이지 않는 수준의 zoom 지터로 값을 구분한다.
+      setPinnedFocusTarget({
+        center: selectedPlaceCoordinates.lngLat,
+        zoom: Math.max(currentZoom, FOCUS_ZOOM) + focusKey * 1e-9,
+      });
     }
-    // focusKey가 같은 장소로 다시 증가해도(재중심 요청) vworld-map-web의 값 기반
-    // sameCamera 비교가 "동일 카메라"로 합쳐 애니메이션을 건너뛰지 않도록, 화면에
-    // 보이지 않는 수준의 zoom 지터로 값을 구분한다.
-    const zoom = Math.max(currentZoom, FOCUS_ZOOM) + focusKey * 1e-9;
-    return { center: selectedPlaceCoordinates.lngLat, zoom };
-  }, [selectedPlaceCoordinates, focusKey, currentZoom]);
+  }
 
-  if (activeCameraTarget && activeCameraTarget !== prevActiveCameraTarget) {
-    setPrevActiveCameraTarget(activeCameraTarget);
+  // 선택된 장소가 있는 동안에는 위에서 고정한 값만 쓴다(currentZoom을 계속
+  // 따라가며 다시 계산하지 않음 — 그러면 사용자의 지도 줌 조작을 덮어쓴다).
+  const activeCameraTarget = selectedPlaceCoordinates ? pinnedFocusTarget : undefined;
+
+  if (activeCameraTarget && activeCameraTarget !== lastCameraTarget) {
     setLastCameraTarget(activeCameraTarget);
   }
 
