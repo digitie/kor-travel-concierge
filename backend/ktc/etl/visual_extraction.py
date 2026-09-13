@@ -241,9 +241,11 @@ def build_visual_pois(
                 ),
                 timestamp_end=None,
                 speaker_note=(frame.extracted_text or None),
-                # 이 서비스는 국내 여행지만 다루고 화면 텍스트만으로 해외 여부를 판정할
-                # 근거가 약하므로, batch_poi 시스템 지시문의 "확실하지 않으면 true"
-                # 규약을 그대로 따른다(자동확정은 어차피 recall source_kind 예외가 막는다).
+                # batch_poi.py의 배치 추출은 국내/해외 판정을 신중히 하려고 불확실하면
+                # false로 두지만(2026-09), 이 경로는 화면 텍스트만으로 해외 여부를 판정할
+                # 근거가 약해 그 규약을 따르지 않고 항상 true로 둔다 — source_kind가
+                # `_RECALL_SOURCE_KINDS`에 속해 is_domestic 값과 무관하게 자동확정 자체가
+                # 막히므로(geocode_service.py) true로 둬도 안전하다.
                 is_domestic=True,
                 evidence_quote=(frame.extracted_text or None),
                 confidence=None,
