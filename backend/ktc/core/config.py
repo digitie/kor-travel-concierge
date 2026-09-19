@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     # --- 2. 데이터베이스 (PostgreSQL + PostGIS, ADR-25) ---
     DATABASE_URL: str = "postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge"
     KTC_TEST_PG_DSN: str = ""
+    # 연결 풀 상한(SQLAlchemy 기본값과 동일 — 지금은 동작 변화 없음). 전용 인스턴스에서는
+    # 무의미하지만, kor-travel-docker-manager 저장소 docs/platform-topology.md §7이
+    # 정한 "공용 Postgres 인스턴스"(2026-09-19 결정, 아직 미구축) 전환 시 여러
+    # 프로젝트가 같은 서버의 max_connections를 나눠 쓰게 되므로, 코드 변경 없이 배포
+    # 설정만으로 프로젝트별 예산을 좁힐 수 있도록 미리 환경변수화해 둔다.
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
 
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""

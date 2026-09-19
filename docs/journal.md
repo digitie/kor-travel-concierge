@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-09-19: 공용 Postgres 인스턴스 전환 대비 — 연결 풀 환경변수화(데이터 이전 없음)
+
+- **배경**: `kor-travel-docker-manager` 저장소 `docs/platform-topology.md` §7이
+  같은 날(2026-09-19) "결정된 목표이나 아직 만들어지지 않은" 계획으로, 현재
+  프로젝트별 전용 Postgres 인스턴스(concierge는 `kor-travel-concierge-postgres:12600`
+  단독 소유) 6개를 포트 `11000` 단일 공용 인스턴스(`dagster_shared`,
+  `kor_travel_map`, `kor_travel_geo`, `kor_travel_concierge`, `pinvi` 등 DB를
+  한 서버 안에 분리 소유)로 통합하는 5단계 절차를 적어 두었다. 1~4단계는 다른
+  프로젝트(map·geo·pinvi)의 Dagster code-server 분리·공유 webserver/daemon
+  구성이라 Dagster가 없는 concierge에는 해당하지 않는다. concierge에 실제로
+  해당하는 5단계("애플리케이션 DB를 11000으로 이사")는 문서 자체가 "가장 비싸고
+  되돌리기 어려운 마지막 단계"로 명시하고, 다른 프로젝트도 1~4단계를 아직
+  시작하지 않았다. 사용자 확인 결과 지금은 concierge 쪽 연결 설정만
+  파라미터화해 준비해 두고, 실제 데이터 이전(다운타임 수반)은 보류하기로 했다.
+- **조사 결과**: concierge의 DB 연결은 이미 `DATABASE_URL` 환경변수 하나로 완전히
+  캡슐화돼 있어(코드 안 다른 곳에 호스트/포트/DB명 하드코딩 없음, `alembic/env.py`도
+  같은 설정을 공유), 공용 인스턴스로 옮길 때 이 값만 바꾸면 되고 코드 변경은
+  필요 없다. 유일하게 준비가 안 돼 있던 지점은 SQLAlchemy 연결 풀 크기가 코드에
+  하드코딩(기본값 `pool_size=5, max_overflow=10`)돼 있었다는 것 — 전용 인스턴스에서는
+  무의미하지만, 여러 프로젝트가 한 서버의 `max_connections`를 나눠 쓰게 되면 배포
+  쪽에서 프로젝트별 예산을 조정할 방법이 코드 배포 없이는 없었다.
+- **변경**: `DATABASE_POOL_SIZE`(기본 5)·`DATABASE_MAX_OVERFLOW`(기본 10) 설정을
+  추가해 `database.create_engine()`에 연결했다. 기본값이 SQLAlchemy 자체 기본값과
+  동일해 지금은 동작 변화가 전혀 없다 — 배포 설정(`.env`)만으로 나중에 좁힐 수
+  있도록 통로만 열어 둔 것이다. 실제 DB 데이터 이전, docker-manager의 `11000`
+  인스턴스 구축, prod `DATABASE_URL` 전환은 이번 작업 범위 밖이며 별도로 진행한다.
+- **검증**: 신규 테스트 2건(기본값 유지 확인, 설정값 반영 확인 — 엔진 생성은 실제
+  연결을 만들지 않는 lazy 동작이라 DB 없이 검증 가능)을 포함해 backend pytest
+  322건 통과, ruff clean.
+
 ## 2026-09-14: 해외 장소 필터링 프롬프트 강화 + 지도 선택 시 줌 강제 버그 수정
 
 - **해외 장소 필터링 강화**: `batch_poi.py`의 POI 추출 system instruction(정리
