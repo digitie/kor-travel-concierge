@@ -25,6 +25,16 @@
 
 ## 완료
 
+- [x] **공용 Postgres 인스턴스 전환 대비 — 연결 풀 환경변수화(데이터 이전 없음)**:
+  `kor-travel-docker-manager` 저장소 `docs/platform-topology.md` §7이 결정한
+  프로젝트 공용 Postgres 인스턴스(`11000`) 전환 계획 중 concierge에 해당하는
+  마지막 단계(앱 DB 이전)는 문서 자체가 "가장 비싸고 되돌리기 어려운 단계"로
+  명시하고 다른 프로젝트도 선행 단계를 시작 전이라, 사용자 확인에 따라 실제
+  데이터 이전은 보류하고 concierge 쪽 코드만 준비했다. `DATABASE_URL`은 이미
+  완전히 환경변수화돼 있었고, 하드코딩돼 있던 SQLAlchemy 연결 풀 크기를
+  `DATABASE_POOL_SIZE`/`DATABASE_MAX_OVERFLOW`로 환경변수화했다(기본값은
+  SQLAlchemy 자체 기본값과 동일 — 지금은 동작 변화 없음). 상세는
+  `docs/journal.md` 2026-09-19 항목 참조.
 - [x] **해외 장소 필터링 프롬프트 강화 + 지도 선택 시 줌 강제 버그 수정**:
   POI 추출 프롬프트의 국내/해외 판정 fail-open 기본값("확실하지 않으면
   국내")을 fail-close("확실하지 않으면 제외")로 뒤집고 맥락 기반 판단 지침을
