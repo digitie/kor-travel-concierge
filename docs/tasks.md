@@ -25,6 +25,16 @@
 
 ## 완료
 
+- [x] **공용 Postgres 인스턴스(`:11000`)로 실제 데이터 마이그레이션 완료(ADR-44)**:
+  2026-09-19 작업에서 보류했던 실제 데이터 이전을 진행했다. concierge 코드
+  변경은 없음(`DATABASE_URL` 배포 설정 전환만) — 새 공용 instance 구축, DB 단위
+  hard cutover(정지 → dump → restore → 검증 → `DATABASE_URL` 전환 → 재기동),
+  n150 실측으로 발견한 PostgreSQL 기본 `PUBLIC` `CONNECT` 권한 gap 수정은
+  전부 `kor-travel-docker-manager` 저장소에서 이뤄졌다(PR #360/#361/#363).
+  마이그레이션 후 테이블 26개 row count·sequence 전부 일치, Alembic head
+  일치, PostGIS 정상, 실브라우저로 결과/작업/수집(1회성 17건·반복 11건,
+  phantom 5건 비활성화 유지)/검수 화면 확인 완료. 옛 instance는 롤백 안전망으로
+  유지. 상세는 `docs/journal.md` 2026-09-20 항목 참조.
 - [x] **공용 Postgres 인스턴스 전환 대비 — 연결 풀 환경변수화(데이터 이전 없음)**:
   `kor-travel-docker-manager` 저장소 `docs/platform-topology.md` §7이 결정한
   프로젝트 공용 Postgres 인스턴스(`11000`) 전환 계획 중 concierge에 해당하는
