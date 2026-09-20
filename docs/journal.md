@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-09-20: 공용 Postgres 인스턴스(`:11000`)로 실제 데이터 마이그레이션 완료(ADR-44)
+
+- **배경**: 2026-09-19 작업(연결 풀 환경변수화, PR #236)에서 보류했던 실제 데이터
+  이전을 이번에 진행했다. `kor-travel-docker-manager` 저장소에 새 공용 instance
+  `kor-travel-shared-postgres`(:11000)를 구축하고(PR #360/#361/#363, ADR-44),
+  concierge 전용 role `kor_travel_concierge_app`(NOSUPERUSER/NOCREATEDB/
+  NOCREATEROLE, `kor_travel_concierge` database 하나에만 권한)을 만들어 ADR-37이
+  겪은 격리 실패(role/ACL은 database가 아니라 cluster 전역)를 반복하지 않도록
+  했다. 이 저장소(concierge) 자체는 코드 변경이 전혀 없다 — `DATABASE_URL`이
+  이미 완전히 환경변수화돼 있었으므로 배포 설정 전환만으로 충분했다.
+- **n150 배포 중 발견한 보안 gap**: 최초 배포 직후 실측에서 PostgreSQL이 기본적으로
+  모든 database에 `PUBLIC` `CONNECT`를 부여한다는 사실을 확인했다 — db-init이
+  role/database/extension만 만들고 CONNECT는 걷어내지 않아, 새 role이 bootstrap
+  `postgres` database에도 연결할 수 있었다. `REVOKE CONNECT ... FROM PUBLIC`
+  (bootstrap DB + 자기 DB) 후 자기 DB에만 `GRANT CONNECT`로 즉시 고치고 소스에도
+  반영했다(PR #361).
+- **Hard cutover 절차**: `pg_advisory_xact_lock`이 database 단위라 신·구 instance에
+  동시 쓰기가 있으면 동시성 보장이 깨지므로, 완전 정지 후 일괄 전환으로 진행했다.
+  1) `ktdctl db-backup create concierge`로 archival 백업(사전 확보) → 2) concierge
+  api/mcp/scheduler 컨테이너 정지 → 3) 정지 직후 기존 instance에서
+  `pg_dump --format=custom --compress=6` → 4) 새 instance로 `pg_restore`
+  (`--no-owner --role=kor_travel_concierge_app`; `pg_stat_statements`/`postgis`
+  주석과 옛 instance 전용 `addr` role GRANT 등 4건의 owner-only 경고는 실제 데이터
+  손실 없이 무해함을 확인) → 5) 검증(테이블 26개 row count 전부 old=new 정확히
+  일치, sequence 값 전부 일치, `alembic_version=20260901_0029`, `postgis_full_version()`
+  정상) → 6) `DATABASE_URL`을 새 instance로 전환 → 7) 컨테이너 재기동, `/health`
+  200, 실제 연결이 새 instance로 붙는지 확인(신규 instance 7개 연결, 구
+  instance 0개 신규 연결).
+- **실브라우저 검증**: 로그인 후 결과(2,694건 검수 대기)·작업(작업 이력
+  페이지네이션 정상)·수집(1회성 수집 17건 패널, 반복 작업 11건 — 2026-09-12
+  phantom 5건 비활성화가 마이그레이션 후에도 유지됨 확인)·검수(개별 후보 상세·
+  외부 API 대조) 화면이 모두 실제 데이터로 정상 동작함을 확인했다.
+- **후속**: `kor-travel-docker-manager`의 백업 도구(`standalone_backup.py`)가
+  일상 백업 대상을 새 instance로 옮기도록 별도 PR(#363)로 수정하고 n150에
+  반영, 새 instance를 실제로 백업해 정상 동작을 재확인했다. 옛
+  `kor-travel-concierge-postgres`(:12600)는 삭제하지 않고 롤백 안전망으로 그대로
+  둔다(현재 쓰기 대상 아님). geo/map/pinvi는 이번 작업 범위 밖이며 ADR-37(프로젝트별
+  전용 instance)을 그대로 유지한다. 상세 결정 경위는 `kor-travel-docker-manager`
+  저장소 `docs/decisions.md` ADR-44 참조.
+
 ## 2026-09-19: 공용 Postgres 인스턴스 전환 대비 — 연결 풀 환경변수화(데이터 이전 없음)
 
 - **배경**: `kor-travel-docker-manager` 저장소 `docs/platform-topology.md` §7이
