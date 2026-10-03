@@ -1999,9 +1999,13 @@ def test_register_worker_jobs_omits_source_scan_when_disabled():
     }
 
 
-async def test_shutdown_requeues_after_handler_cleanup_without_consuming_retry(
-    session, session_factory,
+@pytest.mark.parametrize("database_retry", [False, True])
+async def test_requeue_cleans_owned_analysis_after_handler_cleanup(
+    session, session_factory, monkeypatch, database_retry,
 ):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(worker, "retry_delay", lambda attempt: 0)
     run = await crawl_run_service.create_run(
         session, job_type="harvest", source="scheduler", target_type="keyword",
         target_id="종료 검증",
@@ -2021,6 +2025,8 @@ async def test_shutdown_requeues_after_handler_cleanup_without_consuming_retry(
     async def handler(session, run):
         started.set()
         try:
+            if database_retry:
+                raise OperationalError(None, None, RuntimeError("connection lost"))
             await asyncio.sleep(3600)
         finally:
             await asyncio.sleep(0.01)
@@ -2030,16 +2036,19 @@ async def test_shutdown_requeues_after_handler_cleanup_without_consuming_retry(
         session_factory, handlers={"harvest": handler}, heartbeat_interval_seconds=999,
     ))
     await asyncio.wait_for(started.wait(), 5)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    if database_retry:
+        await asyncio.wait_for(task, 5)
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert cleaned.is_set()
     refreshed = await _fresh_run(session_factory, run.id)
     assert refreshed.state == RunState.PENDING
-    assert refreshed.retry_count == 0
+    assert refreshed.retry_count == int(database_retry)
     assert refreshed.started_at is None
     assert refreshed.heartbeat_at is None
-    assert "다음 기동" in refreshed.current_message
+    assert ("재시도 대기열" if database_retry else "다음 기동") in refreshed.current_message
     async with session_factory() as check:
         analysis = await check.get(YoutubeVideoAnalysisRun, child_id)
         assert analysis.state == VideoAnalysisRunState.PENDING
@@ -2055,3 +2064,125 @@ async def test_memory_high_water_defers_claim_without_touching_database(monkeypa
     monkeypatch.setattr(worker, "_worker_memory_mb", lambda: 2048)
     # DB를 열거나 claim했다면 object()는 session_factory로 호출할 수 없어 실패한다.
     assert await worker.run_once(session_factory=object()) is None
+
+
+@pytest.mark.parametrize("code,expected_retries", [("08006", 3), ("28P01", 0)])
+async def test_database_job_retry_is_bounded_and_auth_errors_fail_once(
+    session, session_factory, monkeypatch, code, expected_retries
+):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(worker, "retry_delay", lambda attempt: 0)
+    monkeypatch.setattr(worker.get_settings(), "SCHEDULER_MAX_RETRIES", 3)
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="scheduler"
+    )
+    calls = 0
+
+    async def handler(session, run):
+        nonlocal calls
+        calls += 1
+        original = RuntimeError("DB 원문")
+        original.sqlstate = code
+        raise OperationalError(None, None, original)
+
+    for attempt in range(expected_retries + 1):
+        await worker.run_once(session_factory, handlers={"harvest": handler})
+        fresh = await _fresh_run(session_factory, run.id)
+        if attempt < expected_retries:
+            assert fresh.state == RunState.PENDING
+            assert fresh.retry_count == attempt + 1
+        else:
+            assert fresh.state == RunState.FAILED
+            assert fresh.retry_count == expected_retries
+    assert calls == expected_retries + 1
+
+
+async def test_database_job_retry_uses_new_session_then_completes(
+    session, session_factory, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(worker, "retry_delay", lambda attempt: 0)
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="scheduler"
+    )
+    sessions = []
+
+    async def handler(session, run):
+        sessions.append(session)
+        if len(sessions) == 1:
+            # 실제 transaction을 실패시켜 손상된 session을 재사용하지 않는지 확인한다.
+            from sqlalchemy import text
+            try:
+                await session.execute(text("SELECT 1 / 0"))
+            except Exception:
+                original = RuntimeError("DB recovery")
+                original.sqlstate = "57P03"
+                raise OperationalError(None, None, original) from None
+        return {"recovered": True}
+
+    await worker.run_once(session_factory, handlers={"harvest": handler})
+    assert (await _fresh_run(session_factory, run.id)).state == RunState.PENDING
+    await worker.run_once(session_factory, handlers={"harvest": handler})
+    fresh = await _fresh_run(session_factory, run.id)
+    assert fresh.state == RunState.DONE
+    assert fresh.retry_count == 1
+    assert sessions[0] is not sessions[1]
+
+
+async def test_cancel_during_database_job_backoff_does_not_retry(
+    session, session_factory, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(worker, "retry_delay", lambda attempt: 30)
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="scheduler"
+    )
+    failed = asyncio.Event()
+
+    async def handler(session, run):
+        failed.set()
+        raise OperationalError(None, None, RuntimeError("connection lost"))
+
+    task = asyncio.create_task(worker.run_once(
+        session_factory, handlers={"harvest": handler},
+        heartbeat_interval_seconds=0.02,
+    ))
+    await asyncio.wait_for(failed.wait(), 5)
+    async with session_factory() as cancellation_session:
+        await crawl_run_service.request_cancel(cancellation_session, run.id)
+    await asyncio.wait_for(task, 5)
+    fresh = await _fresh_run(session_factory, run.id)
+    assert fresh.state == RunState.CANCELLED
+    assert fresh.retry_count == 0
+
+
+async def test_shutdown_during_database_job_backoff_preserves_retry_budget(
+    session, session_factory, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(worker, "retry_delay", lambda attempt: 30)
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="scheduler"
+    )
+    failed = asyncio.Event()
+
+    async def handler(session, run):
+        failed.set()
+        raise OperationalError(None, None, RuntimeError("connection lost"))
+
+    task = asyncio.create_task(worker.run_once(
+        session_factory, handlers={"harvest": handler},
+    ))
+    await asyncio.wait_for(failed.wait(), 5)
+    # handler 예외 뒤 백오프 대기로 전환될 시간을 준다.
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    fresh = await _fresh_run(session_factory, run.id)
+    assert fresh.state == RunState.PENDING
+    assert fresh.retry_count == 0
