@@ -9,7 +9,7 @@
     3. faster-whisper (로컬 전사)
 
 각 provider는 사용 시점에만 지연 import하므로, 라이브러리가 없는 환경에서도 이
-모듈을 import하고 테스트할 수 있다. 블로킹 호출은 `asyncio.to_thread`로 격리한다.
+모듈을 import하고 테스트할 수 있다. 운영 비동기 경로의 블로킹 호출은 취소 가능한 자식 프로세스로 격리한다.
 
 **관측(T-164)**: 각 provider의 시도는 `except Exception: return None`으로 삼키지 않고
 예외 유형별 `TranscriptOutcomeCode`로 분류해 `TranscriptAttempt`로 반환한다(예외를
@@ -668,6 +668,9 @@ def transcribe_via_whisper(
     with tempfile.TemporaryDirectory() as tmp:
         opts = {
             "format": "bestaudio/best",
+            "socket_timeout": 20,
+            "retries": 2,
+            "fragment_retries": 2,
             "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
@@ -688,7 +691,10 @@ def transcribe_via_whisper(
                 TranscriptOutcomeCode.DOWNLOAD_ERROR.value, detail="오디오 다운로드 실패"
             )
         try:
-            model = WhisperModel(resolved_model_size, device="cpu", compute_type="int8")
+            model = WhisperModel(
+                resolved_model_size, device="cpu", compute_type="int8",
+                cpu_threads=2, num_workers=1,
+            )
             whisper_segments, info = model.transcribe(str(audio))
             detected_language = getattr(info, "language", None)
             segments = [
@@ -876,8 +882,30 @@ def fetch_transcript(
 async def fetch_transcript_async(
     video_id: str, *, providers: tuple[TranscriptProvider, ...] | None = None
 ) -> TranscriptOutcome:
-    """블로킹 체인을 executor로 격리해 실행하고 관측 결과를 반환한다."""
-    return await asyncio.to_thread(fetch_transcript, video_id, providers=providers)
+    """설정 순서를 보존하며 provider를 취소 가능한 프로세스에서 실행한다."""
+    from ktc.etl.transcript_process import run_provider_process
+
+    attempts: list[TranscriptAttempt] = []
+    chain = providers if providers is not None else _resolve_provider_chain()
+    for sequence, provider in enumerate(chain, start=1):
+        if provider is transcribe_via_whisper:
+            attempt = await transcribe_whisper_async(video_id)
+        elif provider in CAPTION_PROVIDERS:
+            try:
+                attempt = await run_provider_process(_provider_label(provider), video_id)
+            except Exception as exc:
+                attempt = TranscriptAttempt(
+                    provider=_provider_label(provider),
+                    outcome=_classify_exception(exc), detail=_exc_detail(exc),
+                )
+        else:
+            # 테스트/주입 provider의 기존 계약만 유지한다. 운영 provider는 위 격리 경로다.
+            attempt = await asyncio.to_thread(_run_provider, provider, video_id, sequence)
+        attempt.sequence = sequence
+        attempts.append(attempt)
+        if attempt.succeeded:
+            return TranscriptOutcome(result=attempt.result, attempts=attempts)
+    return TranscriptOutcome(result=None, attempts=attempts)
 
 
 async def fetch_captions_async(video_id: str) -> TranscriptOutcome:
@@ -886,7 +914,7 @@ async def fetch_captions_async(video_id: str) -> TranscriptOutcome:
     순수 네트워크 I/O만 수행한다 — DB 세션에 접근하지 않으므로 다수 영상을
     `asyncio.Semaphore`로 동시에 호출해도 안전하다(session race 없음).
     """
-    return await asyncio.to_thread(fetch_transcript, video_id, providers=caption_provider_chain())
+    return await fetch_transcript_async(video_id, providers=caption_provider_chain())
 
 
 def whisper_failure_attempt(
@@ -914,10 +942,10 @@ async def transcribe_whisper_async(
     force: bool = False,
     model_size: str | None = None,
 ) -> TranscriptAttempt:
-    """whisper 단건 시도(T-172). `transcribe_via_whisper`의 얇은 async 래퍼다.
+    """취소·메모리 제한을 적용한 whisper 단건 시도.
 
-    caption과 달리 CPU 집약이라 호출자는 반드시 동시성 1로만 실행해야 한다(gather
-    금지). `force=False`(기본, auto 경로)면 `TRANSCRIPT_WHISPER_ENABLED` 게이트를
+    프로세스 전체 semaphore로 두 worker lane의 동시 전사를 한 개로 제한한다.
+    `force=False`(기본, auto 경로)면 `TRANSCRIPT_WHISPER_ENABLED` 게이트를
     그대로 따르고, `force=True`(수동 재전사)면 게이트를 우회한다.
 
     `transcribe_via_whisper`는 대개 내부에서 예외를 삼켜 분류된 attempt를 반환하지만,
@@ -928,8 +956,21 @@ async def transcribe_whisper_async(
     """
     started = time.monotonic()
     try:
-        return await asyncio.to_thread(
-            transcribe_via_whisper, video_id, force=force, model_size=model_size
+        import os
+
+        if not force and os.getenv("TRANSCRIPT_WHISPER_ENABLED", "").strip().lower() not in (
+            "1", "true", "yes",
+        ):
+            return TranscriptAttempt(
+                provider=TranscriptProviderName.WHISPER.value,
+                outcome=TranscriptOutcomeCode.DISABLED.value,
+                detail="TRANSCRIPT_WHISPER_ENABLED 비활성",
+            )
+        from ktc.etl.transcript_process import run_provider_process
+
+        return await run_provider_process(
+            TranscriptProviderName.WHISPER.value, video_id,
+            force=force, model_size=model_size,
         )
     except Exception as exc:
         return whisper_failure_attempt(exc, started=started)
@@ -968,4 +1009,4 @@ async def get_transcript_async(
     video_id: str, *, providers: tuple[TranscriptProvider, ...] | None = None
 ) -> TranscriptResult | None:
     """`get_transcript`의 async 래퍼(result만)."""
-    return await asyncio.to_thread(get_transcript, video_id, providers=providers)
+    return (await fetch_transcript_async(video_id, providers=providers)).result

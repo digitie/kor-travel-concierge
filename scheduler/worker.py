@@ -16,19 +16,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import signal
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ktc.core.config import get_settings
-from ktc.core.database import async_session_factory, init_db
+from ktc.core.database import async_session_factory, engine, init_db
 from ktc.etl import (
     batch_poi_service,
     category_catalog,
@@ -72,6 +74,29 @@ LEGACY_WORKER_JOB_ID = "crawl-run-worker"
 
 JobHandler = Callable[[AsyncSession, CrawlRun], Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
+_last_memory_warning_at = 0.0
+
+
+def _worker_memory_mb() -> float:
+    """제한된 Docker cgroup의 익명 메모리, 그 밖에서는 실행자 RSS를 읽는다."""
+    try:
+        root = Path("/sys/fs/cgroup")
+        if (root / "memory.max").read_text().strip() != "max":
+            entries = dict(
+                line.split() for line in (root / "memory.stat").read_text().splitlines()
+            )
+            return int(entries["anon"]) / (1024 * 1024)
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024
+    except (OSError, ValueError):
+        pass
+    return 0.0
+
+
 VIDEO_ANALYSIS_STALE_MAX_ATTEMPTS = 3
 VIDEO_ANALYSIS_RUNNING_LEASE_SECONDS = 15 * 60
 
@@ -1268,6 +1293,34 @@ async def _lock_owned_crawl_run_attempt(
     ).scalar_one_or_none()
 
 
+async def _requeue_interrupted_attempt(session_factory, run: CrawlRun) -> None:
+    async with session_factory() as session:
+        owned_run = await _lock_owned_crawl_run_attempt(
+            session, run_id=run.id, retry_count=int(run.retry_count)
+        )
+        if owned_run is None:
+            await session.rollback()
+        else:
+            if not owned_run.cancel_requested:
+                # parent를 재claim하기 전에 이전 attempt가 소유한 분석 lease도 회수한다.
+                # retry_count는 유지하므로 이를 놓치면 child가 running으로 남아 건너뛰어진다.
+                await session.execute(
+                    update(YoutubeVideoAnalysisRun)
+                    .where(
+                        YoutubeVideoAnalysisRun.owner_crawl_run_id == run.id,
+                        YoutubeVideoAnalysisRun.owner_retry_count == int(run.retry_count),
+                        YoutubeVideoAnalysisRun.state == VideoAnalysisRunState.RUNNING,
+                    )
+                    .values(
+                        state=VideoAnalysisRunState.PENDING,
+                        started_at=None, finished_at=None,
+                        owner_crawl_run_id=None, owner_retry_count=None, claim_token=None,
+                        last_error="worker_shutdown: 실행자 종료 뒤 재실행 대기",
+                    )
+                )
+            await crawl_run_service.requeue_interrupted(session, owned_run)
+
+
 async def _run_handler_with_session(
     session_factory: async_sessionmaker[AsyncSession],
     run: CrawlRun,
@@ -1375,33 +1428,30 @@ async def _hold_crawl_run_execution_lock(
     """작업 handler가 끝날 때까지 삭제와 공유하는 session advisory lock을 보유한다."""
     lock_name = crawl_run_service.crawl_run_execution_lock_name(run_id)
     async with session_factory() as lock_session:
-        await lock_session.execute(
-            select(
-                func.pg_advisory_lock(
-                    func.hashtextextended(lock_name, 0)
-                )
+        # session.commit()은 연결을 풀에 반환한다. session advisory lock은 같은
+        # 물리 연결로 해제해야 하므로 handler 동안 전용 연결을 실제로 보유한다.
+        async with lock_session.bind.connect() as connection:
+            await connection.execute(
+                select(func.pg_advisory_lock(func.hashtextextended(lock_name, 0)))
             )
-        )
-        # session advisory lock은 transaction 종료 후에도 유지된다. lock 획득
-        # 직후 commit해 장시간 ETL 동안 idle transaction으로 남지 않게 한다.
-        await lock_session.commit()
-        try:
-            yield
-        finally:
+            await connection.commit()
             try:
-                await lock_session.execute(
-                    select(
-                        func.pg_advisory_unlock(
-                            func.hashtextextended(lock_name, 0)
-                        )
+                yield
+            finally:
+                async def release() -> None:
+                    await connection.execute(
+                        select(func.pg_advisory_unlock(func.hashtextextended(lock_name, 0)))
                     )
-                )
-                await lock_session.commit()
-            except Exception:  # pragma: no cover - connection failure releases lock
-                await lock_session.rollback()
-                logger.exception(
-                    "crawl_run execution advisory lock 해제 실패(run_id=%s)", run_id
-                )
+                    await connection.commit()
+
+                try:
+                    await asyncio.wait_for(release(), timeout=5)
+                except Exception as exc:
+                    # 잠금 해제를 못한 연결을 pool에 재사용하지 않는다.
+                    await connection.invalidate()
+                    logger.warning(
+                        "실행 잠금 연결 정리(run_id=%s, %s)", run_id, type(exc).__name__
+                    )
 
 
 async def execute_run(
@@ -1484,6 +1534,17 @@ async def _execute_run_locked(
         else:
             # 외부(스케줄러 종료 등) 취소는 handler를 정리하고 그대로 전파한다.
             handler_task.cancel()
+            # handler와 자식 프로세스의 취소 정리가 끝난 뒤 현재 attempt만 재투입한다.
+            # DB가 내려갔으면 running lease를 남겨 다음 기동의 stale 복구에 맡긴다.
+            try:
+                await asyncio.wait_for(
+                    _requeue_interrupted_attempt(session_factory, run), timeout=10,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "종료 중 작업 상태 저장 실패(run_id=%s, %s): 다음 기동에서 lease를 복구합니다.",
+                    run.id, type(exc).__name__,
+                )
             raise
     except Exception as exc:
         async with session_factory() as session:
@@ -1522,6 +1583,17 @@ async def run_once(
     반환값은 claim하여 실행한 `crawl_runs.id`이며, 실행할 작업이 없으면 None이다.
     """
     settings = get_settings()
+    global _last_memory_warning_at
+    memory_mb = _worker_memory_mb()
+    if memory_mb >= settings.SCHEDULER_MEMORY_HIGH_WATER_MB:
+        now = time.monotonic()
+        if now - _last_memory_warning_at >= 60:
+            logger.warning(
+                "실행자 메모리 %.0fMiB: 새 작업 claim을 보류합니다(한도=%sMiB).",
+                memory_mb, settings.SCHEDULER_MEMORY_HIGH_WATER_MB,
+            )
+            _last_memory_warning_at = now
+        return None
     async with session_factory() as session:
         await crawl_run_service.requeue_stale(
             session,
@@ -1552,6 +1624,7 @@ async def worker_loop(
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     *,
     handlers: Mapping[str, JobHandler] | None = None,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
     """APScheduler interval job으로 `run_once`를 반복 실행한다."""
     try:
@@ -1561,7 +1634,13 @@ async def worker_loop(
 
     settings = get_settings()
     use_persistent_jobstore = should_use_persistent_jobstore(session_factory, handlers)
-    scheduler_kwargs: dict[str, Any] = {"timezone": timezone.utc}
+    from scheduler.draining_executor import DrainingAsyncIOExecutor
+
+    executor = DrainingAsyncIOExecutor()
+    scheduler_kwargs: dict[str, Any] = {
+        "timezone": timezone.utc,
+        "executors": {"default": executor},
+    }
     if use_persistent_jobstore:
         try:
             from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore  # type: ignore
@@ -1576,7 +1655,13 @@ async def worker_loop(
                     settings.SCHEDULER_JOBSTORE_URL or None,
                 ),
                 tablename=settings.SCHEDULER_JOBSTORE_TABLE,
-                engine_options={"pool_pre_ping": True},
+                engine_options={
+                    "pool_pre_ping": True,
+                    "connect_args": {
+                        "connect_timeout": 5,
+                        "options": "-c statement_timeout=5000 -c lock_timeout=2000",
+                    },
+                },
             )
         }
     scheduler = RecoveringAsyncIOScheduler(**scheduler_kwargs)
@@ -1594,10 +1679,27 @@ async def worker_loop(
         settings=settings,
     )
 
+    stop = stop_event if stop_event is not None else asyncio.Event()
+    loop = asyncio.get_running_loop()
+    if stop_event is None:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(signum, stop.set)
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
     finally:
-        scheduler.shutdown(wait=False)
+        # 신호를 받은 뒤 새 작업을 먼저 막는다. 짧은 작업은 완료를 기다리고,
+        # 긴 작업은 취소 정리와 pending 복귀를 끝낸 뒤 jobstore를 닫는다.
+        scheduler.pause()
+        logger.info("스케줄러 종료 요청: 새 작업 접수를 중단합니다.")
+        try:
+            await executor.drain(settings.SCHEDULER_SHUTDOWN_GRACE_SECONDS)
+        finally:
+            scheduler.shutdown(wait=False)
+            await asyncio.sleep(0)
+            if stop_event is None:
+                for signum in (signal.SIGTERM, signal.SIGINT):
+                    loop.remove_signal_handler(signum)
+        logger.info("스케줄러 작업 정리와 정상 종료를 완료했습니다.")
 
 
 def register_worker_jobs(
@@ -1637,6 +1739,7 @@ def register_worker_jobs(
             id=job_id,
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=None,
             replace_existing=True,
         )
     if settings.SOURCE_SCAN_ENABLED:
@@ -1652,6 +1755,7 @@ def register_worker_jobs(
             id="source-scan-enqueue",
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=None,
             replace_existing=True,
         )
     if settings.FEATURE_EXPORT_RECONCILE_ENABLED:
@@ -1669,6 +1773,7 @@ def register_worker_jobs(
             id="feature-export-reconcile",
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=None,
             replace_existing=True,
         )
 
@@ -1679,14 +1784,42 @@ async def amain() -> None:
     if not settings.SCHEDULER_ENABLED:
         print("[Scheduler] SCHEDULER_ENABLED=false 이므로 실행자를 시작하지 않는다.")
         return
-    await init_db()
-    print(
-        "[Scheduler] APScheduler 단일 실행자 시작 "
-        f"(poll={settings.SCHEDULER_POLL_INTERVAL_SECONDS}s, "
-        f"stale={settings.SCHEDULER_STALE_THRESHOLD_SECONDS}s, "
-        f"max_retries={settings.SCHEDULER_MAX_RETRIES})"
-    )
-    await worker_loop()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, stop.set)
+    worker_started = False
+
+    async def start_worker() -> None:
+        nonlocal worker_started
+        await init_db()
+        if stop.is_set():
+            return
+        print(
+            "[Scheduler] APScheduler 단일 실행자 시작 "
+            f"(poll={settings.SCHEDULER_POLL_INTERVAL_SECONDS}s, "
+            f"stale={settings.SCHEDULER_STALE_THRESHOLD_SECONDS}s, "
+            f"max_retries={settings.SCHEDULER_MAX_RETRIES})"
+        )
+        worker_started = True
+        await worker_loop(stop_event=stop)
+
+    task = asyncio.create_task(start_worker())
+    stop_task = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait({task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        if stop.is_set() and not worker_started:
+            # DB 초기화 중에도 SIGTERM을 강제 종료로 처리하지 않는다.
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        else:
+            await task
+    finally:
+        stop_task.cancel()
+        await asyncio.gather(stop_task, return_exceptions=True)
+        await engine.dispose()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(signum)
 
 
 async def reconcile_feature_exports_once(

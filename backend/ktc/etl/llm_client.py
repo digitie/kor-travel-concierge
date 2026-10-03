@@ -44,6 +44,8 @@ import inspect
 import json
 import logging
 import time
+import threading
+from concurrent.futures import CancelledError as ThreadCancelledError
 from dataclasses import dataclass
 from typing import Any
 
@@ -352,6 +354,26 @@ def _estimate_gemini_tokens(
     )
 
 
+
+async def _call_in_thread(function, **kwargs):
+    """취소 뒤 새 HTTP 재시도를 막고 현재 호출의 정리가 끝날 때까지 기다린다."""
+    stopped = threading.Event()
+
+    def pause(seconds: float) -> None:
+        if stopped.wait(seconds):
+            raise ThreadCancelledError("실행 종료로 LLM 재시도를 중단합니다.")
+
+    task = asyncio.create_task(asyncio.to_thread(
+        function, **kwargs, cancelled=stopped.is_set, sleep=pause,
+    ))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        stopped.set()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
+
 async def generate(
     runtime: LlmRuntime,
     prompt: str | None = None,
@@ -389,7 +411,7 @@ async def generate(
                 full = compose_prompt(runtime.preprompt, prompt or "")
             else:
                 full = prompt or ""
-            payload = await asyncio.to_thread(
+            payload = await _call_in_thread(
                 deepseek_client.post_chat_completion_payload,
                 api_key=runtime.deepseek_api_key,
                 model=runtime.model,
@@ -416,7 +438,7 @@ async def generate(
                 estimated_tokens=estimated_tokens,
                 max_wait_seconds=quota_max_wait,
             )
-            data = await asyncio.to_thread(
+            data = await _call_in_thread(
                 gemini_client.post_generate_content,
                 api_key=runtime.gemini_api_key,
                 model=runtime.model,

@@ -12,6 +12,7 @@ import random
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import CancelledError as ThreadCancelledError
 from typing import Any
 
 import requests
@@ -124,6 +125,7 @@ def post_generate_content(
     jitter: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
+    cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """`generateContent`를 호출하고 JSON 응답(dict)을 반환한다.
 
@@ -149,6 +151,8 @@ def post_generate_content(
     last_exc: Exception | None = None
     last_detail: str | None = None
     for attempt in range(max_attempts):
+        if cancelled is not None and cancelled():
+            raise ThreadCancelledError("실행 종료로 LLM 재시도를 중단합니다.")
         retryable = False
         try:
             response = requests.post(url, headers=headers, json=body, timeout=timeout_seconds)
