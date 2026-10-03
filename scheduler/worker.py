@@ -29,6 +29,8 @@ import httpx
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from scheduler.db_retry import is_transient_database_error, retry_database, retry_delay
+
 from ktc.core.config import get_settings
 from ktc.core.database import async_session_factory, engine, init_db
 from ktc.etl import (
@@ -1293,7 +1295,9 @@ async def _lock_owned_crawl_run_attempt(
     ).scalar_one_or_none()
 
 
-async def _requeue_interrupted_attempt(session_factory, run: CrawlRun) -> None:
+async def _requeue_interrupted_attempt(
+    session_factory, run: CrawlRun, *, database_retry: bool = False,
+) -> None:
     async with session_factory() as session:
         owned_run = await _lock_owned_crawl_run_attempt(
             session, run_id=run.id, retry_count=int(run.retry_count)
@@ -1315,10 +1319,18 @@ async def _requeue_interrupted_attempt(session_factory, run: CrawlRun) -> None:
                         state=VideoAnalysisRunState.PENDING,
                         started_at=None, finished_at=None,
                         owner_crawl_run_id=None, owner_retry_count=None, claim_token=None,
-                        last_error="worker_shutdown: 실행자 종료 뒤 재실행 대기",
+                        last_error=(
+                            "database_retry: DB 일시 오류 뒤 재실행 대기"
+                            if database_retry else
+                            "worker_shutdown: 실행자 종료 뒤 재실행 대기"
+                        ),
                     )
                 )
-            await crawl_run_service.requeue_interrupted(session, owned_run)
+            if database_retry and not owned_run.cancel_requested:
+                owned_run.retry_count += 1
+            await crawl_run_service.requeue_interrupted(
+                session, owned_run, database_retry=database_retry,
+            )
 
 
 async def _run_handler_with_session(
@@ -1418,7 +1430,9 @@ async def _heartbeat_and_cancel_watch(
                     on_cancel()
                     return
         except Exception as exc:  # pragma: no cover - DB 상태에 따라 메시지가 달라진다.
-            logger.warning("crawl_run heartbeat 갱신 실패(run_id=%s): %s", run_id, exc)
+            logger.warning(
+                "crawl_run heartbeat 갱신 실패(run_id=%s, %s)", run_id, type(exc).__name__
+            )
 
 
 @asynccontextmanager
@@ -1462,12 +1476,22 @@ async def execute_run(
     heartbeat_interval_seconds: float | None = None,
 ) -> None:
     """작업 실행과 삭제의 경합을 lease로 보호한다."""
-    async with _hold_crawl_run_execution_lock(session_factory, run.id):
-        await _execute_run_locked(
-            session_factory,
-            run,
-            handlers=handlers,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
+    try:
+        async with _hold_crawl_run_execution_lock(session_factory, run.id):
+            await _execute_run_locked(
+                session_factory,
+                run,
+                handlers=handlers,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+            )
+    except Exception as exc:
+        if not is_transient_database_error(exc):
+            raise
+        # 연결 자체를 잃어 재투입 저장까지 실패한 경우 lease를 남긴다.
+        # 다음 tick의 stale 복구가 횟수 제한과 소유권 확인을 적용한다.
+        logger.warning(
+            "작업 DB 상태 저장 실패(run_id=%s, %s): heartbeat 복구를 기다립니다.",
+            run.id, type(exc).__name__,
         )
 
 
@@ -1518,7 +1542,28 @@ async def _execute_run_locked(
         )
     )
     try:
-        await handler_task
+        try:
+            await handler_task
+        except Exception as exc:
+            if not is_transient_database_error(exc):
+                raise
+            if int(run.retry_count) >= settings.SCHEDULER_MAX_RETRIES:
+                raise
+            delay = retry_delay(int(run.retry_count) + 1)
+            logger.warning(
+                "작업 DB 일시 오류(run_id=%s, %s): %s초 뒤 대기열에 재투입합니다.",
+                run.id, type(exc).__name__, delay,
+            )
+            # watcher가 사용자 중지 시 백오프도 취소하도록 현재 task를 교체한다.
+            handler_task = asyncio.create_task(asyncio.sleep(delay))
+            await handler_task
+            await retry_database(
+                lambda: _requeue_interrupted_attempt(
+                    session_factory, run, database_retry=True,
+                ),
+                context="작업 재투입",
+                max_retries=settings.SCHEDULER_MAX_RETRIES,
+            )
     except asyncio.CancelledError:
         if cancel_state["requested"]:
             async with session_factory() as session:
@@ -1547,6 +1592,12 @@ async def _execute_run_locked(
                 )
             raise
     except Exception as exc:
+        if (
+            is_transient_database_error(exc)
+            and int(run.retry_count) < settings.SCHEDULER_MAX_RETRIES
+        ):
+            # 재투입 저장 자체가 실패하면 실패 확정 대신 lease 복구에 맡긴다.
+            raise
         async with session_factory() as session:
             owned_run = await _lock_owned_crawl_run_attempt(
                 session,
@@ -1554,7 +1605,13 @@ async def _execute_run_locked(
                 retry_count=int(run.retry_count),
             )
             if owned_run is not None:
-                await crawl_run_service.mark_failed(session, run.id, error=str(exc))
+                await crawl_run_service.mark_failed(
+                    session, run.id,
+                    error=(
+                        f"DB 일시 오류 재시도 한도 초과({type(exc).__name__})"
+                        if is_transient_database_error(exc) else str(exc)
+                    ),
+                )
             else:
                 await session.rollback()
     finally:
@@ -1667,35 +1724,47 @@ async def worker_loop(
     scheduler = RecoveringAsyncIOScheduler(**scheduler_kwargs)
     # job 등록/제거는 start() 이후에 한다 — persistent SQLAlchemyJobStore는 start()
     # 시점에 연결되므로 구 job id 제거가 실제 store 행에 반영되려면 running 상태여야
-    # 한다(T-163). 근거: start() 직후 register_worker_jobs(구 job 제거)까지 await가
-    # 없어 이벤트 루프가 job을 dispatch할 틈이 없다 → 구 crawl-run-worker는 단 한 번도
-    # dispatch되기 전에 제거된다.
-    scheduler.start()
-    register_worker_jobs(
-        scheduler,
-        session_factory=session_factory,
-        handlers=handlers,
-        use_persistent_jobstore=use_persistent_jobstore,
-        settings=settings,
-    )
-
+    # 한다(T-163). 등록 완료까지 paused 상태를 유지해 DB 재시도 대기 중에도
+    # 구 단일 worker와 부분 등록 job이 실행되지 않게 한다.
     stop = stop_event if stop_event is not None else asyncio.Event()
     loop = asyncio.get_running_loop()
     if stop_event is None:
         for signum in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(signum, stop.set)
+
+    async def prepare_scheduler() -> None:
+        # 부분 등록 뒤 DB가 끊겨도 기존 job이 먼저 실행되지 않도록 일시 정지한다.
+        if not scheduler.running:
+            scheduler.start(paused=True)
+        register_worker_jobs(
+            scheduler,
+            session_factory=session_factory,
+            handlers=handlers,
+            use_persistent_jobstore=use_persistent_jobstore,
+            settings=settings,
+        )
+
     try:
-        await stop.wait()
+        await retry_database(prepare_scheduler, context="예약 등록", stop=stop)
+        if not stop.is_set():
+            scheduler.resume()
+            await stop.wait()
     finally:
         # 신호를 받은 뒤 새 작업을 먼저 막는다. 짧은 작업은 완료를 기다리고,
         # 긴 작업은 취소 정리와 pending 복귀를 끝낸 뒤 jobstore를 닫는다.
-        scheduler.pause()
+        if scheduler.running:
+            scheduler.pause()
         logger.info("스케줄러 종료 요청: 새 작업 접수를 중단합니다.")
         try:
             await executor.drain(settings.SCHEDULER_SHUTDOWN_GRACE_SECONDS)
         finally:
-            scheduler.shutdown(wait=False)
-            await asyncio.sleep(0)
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+                await asyncio.sleep(0)
+            else:
+                # start() 중 연결 오류가 난 저장소도 생성된 연결 풀을 회수한다.
+                for store in scheduler_kwargs.get("jobstores", {}).values():
+                    store.shutdown()
             if stop_event is None:
                 for signum in (signal.SIGTERM, signal.SIGINT):
                     loop.remove_signal_handler(signum)
@@ -1714,7 +1783,7 @@ def register_worker_jobs(
 
     - 구 단일 워커 job id(`crawl-run-worker`, lane 미지정)를 먼저 제거한다. persistent
       store에 잔존하면 lane 필터 없는 `run_once`를 계속 돌려 레인 격리를 무력화하기
-      때문이다. 부재/미지원은 무시한다.
+      때문이다. 부재만 무시하고 DB 오류는 기동 재시도로 전달한다.
     - 레인당 interval job 1개씩(`-interactive`/`-batch`, 각 `max_instances=1`)을 등록한다.
       persistent 분기는 kwargs가 직렬화돼야 하므로 lane만 넘기고, 비-persistent(테스트)
       분기는 session_factory/handlers도 함께 넘긴다.
@@ -1722,7 +1791,7 @@ def register_worker_jobs(
     """
     try:
         scheduler.remove_job(LEGACY_WORKER_JOB_ID)
-    except Exception:  # noqa: BLE001 - 부재/미지원 jobstore는 정상 경로
+    except LookupError:  # 부재만 무시하고 DB 오류는 기동 재시도에 전달한다
         pass
     base_kwargs: dict[str, Any] = (
         {}
@@ -1792,7 +1861,7 @@ async def amain() -> None:
 
     async def start_worker() -> None:
         nonlocal worker_started
-        await init_db()
+        await retry_database(init_db, context="DB 초기화", stop=stop)
         if stop.is_set():
             return
         print(
