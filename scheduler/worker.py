@@ -1555,7 +1555,7 @@ async def worker_loop(
 ) -> None:
     """APScheduler interval job으로 `run_once`를 반복 실행한다."""
     try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
+        from scheduler.recovering_scheduler import RecoveringAsyncIOScheduler
     except ImportError as exc:
         raise RuntimeError("APScheduler가 설치되어 있지 않다") from exc
 
@@ -1576,9 +1576,10 @@ async def worker_loop(
                     settings.SCHEDULER_JOBSTORE_URL or None,
                 ),
                 tablename=settings.SCHEDULER_JOBSTORE_TABLE,
+                engine_options={"pool_pre_ping": True},
             )
         }
-    scheduler = AsyncIOScheduler(**scheduler_kwargs)
+    scheduler = RecoveringAsyncIOScheduler(**scheduler_kwargs)
     # job 등록/제거는 start() 이후에 한다 — persistent SQLAlchemyJobStore는 start()
     # 시점에 연결되므로 구 job id 제거가 실제 store 행에 반영되려면 running 상태여야
     # 한다(T-163). 근거: start() 직후 register_worker_jobs(구 job 제거)까지 await가
