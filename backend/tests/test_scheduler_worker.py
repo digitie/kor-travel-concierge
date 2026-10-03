@@ -1997,3 +1997,61 @@ def test_register_worker_jobs_omits_source_scan_when_disabled():
         "crawl-run-worker-batch",
         "feature-export-reconcile",
     }
+
+
+async def test_shutdown_requeues_after_handler_cleanup_without_consuming_retry(
+    session, session_factory,
+):
+    run = await crawl_run_service.create_run(
+        session, job_type="harvest", source="scheduler", target_type="keyword",
+        target_id="종료 검증",
+    )
+    session.add(YoutubeVideo(video_id="shutdown-video", title="종료 검증", url="https://www.youtube.com/watch?v=shutdown-video", channel_id="shutdown-channel"))
+    child = YoutubeVideoAnalysisRun(
+        video_id="shutdown-video", run_type=VideoAnalysisRunType.URL_SUMMARY,
+        state=VideoAnalysisRunState.RUNNING, owner_crawl_run_id=run.id,
+        owner_retry_count=0, claim_token="shutdown-owner",
+    )
+    session.add(child)
+    await session.commit()
+    child_id = child.id
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def handler(session, run):
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            await asyncio.sleep(0.01)
+            cleaned.set()
+
+    task = asyncio.create_task(worker.run_once(
+        session_factory, handlers={"harvest": handler}, heartbeat_interval_seconds=999,
+    ))
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleaned.is_set()
+    refreshed = await _fresh_run(session_factory, run.id)
+    assert refreshed.state == RunState.PENDING
+    assert refreshed.retry_count == 0
+    assert refreshed.started_at is None
+    assert refreshed.heartbeat_at is None
+    assert "다음 기동" in refreshed.current_message
+    async with session_factory() as check:
+        analysis = await check.get(YoutubeVideoAnalysisRun, child_id)
+        assert analysis.state == VideoAnalysisRunState.PENDING
+        assert analysis.owner_crawl_run_id is None
+        assert analysis.claim_token is None
+    assert await worker.run_once(
+        session_factory, handlers={"harvest": _ok_handler},
+    ) == run.id
+    assert (await _fresh_run(session_factory, run.id)).state == RunState.DONE
+
+
+async def test_memory_high_water_defers_claim_without_touching_database(monkeypatch):
+    monkeypatch.setattr(worker, "_worker_memory_mb", lambda: 2048)
+    # DB를 열거나 claim했다면 object()는 session_factory로 호출할 수 없어 실패한다.
+    assert await worker.run_once(session_factory=object()) is None

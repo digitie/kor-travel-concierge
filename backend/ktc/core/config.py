@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GEMINI_ENGINE_VERSION_DEFAULT = "gemini-2.5-flash"
@@ -288,6 +289,13 @@ class Settings(BaseSettings):
 
     # --- 4. 스케줄러 및 동시성 ---
     SCHEDULER_ENABLED: bool = True
+    # 컨테이너 2GiB 한도 이전에 신규 claim을 보류하고 진행 중 작업을 정리한다.
+    SCHEDULER_MEMORY_HIGH_WATER_MB: int = Field(default=1536, ge=128)
+    # Docker stop 180초 안에 진행 중 LLM HTTP(기본 최대 120초) 정리 시간을 확보한다.
+    SCHEDULER_SHUTDOWN_GRACE_SECONDS: int = Field(default=20, ge=0, le=60)
+    # 모델 전사는 별도 프로세스에서 메모리·실행 시간을 제한한다.
+    WHISPER_MAX_MEMORY_MB: int = Field(default=1024, ge=128)
+    WHISPER_TIMEOUT_SECONDS: int = Field(default=1800, ge=1)
     CRAWL_DEFAULT_INTERVAL_DAYS: int = 7
     # 자막 캡션 병렬 fetch(T-172) semaphore 크기. yt-dlp 동시 다연발로 인한 YouTube IP
     # 스로틀/봇 탐지 위험을 낮추기 위해 3으로 둔다(whisper는 별도 동시성 1 고정).

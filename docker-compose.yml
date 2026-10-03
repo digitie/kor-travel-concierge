@@ -115,6 +115,13 @@ services:
         condition: service_healthy
 
   scheduler:
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 180s
+    # Whisper 자식 한도(기본 1GiB)와 API/DB 처리용 여유를 함께 확보한다.
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
     build:
       context: .
       dockerfile: Dockerfile.python

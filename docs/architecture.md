@@ -361,9 +361,19 @@ RustFS는 YouTube에서 확보한 대용량 파일을 PostgreSQL DB와 분리해
 - 일반 인덱스: PostgreSQL FK 컬럼 명시 인덱스, 상태+시간 범위 composite index,
   조회 대상 JSONB의 GIN 또는 expression index
 - 블로킹 격리: `asyncio.to_thread()` 또는 `loop.run_in_executor()`
-- CPU 집약 전사: 필요 시 별도 프로세스풀
+- CPU 집약 전사·자막 다운로드: 취소 가능한 자식 프로세스, Whisper 전역 동시성 1·캡션 최대 3(ADR-46)
 
 API 서버, MCP 서버, 정기 스케줄러는 모두 같은 작업 테이블(`crawl_runs`)을 통해 작업을 만들고 조회한다. 실제 실행은 scheduler가 `pending` 작업을 claim하여 처리한다.
+
+스케줄러는 SIGTERM·SIGINT 뒤 신규 예약 처리를 중단하고 진행 중 작업의 완료·취소 정리를
+기다린다. 정상 종료로 중단한 현재 작업과 분석 lease는 `pending`으로 돌려 다음 기동에서
+다시 실행한다. DB 저장이 불가능한 종료와 갑작스러운 강제 종료는 heartbeat 만료 복구로
+회수한다. 실행 잠금은 작업 내내 동일한 물리 DB 연결로 보유한다.
+
+Whisper 모델 메모리는 영상마다 별도 프로세스에서 반환하며, 메모리·시간 제한을 초과하면
+전사 실패 관측을 기록하고 기존 폴백으로 이어진다. 자식 프로세스 그룹과 임시 파일은
+취소 때도 회수한다. 컨테이너 자원 상한과 신규 claim 메모리 임계값은 ADR-46을 따른다.
+
 
 ---
 

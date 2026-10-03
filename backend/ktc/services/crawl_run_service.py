@@ -1003,6 +1003,22 @@ async def mark_cancelled(
     await session.commit()
 
 
+async def requeue_interrupted(session: AsyncSession, run: CrawlRun) -> None:
+    """종료 정리가 끝나고 소유권을 확인한 작업을 실패 횟수 차감 없이 재투입한다."""
+    if run.cancel_requested:
+        await mark_cancelled(session, run.id)
+        return
+    run.state = RunState.PENDING
+    run.started_at = None
+    run.heartbeat_at = None
+    _append_log_to_run(
+        run,
+        "실행자 종료로 작업을 정리했습니다. 다음 기동에서 다시 실행합니다.",
+        level="warning", touch_heartbeat=False,
+    )
+    await session.commit()
+
+
 async def requeue_stale(
     session: AsyncSession,
     *,
