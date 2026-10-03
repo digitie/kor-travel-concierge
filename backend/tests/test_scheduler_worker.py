@@ -2128,6 +2128,7 @@ async def test_database_job_retry_uses_new_session_then_completes(
     fresh = await _fresh_run(session_factory, run.id)
     assert fresh.state == RunState.DONE
     assert fresh.retry_count == 1
+    assert fresh.last_error is None
     assert sessions[0] is not sessions[1]
 
 

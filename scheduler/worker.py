@@ -1328,7 +1328,6 @@ async def _requeue_interrupted_attempt(
                 )
             if database_retry and not owned_run.cancel_requested:
                 owned_run.retry_count += 1
-                owned_run.last_error = "DB 일시 오류: 자동 재시도 대기"
             await crawl_run_service.requeue_interrupted(
                 session, owned_run, database_retry=database_retry,
             )
