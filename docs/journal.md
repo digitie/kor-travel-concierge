@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-10-06: Concierge 공용 Dagster 구현과 격리 검증
+
+- Map·PinVi·Geo 공용 instance의 code location으로 이관하고 DB native owner/attempt/control generation fence를 추가했다. API/MCP 이미지에서 Dagster SDK를 분리했다. Common Python과 로그인·메뉴·실행 대시보드를 사용한다(ADR-48).
+- 두 독립 FULL 적대 리뷰에서 preclaim 취소 부활, C 연산 중 guardian hard kill, HTTP client cleanup, 첫 lane UNKNOWN의 예산 독점을 검토했다. 확인된 반례를 수정하고 원문·해시를 별도로 보존했다. dispatch는 tick 시작 lane을 교대하며 기존 partial cursor와 새 generation을 보존한다.
+- Linux 전체 backend 945건, 최종 lane/Whisper 예약 수정 후 PostGIS·process/회수 회귀 32건 통과. frontend type/lint·336 tests·production build 통과. 전체 Ruff는 기존 진단 314→302로 남지만 추가 진단은 0이다.
+- 실제 native launcher/daemon에서 성공·provider 실패·step crash·정상 SIGTERM·명시 취소·60초 runtime 초과·scoped summary를 실행했다. timeout은 running lease를 보존하고 recovery retry를 증가시킨다. 정상 종료는 retry 0으로 재개한다.
+- 실제 Docker UID10001/2GiB cgroup에서 두 lane 동시 실행·job당 한 실행·다음 실행 대기를 확인했다. 합성 provider 각64MiB 조건의 peak는 약947MiB다. 살아 있는 proxy의 module load error도 health가 거부하며 기존 Manager incarnation reaper는 이전 실행만 실패로 마감했다.
+- N150 Linux Chromium에서 격리 production UI 두 live E2E를 통과했다. 실제 native 로그/선택 상세·mobile·domain 작업 화면·degraded last-good·401 폐기·재조회·logout을 확인했다. fault 응답과 실제 native/API 검증을 구분했다.
+- 별도 PostGIS DB에서 clean upgrade, owned pending downgrade 거부, drain 뒤 downgrade/reupgrade 및 기존 행·legacy0 보존을 확인했다. 운영 cutover·공개 gateway 배포·실제 Whisper 최대 RSS·유료 provider 호출은 NOT_RUN이다. [전환/복구 가이드](dagster-adoption.md)를 따른다.
+
 ## 2026-10-03: 스케줄러 재시도 운영 배포·인증 경로 복구 확인
 
 - **배포**: 정상 종료·메모리 제한·DB 재시도를 포함한 PR #239/#240 이미지를 운영

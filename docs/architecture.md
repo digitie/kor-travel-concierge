@@ -40,7 +40,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
   `kor_travel_concierge`를 둔다.
 - 백엔드와 ETL은 전면 `asyncio` 기반으로 작성한다.
 - 블로킹 라이브러리(`yt-dlp`, `faster-whisper`, FFmpeg)는 executor로 격리한다.
-- 정기 크롤 실행자는 APScheduler 단일 실행자로 시작하며, interval job 정의는
+- 실행자는 ADR-48로 공용 Dagster code location에 이관한다. 초기/rollback APScheduler의 interval job 정의는
   PostgreSQL `apscheduler_jobs` 테이블에 유지한다. 실제 작업 내구성과 실행 상태는
   계속 `crawl_runs`가 책임진다. Celery, Redis, RabbitMQ, PostgreSQL Advisory Lock은 초기 범위에서 제외한다.
 - 사람용 Web REST UX와 AI 에이전트용 MCP UX는 분리하되 같은 작업 테이블과 같은 파이프라인을 공유한다.
@@ -546,6 +546,10 @@ RustFS에 저장한 동영상, 자막, 전사 결과, 대표 프레임의 메타
 - `finished_at` (DateTime, Nullable)
 - `retry_count` (Integer)
 - `last_error` (Text, Nullable)
+
+ADR-48의 Dagster는 lane별 job과 dispatch/recovery/maintenance sensor를 사용한다.
+owner·attempt·retry·control generation을 domain에 저장하며 상세 계약은 [적용 가이드](dagster-adoption.md)를 따른다.
+아래 APScheduler 구조는 legacy rollback profile의 계약이다.
 
 APScheduler는 레인별 interval job 2개(`crawl-run-worker-interactive`,
 `crawl-run-worker-batch`, 각 `max_instances=1`)로 각 lane의 pending `crawl_runs`를

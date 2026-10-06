@@ -6,6 +6,8 @@
 
 ## 진행 중
 
+- [ ] **T-196**: Concierge 공용 Dagster 이관 — Map·PinVi·Geo 공용 제어 plane와 common Python/UI를 채택한다. 설계·소유권 migration·복구·메모리·기존 대기열/반복 주기 보존·회귀/live 검증. 담당: Codex. [설계](dagster-migration-plan.md).
+
 ---
 
 ## 대기 (우선순위 순)

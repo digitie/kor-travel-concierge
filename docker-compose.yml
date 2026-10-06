@@ -11,6 +11,8 @@ x-app-env-file: &app-env-file
     required: false
 
 x-python-env: &python-env
+  KTC_DAGSTER_URL: ${KTC_DAGSTER_URL:-http://host.docker.internal:11002}
+  KTC_DAGSTER_PUBLIC_URL: ${KTC_DAGSTER_PUBLIC_URL:-http://127.0.0.1:11001}
   DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://addr:addr@host.docker.internal:5432/kor_travel_concierge}
   # 브라우저는 same-origin BFF로 호출하므로 보통 비워 둔다. 미설정(unset)이면 로컬
   # host 포트가 백엔드 CORS에 추가되고, .env에서 명시적 빈 값으로 두면 추가되지 않는다
@@ -115,6 +117,7 @@ services:
         condition: service_healthy
 
   scheduler:
+    profiles: ["legacy-scheduler"]
     init: true
     restart: unless-stopped
     stop_grace_period: 180s
@@ -135,6 +138,31 @@ services:
       api:
         condition: service_healthy
 
+  dagster-code-server:
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 180s
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      target: dagster
+    env_file: *app-env-file
+    environment:
+      <<: *python-env
+      KOR_TRAVEL_DAGSTER_SHARED_PG_URL: ${KOR_TRAVEL_DAGSTER_SHARED_PG_URL:?shared Dagster PostgreSQL URL required}
+      DAGSTER_HOME: /opt/dagster/dagster_home
+    ports:
+      - "127.0.0.1:${DAGSTER_GRPC_HOST_PORT:-12603}:12603"
+    # 동일 Manager 정본을 모든 code-server/daemon이 읽는다. 자체 daemon을 만들지 않는다.
+    volumes:
+      - ${DAGSTER_SHARED_CONFIG:?Manager shared dagster.yaml required}:/opt/dagster/dagster_home/dagster.yaml:ro
+      - concierge-dagster-state:/opt/dagster/state
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   frontend:
     build:
       context: ./frontend
@@ -153,5 +181,6 @@ services:
         condition: service_healthy
 
 volumes:
+  concierge-dagster-state:
   # RustFS 객체 데이터 볼륨 (무기한 보존)
   rustfs-data:

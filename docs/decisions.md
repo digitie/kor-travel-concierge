@@ -1505,6 +1505,23 @@ DB 연결 오류가 APScheduler의 다음 실행 타이머 등록을 중단시�
 
 ---
 
+## ADR-48: Concierge 실행자를 공용 Dagster code location으로 이관한다
+
+- 상태: accepted
+- 날짜: 2026-10-06
+- 결정자: human, Codex
+
+기존 수집 domain 상태·멱등성·재시작 lineage를 유지하고 Map·PinVi·Geo의 공용
+Dagster instance에 code server만 합류한다. Common recovery policy/HTTP/health와
+login/menu/dashboard를 사용한다. DB backend/generation admission과 native owner/attempt
+CAS로 두 실행 방식의 중복 claim과 늦은 쓰기를 차단한다. provider 실패는 자동 과금 재시도 없이
+실패로 표시하고, crash/timeout만 terminal/stale/physical lease 확인 후 최대 3회 복구한다.
+메모리 예약과 stdlib guardian/watchdog은 run worker에서 분리한다. 상세 결정과 운영 경계는
+[설계](dagster-migration-plan.md)와 [적용 가이드](dagster-adoption.md)에 기록한다.
+운영 전환은 별도 drain 창이다. APScheduler는 rollback profile로 보존한다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

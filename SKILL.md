@@ -11,7 +11,7 @@
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
 - **백엔드**: FastAPI + SQLAlchemy 2.0. DB는 PostgreSQL + PostGIS이며, `asyncpg`와 Alembic으로 schema를 관리한다.
 - **ETL 모듈**: 공식 YouTube Data API v3 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(`yt-dlp`/FFmpeg) → 원본 동영상·자막·전사 결과·대표 프레임 RustFS 저장 → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
-- **스케줄러**: APScheduler 단일 실행자가 `crawl_runs`의 pending 작업을 claim하고 전면 비동기 파이프라인을 실행한다.
+- **스케줄러**: 공용 Dagster의 `ktc.dagster.definitions` code location이 두 lane을 실행한다. `crawl_runs`가 domain 정본이며 backend/generation/owner fence를 적용한다. APScheduler는 `legacy-scheduler` rollback profile이다. 전환 절차: `docs/dagster-adoption.md`.
 - **미디어 저장소**: RustFS를 별도 로컬 Docker 서비스로 구동하고, 원본 동영상·자막·전사 결과·대표 프레임을 무기한 보존한다.
 
 ### 개발 환경 기본 요건
