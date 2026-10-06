@@ -6,6 +6,7 @@
 
 ## 진행 중
 
+
 ---
 
 ## 대기 (우선순위 순)
@@ -24,6 +25,8 @@
 ---
 
 ## 완료
+
+- [x] **T-196**: Concierge 공용 Dagster 이관 구현(ADR-48) — Common Python/UI, native owner/attempt/generation fence, 유한 회수·재시도, job별 UNKNOWN 격리와 provider 메모리 예약을 적용했다. Linux/PostGIS/native/Docker/N150 live UI 격리 검증 완료. 독립 FULL 리뷰와 PR 검사는 병합 gate로 진행한다. 운영 drain/backend 전환은 별도 작업이다. [전환·복구 가이드](dagster-adoption.md).
 
 - [x] **T-195**: 스케줄러 DB 일시 오류 자동 재시도(ADR-47) — DB 초기화·예약 등록의
   종료 가능한 2~30초 백오프, 부분 등록 중 실행 보류, SQLSTATE 기반 영구 오류 제외,

@@ -1,5 +1,11 @@
 # 변경 기록
 
+## 2026-10-06
+
+- 공용 Dagster code location과 domain 소유권·세대 migration을 추가했다. worker 중단/timeout은 유한 복구하고 provider 실패·명시 취소는 자동 부활하지 않는다.
+- API/MCP에서 SDK를 분리하고 provider 합산 메모리 예약·guardian hard kill 회수를 보강했다.
+- Common 로그인·메뉴·Dagster 대시보드를 적용했다. 운영 전환은 drain 후 별도 수행한다.
+
 ## 2026-10-03
 
 ### Changed

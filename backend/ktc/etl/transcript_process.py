@@ -38,6 +38,9 @@ def _group_rss_mb(group_id: int) -> float:
 
 async def _stop_group(process: asyncio.subprocess.Process) -> None:
     """정상 종료 신호를 먼저 보내고 응답하지 않는 자식만 회수한다."""
+    # 종료된 group ID는 재사용될 수 있다. 남은 손자는 살아 있는 supervisor가 회수한다.
+    if process.returncode is not None:
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -46,7 +49,9 @@ async def _stop_group(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), timeout=3)
     except asyncio.TimeoutError:
         pass
-    # 부모가 먼저 종료돼도 손자 FFmpeg/다운로더가 남을 수 있다.
+    # supervisor가 종료되면 자체 pidfd 회수/PDEATHSIG가 자식을 정리한다.
+    if process.returncode is not None:
+        return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -79,24 +84,49 @@ async def run_provider_process(
     memory_mb = settings.WHISPER_MAX_MEMORY_MB if whisper else 256
     timeout = settings.WHISPER_TIMEOUT_SECONDS if whisper else 120
 
-    async with slots:
+    from ktc.etl.process_slots import reserve
+
+    async with (
+        slots,
+        reserve(
+            settings.KTC_TRANSCRIPT_SLOT_DIR,
+            whisper=whisper,
+            memory_mb=memory_mb,
+            caption_limit=settings.CRAWL_MAX_CONCURRENT_VIDEOS,
+        ) as slot_fds,
+    ):
         with tempfile.TemporaryDirectory(prefix="ktc-transcript-") as work_dir:
             output = Path(work_dir) / "result.json"
             env = dict(os.environ, TMPDIR=work_dir)
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "ktc.etl.transcript_process",
-                provider,
-                video_id,
-                str(output),
-                "1" if force else "0",
-                model_size or "",
-                env=env,
-                start_new_session=True,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "ktc.process_guard",
+                    str(read_fd),
+                    ",".join(map(str, slot_fds)),
+                    str(memory_mb),
+                    str(timeout),
+                    sys.executable,
+                    "-m",
+                    "ktc.etl.transcript_process",
+                    provider,
+                    video_id,
+                    str(output),
+                    "1" if force else "0",
+                    model_size or "",
+                    env=env,
+                    pass_fds=(read_fd, *slot_fds),
+                    start_new_session=True,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+            except BaseException:
+                os.close(write_fd)
+                raise
+            finally:
+                os.close(read_fd)
             started = asyncio.get_running_loop().time()
             try:
                 while process.returncode is None:
@@ -110,6 +140,10 @@ async def run_provider_process(
                         await asyncio.wait_for(process.wait(), timeout=0.25)
                     except asyncio.TimeoutError:
                         pass
+                if process.returncode == 124:
+                    raise TimeoutError(f"자막 처리 시간 한도 초과({timeout}초)")
+                if process.returncode == 137:
+                    raise RuntimeError(f"자막 처리 메모리 한도 초과({memory_mb}MiB)")
                 if process.returncode != 0:
                     raise RuntimeError(
                         f"자막 처리 자식 종료(code={process.returncode})"
@@ -125,11 +159,15 @@ async def run_provider_process(
                     result = TranscriptResult(**result)
                 return TranscriptAttempt(**data, result=result)
             finally:
+                os.close(write_fd)
                 await _stop_group(process)
 
 
 def main() -> None:
     """신뢰한 내부 provider만 실행하는 자식 프로세스 진입점."""
+    from ktc.process_guard import protect_provider
+
+    protect_provider()
     from ktc.etl.transcript import (
         fetch_via_transcript_api,
         fetch_via_ytdlp,

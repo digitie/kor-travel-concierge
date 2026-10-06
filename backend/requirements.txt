@@ -4,7 +4,7 @@ uvicorn>=0.28.0
 # 사용과 호환되지 않는다(mcp<2로 고정, 이전까지는 google-generativeai 등의 전이
 # 의존성으로만 들어와 상한이 없어 2026-09-04 배포에서 mcp 2.1.1로 올라가며 깨졌다).
 mcp<2
-sqlalchemy>=2.0.28
+sqlalchemy[asyncio]>=2.0.28
 asyncpg>=0.29.0
 geoalchemy2>=0.14.7
 alembic>=1.13.1
@@ -24,3 +24,6 @@ pyproj>=3.6.0
 pytest>=8.1.1
 pytest-asyncio>=0.23.5
 python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/a1fea840531f0b4d8e1b6a0db85e15063532602d.zip
+
+# 공용 HTTP만 설치해 API/MCP에 Dagster를 적재하지 않는다.
+kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@efcd671207d7f9e2fb01251bab6854a8d543279a#subdirectory=packages/py/kor-travel-common

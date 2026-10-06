@@ -44,8 +44,8 @@ from ktc.models import (
     AssetType,
     CrawlRun,
     CrawlStatus,
-    ExtractedPlaceCandidate,
     EvidenceSourceKind,
+    ExtractedPlaceCandidate,
     FeatureExport,
     GroundingStatus,
     MatchStatus,
@@ -3820,3 +3820,8 @@ def _filename_slug(value: str) -> str:
     chars = [char if char.isalnum() else "-" for char in value.casefold()]
     slug = "-".join(part for part in "".join(chars).split("-") if part)
     return slug or "na"
+
+# 관리자 proxy와 기존 API key 경계를 함께 적용한다.
+from ktc.api.dagster import router as dagster_router
+
+router.include_router(dagster_router)

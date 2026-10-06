@@ -1,0 +1,379 @@
+{
+  "components": {
+    "schemas": {
+      "Repository": {
+        "properties": {
+          "assetCount": {
+            "title": "Assetcount",
+            "type": "integer"
+          },
+          "assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "jobs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "locationName": {
+            "title": "Locationname",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/Schedule"
+            },
+            "title": "Schedules",
+            "type": "array"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/Sensor"
+            },
+            "title": "Sensors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "locationName",
+          "jobs",
+          "assets",
+          "assetCount",
+          "schedules",
+          "sensors"
+        ],
+        "title": "Repository",
+        "type": "object"
+      },
+      "Run": {
+        "properties": {
+          "domainRunId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domainrunid"
+          },
+          "endTime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endtime"
+          },
+          "errorMessage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errormessage"
+          },
+          "jobName": {
+            "minLength": 1,
+            "title": "Jobname",
+            "type": "string"
+          },
+          "maxRuntimeSeconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxruntimeseconds"
+          },
+          "runId": {
+            "minLength": 1,
+            "title": "Runid",
+            "type": "string"
+          },
+          "startTime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starttime"
+          },
+          "status": {
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "status",
+          "jobName",
+          "startTime",
+          "endTime"
+        ],
+        "title": "Run",
+        "type": "object"
+      },
+      "Schedule": {
+        "properties": {
+          "cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cron"
+          },
+          "jobName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobname"
+          },
+          "lastTick": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tick"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "lastTick",
+          "cron",
+          "jobName",
+          "timezone"
+        ],
+        "title": "Schedule",
+        "type": "object"
+      },
+      "Sensor": {
+        "properties": {
+          "lastTick": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tick"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "lastTick"
+        ],
+        "title": "Sensor",
+        "type": "object"
+      },
+      "Snapshot": {
+        "properties": {
+          "checkedAt": {
+            "title": "Checkedat",
+            "type": "string"
+          },
+          "repositories": {
+            "items": {
+              "$ref": "#/components/schemas/Repository"
+            },
+            "title": "Repositories",
+            "type": "array"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checkedAt",
+          "repositories",
+          "runs"
+        ],
+        "title": "Snapshot",
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "publicUrl": {
+            "title": "Publicurl",
+            "type": "string"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Snapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "snapshot",
+          "error",
+          "publicUrl"
+        ],
+        "title": "Summary",
+        "type": "object"
+      },
+      "Tick": {
+        "properties": {
+          "status": {
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ],
+        "title": "Tick",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Concierge Dagster admin contract",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/admin/dagster/summary": {
+      "get": {
+        "operationId": "summary_api_v1_admin_dagster_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Summary"
+      }
+    }
+  }
+}

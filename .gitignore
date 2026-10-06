@@ -74,3 +74,6 @@ docs/prod-access.local.md
 
 # Playwright MCP screenshot/snapshot artifacts
 .playwright-mcp/
+
+# 격리 native 검증 로그/임시 자격증명은 배포·커밋 대상이 아니다.
+.native-test/

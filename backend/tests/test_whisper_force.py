@@ -16,12 +16,10 @@ from pathlib import Path
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-
 from ktc.core.database import get_repeatable_read_session, get_session
 from ktc.etl import postprocess_service, transcript
 from ktc.models import YoutubeVideo
 from main import app
-
 
 # --- whisper/yt-dlp 모사 -----------------------------------------------------
 
@@ -58,11 +56,22 @@ def _install_fake_whisper(monkeypatch, captured: dict) -> None:
     monkeypatch.setitem(sys.modules, "yt_dlp", ydl_mod)
 
     class _FakeWhisperModel:
-        def __init__(self, model_size, device=None, compute_type=None):
+        def __init__(
+            self,
+            model_size,
+            device=None,
+            compute_type=None,
+            cpu_threads=None,
+            num_workers=None,
+        ):
             captured["model_size"] = model_size
+            assert cpu_threads == 2 and num_workers == 1
 
         def transcribe(self, path):
-            return ([_FakeSeg(0.0, "안녕하세요"), _FakeSeg(5.0, "여기는 제주")], _FakeInfo())
+            return (
+                [_FakeSeg(0.0, "안녕하세요"), _FakeSeg(5.0, "여기는 제주")],
+                _FakeInfo(),
+            )
 
     fw_mod = types.ModuleType("faster_whisper")
     fw_mod.WhisperModel = _FakeWhisperModel
@@ -86,9 +95,7 @@ def test_force_bypasses_env_gate_and_passes_model(monkeypatch):
     captured: dict = {}
     _install_fake_whisper(monkeypatch, captured)
 
-    attempt = transcript.transcribe_via_whisper(
-        "vid", force=True, model_size="small"
-    )
+    attempt = transcript.transcribe_via_whisper("vid", force=True, model_size="small")
     assert attempt.outcome == transcript.TranscriptOutcomeCode.SUCCESS.value
     assert attempt.provider == "whisper"
     assert captured["model_size"] == "small"  # env 기본 "base" 아님
@@ -114,7 +121,23 @@ async def test_forced_fetcher_factory_injects_model(monkeypatch):
     정합 — force_whisper 모드는 caption_fetcher=None + 이 fetcher만 주입한다)."""
     monkeypatch.delenv("TRANSCRIPT_WHISPER_ENABLED", raising=False)
     captured: dict = {}
-    _install_fake_whisper(monkeypatch, captured)
+
+    async def transcribe(video_id, *, force, model_size):
+        captured.update(video_id=video_id, force=force, model_size=model_size)
+        return transcript.TranscriptAttempt(
+            provider="whisper",
+            outcome="success",
+            result=transcript.TranscriptResult(
+                video_id=video_id,
+                source="whisper",
+                language="ko",
+                segments=[transcript.TranscriptSegment(start=0.0, text="안녕하세요")],
+            ),
+        )
+
+    # factory는 별도 interpreter provider에 force/model을 넘긴다. sys.modules fake를
+    # subprocess가 상속한다고 가정하지 않고 실제 async 경계의 전달값을 검증한다.
+    monkeypatch.setattr(postprocess_service, "transcribe_whisper_async", transcribe)
 
     fetcher = postprocess_service._whisper_forced_transcript_fetcher("medium")
     attempt = await fetcher("vid")
@@ -123,6 +146,7 @@ async def test_forced_fetcher_factory_injects_model(monkeypatch):
     assert captured["model_size"] == "medium"
     assert attempt.result is not None
     assert attempt.result.segments[0].text == "안녕하세요"
+    assert captured["force"] is True and captured["video_id"] == "vid"
 
 
 # --- API 트리거: (a) duration cap, (b) batch 레인, (d) 기본 interactive ------
@@ -174,10 +198,11 @@ async def test_reprocess_force_whisper_uses_batch_lane(client, session_factory):
     assert view["lane"] == "batch"
 
     # payload에 whisper 강제 파라미터가 실린다(기본 모델은 config WHISPER_MANUAL_MODEL_SIZE).
+    import json as _json
+
     from ktc.core.config import get_settings
     from ktc.models import CrawlRun
     from sqlalchemy import select
-    import json as _json
 
     async with session_factory() as s:
         run = (
@@ -240,9 +265,10 @@ async def test_reprocess_force_whisper_custom_model_passes_through(
     assert resp.status_code == 200
     job_id = resp.json()["job_ids"][0]
 
+    import json as _json
+
     from ktc.models import CrawlRun
     from sqlalchemy import select
-    import json as _json
 
     async with session_factory() as s:
         run = (
@@ -268,9 +294,10 @@ async def test_reprocess_without_force_whisper_stays_interactive(
     # 기본 재처리는 종전 계약대로 대화형 레인이며 whisper 강제 파라미터가 없다.
     assert view["lane"] == "interactive"
 
+    import json as _json
+
     from ktc.models import CrawlRun
     from sqlalchemy import select
-    import json as _json
 
     async with session_factory() as s:
         run = (

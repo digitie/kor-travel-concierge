@@ -45,7 +45,7 @@
 [MCP 서버] ── 도구 호출 / 작업 생성 ────────┤
                                            │
                                            ▼
-                         [APScheduler 실행자] ── 객체 저장 ──► [RustFS 로컬 Docker]
+                         [공용 Dagster code server] ── 객체 저장 ──► [RustFS 로컬 Docker]
                                            │
                                            ▼
                  [YouTube Data API / Gemini / Kakao / Naver / VWorld]
@@ -203,3 +203,5 @@ Windows fallback이 필요한 경우에는 Windows 호스트의 `tests` 디렉�
 ## 라이선스
 
 MIT License. 자세한 내용은 [`LICENSE`](./LICENSE)를 참고합니다.
+
+공용 Dagster 이관 설계와 drain/복구/rollback 절차: [적용 가이드](docs/dagster-adoption.md).

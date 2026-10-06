@@ -31,7 +31,9 @@
     "tailwind-merge": "^3.6.0",
     "vworld-map-core": "file:vendor/vworld-map-core-1.0.0.tgz",
     "vworld-map-web": "file:vendor/vworld-map-web-1.0.0.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@kor-travel/tokens": "file:vendor/kor-travel-tokens-0.1.0.tgz",
+    "@kor-travel/ui": "file:vendor/kor-travel-ui-0.1.0-dev.6.tgz"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.1",

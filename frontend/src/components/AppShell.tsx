@@ -1,6 +1,8 @@
 "use client";
 /* Hallmark · genre: editorial-utilitarian · macrostructure: Rail-Workbench · design-system: design.md · designed-as-app */
 
+import { AppMenu, type AppMenuLinkProps } from "@kor-travel/ui/app-menu";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -58,6 +60,7 @@ const navGroups: readonly NavGroup[] = [
     items: [
       { href: "/settings", label: "설정", icon: SettingsIcon },
       { href: "/status", label: "상태", icon: ActivityIcon },
+      { href: "/dagster", label: "Dagster", icon: ActivityIcon },
       { href: "/api-test", label: "API 테스트", icon: PlugIcon },
     ],
   },
@@ -71,8 +74,11 @@ const railRowClass =
   "relative flex h-control-sm shrink-0 items-center gap-2.5 rounded-control px-3 text-xs font-medium whitespace-nowrap text-[var(--shell-rail-muted)] no-underline transition-[color,background-color] duration-fast ease-out hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white active:bg-white/15";
 const railRowActiveClass =
   "bg-white text-[var(--shell-rail)] hover:bg-white before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand";
-const railRowCollapsedClass =
-  "lg:size-control lg:justify-center lg:gap-0 lg:px-0";
+
+function MenuLink(props: AppMenuLinkProps) {
+  const active = props["aria-current"] === "page";
+  return <Link {...props} className={cn(railRowClass, active && railRowActiveClass)} />;
+}
 
 export function AppShell({
   title,
@@ -91,6 +97,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const activeHref = pickActiveNavHref(
     pathname,
     navItems.map((item) => item.href),
@@ -98,7 +105,7 @@ export function AppShell({
   const activeGroup = navGroups.find((group) =>
     group.items.some((item) => item.href === activeHref),
   );
-  const activeNavItemRef = useRef<HTMLAnchorElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
@@ -116,7 +123,7 @@ export function AppShell({
     const reduceMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-    activeNavItemRef.current?.scrollIntoView({
+    menuRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
       behavior: reduceMotion ? "auto" : "smooth",
       block: "nearest",
       inline: "center",
@@ -125,6 +132,7 @@ export function AppShell({
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    queryClient.clear();
     router.replace("/login");
     router.refresh();
   }
@@ -223,64 +231,14 @@ export function AppShell({
                 </button>
               </div>
             </div>
-            <nav
-              aria-label="주요 메뉴"
-              className={cn(
-                "flex min-h-0 max-w-full gap-1 overflow-x-auto px-3 py-2 lg:flex-1 lg:flex-col lg:gap-0.5 lg:overflow-x-hidden lg:overflow-y-auto lg:py-3",
-                sidebarCollapsed && "lg:items-center lg:px-2",
-              )}
-            >
-              {navGroups.map((group) => (
-                <div
-                  className={cn(
-                    "flex shrink-0 items-center gap-1 lg:flex-col lg:items-stretch lg:gap-0.5",
-                    sidebarCollapsed && "lg:items-center",
-                  )}
-                  key={group.label}
-                >
-                  <div
-                    className={cn(
-                      "ml-1 flex shrink-0 items-center gap-2 border-l border-white/20 pl-3 text-2xs font-medium whitespace-nowrap text-[var(--shell-rail-muted)] lg:ml-0 lg:border-l-0 lg:px-3 lg:pt-4 lg:pb-1 lg:after:h-px lg:after:flex-1 lg:after:bg-white/15",
-                      sidebarCollapsed && "lg:hidden",
-                    )}
-                  >
-                    {group.label}
-                  </div>
-                  {group.items.map((item) => {
-                    const Icon = item.icon;
-                    const active = item.href === activeHref;
-                    return (
-                      <Link
-                        aria-current={active ? "page" : undefined}
-                        aria-label={sidebarCollapsed ? item.label : undefined}
-                        className={cn(
-                          railRowClass,
-                          active && railRowActiveClass,
-                          sidebarCollapsed && railRowCollapsedClass,
-                        )}
-                        href={item.href}
-                        key={item.href}
-                        ref={active ? activeNavItemRef : undefined}
-                        title={sidebarCollapsed ? item.label : undefined}
-                      >
-                        <Icon
-                          aria-hidden="true"
-                          className={cn(
-                            "size-4 shrink-0",
-                            active
-                              ? "text-brand"
-                              : "text-[var(--shell-rail-muted)]",
-                          )}
-                        />
-                        <span className={cn(sidebarCollapsed && "lg:hidden")}>
-                          {item.label}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              ))}
-            </nav>
+            <div ref={menuRef} data-kt-surface data-sidebar-collapsed={sidebarCollapsed}
+              className="concierge-common-menu min-h-0 max-w-full overflow-x-auto px-3 py-2 lg:flex-1 lg:overflow-x-hidden lg:overflow-y-auto lg:py-3">
+              <AppMenu label="주요 메뉴" pathname={pathname} activeItemId={activeHref}
+                linkComponent={MenuLink} testId="concierge-common-menu"
+                groups={navGroups.map(group => ({ id: group.label, label: group.label,
+                  items: group.items.map(item => ({ id: item.href, href: item.href,
+                    label: item.label, exact: item.href === "/", icon: <item.icon className="size-4" /> })) }))} />
+            </div>
             <div
               className={cn(
                 "hidden shrink-0 border-t border-white/15 p-2 lg:flex lg:flex-col lg:gap-2",

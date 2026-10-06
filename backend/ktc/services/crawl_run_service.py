@@ -709,7 +709,10 @@ async def claim_next_pending(
     해당 레인의 작업만 claim한다(T-163 — 대화형/배치 워커 분리). `lane=None`이면
     레인 무관 전체에서 가장 오래된 pending을 claim한다(하위호환).
     """
-    stmt = select(CrawlRun).where(CrawlRun.state == RunState.PENDING)
+    from ktc.services.scheduler_control import admitted
+    if not await admitted(session, "legacy"):
+        return None
+    stmt = select(CrawlRun).where(CrawlRun.state == RunState.PENDING, CrawlRun.orchestrator_run_id.is_(None))
     if lane is not None:
         stmt = stmt.where(CrawlRun.lane == lane)
     stmt = (
@@ -1040,6 +1043,9 @@ async def requeue_stale(
     select에 `FOR UPDATE SKIP LOCKED`를 걸어 두 워커가 같은 stale run을 중복 재투입하지
     않게 한다(각자 disjoint 집합만 처리). lane 보존·재투입 semantics는 불변(T-163).
     """
+    from ktc.services.scheduler_control import admitted
+    if not await admitted(session, "legacy"):
+        return 0
     cutoff = utcnow() - timedelta(seconds=threshold_seconds)
     stmt = (
         select(CrawlRun)
@@ -1047,6 +1053,7 @@ async def requeue_stale(
             CrawlRun.state == RunState.RUNNING,
             CrawlRun.heartbeat_at.is_not(None),
             CrawlRun.heartbeat_at < cutoff,
+            CrawlRun.orchestrator_run_id.is_(None),
         )
         .with_for_update(skip_locked=True)
     )

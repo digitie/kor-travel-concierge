@@ -1462,6 +1462,7 @@ async def test_empty_changes_page_releases_export_lock_before_later_tombstone(
     monkeypatch,
 ):
     """빈 GET page commit까지 writer가 기다리고, 다음 cursor에는 tombstone이 남는다."""
+    from contextvars import ContextVar
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from ktc.services import feature_export_service
@@ -1479,14 +1480,13 @@ async def test_empty_changes_page_releases_export_lock_before_later_tombstone(
     release_page_commit = asyncio.Event()
     writer_waiting_for_export = asyncio.Event()
     writer_acquired_export = asyncio.Event()
+    operation = ContextVar("feature-page-test-operation", default="")
     original_commit = AsyncSession.commit
     original_acquire = feature_export_service.acquire_feature_export_lock
 
     async def paused_page_commit(session):
-        task = asyncio.current_task()
         if (
-            task is not None
-            and task.get_name() == "empty-feature-page"
+            operation.get() == "empty-feature-page"
             and not page_before_commit.is_set()
         ):
             page_before_commit.set()
@@ -1494,11 +1494,10 @@ async def test_empty_changes_page_releases_export_lock_before_later_tombstone(
         return await original_commit(session)
 
     async def observed_export_lock(session):
-        task = asyncio.current_task()
-        if task is not None and task.get_name() == "place-delete-writer":
+        if operation.get() == "place-delete-writer":
             writer_waiting_for_export.set()
         result = await original_acquire(session)
-        if task is not None and task.get_name() == "place-delete-writer":
+        if operation.get() == "place-delete-writer":
             writer_acquired_export.set()
         return result
 
@@ -1509,15 +1508,23 @@ async def test_empty_changes_page_releases_export_lock_before_later_tombstone(
         observed_export_lock,
     )
 
+    async def identified_request(name, request):
+        # ASGI middleware의 자식 Task에도 의미가 이어지며 전용 transaction만 멈춘다.
+        token = operation.set(name)
+        try:
+            return await request
+        finally:
+            operation.reset(token)
+
     empty_page_task = asyncio.create_task(
-        client.get("/api/v1/features/changes", params={"cursor": cursor}),
+        identified_request("empty-feature-page", client.get("/api/v1/features/changes", params={"cursor": cursor})),
         name="empty-feature-page",
     )
     delete_task = None
     try:
         await asyncio.wait_for(page_before_commit.wait(), timeout=5)
         delete_task = asyncio.create_task(
-            client.delete(f"/api/v1/destinations/{place_id}"),
+            identified_request("place-delete-writer", client.delete(f"/api/v1/destinations/{place_id}")),
             name="place-delete-writer",
         )
         await asyncio.wait_for(writer_waiting_for_export.wait(), timeout=5)

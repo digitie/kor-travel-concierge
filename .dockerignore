@@ -26,3 +26,11 @@ tests/node_modules/
 tests/.tmp/
 test-results/
 playwright-report/
+
+# 작업별 Linux venv/코드 인덱스/비공개 운영 기록은 이미지에도 포함하지 않는다.
+.venv/
+.codegraph/
+**/*.local.md
+
+# 격리 native 검증 로그/임시 자격증명은 배포·커밋 대상이 아니다.
+.native-test/
