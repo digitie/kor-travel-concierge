@@ -6,7 +6,6 @@
 
 ## 진행 중
 
-- [ ] **T-196**: Concierge 공용 Dagster 이관 — Map·PinVi·Geo 공용 제어 plane와 common Python/UI를 채택한다. 설계·소유권 migration·복구·메모리·기존 대기열/반복 주기 보존·회귀/live 검증. 담당: Codex. [설계](dagster-migration-plan.md).
 
 ---
 
@@ -26,6 +25,8 @@
 ---
 
 ## 완료
+
+- [x] **T-196**: Concierge 공용 Dagster 이관 구현(ADR-48) — Common Python/UI, native owner/attempt/generation fence, 유한 회수·재시도, job별 UNKNOWN 격리와 provider 메모리 예약을 적용했다. Linux/PostGIS/native/Docker/N150 live UI 격리 검증 완료. 독립 FULL 리뷰와 PR 검사는 병합 gate로 진행한다. 운영 drain/backend 전환은 별도 작업이다. [전환·복구 가이드](dagster-adoption.md).
 
 - [x] **T-195**: 스케줄러 DB 일시 오류 자동 재시도(ADR-47) — DB 초기화·예약 등록의
   종료 가능한 2~30초 백오프, 부분 등록 중 실행 보류, SQLSTATE 기반 영구 오류 제외,
