@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-10-07: 공용 Dagster 운영 배포와 backend 전환
+
+- PR #242와 Manager #463/#464를 운영 호스트에 반영했다. 두 DB 백업과 소스·이미지 복구 지점을 확보하고 공식 installer/C6c 경로로 배포했다. 기존 APScheduler 중지·drain 뒤 migration `20261006_0030`, 공유 storage migrate·plane 갱신 및 CLI로 `dagster / generation 1` 전환을 완료했다.
+- 두 독립 적대 리뷰와 CI를 통과한 Manager 재생성 수정은 legacy 실행자를 다시 띄우지 않는다. API/MCP SDK 분리와 UID10001·2GiB 제한, 세 sensor tick·공유 plane health를 확인했다. 다른 다섯 앱의 컨테이너 ID와 health는 유지됐다.
+- 공개/LAN 인증 POST·Set-Cookie·summary·logout·401 검증 및 N150 공개 Chromium 3 live E2E를 통과했다. 최초 테스트의 gateway Basic 인증 미주입과 목록 제외 seed를 수정한 뒤 재검증했다. 초기 실패 원문도 보존한다.
+- provider 호출 없는 성공·실패 seed의 native/domain 상태를 확인했다. UI 재시작의 새 lineage와 동일 입력 재실패, 이후 같은 batch lane의 빈 결과 작업 성공을 확인했다. retry는 0이며 종료 확인 시 pending/running은 0이다. 테스트 실패 attention만 확인 처리하고 이력은 보존했다.
+- 컨테이너 migration의 `/app` 작업 디렉터리와 별도 gateway 인증 조건을 [가이드](dagster-adoption.md)에 기록했다. 운영 강제 종료·timeout·cancel drill, 실제 Whisper 최대 RSS·유료 provider 평가는 이번 배포 검증에서 NOT_RUN이다.
+
 ## 2026-10-06: Concierge 공용 Dagster 구현과 격리 검증
 
 - Map·PinVi·Geo 공용 instance의 code location으로 이관하고 DB native owner/attempt/control generation fence를 추가했다. API/MCP 이미지에서 Dagster SDK를 분리했다. Common Python과 로그인·메뉴·실행 대시보드를 사용한다(ADR-48).

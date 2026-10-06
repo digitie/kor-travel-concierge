@@ -21,7 +21,7 @@ metadata UNKNOWN에서는 owner를 보존하며 cursor는 다음 행으로 진�
 
 1. 기존 APScheduler 바이너리를 먼저 중지하고 실행 작업을 drain한다. 새 DB fence는 이전 바이너리를
    바꿀 수 없으므로 기존 실행자를 켠 채 모드를 전환하지 않는다. domain과 native 활성 작업을 함께 확인한다.
-2. Concierge migration을 `python -m alembic upgrade head`로 적용한다. 초기 mode는 `legacy`, generation은 0이다.
+2. Concierge migration을 저장소 루트에서 `python -m alembic upgrade head`로 적용한다. 초기 mode는 `legacy`, generation은 0이다.
    shared metadata schema는 Manager의 정식 storage migrate one-shot으로 준비한다.
 3. Manager의 `conc` 기본 target은 code server를 포함한다. old scheduler는 `legacy-scheduler` profile의
    rollback 정의로 남는다. code image와 공유 instance/workspace를 함께 반영한다.
@@ -76,3 +76,33 @@ metadata UNKNOWN의 lane 격리를 위해 dispatch cursor는 tick마다 시작 l
 25초 전역 예산을 한 lane이 소진해도 다음 tick에서 다른 lane을 먼저 조회하고 각 keyset cursor를 보존한다.
 
 활성 metadata 조회 UNKNOWN은 해당 job만 신규 발화를 보류한다. 다른 lane과 maintenance job은 계속 확인하고 cursor를 저장한다. 조회가 회복되면 보류한 job도 다시 발화할 수 있다. backend/generation 조회 UNKNOWN은 전체 발화를 계속 금지한다.
+
+
+## 2026-10-07 운영 전환 결과와 실행 주의점
+
+Concierge PR #242의 `1fe1f9f`와 Manager PR #463/#464의 `42ffc553`를 운영 호스트에 반영했다.
+Manager의 기존 `rehearsal/rebuildable` 분류는 유지했다. 두 DB 백업, 이전 소스·이미지 복구 지점을
+확보한 뒤 trusted installer와 canonical C6c 경로를 사용했다. APScheduler 중지·drain 후
+`20261006_0030`으로 migration하고 공유 storage migrate 및 daemon/webserver를 갱신했다.
+generation CLI의 결과는 `dagster / generation 1`이다. 기존 APScheduler는 중지 상태다.
+
+- API 이미지의 기본 작업 디렉터리는 `/app/backend`다. 컨테이너 migration one-shot은
+  Manager가 검증한 canonical projection에서 작업 디렉터리를 `/app`으로 지정하고
+  `python -m alembic -c /app/alembic.ini upgrade head`를 실행한다. 기본 디렉터리에서 실행하면
+  `No 'script_location' key found`로 DB 변경 전에 실패한다.
+- 공개 Dagster 로그 gateway는 별도 Basic 인증을 요구한다. live 브라우저 context에
+  해당 공개 origin으로 범위를 제한한 `httpCredentials`를 비공개 설정으로 주입한다.
+  인증값·JSON reporter의 설정·브라우저 cache는 커밋하지 않는다. 사용자 작업 이력의
+  재시작 검증에는 목록에 표시되는 작업 유형과 외부 provider 호출 없는 입력을 사용한다.
+- 공개/LAN 로그인 POST와 Set-Cookie, 실제 summary, 로그아웃 후 401 및 틀린 자격 401을
+  확인했다. N150 Linux Chromium에서 데스크톱·모바일·UI 재시작 3건을 통과했다.
+  실제 native/API 확인 이후의 degraded/401 응답 주입은 브라우저 장애 표시 검증으로 구분했다.
+- 외부 provider 호출 없는 seed의 native/domain 성공·실패가 일치했다. UI 재시작은 새 lineage로
+  동일한 잘못된 입력을 다시 실패 처리하며 retry는 0을 유지했다. 같은 batch lane의 후속 빈 결과
+  작업은 성공했다. 종료 확인 시 pending/running은 0이고, 테스트 실패 attention만 확인 처리했다.
+- 세 sensor의 반복 tick, code server·공유 plane health, UID10001·2GiB cgroup 및 API/MCP의
+  Dagster SDK 부재를 확인했다. 다른 다섯 앱의 기존 컨테이너와 health는 유지됐다.
+
+실제 운영 worker 강제 종료·timeout·cancel drill과 Whisper 모델별 최대 RSS·유료 provider 평가는
+이번 운영 검증에서 실행하지 않았다. 해당 장애 회귀는 앞선 격리 검증 결과와 구분한다.
+운영 접속·백업 receipt·초기 실패 및 최종 live 결과는 비공개 런북과 별도 실행 기록에 보존한다.

@@ -84,7 +84,7 @@
 | Geocoding / Reverse Geocoding | VWorld 최우선(`python-vworld-api`의 `AsyncVworldClient` 직접 사용), Kakao Local 주소·키워드 장소 검색 보조, Naver 보조 검증 (`kraddr-geo` 지오코딩 연계 없음; ADR-25의 `python-kraddr-geo` PostgreSQL/PostGIS DB 서버 재사용은 별도) |
 | YouTube 수집 | 공식 YouTube Data API v3 우선, 비공식 의존은 자막/프레임 구간으로 격리 |
 | 미디어 저장소 | 별도 로컬 Docker RustFS 서비스, 원본 동영상·자막·전사 결과·대표 프레임 무기한 보존 |
-| 스케줄러 | APScheduler 단일 실행자 |
+| 스케줄러 | Manager 공용 Dagster code location, APScheduler는 명시적 legacy rollback 경로 |
 | 프론트엔드 폼/상태 | React Hook Form / Zod / shadcn/ui / Tailwind CSS / TanStack Query |
 
 ## 개발 환경 정책
