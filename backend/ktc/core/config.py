@@ -145,6 +145,14 @@ class Settings(BaseSettings):
     # 설정만으로 프로젝트별 예산을 좁힐 수 있도록 미리 환경변수화해 둔다.
     DATABASE_POOL_SIZE: int = 5
     DATABASE_MAX_OVERFLOW: int = 10
+    # API는 HTTP만 사용한다. Dagster Python은 별도 code-server 이미지에 설치한다.
+    KTC_DAGSTER_URL: str = "http://127.0.0.1:11002"
+    KTC_DAGSTER_PUBLIC_URL: str = "http://127.0.0.1:11001"
+    KTC_DAGSTER_LOCATION: str = "ktc.dagster.definitions"
+    KTC_DAGSTER_MAX_RUNTIME_SECONDS: int = Field(default=21600, ge=60, le=86400)
+    KTC_DAGSTER_MISSING_GRACE_SECONDS: int = Field(default=600, ge=60)
+    KTC_TRANSCRIPT_SLOT_DIR: str = "/tmp/ktc-transcript-slots"
+
 
     # --- LLM: Gemini ---
     GEMINI_API_KEY: str = ""

@@ -7,14 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from ktc.etl import transcript, transcript_process
 
 
 @pytest.fixture
-def settings(monkeypatch):
+def settings(monkeypatch, tmp_path):
     value = SimpleNamespace(
         CRAWL_MAX_CONCURRENT_VIDEOS=3,
+        KTC_TRANSCRIPT_SLOT_DIR=str(tmp_path / "slots"),
         WHISPER_MAX_MEMORY_MB=1024,
         WHISPER_TIMEOUT_SECONDS=10,
     )
@@ -30,16 +30,16 @@ async def test_two_lanes_share_one_whisper_process_and_decode_result(
 ):
     original = asyncio.create_subprocess_exec
     active = maximum = 0
-    attempt = dict(
-        provider="whisper",
-        outcome="success",
-        result=dict(
-            video_id="video",
-            source="whisper",
-            language="ko",
-            segments=[dict(start=1.0, text="서울")],
-        ),
-    )
+    attempt = {
+        "provider": "whisper",
+        "outcome": "success",
+        "result": {
+            "video_id": "video",
+            "source": "whisper",
+            "language": "ko",
+            "segments": [{"start": 1.0, "text": "서울"}],
+        },
+    }
 
     async def spawn(*args, **kwargs):
         nonlocal active, maximum
@@ -48,12 +48,12 @@ async def test_two_lanes_share_one_whisper_process_and_decode_result(
         maximum = max(maximum, active)
         script = (
             "import time,pathlib; time.sleep(.1); pathlib.Path("
-            + repr(args[5])
+            + repr(args[12])
             + ").write_text("
             + repr(json.dumps(attempt))
             + ")"
         )
-        process = await original(sys.executable, "-c", script, **kwargs)
+        process = await original(*args[:7], sys.executable, "-c", script, **kwargs)
 
         async def count():
             nonlocal active
@@ -82,7 +82,7 @@ async def test_limit_or_cancel_reaps_process_group_and_temp_files(
     processes = []
     directories = []
     if reason == "memory":
-        settings.WHISPER_MAX_MEMORY_MB = 32
+        settings.WHISPER_MAX_MEMORY_MB = 128
     if reason == "timeout":
         settings.WHISPER_TIMEOUT_SECONDS = 0.3
 
@@ -91,11 +91,13 @@ async def test_limit_or_cancel_reaps_process_group_and_temp_files(
         script = """
 import subprocess, sys, pathlib, time
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-payload = bytearray(64 * 1024 * 1024)
 pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+payload = bytearray(160 * 1024 * 1024)
 time.sleep(60)
 """
-        process = await original(sys.executable, "-c", script, str(ready), **kwargs)
+        process = await original(
+            *args[:7], sys.executable, "-c", script, str(ready), **kwargs
+        )
         processes.append(process)
         return process
 
@@ -133,9 +135,13 @@ async def test_async_chain_preserves_provider_order_and_failure_fallback(monkeyp
     monkeypatch.setattr(transcript_process, "run_provider_process", attempt)
     monkeypatch.setenv("TRANSCRIPT_WHISPER_ENABLED", "true")
     monkeypatch.setattr(
-        transcript, "_resolve_provider_chain",
-        lambda: (transcript.transcribe_via_whisper, transcript.fetch_via_ytdlp,
-                 transcript.fetch_via_transcript_api),
+        transcript,
+        "_resolve_provider_chain",
+        lambda: (
+            transcript.transcribe_via_whisper,
+            transcript.fetch_via_ytdlp,
+            transcript.fetch_via_transcript_api,
+        ),
     )
     outcome = await transcript.fetch_transcript_async("video")
     assert calls == ["whisper", "yt_dlp", "youtube_transcript_api"]

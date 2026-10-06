@@ -23,6 +23,9 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("mcp", help="MCP 서버를 실행합니다.")
     subparsers.add_parser("scheduler", help="APScheduler 실행자를 실행합니다.")
+    control = subparsers.add_parser("scheduler-backend", help="drain 후 실행 방식/세대를 전환합니다.")
+    control.add_argument("--activate", choices=["legacy", "dagster"])
+    control.add_argument("--expected-generation", type=int)
     subparsers.add_parser("etl", help="ETL 샘플 파이프라인을 실행합니다.")
 
     args = parser.parse_args(argv)
@@ -32,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
         return _run_mcp()
     if args.command == "scheduler":
         return _run_scheduler()
+    if args.command == "scheduler-backend":
+        if args.activate and args.expected_generation is None:
+            parser.error("--activate에는 --expected-generation이 필요합니다")
+        from ktc.dagster.control import main as control_main
+        return control_main(args.activate, args.expected_generation)
     if args.command == "etl":
         return _run_etl()
     _unreachable(args.command)

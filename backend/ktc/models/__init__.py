@@ -27,12 +27,12 @@ from ktc.models.crawl_run import (
     RunState,
 )
 from ktc.models.crawl_run_stage_event import CrawlRunStageEvent, StageOutcome
+from ktc.models.export_dirty_outbox import ExportDirtyOutbox
 from ktc.models.extracted_place_candidate import (
     AuditStatus,
     ExtractedPlaceCandidate,
     MatchStatus,
 )
-from ktc.models.export_dirty_outbox import ExportDirtyOutbox
 from ktc.models.feature_evidence import (
     EvidenceSourceKind,
     FeatureExportStatus,
@@ -56,6 +56,7 @@ from ktc.models.review_bulk_operation import (
     ReviewBulkOperationReceipt,
     ReviewBulkOperationStatus,
 )
+from ktc.models.scheduler_control import SchedulerControl
 from ktc.models.search_keyword import SearchKeyword
 from ktc.models.source_target import SourceTarget, TargetType
 from ktc.models.system_setting import SystemSetting
@@ -83,6 +84,7 @@ __all__ = [
     "utcnow",
     # 작업/감사/설정
     "CrawlRun",
+    "SchedulerControl",
     "RunState",
     "RunSource",
     "RunAttention",

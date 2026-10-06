@@ -20,17 +20,13 @@ import signal
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from scheduler.db_retry import is_transient_database_error, retry_database, retry_delay
-
 from ktc.core.config import get_settings
 from ktc.core.database import async_session_factory, engine, init_db
 from ktc.etl import (
@@ -56,7 +52,6 @@ from ktc.models import (
     YoutubeVideoAnalysisRun,
     utcnow,
 )
-
 from ktc.services import (
     crawl_run_service,
     feature_export_service,
@@ -64,6 +59,10 @@ from ktc.services import (
     settings_service,
     source_scan_service,
 )
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from scheduler.db_retry import is_transient_database_error, retry_database, retry_delay
 
 # 워커 레인별 interval job id(T-163). 각 레인 1 인스턴스(max_instances=1)로 등록한다.
 WORKER_JOB_IDS: dict[str, str] = {
@@ -1274,6 +1273,9 @@ DEFAULT_HANDLERS: dict[str, JobHandler] = {
 }
 
 
+_execution_owner: ContextVar[str | None] = ContextVar("crawl_native_owner", default=None)
+
+
 async def _lock_owned_crawl_run_attempt(
     session: AsyncSession,
     *,
@@ -1288,6 +1290,7 @@ async def _lock_owned_crawl_run_attempt(
                 CrawlRun.id == run_id,
                 CrawlRun.state == "running",
                 CrawlRun.retry_count == retry_count,
+                CrawlRun.orchestrator_run_id == _execution_owner.get(),
             )
             .with_for_update()
             .execution_options(populate_existing=True, autoflush=False)
@@ -1476,6 +1479,7 @@ async def execute_run(
     heartbeat_interval_seconds: float | None = None,
 ) -> None:
     """작업 실행과 삭제의 경합을 lease로 보호한다."""
+    owner_token = _execution_owner.set(run.orchestrator_run_id)
     try:
         async with _hold_crawl_run_execution_lock(session_factory, run.id):
             await _execute_run_locked(
@@ -1493,6 +1497,8 @@ async def execute_run(
             "작업 DB 상태 저장 실패(run_id=%s, %s): heartbeat 복구를 기다립니다.",
             run.id, type(exc).__name__,
         )
+    finally:
+        _execution_owner.reset(owner_token)
 
 
 async def _execute_run_locked(
@@ -1511,9 +1517,11 @@ async def _execute_run_locked(
     handler = (handlers or DEFAULT_HANDLERS).get(run.job_type)
     if handler is None:
         async with session_factory() as session:
-            await crawl_run_service.mark_failed(
-                session, run.id, error=f"지원하지 않는 job_type: {run.job_type}"
-            )
+            owned = await _lock_owned_crawl_run_attempt(session, run_id=run.id, retry_count=int(run.retry_count))
+            if owned is not None:
+                await crawl_run_service.mark_failed(
+                    session, run.id, error=f"지원하지 않는 job_type: {run.job_type}"
+                )
         return
 
     settings = get_settings()
@@ -1579,12 +1587,16 @@ async def _execute_run_locked(
         else:
             # 외부(스케줄러 종료 등) 취소는 handler를 정리하고 그대로 전파한다.
             handler_task.cancel()
+            await asyncio.gather(handler_task, return_exceptions=True)
             # handler와 자식 프로세스의 취소 정리가 끝난 뒤 현재 attempt만 재투입한다.
             # DB가 내려갔으면 running lease를 남겨 다음 기동의 stale 복구에 맡긴다.
             try:
-                await asyncio.wait_for(
-                    _requeue_interrupted_attempt(session_factory, run), timeout=10,
-                )
+                if _execution_owner.get() is None:
+                    await asyncio.wait_for(
+                        _requeue_interrupted_attempt(session_factory, run), timeout=10,
+                    )
+                # native 소유 작업은 Dagster 상태/시간 상한을 확인한 뒤 인계한다.
+                # timeout을 정상 종료로 먼저 재투입하면 재시도 예산을 우회한다.
             except Exception as exc:
                 logger.warning(
                     "종료 중 작업 상태 저장 실패(run_id=%s, %s): 다음 기동에서 lease를 복구합니다.",
@@ -1700,7 +1712,9 @@ async def worker_loop(
     }
     if use_persistent_jobstore:
         try:
-            from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore  # type: ignore
+            from apscheduler.jobstores.sqlalchemy import (
+                SQLAlchemyJobStore,  # type: ignore
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "APScheduler persistent job store에는 SQLAlchemy jobstore 의존성이 필요하다"
@@ -1901,6 +1915,9 @@ async def reconcile_feature_exports_once(
     (`next_run_time=now`) + 주기 실행한다. 변경 건수를 반환한다.
     """
     async with session_factory() as session:
+        from ktc.services.scheduler_control import admitted
+        if not await admitted(session, "legacy"):
+            return 0
         try:
             changed = await feature_export_service.sync_feature_exports(session)
         except Exception as exc:  # noqa: BLE001 - 안전망은 다음 tick에서 재시도한다
@@ -1923,6 +1940,9 @@ async def enqueue_source_scan_once(
         "max_videos": settings.YOUTUBE_MAX_VIDEOS_PER_RUN,
     }
     async with session_factory() as session:
+        from ktc.services.scheduler_control import admitted
+        if not await admitted(session, "legacy"):
+            return None
         run, created = await source_scan_service.ensure_source_scan_run(
             session,
             payload=payload,

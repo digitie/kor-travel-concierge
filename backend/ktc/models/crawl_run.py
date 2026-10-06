@@ -130,6 +130,10 @@ class CrawlRun(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # native 연결과 정상 종료의 attempt identity는 domain 재시도 예산과 분리한다.
+    orchestrator_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    orchestrator_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    orchestrator_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 실행 중 작업에 대한 협조적 중지 신호. 실행자(heartbeat watcher)가 폴링해 작업을 취소한다.
     cancel_requested: Mapped[bool] = mapped_column(
