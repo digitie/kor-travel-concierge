@@ -524,3 +524,129 @@ def test_unknown_lane_allows_other_lane_actual_request_next_tick(
             json.loads(second.cursor)[failing_lane]
             > json.loads(first.cursor)[failing_lane]
         )
+
+
+@pytest.mark.parametrize("failing_lane", ["interactive", "batch"])
+def test_scoped_active_unknown_holds_only_lane_and_recovers(monkeypatch, failing_lane):
+    import json
+
+    from ktc.dagster import definitions as module
+
+    healthy_lane = "batch" if failing_lane == "interactive" else "interactive"
+    visited = []
+    failing = [True]
+
+    async def control():
+        return SimpleNamespace(backend="dagster", generation=1)
+
+    async def page(lane, after):
+        visited.append(lane)
+        return [rt.Lease(100, lane, 0, 0, None, RunState.PENDING, None, None, None)]
+
+    monkeypatch.setattr(rt, "control_snapshot", control)
+    monkeypatch.setattr(module, "pending_page", page)
+    monkeypatch.setattr(
+        module, "get_settings", lambda: SimpleNamespace(SCHEDULER_ENABLED=True)
+    )
+    cursor = json.dumps({"next_lane": failing_lane})
+    with DagsterInstance.ephemeral() as instance:
+        original = instance.get_runs
+
+        def scoped_failure(*args, **kwargs):
+            filters = kwargs.get("filters") or (args[0] if args else None)
+            if (
+                failing[0]
+                and filters is not None
+                and filters.job_name == rt.LANE_JOBS[failing_lane]
+            ):
+                raise RuntimeError("scoped active metadata UNKNOWN")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(instance, "get_runs", scoped_failure)
+        for _ in range(3):
+            with build_sensor_context(
+                instance=instance,
+                repository_def=defs.get_repository_def(),
+                cursor=cursor,
+            ) as context:
+                result = concierge_dispatch.evaluate_tick(context)
+            assert [request.job_name for request in result.run_requests] == [
+                rt.LANE_JOBS[healthy_lane]
+            ]
+            assert (
+                json.loads(result.cursor)["next_lane"]
+                != json.loads(cursor)["next_lane"]
+            )
+            cursor = result.cursor
+        assert visited == [healthy_lane] * 3
+        failing[0] = False
+        with build_sensor_context(
+            instance=instance, repository_def=defs.get_repository_def(), cursor=cursor
+        ) as context:
+            recovered = concierge_dispatch.evaluate_tick(context)
+        assert {request.job_name for request in recovered.run_requests} == set(
+            rt.LANE_JOBS.values()
+        )
+
+
+@pytest.mark.parametrize(
+    "failing_job", ["concierge_source_scan", "concierge_feature_exports"]
+)
+def test_scoped_maintenance_active_unknown_holds_only_job_and_recovers(
+    monkeypatch, failing_job
+):
+    import json
+
+    from ktc.dagster import definitions as module
+
+    jobs = {"concierge_source_scan", "concierge_feature_exports"}
+    healthy_job = (jobs - {failing_job}).pop()
+    failing = [True]
+    now = [1000.0]
+
+    async def control():
+        return SimpleNamespace(backend="dagster", generation=1)
+
+    monkeypatch.setattr(rt, "control_snapshot", control)
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            SCHEDULER_ENABLED=True,
+            SOURCE_SCAN_ENABLED=True,
+            SOURCE_SCAN_INTERVAL_SECONDS=10,
+            FEATURE_EXPORT_RECONCILE_ENABLED=True,
+            FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS=10,
+        ),
+    )
+    cursor = None
+    with DagsterInstance.ephemeral() as instance:
+        original = instance.get_runs
+
+        def scoped_failure(*args, **kwargs):
+            filters = kwargs.get("filters") or (args[0] if args else None)
+            if failing[0] and filters is not None and filters.job_name == failing_job:
+                raise RuntimeError("scoped active metadata UNKNOWN")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(instance, "get_runs", scoped_failure)
+        for _ in range(3):
+            with build_sensor_context(
+                instance=instance,
+                repository_def=defs.get_repository_def(),
+                cursor=cursor,
+            ) as context:
+                result = module.concierge_maintenance.evaluate_tick(context)
+            assert [request.job_name for request in result.run_requests] == [
+                healthy_job
+            ]
+            assert json.loads(result.cursor) == {healthy_job: now[0]}
+            cursor = result.cursor
+            now[0] += 11
+        failing[0] = False
+        with build_sensor_context(
+            instance=instance, repository_def=defs.get_repository_def(), cursor=cursor
+        ) as context:
+            recovered = module.concierge_maintenance.evaluate_tick(context)
+        assert {request.job_name for request in recovered.run_requests} == jobs

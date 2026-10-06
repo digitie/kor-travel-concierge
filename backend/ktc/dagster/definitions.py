@@ -166,15 +166,22 @@ JOBS = [
 
 
 def active(context, name):
-    return call_with_deadline(
-        lambda: has_active_run(
-            context.instance,
-            job_name=name,
-            project=rt.PROJECT,
-            location_name=rt.location(),
-        ),
-        timeout_seconds=5,
-    )
+    try:
+        return call_with_deadline(
+            lambda: has_active_run(
+                context.instance,
+                job_name=name,
+                project=rt.PROJECT,
+                location_name=rt.location(),
+            ),
+            timeout_seconds=5,
+        )
+    except Exception as exc:  # noqa: BLE001 - UNKNOWN은 해당 job 발화만 보류한다
+        context.log.warning(
+            "활성 metadata UNKNOWN(job=%s, %s)", name, type(exc).__name__
+        )
+        # 조회 실패를 빈 큐로 오인하지 않으며 다른 job의 확인·cursor 저장은 계속한다.
+        return True
 
 
 async def pending_page(lane, after):

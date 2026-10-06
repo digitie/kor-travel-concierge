@@ -74,3 +74,5 @@ pidfd Python wrapper가 없는 Linux 빌드에서는 libc wrapper를 사용하�
 
 metadata UNKNOWN의 lane 격리를 위해 dispatch cursor는 tick마다 시작 lane을 교대로 선택한다.
 25초 전역 예산을 한 lane이 소진해도 다음 tick에서 다른 lane을 먼저 조회하고 각 keyset cursor를 보존한다.
+
+활성 metadata 조회 UNKNOWN은 해당 job만 신규 발화를 보류한다. 다른 lane과 maintenance job은 계속 확인하고 cursor를 저장한다. 조회가 회복되면 보류한 job도 다시 발화할 수 있다. backend/generation 조회 UNKNOWN은 전체 발화를 계속 금지한다.
