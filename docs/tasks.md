@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-- [ ] **T-197**: 지도 무기한 로딩 복구 — 타일 응답 보류 재현, 15초 지연 안내·지도 단독 재시도, WebGL 실패 복구와 정상 desktop/mobile, GPU 검사 해제 미확인 차단 live 6건 통과. 운영 반영·공개 재검증 대기.
+진행 중 작업 없음.
 
 
 ---
@@ -27,6 +27,8 @@
 ---
 
 ## 완료
+
+- [x] **T-197**: 지도 무기한 로딩 복구 — 15초 지연 안내·지도 단독 재시도, WebGL 지원/해제 확인과 반복 생성 차단. 두 독립 적대 리뷰 PASS 후 PR #244 병합·운영 UI 반영, 후보/공개 지도 live 각각 6건과 desktop/mobile 인증·Dagster·jobs 확인 완료. 원인 미확정·메모리 검증 범위는 journal에 기록.
 
 - [x] **T-196**: Concierge 공용 Dagster 이관 구현(ADR-48) — Common Python/UI, native owner/attempt/generation fence, 유한 회수·재시도, job별 UNKNOWN 격리와 provider 메모리 예약을 적용했다. Linux/PostGIS/native/Docker/N150 live UI 격리 검증 완료. 독립 FULL 리뷰와 PR 검사는 병합 gate로 진행한다. 운영 drain/backend 전환은 별도 작업이다. [전환·복구 가이드](dagster-adoption.md).
 

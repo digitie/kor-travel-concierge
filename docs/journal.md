@@ -9,7 +9,11 @@
 - 운영 Chromium의 정상 결과 화면에서 실제 PNG 타일과 장소 마커가 표시됨을 확인했다. 사용자 환경의 최초 지도 로딩 고착 원인은 아직 특정하지 않았으며, 응답이 끝나지 않는 조건을 브라우저에서 재현해 복구 경로를 보강한다.
 - 최초 candidate live는 정상 desktop/mobile과 타일 보류 복구 3건을 통과했으나 WebGL 실패 1건에서 실패했다. 설치된 MapLibre 6가 WebGL2 생성 실패 때 throw 없이 미완성 Map을 반환하여 어댑터 fallback도 발생하지 않음을 소스·실행으로 확인했다. 지도 생성 전에 1×1 canvas로 WebGL2를 확인하고 context loss 확인 후에만 실제 지도를 생성한다. 해제 확장이 없거나 loss를 확인할 수 없거나 할당 후 예외가 발생하면 지도 생성·수동 재검사를 막고 새로고침/다른 브라우저를 안내한다. 실제 N150 Chromium의 별도 검사에서는 loss 호출 직후 isContextLost가 true임을 확인했다. 이는 드라이버 메모리 반환 시점을 보장하거나 이후 실제 지도 초기화의 모든 실패를 검출한다는 뜻은 아니다.
 - 지도 준비 skeleton의 15초 타이머는 준비·재시도·unmount 시 정리된다. 자동 요청 루프 없이 지도만 다시 마운트하고 상위 장소 목록·선택·카메라 목표를 유지한다. WebGL 초기화 실패도 명시적으로 안내하고 수동 재시도한다.
-- 정상 desktop/mobile 실제 타일, 타일 응답 보류→수동 복구, WebGL 초기화 실패→수동 복구, 해제 확장 미지원/loss 미확인의 추가 context 생성 차단 live 회귀 6건을 추가했다. 최종 후보 N150 Chromium live 6건은 모두 통과했다(실제 PNG200·마커·재시도 후 목록/선택 보존 포함). frontend type-check·lint·Vitest 336건·production build를 통과했다. 최종 후보 준비 확인 전 시작한 6건은 연결 실패였으며 결과를 보존하고 준비 후 동일 시험을 재실행했다. 운영 반영·공개 재검증은 병합 후 진행한다.
+- 정상 desktop/mobile 실제 타일, 타일 응답 보류→수동 복구, WebGL 초기화 실패→수동 복구, 해제 확장 미지원/loss 미확인의 추가 context 생성 차단 live 회귀 6건을 추가했다. 최종 후보 N150 Chromium live 6건은 모두 통과했다(실제 PNG200·마커·재시도 후 목록/선택 보존 포함). frontend type-check·lint·Vitest 336건·production build를 통과했다. 최종 후보 준비 확인 전 시작한 6건은 연결 실패였으며 결과를 보존하고 준비 후 동일 시험을 재실행했다. 운영 반영·공개 재검증 결과는 아래 기록과 같다.
+
+- 두 독립 적대 리뷰의 최종 제품·문서 PASS/OPEN0 후 PR #244를 병합했다(`aa0901c8`). Manager 전역 mutation 잠금과 canonical Concierge compose 경로에서 검증한 후보 이미지로 UI만 재생성했다. 이전 UI 이미지·소스는 복구용으로 보관했다. API/MCP/code-server/공유 daemon/webserver ID는 유지됐다.
+- 배포 후 공개 N150 Chromium에서 동일 지도 live 6건 모두 통과했다(재시도 뒤 새 PNG200·장소 목록/선택 마커 보존 포함). 공개/LAN login200·Set-Cookie·summary200/ok·logout200→401·잘못된 비밀번호401과 desktop/mobile Dagster·jobs 화면, pageerror/실패 asset0을 확인했다. 배포 소스 SHA가 리뷰한 후보와 같고 UI restart0/OOM 없음, API/code-server healthy다. 사용자 최초 브라우저의 장애 원인을 특정한 것은 아니다.
+- 본 작업이 만든 후보 컨테이너 3개와 비공개 브라우저 settings를 정리했다. 초기 실패/최종 증거와 운영 복구 이미지·소스는 보존한다. 최대 GPU/heap 및 운영 중 context loss drill은 미실행이다.
 
 ## 2026-10-07: 공용 Dagster 운영 배포와 backend 전환
 
