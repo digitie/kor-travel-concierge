@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MapLibreMap, MarkerProps, PopupProps, VWorldMapViewProps } from "vworld-map-web";
 
 import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
@@ -52,6 +52,7 @@ const FOCUS_ZOOM = 12;
 // 실제 키 부재는 별도 오버레이 배지로 알린다. 더미 키의 VWorld 타일 요청은
 // unsupportedTileFallback으로 우아하게 대체된다.
 const KEYLESS_PLACEHOLDER_KEY = "keyless-dev-placeholder";
+const MAP_LOADING_TIMEOUT_MS = 15_000;
 
 export function VWorldMap({
   places,
@@ -59,6 +60,8 @@ export function VWorldMap({
   onSelectPlace,
   focusKey = 0,
 }: VWorldMapProps) {
+  const [mapAttempt, setMapAttempt] = useState(0);
+  const retryMap = useCallback(() => setMapAttempt((attempt) => attempt + 1), []);
   // react-hooks/refs: ref는 렌더 중 읽을 수 없으므로(값은 커밋 이후에만 접근),
   // cameraTarget 계산에 쓰이는 두 값은 ref 대신 state로 추적한다. zoomend/moveend는
   // 제스처가 끝날 때만 발생해(연속 프레임이 아님) 리렌더 비용이 문제되지 않는다.
@@ -138,6 +141,7 @@ export function VWorldMap({
       className="relative h-full w-full"
     >
       <VWorldMapView
+        key={mapAttempt}
         apiKey={VWORLD_SERVICE_KEY || KEYLESS_PLACEHOLDER_KEY}
         layerType="Base"
         center={KOREA_CENTER}
@@ -150,8 +154,8 @@ export function VWorldMap({
         cameraTarget={cameraTarget}
         onZoomEnd={handleCameraTrackingEvent}
         onMoveEnd={handleCameraTrackingEvent}
-        fallback={<MapFallback />}
-        loadingSkeleton={<MapLoadingSkeleton />}
+        fallback={<MapFallback onRetry={retryMap} />}
+        loadingSkeleton={<MapLoadingSkeleton onRetry={retryMap} />}
         unsupportedTileFallback={{ label: "VWorld 타일" }}
         className="h-full w-full"
       >
@@ -188,20 +192,49 @@ export function VWorldMap({
   );
 }
 
-function MapLoadingSkeleton() {
+function MapLoadingSkeleton({ onRetry }: { onRetry?: () => void }) {
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    // 타일 요청이 끝나지 않으면 MapLibre의 load 이벤트도 오지 않는다.
+    // 자동 재시도 대신 운영자가 지도만 재생성하도록 하며, 준비되면 이 컴포넌트가
+    // 사라져 타이머도 정리된다. 장소 목록·선택·카메라 목표는 상위에 보존한다.
+    const timer = window.setTimeout(() => setTimedOut(true), MAP_LOADING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   return (
     <div className="absolute inset-0 grid place-items-center bg-muted text-sm text-muted-foreground">
-      지도 로딩 중
+      <div className="grid justify-items-center gap-3 px-4 text-center">
+        <p role="status">
+          {timedOut ? "지도 응답이 지연되고 있습니다. 네트워크 연결을 확인해 주세요." : "지도 로딩 중"}
+        </p>
+        {timedOut && (onRetry ? <MapRetryButton onRetry={onRetry} /> : <p>페이지를 새로고침해 주세요.</p>)}
+      </div>
     </div>
   );
 }
 
-function MapFallback() {
-  // apiKey는 항상 비어 있지 않은 값(실제 키 또는 KEYLESS_PLACEHOLDER_KEY)을 전달하므로
-  // 이 fallback은 실질적으로 "map-init-error"(WebGL 등 초기화 실패)에서만 나타난다.
+function MapRetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRetry}
+      className="rounded-md border border-border bg-background px-4 py-2 text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      지도 다시 시도
+    </button>
+  );
+}
+
+function MapFallback({ onRetry }: { onRetry: () => void }) {
+  // apiKey는 항상 비어 있지 않은 값이므로 WebGL 등 초기화 실패에서 나타난다.
   return (
     <div className="grid h-full w-full place-items-center bg-muted text-sm text-muted-foreground">
-      지도를 불러오지 못했습니다
+      <div className="grid justify-items-center gap-3 px-4 text-center">
+        <p role="alert">지도를 불러오지 못했습니다. 브라우저의 그래픽 가속 설정을 확인해 주세요.</p>
+        <MapRetryButton onRetry={onRetry} />
+      </div>
     </div>
   );
 }
