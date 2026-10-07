@@ -87,6 +87,8 @@ test('응답 없는 지도는 지연을 알리고 수동 재시도로 복구한�
 });
 
 test('WebGL 초기화 실패를 표시하고 지도만 다시 초기화한다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.name));
   await page.addInitScript(() => {
     const original = HTMLCanvasElement.prototype.getContext;
     (window as Window & { blockMapWebGL?: boolean }).blockMapWebGL = true;
@@ -98,6 +100,7 @@ test('WebGL 초기화 실패를 표시하고 지도만 다시 초기화한다', 
   await login(page);
   const map = page.locator('#vworld-map-container');
   await expect(map.getByRole('alert')).toContainText('브라우저의 그래픽 가속 설정');
+  await expect(map.locator('canvas')).toHaveCount(0); // 미완성 Map을 생성하지 않는다.
   const selection = await selectPlace(page);
   await page.evaluate(() => { (window as Window & { blockMapWebGL?: boolean }).blockMapWebGL = false; });
   const tile = nextTile(page);
@@ -105,4 +108,38 @@ test('WebGL 초기화 실패를 표시하고 지도만 다시 초기화한다', 
   await tile;
   await ready(page);
   await preserved(page, selection);
+  expect(errors).toEqual([]);
 });
+
+for (const mode of ["missing-extension", "unconfirmed-loss"] as const) {
+  test(`GPU 검사 자원 해제를 확인할 수 없으면 추가 지도를 생성하지 않는다 ${mode}`, async ({ page }) => {
+    await page.addInitScript((mode) => {
+      const original = HTMLCanvasElement.prototype.getContext;
+      (window as Window & { mapProbeCount?: number }).mapProbeCount = 0;
+      HTMLCanvasElement.prototype.getContext = function (...args: Parameters<typeof original>) {
+        const context = original.apply(this, args);
+        if (String(args[0]) === 'webgl2' && context) {
+          const state = window as Window & { mapProbeCount?: number };
+          state.mapProbeCount = (state.mapProbeCount ?? 0) + 1;
+          const gl = context as WebGL2RenderingContext;
+          const getExtension = gl.getExtension.bind(gl);
+          gl.getExtension = ((name: string) => name === 'WEBGL_lose_context'
+            ? mode === 'missing-extension' ? null : { loseContext() {}, restoreContext() {} }
+            : getExtension(name)) as typeof gl.getExtension;
+        }
+        return context;
+      } as typeof original;
+    }, mode);
+    await login(page);
+    const map = page.locator('#vworld-map-container');
+    await expect(map.getByRole('alert')).toContainText('지도를 안전하게 초기화하지 못했습니다.');
+    await expect(map.locator('canvas')).toHaveCount(0);
+    await expect(map.getByRole('button', { name: '지도 다시 시도' })).toHaveCount(0);
+    const before = await page.evaluate(() => (window as Window & { mapProbeCount?: number }).mapProbeCount);
+    expect(before).toBe(1);
+    await selectPlace(page); // 부모 rerender에도 검사 context를 추가 생성하지 않는다.
+    await page.waitForTimeout(2_000);
+    expect(await page.evaluate(() => (window as Window & { mapProbeCount?: number }).mapProbeCount)).toBe(before);
+    await expect(map.getByText('지도 로딩 중', { exact: true })).toHaveCount(0);
+  });
+}

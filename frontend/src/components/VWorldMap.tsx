@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { MapLibreMap, MarkerProps, PopupProps, VWorldMapViewProps } from "vworld-map-web";
 
 import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
@@ -140,49 +140,50 @@ export function VWorldMap({
       data-status={VWORLD_SERVICE_KEY ? "vworld" : "fallback"}
       className="relative h-full w-full"
     >
-      <VWorldMapView
-        key={mapAttempt}
-        apiKey={VWORLD_SERVICE_KEY || KEYLESS_PLACEHOLDER_KEY}
-        layerType="Base"
-        center={KOREA_CENTER}
-        zoom={INITIAL_ZOOM}
-        minZoom={VWORLD_MIN_ZOOM}
-        maxBounds={KOREA_MAX_BOUNDS}
-        navigation
-        geolocate={false}
-        scale={false}
-        cameraTarget={cameraTarget}
-        onZoomEnd={handleCameraTrackingEvent}
-        onMoveEnd={handleCameraTrackingEvent}
-        fallback={<MapFallback onRetry={retryMap} />}
-        loadingSkeleton={<MapLoadingSkeleton onRetry={retryMap} />}
-        unsupportedTileFallback={{ label: "VWorld 타일" }}
-        className="h-full w-full"
-      >
-        {visiblePlaces.map(({ place, number, lngLat }) => (
-          <Marker
-            key={place.place_id}
-            lngLat={lngLat}
-            anchor="bottom"
-            selected={place.place_id === selectedPlaceId}
-            ariaLabel={`${number}번 ${place.name} 선택`}
-            interactionId={String(number)}
-            onClick={() => onSelectPlace(place.place_id)}
-          >
-            <MarkerBadge number={number} selected={place.place_id === selectedPlaceId} />
-          </Marker>
-        ))}
-        {selectedPlaceCoordinates ? (
-          <Popup
-            lngLat={selectedPlaceCoordinates.lngLat}
-            offset={18}
-            closeButton={false}
-            closeOnClick={false}
-          >
-            <strong>{selectedPlaceCoordinates.place.name}</strong>
-          </Popup>
-        ) : null}
-      </VWorldMapView>
+      <MapWebGLGuard key={mapAttempt} onRetry={retryMap}>
+        <VWorldMapView
+          apiKey={VWORLD_SERVICE_KEY || KEYLESS_PLACEHOLDER_KEY}
+          layerType="Base"
+          center={KOREA_CENTER}
+          zoom={INITIAL_ZOOM}
+          minZoom={VWORLD_MIN_ZOOM}
+          maxBounds={KOREA_MAX_BOUNDS}
+          navigation
+          geolocate={false}
+          scale={false}
+          cameraTarget={cameraTarget}
+          onZoomEnd={handleCameraTrackingEvent}
+          onMoveEnd={handleCameraTrackingEvent}
+          fallback={<MapFallback onRetry={retryMap} />}
+          loadingSkeleton={<MapLoadingSkeleton onRetry={retryMap} />}
+          unsupportedTileFallback={{ label: "VWorld 타일" }}
+          className="h-full w-full"
+        >
+          {visiblePlaces.map(({ place, number, lngLat }) => (
+            <Marker
+              key={place.place_id}
+              lngLat={lngLat}
+              anchor="bottom"
+              selected={place.place_id === selectedPlaceId}
+              ariaLabel={`${number}번 ${place.name} 선택`}
+              interactionId={String(number)}
+              onClick={() => onSelectPlace(place.place_id)}
+            >
+              <MarkerBadge number={number} selected={place.place_id === selectedPlaceId} />
+            </Marker>
+          ))}
+          {selectedPlaceCoordinates ? (
+            <Popup
+              lngLat={selectedPlaceCoordinates.lngLat}
+              offset={18}
+              closeButton={false}
+              closeOnClick={false}
+            >
+              <strong>{selectedPlaceCoordinates.place.name}</strong>
+            </Popup>
+          ) : null}
+        </VWorldMapView>
+      </MapWebGLGuard>
       {!VWORLD_SERVICE_KEY ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-muted/70 text-sm text-muted-foreground">
           VWorld 지도 키 없음
@@ -190,6 +191,55 @@ export function VWorldMap({
       ) : null}
     </div>
   );
+}
+
+function MapWebGLGuard({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+  const [status, setStatus] = useState<"checking" | "ready" | "unsupported" | "unreleasable">("checking");
+
+  useEffect(() => {
+    // MapLibre 6는 WebGL2 초기화 실패 때 throw 없이 미완성 Map을 반환한다.
+    // 어댑터의 load/fallback 모두 발화하지 않는 경로를 지도 생성 전에 차단한다.
+    const frame = window.requestAnimationFrame(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      let allocated = false;
+      let result: "ready" | "unsupported" | "unreleasable" = "unsupported";
+      try {
+        const context = canvas.getContext("webgl2", {
+          alpha: true, depth: true, stencil: true, premultipliedAlpha: true,
+          antialias: false, preserveDrawingBuffer: false,
+          powerPreference: "high-performance", failIfMajorPerformanceCaveat: false,
+          desynchronized: false,
+        });
+        if (context) {
+          allocated = true;
+          result = "unreleasable";
+          const release = context.getExtension("WEBGL_lose_context");
+          if (release) {
+            release.loseContext();
+            // 검사 context의 loss가 확인된 경우에만 실제 지도를 생성한다.
+            // 해제가 불확실하면 재검사로 context를 추가 생성하지 않는다.
+            if (context.isContextLost()) result = "ready";
+          }
+        }
+      } catch {
+        result = allocated ? "unreleasable" : "unsupported";
+      }
+      setStatus(result);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  if (status === "checking") return <MapLoadingSkeleton />;
+  if (status === "unsupported") return <MapFallback onRetry={onRetry} />;
+  if (status === "unreleasable") {
+    return (
+      <div className="absolute inset-0 grid place-items-center bg-muted px-4 text-center text-sm text-muted-foreground">
+        <p role="alert">지도를 안전하게 초기화하지 못했습니다. 페이지를 새로고침하거나 다른 브라우저로 접속해 주세요.</p>
+      </div>
+    );
+  }
+  return children;
 }
 
 function MapLoadingSkeleton({ onRetry }: { onRetry?: () => void }) {
