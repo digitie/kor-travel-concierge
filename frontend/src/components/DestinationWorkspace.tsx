@@ -494,6 +494,7 @@ function DestinationList({
 }) {
   // 선택된 장소의 행 DOM을 참조해 마커 클릭 시 목록에서 보이도록 스크롤한다.
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const rowsScrollRef = useRef<HTMLDivElement | null>(null);
   const selectedPlaceId = selectedPlace?.place_id ?? null;
   const districtFilterLabel =
     (facets?.districts ?? []).find((district) => district.value === districtFilter)
@@ -503,10 +504,16 @@ function DestinationList({
     if (selectedPlaceId == null) {
       return;
     }
-    rowRefs.current.get(selectedPlaceId)?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-    });
+    const row = rowRefs.current.get(selectedPlaceId);
+    const scroll = rowsScrollRef.current;
+    if (!row || !scroll) return;
+    // scrollIntoView는 모바일 문서까지 움직여 첫 로드의 메뉴·지도를 밀어낸다.
+    // 선택 행만 목록의 scrollport 안으로 이동한다.
+    const rowBox = row.getBoundingClientRect();
+    const scrollBox = scroll.getBoundingClientRect();
+    const top = rowBox.top < scrollBox.top ? rowBox.top - scrollBox.top
+      : rowBox.bottom > scrollBox.bottom ? rowBox.bottom - scrollBox.bottom : 0;
+    if (top) scroll.scrollBy({ top, behavior: "smooth" });
   }, [selectedPlaceId]);
 
   return (
@@ -670,7 +677,7 @@ function DestinationList({
           {selectedExportCount > 0 ? `선택 ${selectedExportCount}` : "전체"} 내보내기
         </Button>
       </div>
-      <div className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
+      <div ref={rowsScrollRef} className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
         {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
         {!isLoading && places.length === 0 && !errorMessage ? (
           <p className="text-sm text-muted-foreground">조건에 맞는 장소가 없습니다.</p>

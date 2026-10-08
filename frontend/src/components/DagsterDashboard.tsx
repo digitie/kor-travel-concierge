@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { DagsterOperations } from "@kor-travel/ui/dagster-operations";
-import type { ConciergeSnapshot, DagsterSummary } from "@/lib/dagster";
+import { parseHealthyDagsterSummary, type ConciergeSnapshot } from "@/lib/dagster";
 
 const JOB_LABELS: Record<string, string> = {
   concierge_interactive: "즉시 수집", concierge_batch: "대량 수집",
@@ -35,11 +35,11 @@ export function DagsterDashboard() {
         throw new Error("관리자 인증 만료");
       }
       if (!response.ok) throw new Error("조회 실패");
-      const payload = await response.json() as DagsterSummary;
-      if (payload.status !== "ok" || !payload.snapshot) throw new Error("연결 확인 실패");
+      const payload = parseHealthyDagsterSummary(await response.json());
       if (controller.signal.aborted || request !== sequence.current) return;
+      const nextPublicUrl = payload.publicUrl.replace(/\/$/, "");
       setSnapshot(payload.snapshot);
-      setPublicUrl(payload.publicUrl.replace(/\/$/, ""));
+      setPublicUrl(nextPublicUrl);
       setSelected(current => payload.snapshot!.runs.some(run => run.runId === current) ? current : null);
       setError(undefined);
     } catch {
