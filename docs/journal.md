@@ -8,9 +8,14 @@
 
 - [실행 가이드](live-ui-testing.md)와 운영 전용 config를 추가했다. 로그인·메뉴 21, 폼·작업 22, 운영·Dagster 19, 장소·검수 22, 기존 지도 복구 6개로 총 90개다. 작업자 1개·자동 재시도 0, 실제 조회와 브라우저 장애/fixture를 구분하고 운영 domain write·provider 검색을 막는다.
 - 최초 baseline은 하니스 오류 수정과 제품 재현을 위해 중단했다(36 통과/29 실패/14 미실행). 별도 진단 5개는 모두 실패했다. 저장된 메뉴의 hydration 오류, Zod4/resolver3 조합의 미처리 예외, 잘못된 Dagster HTTP200의 상태 교체·화면 오류, 320px 설정 넘침을 수정했다. 첫 전체 후보 실행은 72 통과/18 실패/skip0/flaky0이며 결과를 보존했다.
-- 첫 전체 후보의 Dagster 13개는 실제 degraded 응답으로 실패했고 API에는 ReadTimeout이 기록됐다. 이후 같은 운영 컨테이너의 직접 조회는 8회 모두 정상으로 회복했다. UI-only 시험에서 공유 native 서비스를 재시작하거나 timeout을 늘려 숨기지 않았다. 일시 조회 지연의 근본 원인은 아직 특정하지 않았다.
-- 모바일 결과 첫 로드의 자동 선택 행 `scrollIntoView`가 전체 문서를 움직여 메뉴·지도를 밀어내는 현상을 추가로 확인했다. 장소 목록 scrollport만 움직이도록 변경한다. 선택 필터 초기화는 첫 장소 자동 선택이라는 기존 계약에 맞춰 검증한다.
-- 독립 리뷰의 요청 취소·늦은 응답 마커 검증 누락을 보강했다. 제품 fetch signal abort를 하니스 정리 전에 관측하고, 늦은 A 응답 이후 B 마커·popup과 A 부재를 확인한다. 리뷰 원문과 초기 실패 기록은 비공개로 보존한다. 최종 검증·병합·배포 결과는 완료 후 아래에 기록한다.
+- 첫 전체 후보의 Dagster 13개는 실제 degraded 응답으로 실패했고 API에는 ReadTimeout이 기록됐다. 이후 같은 운영 컨테이너의 직접 조회는 8회 모두 정상으로 회복했다. UI 시험에서 공유 native 서비스를 재시작하거나 timeout을 늘려 숨기지 않았다. 일시 조회 지연의 근본 원인은 아직 특정하지 않았다.
+- 모바일 결과 첫 로드의 자동 선택 행 `scrollIntoView`가 전체 문서를 움직여 메뉴·지도를 밀어내는 현상을 추가로 확인했다. 장소 목록 scrollport만 움직이도록 변경했다. 선택 필터 초기화는 첫 장소 자동 선택이라는 기존 계약에 맞춰 검증한다.
+- 독립 리뷰의 요청 취소·늦은 응답 마커 검증 누락을 보강했다. 제품 fetch signal abort를 하니스 정리 전에 관측하고, 늦은 A 응답 이후 B 마커·popup과 A 부재를 확인한다. 리뷰 원문과 초기 실패 기록은 비공개로 보존한다. 최종 결과는 아래와 같다.
+
+- 두 독립 적대 소스 리뷰 PASS/OPEN0 뒤 PR [#246](https://github.com/digitie/kor-travel-concierge/pull/246)을 병합했다(`f4732b9`). 정확한 요청 signal 검증을 포함한 최신 후보 전체는 90/90 PASS, 실패·skip·flaky0, retries0이었다. Manager canonical projection과 전역 mutation 잠금에서 검증한 UI 이미지만 반영하고 이전 이미지·8개 소스를 복구용으로 보관했다. API/MCP/code-server/공유 daemon/webserver ID는 유지됐고 관리자 hash가 비어 있지 않다.
+- 첫 공개 전체는 89 PASS/1 FAIL/skip0/flaky0이었다. 설정 GET 응답 전 `count()`로 0개를 즉시 검증하던 하니스 대기 누락이다. 정확한 GET200과 `toHaveCount(9)` 렌더 대기를 추가하고 입력 개수·password 빈 값·4000자 경계 조건을 유지했다. 수정 단건 후보 PASS, 두 독립 좁은 리뷰 PASS/OPEN0 및 공개 전체 90/90 PASS(실패·skip·flaky0, retries0)를 확인했다. 첫 공개 실패 원문도 보존한다.
+- 공개/LAN 실제 login POST200·Set-Cookie, summary200/ok, logout200→summary401, 잘못된 비밀번호401을 확인했다. 배포 소스 8개와 후보 hash가 같고 유지 대상 전체에서 재시작 0회·OOM 없음, API/code-server/공유 daemon/webserver healthy다. 이는 특정 시점 관측이며 최초 native 요약 지연의 근본 원인·장기 안정성을 확정한 것은 아니다.
+- Chromium의 실제 UI 조회와 browser fault/fixture 시험을 구분한다. 도메인/Dagster 실행 변경·강제 종료·provider 수집·OS IME·다른 브라우저·최대 GPU/heap/RSS·장기부하 검증은 이 90건에 포함하지 않는다. 시험은 작업자 1개로 실행했고 초기 실패와 원문 증거는 비공개로 보존한다.
 
 ## 2026-10-08: 지도 무기한 로딩 복구 보강
 
