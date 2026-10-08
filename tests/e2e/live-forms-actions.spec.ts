@@ -33,8 +33,10 @@ test('반복·콘텐츠·강제 다운로드 폼을 변경하고 실제 등록 �
   await page.getByRole('checkbox', { name: '반복 검색 도움말', exact: true }).uncheck(); await expect(page.locator('#harvest-repeat-count')).toHaveCount(0);
 });
 test('설정 키는 빈 password 입력이고 프롬프트 4000자 경계를 표시한다', async ({ page }) => {
-  await login(page, '/settings'); const inputs = page.locator('input[id^="settings-"]');
-  expect(await inputs.count()).toBe(9);
+  const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/settings' && r.request().method() === 'GET');
+  await login(page, '/settings'); expect((await response).status()).toBe(200);
+  const inputs = page.locator('input[id^="settings-"]');
+  await expect(inputs).toHaveCount(9);
   for (const input of await inputs.all()) { await expect(input).toHaveValue(''); await expect(input).toHaveAttribute('type', 'password'); }
   const prompt = page.getByLabel('AI 사전 프롬프트', { exact: true }); await prompt.fill('가'.repeat(4001));
   await expect(prompt).toHaveAttribute('aria-invalid', 'true'); await expect(page.locator('#settings-save-button')).toBeDisabled();
