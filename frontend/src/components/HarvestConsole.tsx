@@ -98,13 +98,13 @@ const harvestFormSchema = z
     targetType: z.enum(["auto", "keyword", "channel", "playlist", "video"]),
     targetValue: z.string().trim().min(1, "수집 대상을 입력하세요."),
     maxVideos: z.coerce
-      .number()
+      .number<number>()
       .int("정수로 입력하세요.")
       .min(1, "최소 1개 이상 입력하세요.")
       .max(300, "한 번에 최대 300개까지 요청할 수 있습니다."),
     repeat: z.boolean(),
-    repeatIntervalMinutes: z.coerce.number().int().min(1),
-    repeatMaxRuns: z.coerce.number().int().min(0),
+    repeatIntervalMinutes: z.coerce.number<number>().int().min(1),
+    repeatMaxRuns: z.coerce.number<number>().int().min(0),
     contentFilter: z.enum(["both", "shorts", "videos"]),
     // 강제 다운로드: 증분 워터마크 무시하고 처음부터 재수집(기본은 증분 추가).
     force: z.boolean(),

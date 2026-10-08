@@ -5,7 +5,8 @@
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "test:live-ui": "playwright test --config playwright.live-ui.config.ts"
   },
   "dependencies": {},
   "devDependencies": {

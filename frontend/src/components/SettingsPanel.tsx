@@ -126,8 +126,8 @@ export function SettingsPanel() {
   }
 
   return (
-    <div className="ktc-workspace grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-      <section className="flex flex-col gap-5 rounded-panel border border-border bg-card p-4">
+    <div className="ktc-workspace grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <section className="flex min-w-0 flex-col gap-5 rounded-panel border border-border bg-card p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="ktc-eyebrow mb-1">실행 기준</p>
@@ -207,7 +207,7 @@ export function SettingsPanel() {
         ) : null}
       </section>
 
-      <section className="flex flex-col gap-5 rounded-panel border border-border bg-card p-4">
+      <section className="flex min-w-0 flex-col gap-5 rounded-panel border border-border bg-card p-4">
         <div>
           <p className="ktc-eyebrow mb-1">연결 관리</p>
           <h2 className="text-[18px] font-extrabold tracking-[-0.025em]">API 키</h2>
@@ -245,7 +245,7 @@ export function SettingsPanel() {
         </div>
       </section>
 
-      <section className="flex flex-col gap-5 rounded-panel border border-border bg-card p-4">
+      <section className="flex min-w-0 flex-col gap-5 rounded-panel border border-border bg-card p-4">
         <div>
           <div className="flex items-center gap-1">
             <div>

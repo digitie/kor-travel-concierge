@@ -106,17 +106,21 @@ export function AppShell({
     group.items.some((item) => item.href === activeHref),
   );
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
-  });
-
+  // 서버와 첫 client 렌더는 같은 메뉴를 표시하고, 마운트 뒤 저장값을 복원한다.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarRestored, setSidebarRestored] = useState(false);
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    window.localStorage.setItem(
-      SIDEBAR_COLLAPSED_KEY,
-      sidebarCollapsed ? "1" : "0",
-    );
-  }, [sidebarCollapsed]);
+    try { setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"); }
+    catch { /* 저장소가 막혀도 현재 탭의 메뉴를 사용할 수 있다. */ }
+    setSidebarRestored(true);
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!sidebarRestored) return;
+    try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0"); }
+    catch { /* 저장 실패는 UI 조작을 막지 않는다. */ }
+  }, [sidebarCollapsed, sidebarRestored]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.innerWidth >= 1024) return;
