@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-**T-199 진행 중**: geo 데이터 토큰 컬럼·격리 재해결·인증 헤더·dirty/export 계약을 구현하고, 독립 리뷰와 live 검증 후 병합한다.
+**T-199 구현 검증 완료, 병합·배포 진행 중**: 두 독립 source 리뷰 OPEN 0, 실제 PostGIS/HTTP/API 공급 검증과 n150 live UI 90 PASS. 운영 Geo token/backfill·조회 504와 T-200 활성화 gate는 별도로 남는다.
 
 
 ---
