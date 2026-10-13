@@ -856,7 +856,7 @@ T-097 후속 UI 보강. 워크플로(2 기능 병렬 + 빌드 게이트)로 1차
   - Docker Compose smoke: `SKIP_BUILD=1 bash scripts/verify-docker-compose.sh` with override ports → RustFS/API/frontend/MCP/RustFS object smoke 통과
   - Windows host Playwright E2E: `npx playwright test` → `4 passed`
   - `python-krtour-map`: `tests/unit/test_providers_kor_travel_concierge.py` → `9 passed`
-  - live pull smoke: running backend `http://<운영 공개 도메인>:18082` + WSL consumer transform → `live_pull_ok 1 f_global_p_5894e112b38c3e3a 5 월정리 해변`
+  - live pull smoke: running backend `http://0.0.0.0:18082` + WSL consumer transform → `live_pull_ok 1 f_global_p_5894e112b38c3e3a 5 월정리 해변`
   - TripMate POI/notice plan smoke: schema/model/snapshot fallback → `tripmate_poi_notice_smoke_ok f_global_p_5894e112b38c3e3a 월정리 해변`
 
 ## 2026-06-11: T-068 TripMate feature 연계 POI/curated plan 소비 흐름 검증
