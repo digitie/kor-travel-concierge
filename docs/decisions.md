@@ -1727,6 +1727,224 @@ geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`�
 
 ---
 
+## ADR-50: kor-travel-geo가 odroid로 옮겨도 concierge는 REST로만 호출한다
+
+- 상태: proposed (미구현 — 구현은 T-202a/T-203(즉시 가능)·T-202b(운영값 전환, Track 2 배포 순서의
+  **consumer URL 전환 단계** — 이하 "전환 단계"; 설계 §11.2의 9단계, geo 플립·`mv_refresh` 다음 날))
+- 날짜: 2026-10-13
+- 결정자: human, AI agent
+- 관계: ADR-19(VWorld 우선 지오코딩), ADR-32(공개 API 키), ADR-48(공용 Dagster code location),
+  ADR-49(Track 1) — geo 이전 뒤 odroid full load의 새 `data_token`으로 refresh job(1 h maintenance job,
+  LAN `POST /v2/dataset/version`)이 전 장소를 재지오코딩한다(수용 기본, 설계 §14-19; dump 복원이면 0) —
+  결정 5. kor-travel-docker-manager **ADR-58**(호스트 프로필 Manager·odroid 재배치 — Track 2 정본),
+  kor-travel-geo **ADR-070**(geo odroid 재배치), kor-travel-map **ADR-110**, kor-travel-transport
+  **ADR-014**. 교차 저장소 번호는 Track 2 설계(2026-10-13)에서 고정된 값이다.
+- 용어: 이 ADR의 "Track 2 설계 §n"·"§14-n"은 **Manager ADR-58**(작성 예정; 2026-10-13 설계 최종본의 절
+  번호 기준)의 해당 절을 뜻한다 — ADR-58 머지 뒤 T-202b 선행 확인 (4)에서 절 번호를 재대조한다. "fact
+  base"는 그 설계의 2026-10-13 실측 기록이며 concierge에 닿는 값(odroid 준비 상태·LAN RTT·n150 디렉터리
+  성격)은 이 ADR 맥락에 옮겨 적었다.
+
+### 맥락
+
+Track 2(Manager ADR-58)는 kor-travel-geo·weather·transport 세 tenant를 n150(`192.168.1.14`)에서
+odroid(`192.168.1.13`)로 옮긴다. **concierge는 n150에 남는다**(재배치 없음, 공용 PG도 n150). 포트·URL·
+컨테이너명·compose 프로젝트명은 n150과 동일하고 **호스트만** `.14 → .13`이다(geo API `12501` 불변).
+
+concierge가 geo를 부르는 곳은 둘이다 — `POST /v2/reverse`
+(`backend/ktc/etl/admin_region_service.py:264-310`)와 `POST /v2/regions/within-radius`(`:312-335`).
+두 호출은 `httpx.AsyncClient(timeout=10.0)`(`:90`, `:254`) 하나의 timeout만 가지며 connect timeout이
+분리돼 있지 않다. 값의 자리는 다음과 같다.
+
+- **base URL** = env `KOR_TRAVEL_GEO_V2_BASE_URL`(`backend/ktc/core/config.py:268`, 기본 `""`). 비어
+  있으면 `_configured`(`admin_region_service.py:439-443`)가 거부해 행정코드 보강을 건너뛴다
+  (`:109-111`, `:232-234`). **운영 값의 자리** = n150 concierge 디렉터리
+  (`${KOR_TRAVEL_CONCIERGE_REPO_DIR:-../kor-travel-concierge}`; n150의 이 디렉터리는 git 저장소가 아니다
+  — 2026-10-13 실측, 출처 Track 2 fact base)의 `.env`(저장소 밖) — Manager compose가 그 파일을 `env_file`(`required: false`,
+  `format: raw`)로 전달한다(kor-travel-docker-manager `docker-compose.yml:1198·1262·1307·1355`, origin/main
+  @094d397; 같은 블록에 geo 관련 `environment` 항목은 없다 — Manager는 값을 렌더하지 않고 파일을 전달만
+  한다). **`env_file` 수신 service는 compose 정의상 넷**(api·mcp·scheduler·dagster-code-server; ui 블록에는
+  `env_file`이 없다)이지만 scheduler는 `profiles: [legacy-scheduler]`(`docker-compose.yml:1287`)의
+  롤백 전용(ADR-48; 기본 미기동)이고 Manager `conc` target(`config/docker-targets.yml:491-502`)의
+  `services`/`runtime_services`에도 없다. 따라서 **운영에서 env_file을 실제로 읽는 runtime 컨테이너는 셋**
+  (api·mcp·dagster-code-server)이며, `--profile legacy-scheduler`로 scheduler **컨테이너**를 기동한 롤백
+  상태(ADR-48; DB backend 전환 자체는 `ktc.cli scheduler-backend --activate legacy`, `backend/ktc/cli.py:27`
+  — 둘은 별개 축이고 "넷째"의 조건은 compose profile 기동이다)라면 scheduler가 넷째가 된다. `env_file`은
+  컨테이너 **생성 시에만** 읽히므로 값 변경은
+  `restart`로는 반영되지 않고 **재생성**이 필요하다. **운영 실값은 이 문서 작성 시점에 미확인**이다(Track 2
+  설계 §2.2; 비어 있음·loopback·HAProxy 공개 host 중 무엇인지 읽는 것이 T-202b 선행 확인이다).
+- **API 키** = `settings_service.get_secret(session, "kor_travel_geo_v2_api_key")`(`:138-140`, `:237`).
+  `system_settings` 행이 있으면 그 값, 없으면 settings 속성 `kor_travel_geo_v2_api_key`
+  (`backend/ktc/services/settings_service.py:33`의 `SECRET_ENV_ATTRS` 매핑, `get_secret` `:43-53`) =
+  `KOR_TRAVEL_GEO_V2_API_KEY or VWORLD_SERVICE_KEY`(`config.py:384-386`). 즉 **DB 값이 env보다 우선**
+  하고, 키는 운영 admin 설정 `POST /settings`(`backend/ktc/api/routes.py:3542-3553`, allowlist
+  `settings_service.py:37-39`에 `kor_travel_geo_v2_api_key` 포함)로 바꿀 수 있다. 단 그 엔드포인트는
+  **비밀 키의 빈 값을 "미입력=변경 없음"으로 건너뛴다**(`routes.py:3548-3550`) — 행이 한 번 생기면 운영
+  UI/API로는 비울 수 없고, env 폴백으로 돌아가려면 DB에서 행을 직접 지워야 한다
+  (`DELETE FROM system_settings WHERE key = 'kor_travel_geo_v2_api_key'`; ADR-49가
+  `kor_travel_geo_data_token`에 쓴 것과 같은 경로).
+
+**오늘의 호출 경로는 추정이다**(운영 실값 미확인, 설계 §2.2). 실값이 loopback이면 두 호출은 geo의
+**신뢰 peer 면제**로 통과하며 키가 대조되지 않는다(kor-travel-geo
+`src/kortravelgeo/api/public_api_key.py:55-56`, geo @6dd4951; Track 2 설계 §5.6 ⑥). 실값이 비어 있으면
+호출 자체가 없고(위 `_configured`), HAProxy 공개 host였다면 peer가 HAProxy addr라 면제·장애 서술이 모두
+달라진다 — 아래 "오늘" 서술은 loopback 가정이다. 전환 뒤 peer는 LAN `.14`가 되어 **키가 대조된다**.
+odroid geo DB의 `public_api_keys`는 **full load 기준**으로 비어 있어 VWorld 공용 키 해시 폴백만
+유효하다(`public_api_key.py:65` `active_hashes or _vworld_default_key_hashes`, geo @6dd4951); n150 dump
+**복원**(§14-8)이면 n150의 `public_api_keys` 행(유무 미확인)이 그대로 따라온다.
+
+장애 의미도 바뀐다(Track 2 설계 §2.2). 오늘(loopback 가정)은 피호출자가 같은 호스트라 다운 시 커널이
+RST를 즉시 돌려주지만, odroid가 꺼지거나 링크가 끊기면 SYN이 응답 없이 **timeout 10 s까지** 간다. 두
+호출은 best-effort(`except Exception: return False` — 비-isolated 경로 `:256-257`, isolated 경로 `:182-183`;
+docstring `:102-106`대로 격리 session 안에서 흡수)라 장소 확정은 막히지 않지만, 확정 1건당 **최대 10 s**가
+블록된다(설계 §2.2).
+`within-radius`는 reverse가 `status: OK`를 돌려준 뒤에만 호출되므로(`:288-304`) 전원 off·링크 단절
+시나리오는 첫 reverse의 connect timeout에서 끝난다 — 20 s는 한 요청 안에서 connect 뒤 read 단계에
+링크가 끊기는 중간 단절에서만 생긴다. ADR-49의 refresh job(1 h; `POST /v2/dataset/version`을 먼저
+부르고 토큰이 같으면 종료, 대상은 토큰이 다른 장소만, 페이지 50)은 **run 도중** geo를 잃으면 장소마다
+timeout이 쌓여 `errored` 비율 가드(ADR-49 결정 4)로 op `Failure`가 나고 — 설정 토큰은 전진하지 않고
+다음 tick이 다시 본다(추가 장치 없음) — geo가 **처음부터** 다운이면 version 호출 1회 timeout으로
+끝난다(장소별 대기 없음).
+
+odroid 준비 상태(2026-10-13 03:4xZ 실측, 출처 Track 2 fact base): WSL 직접 ssh·NOPASSWD sudo·docker 그룹·
+NTP 수동 동기(시계 2026)는 **완료**, timesyncd 부팅 순서 사이클 영속화(drop-in)·`docker compose`
+v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n150에서 서빙 중이다.
+
+### 결정
+
+1. **REST만, 재배치·코드 배선 변경 없음.** concierge 코드·compose·Dagster 배선은 geo의 호스트를
+   모른다. geo 호스트 이동은 concierge에게 **env 값 하나**의 변경이다 — 운영 env
+   `KOR_TRAVEL_GEO_V2_BASE_URL=http://192.168.1.13:12501`(**계획값**; 전환 전까지는 현재 값 유지). 값의
+   자리는 맥락의 n150 concierge 디렉터리 `.env`(Manager compose `env_file`)이며 Manager는 그 값을
+   **렌더하지 않는다**(Track 2 설계 §7.2 — 외부 저장소 값은 Manager 밖; 파일을 전달만 한다). 이 값은
+   운영자가 바꾸고 **env_file을 받는 concierge runtime 컨테이너(api·mcp·dagster-code-server; 맥락 참조)만
+   재생성**해 반영한다 — 효과로 정의한다: `restart`는 `env_file`을 다시 읽지 않고, 공용
+   `kor-travel-shared-postgres`·plane·관측 컨테이너는 건드리지 않는다(`--no-deps`). 재생성 **명령**은
+   Manager 정본에 위임한다: n150은 production mode라 Manager `ensure conc [--recreate]`
+   (`docs/ktdctl-ui-migration.md:597`)는 **거부된다**(`compose_service.py:3621-3637` @094d397
+   `"production ensure is not permitted"`; 같은 행의 "두 지점 하드스톱" 표기) — 허용된다 해도 `conc`
+   target의 `services` 합집합(`docker-targets.yml:491-497`: 공용 PG·db-init·ui 포함, `depends_on: [prom]`
+   `:481` 폐포)을 `up -d --force-recreate`하므로(`compose_service.py:3714-3719`) 범위가 맞지 않는다. Manager가
+   production에서 허용하는 concierge 재생성 경로는 `ktdctl compose-boundary activate-concierge --confirm`
+   (`docs/docker-management.md:490-493`; 구현 `backend/src/kor_travel_docker_manager/services/
+   legacy_override_retirement.py:138-143·692-726` @094d397 — `up --detach --no-deps --force-recreate`
+   api·mcp·dagster-code-server·ui; lock 경로는 production이면 `:401-402`, production·canonical rehearsal
+   외에는 거부 `:417-419`)이고, 대안은 n150 호스트에서 Manager compose 프로젝트에 직접 `docker compose …
+   up -d --no-deps --force-recreate kor-travel-concierge-api kor-travel-concierge-mcp
+   kor-travel-concierge-dagster-code-server`다. 단 `activate-concierge`는 env 반영용 일반 명령이 아니라
+   **C6c 이관 명령**이다 — 재생성 전에 trusted compose 부분만 투영(`_canonical_concierge_compose_projection`
+   `:700-703`)해 경계 검증(`_validate_canonical_compose_projection` `:704-711`)을 통과해야 하고 `--confirm`·
+   global-mutation lock·ui 재생성이 따라온다. **어느 쪽을 전환 단계 레시피로 쓸지는 Manager ADR-58이 확정**
+   한다(열린 결정). 이 ADR은 **기대값만** 적는다.
+   HAProxy 공개 host는 경유하지 않는다(오늘도 LAN/loopback 직결로 추정, 뒤에도 LAN 직결; TLS·HAProxy
+   의존을 더하지 않는다).
+2. **키의 자리는 DB 우선이며 정책은 geo 쪽 결정을 따른다.** 키 정책(Track 2 설계 §14-21, geo ADR-070)은
+   소유자 결정이다: (가) **VWorld 공용 키 폴백 유지**(추천, 변경 0 — concierge는 env가 비면 이미 VWorld
+   키다 `config.py:384-386`) 또는 (나) 소비자별 발급 키. 어느 쪽이든 **`system_settings['kor_travel_geo_v2_api_key']`
+   행이 있으면 그 값이 쓰이므로 env만 갱신하면 효과가 없다** — (나)면 admin 설정(`POST /settings`)으로
+   갱신하고, env 폴백으로 돌아가려면 **DB 행을 직접 삭제**한다(운영 `POST /settings`는 비밀 키의 빈 값을
+   건너뛴다, `routes.py:3548-3550` — 맥락 참조). (가)의 "변경 0"은 **concierge의 유효 키(DB → env →
+   `VWORLD_SERVICE_KEY`)가 geo의 `_vworld_default_key_hashes`와 같은 VWorld 키**라는 전제 위에 있다.
+   전환 전에 운영 DB의 그 행 유무·값과 이 전제를 확인하는 것이 선행이다(T-202b).
+   all-or-nothing 함정: geo DB에 키가 **하나라도** 발급되면 VWorld 폴백이 꺼져(`public_api_key.py:65`) 모든
+   소비자가 발급 키를 가져야 한다. geo 재적재 뒤에는 `public_api_keys`가 비므로 (나)면 재발급·재설정이
+   따라온다(Track 2 설계 §11.4). 키 **전달 방식**(`?key=` 쿼리 → `X-KTG-API-Key` 헤더, `:275`·`:322`)은
+   ADR-49 결정 3의 열린 결정이고 이 ADR은 건드리지 않는다.
+3. **전환은 Track 2 배포 순서의 consumer URL 전환 단계(설계 §11.2 9단계)에서만 한다.** geo 플립(8a/8b:
+   odroid full load → `mv_refresh` → 키 정책 적용) **다음 날, geo 야간 job 창 밖**에 concierge env 갱신 →
+   runtime 세 컨테이너 재생성(결정 1의 경로; 명령은 Manager ADR-58 정본) → **n150 geo-api가 stop인 상태에서**
+   효과 검사. 호출 주체는 **api·dagster-code-server·mcp 세 컨테이너**다 — ETL 확정·refresh job은
+   code-server에서, MCP post-commit 보정은 mcp 컨테이너에서(`backend/ktc/mcp_server/tools.py:492·540·704·788`)
+   돌므로 api 경로만 확인하면 나머지가 옛 값(`.14`, stop)을 보며 best-effort False로 조용히 실패하는 상태가
+   통과한다. 검사는 **전파**와 **효과**로 나눈다(세 컨테이너 모두 `network_mode: host`라 odroid access log의
+   peer는 전부 `.14`로 같아 **어느 컨테이너가 불렀는지 peer로는 구분할 수 없다**): (a) 전파 = 세 컨테이너
+   (`legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷) `docker exec <ctr> printenv
+   KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://192.168.1.13:12501` + 컨테이너 ID가 재생성 전후 바뀜;
+   (b) 효과 = api 발 장소 확정 1건 성공 + code-server 발 1건(ETL 확정 또는 refresh tick — 발신 주체는
+   Dagster run 로그로 식별) 성공 + odroid access log에 peer `.14`·키 경로 200 기록. 재생성 범위도 효과로
+   검사한다: 전후 `kor-travel-shared-postgres`·공용 Dagster daemon/webserver 컨테이너 ID
+   (`docker inspect -f '{{.Id}}'`) 불변. 키 경로가 실제로 강제됨은 음성 프로브
+   1건(n150에서 잘못된 키로 `POST /v2/reverse` → 4xx)으로 묶는다 — peer가 `.14`면 정의상 면제가 아니지만
+   200 하나로는 "VWorld 폴백이 켜져 있다"와 "키가 대조됐다"를 구분할 수 없다. concierge 측 게이트는
+   "region 1 call"(T-202b 수용 기준)이다. 전환 전에는 아무것도 바꾸지 않는다.
+4. **장애 모드: best-effort는 불변, connect timeout만 분리한다(T-203).** 두 `httpx.AsyncClient(timeout=10.0)`
+   (`:90`, `:254`)가 모듈 상수 `GEO_HTTP_TIMEOUT = httpx.Timeout(10.0, connect=2.0)` 하나를 쓰게 한다 —
+   odroid 전원 off·링크 단절 시 호출당 대기가 2 s로 줄어 장소 확정 지연 < 3 s(Track 2 설계 §11.3 "odroid
+   전원 off drill"의 concierge 기준). read timeout 10 s와 `except Exception → False`는 그대로다. 검증
+   기제는 하나로 고정한다: `http_client` 주입 경로(`:88-89`, `:251-252`)는 timeout을 우회하고
+   `httpx.MockTransport`(기존 테스트 패턴)는 연결 단계가 없어 SYN 무응답을 흉내낼 수 없으며 "라우팅되지
+   않는 주소"는 환경 의존이므로, 단위 테스트는 **`httpx.AsyncClient`를 기록용 더블로 바꿔 두 경로가
+   `http_client=None`일 때 `timeout=GEO_HTTP_TIMEOUT`을 넘기는지 + 상수의 `connect == 2.0`·`read == 10.0`**을
+   단언한다(결박 층 = 클라이언트 생성; 설계 §12·§13 T-CNC-02의 "연결 거부 호스트에 2 s 안 False"와 다른
+   층이다 — 설계와 달리 쓴 점). 더블이 호출되려면 두 경로의 **HTTP 앞 단계**를 통과해야 한다: isolated
+   경로는 `httpx.AsyncClient`(`:90`) 앞에서 `session_factory()`로 `TravelPlace` SELECT(`:116-126`, 행이 없으면
+   False)와 `get_secret`(`:138-140`)을 먼저 하므로 기존 `session_factory` fixture에 장소 1건 seed +
+   `settings_service.get_secret` monkeypatch(기존 테스트 `backend/tests/test_admin_region_service.py:106-148`
+   패턴)가 전제이고, 더블의 `ConnectTimeout`은 **쓰기 세션(`:155`) 전**에 `:182-183`으로 흡수된다; 비-isolated
+   경로는 `get_secret(session, …)`(`:237`)용 session(또는 같은 monkeypatch) + `TravelPlace(...)` 인스턴스면 된다.
+   효과 층 시험은 **권장**으로 병기한다: TEST-NET `http://192.0.2.1:12501`로 `http_client=None` 호출 → 3 s
+   안 `False`(네트워크 의존이라 `slow` 마커·CI 제외) — 채택 여부는 열린 결정. 실제 SYN 무응답 효과는
+   Track 2 §11.3 전원 off drill(확정 지연 < 3 s)이 운영에서 잰다. **회로차단은 두지 않는다** — concierge의
+   geo 호출은 ETL 확정·post-commit·MCP 보정·refresh job뿐이고 사용자 화면을 블록하지 않으므로(PinVi
+   T-PNV-02와 다르다) 단순성 우선. 작업 지시문의 "회로차단은 후속 코드 T"는 이번 문서 PR 범위 밖이라는
+   뜻이고 설계(§9.1·§13; T-CNC-02는 timeout 분리뿐)에 concierge 회로차단 항목은 없다 — 필요가 실측되면
+   후속 T로 올린다(소유자 결정 항목이 아니다).
+5. **Track 1과의 상호작용(Track 2 설계 §9.3·§14-19).** odroid에서 소스 ZIP으로 **full load**한 geo는 새
+   `data_token`을 내므로, 전환 단계에서 URL을 `.13`으로 돌리는 순간 ADR-49의 refresh job(1 h 주기; concierge는
+   Map과 달리 ≤5분 센서가 아니라 maintenance job이다)이 전 geocoded 장소를 재해결하고 그 전부가 dirty가
+   되어 재발행된다. **수용을 기본으로 둔다**(설계 추천 — 새 소스로 적재했으면 재지오코딩이 정확성상
+   옳다; 최종은 §14-19 소유자 결정, 아래 열린 결정 참조); n150 dump **복원** 지름길(§14-8)을 택하면
+   토큰이 같아 이 비용은 0이다. concierge 쪽 추가 장치는 없다.
+   T-200 배포 전이면 refresh job이 없어 ADR-49 맥락대로 stale이 유지될 뿐 전환 자체는 막히지 않는다.
+
+### 대안
+
+- concierge도 odroid로 재배치: 기각 — Track 2 범위 밖(Map/PinVi/concierge 재배치 없음, 공용 PG n150;
+  설계 §1).
+- HAProxy 공개 host(`geo-api.…`) 경유: 기각 — LAN 직결 유지(오늘도 직결), 공개 TLS·HAProxy 의존 추가.
+- Manager가 concierge env를 렌더: 기각 — Manager 범용성·과결박 금지(설계 §7.2; 외부 저장소 값은 Manager
+  밖).
+- base URL을 `system_settings`로 옮겨 운영 UI에서 전환: 기각 — settings allowlist 표면 확대(ADR-49가
+  `kor_travel_geo_data_token`에서 같은 이유로 기각); env 하나로 충분.
+- connect timeout과 함께 회로차단 도입: 보류(결정 4).
+
+### 결과와 한계
+
+- 전환 자체의 코드 변경은 0이다. 저장소 변경은 T-202a(`.env.example` 주석, 즉시)와 T-203(timeout 상수
+  + 테스트)뿐이고 둘 다 전환과 독립이라 먼저 머지할 수 있다.
+- 운영 env 실값·`system_settings` 행 유무는 미확인이다 — 전환 단계 전 운영자 확인(T-202b 선행 확인)이
+  선행이다. 실값이 비어 있다면 전환 단계는 "전환"이 아니라 "최초 설정"이다.
+- 재생성 명령은 이 저장소가 정하지 않는다(결정 1): production Manager는 `ensure`를 거부하고, 허용되는
+  경로(`compose-boundary activate-concierge` 또는 호스트 직접 `--no-deps --force-recreate`)의 선택은
+  Manager ADR-58이 확정한다. Track 2 설계 §11.2의 "n150 `ensure map`" 표현도 같은 전제를 공유하므로
+  Manager 트랙에 피드백한다.
+- LAN RTT ≈9.7 ms(2026-10-13 실측, 출처 Track 2 fact base)가 호출마다 더해진다 — 확정 흐름에서는 무시할
+  수 있다.
+- odroid 방화벽은 (가) 우리 포트만 제한 + 그 외 accept / (나) default-deny 어느 안(설계 §4.3·§14-28,
+  소유자 결정)에서도 `12501`을 n150 addr·HAProxy addr에만 허용하므로 — concierge는 n150에서 부른다 —
+  정책과 무관하게 추가 허용이 필요 없다. 다른 호스트에서 concierge를 띄우면 열어야 한다.
+- 이 ADR이 서술하는 odroid 동작은 전부 **계획(proposed, 미구현)**이다. 상태를 accepted로 바꾸는 것은
+  전환 단계 효과 검사 통과 뒤 T-202b에서 한다.
+
+### 열린 결정(소유자)
+
+- 키 정책 (가) VWorld 폴백 유지 vs (나) 소비자별 발급 — Track 2 설계 §14-21(geo ADR-070)과 하나로 결정.
+- 운영 DB `system_settings['kor_travel_geo_v2_api_key']` 행의 유무·값(미확인) — (가)면 행을 DB에서 직접
+  삭제하거나(운영 API로는 비울 수 없다, `routes.py:3548-3550`) VWorld 키와 같게 유지, (나)면 발급 키로
+  갱신.
+- 전환 단계 재해결 비용 수용(full load, 결정 5의 기본) vs n150 dump 복원(§14-8/§14-19) — concierge는
+  결과만 받는다.
+- production 재생성 경로 확정(Manager ADR-58): `ktdctl compose-boundary activate-concierge --confirm`
+  (api·mcp·dagster-code-server·ui) vs 호스트 직접 `docker compose … up -d --no-deps --force-recreate`
+  세 runtime 컨테이너 — 결정 1·T-202b의 명령은 이 확정을 따른다. Manager 트랙 피드백:
+  `activate-concierge`는 C6c projection 검증·`--confirm`·global-mutation lock·ui 재생성을 동반하는 **이관
+  명령**(`legacy_override_retirement.py:692-726`, `docker-management.md:490-493`)이라 env 반영 용도로 쓰려면
+  ADR-58이 그 전제(검증 통과 조건·lock·ui 재생성 수용)를 명시해야 하고, 아니면 호스트 직접
+  `--no-deps --force-recreate` 셋이 단순하다(소유자 원칙: 단순성·과결박 금지).
+- T-203의 connect 상한 2 s(설계값) 승인, 그리고 효과 층 시험(TEST-NET `192.0.2.1:12501` → 3 s 안 False,
+  `slow`·CI 제외) 채택 여부(결정 4; 기본은 생성 인자 더블만).
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

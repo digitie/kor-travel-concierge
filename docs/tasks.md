@@ -94,6 +94,89 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   0건(`docs/journal.md`·`docs/tasks.md`는 이력이라 제외); ADR-49 본문의 file:line 인용이 머지된
   head와 일치; geo ADR-069·Map ADR-109 번호가 각 저장소에서 확정된 값인지 확인.
 
+### geo odroid 재배치 대응 (T-202a/b~T-203, ADR-50 proposed; Track 2 설계 ID T-CNC-01~02)
+
+설계 정본은 `docs/decisions.md` ADR-50(proposed, 2026-10-13)이며 교차 저장소 정본은 Manager ADR-58·geo
+ADR-070·Map ADR-110·transport ADR-014(Track 2 설계에서 고정된 번호)다. concierge는 n150에 남고 geo만
+odroid(`192.168.1.13`)로 간다 — concierge에게는 env 값 하나(`KOR_TRAVEL_GEO_V2_BASE_URL`; 자리는 n150
+concierge 디렉터리 `.env`, Manager compose `env_file` — 수신 컨테이너·재생성 범위는 ADR-50 맥락 참조)의
+변경이고 저장소 변경은 T-202a(주석)·T-203(timeout)뿐이며 둘 다 전환과 독립이라 먼저 머지할 수 있다.
+ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 2026-10-13 doc-only PR에서 끝났다.
+운영값 전환(T-202b)은 Track 2 배포 순서의 consumer URL 전환 단계(설계 §11.2 9단계; geo 플립·`mv_refresh`
+다음 날 — 이하 "전환 단계")에서만 한다. "Track 2 설계 §n"은 Manager ADR-58(작성 예정; 2026-10-13 설계
+최종본 절 번호 기준)의 해당 절이다(ADR-50 "용어").
+
+- [ ] **T-202a**(T-CNC-01 앞부분): `.env.example` 주석(규모 XS, 의존 없음 — T-203과 같은 코드 PR에 실어도
+  된다). 수정 파일: `.env.example`(`:204-207` 주석만 — `KOR_TRAVEL_GEO_V2_API_KEY` "비우면 VWorld 키;
+  **DB `system_settings` 값이 있으면 env 무시**(ADR-50); DB 행은 운영 `POST /settings`로 비울 수 없다(행
+  직접 삭제)", `KOR_TRAVEL_GEO_V2_BASE_URL` "운영 기대값 `http://192.168.1.13:12501`(odroid, ADR-50 계획;
+  Manager는 이 값을 렌더하지 않고 `env_file`로 전달만 한다 — `env_file`은 컨테이너 생성 시에만 읽히므로
+  변경 뒤 concierge runtime 컨테이너를 재생성해야 한다(`restart` 불가; 명령은 ADR-50 결정 1·Manager
+  ADR-58)) — 비우면 보강 skip"; 값 자체는 빈 채로 유지). 수용 기준: 주석만 바뀌고 `Settings` 기본값·
+  테스트 불변.
+- [ ] **T-202b**(T-CNC-01 뒷부분): 운영 env 전환·ADR-50 승격(규모 S, 의존: geo 플립 8a/8b 완료 + 전환
+  단계 창 + Manager ADR-58의 production 재생성 경로 확정 + (5) Track 2 1단계(Manager T-MGR-01b의
+  `kor-travel-map-api → kor-travel-geo-api` 간선 삭제, Manager `docker-compose.yml:1522-1530`) 배포 완료 —
+  아래 "n150 geo-api stop" 게이트는 Map T-MAP-01(Map ADR-110)과 **같은 창**에서 운영자가 1회 수행하고 두
+  저장소 게이트를 함께 본다; 1단계 전에는 같은 창의 n150 `ensure map`이 geo-api를 다시 띄우거나 실패한다).
+  수정 파일: 운영 env 파일(n150 concierge
+  디렉터리 `${KOR_TRAVEL_CONCIERGE_REPO_DIR:-../kor-travel-concierge}/.env`, 저장소 밖)
+  `KOR_TRAVEL_GEO_V2_BASE_URL=http://192.168.1.13:12501` → env_file을 받는 runtime 컨테이너(api·mcp·
+  dagster-code-server)만 재생성(`env_file`은 생성 시에만 읽히므로 `restart`로는 반영되지 않는다; production
+  Manager `ensure conc`는 거부되고 범위도 공용 PG까지 번지므로 쓰지 않는다 — `ktdctl compose-boundary
+  activate-concierge --confirm` 또는 호스트 직접 `--no-deps --force-recreate`, ADR-50 결정 1·Manager
+  ADR-58 정본), `docs/decisions.md` ADR-50 proposed → accepted, `docs/architecture.md` §4.5 표의 "계획" 문구
+  제거, `docs/journal.md`. 선행 확인: (0) Manager ADR-58에서 production 재생성 명령이 확정됐는지,
+  (1) 운영 concierge api·mcp·dagster-code-server 컨테이너 env의 `KOR_TRAVEL_GEO_V2_BASE_URL` **현재 값 기록**
+  (비어 있음/loopback/공개 host 중 무엇인지 — 비어 있으면 "전환"이 아니라 "최초 설정"), (2) 운영 DB
+  `system_settings['kor_travel_geo_v2_api_key']` 행 유무·값(키 정책 §14-21에 맞게 — (가)면 행을 DB에서
+  직접 삭제하거나 VWorld 키와 같게, (나)면 `POST /settings`로 갱신; env만 갱신하면 효과 없음, 운영 API는
+  빈 값을 건너뛴다 `routes.py:3548-3550`), (3) (가)의 전제 "concierge 유효 키(DB → env →
+  `VWORLD_SERVICE_KEY`) == geo VWorld 기본 키" 확인, (4) 네 교차 ADR 번호(Manager 58·geo 070·Map 110·
+  transport 014)가 각 저장소 main에서 확정된 값인지 + ADR-58 머지 뒤 ADR-50이 인용한 설계 절 번호
+  재대조. 수용 기준(효과로 결박; 세 컨테이너 모두 `network_mode: host`라 odroid access log peer는 전부
+  `.14`로 같아 **컨테이너 구분은 peer로 할 수 없다** — 전파와 효과를 나눈다): ① 전파: 세 컨테이너
+  (api·mcp·dagster-code-server; `legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷)
+  `docker exec <ctr> printenv KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://192.168.1.13:12501` + 각 컨테이너
+  ID가 재생성 전후 바뀜(mcp는 `mcp_server/tools.py:492·540·704·788` 보정 호출 주체라 여기서 잡는다);
+  ② 효과: **n150 geo-api가 stop인 상태에서** api 컨테이너 발 장소 확정 1건의 reverse 성공("region 1 call")
+  + dagster-code-server 발 1건(ETL 확정 또는 ADR-49 refresh tick; 발신 주체는 Dagster run 로그로 식별)
+  성공 + odroid geo access log에 peer `192.168.1.14`·키 경로 200 기록;
+  ③ 음성 프로브: n150에서 잘못된 키로 `POST /v2/reverse` → 4xx(키 경로가 강제됨을 효과로 확인 — 200
+  하나로는 VWorld 폴백과 키 대조를 구분하지 못한다); ④ 전환 뒤 첫 ADR-49 refresh tick(T-200 배포 시)이
+  새 토큰으로 전 장소를 재해결함을 op 메타로 확인(full load면 수용, dump 복원이면 0건); ⑤ 재생성 범위:
+  전후 `kor-travel-shared-postgres`·공용 Dagster daemon/webserver 컨테이너 ID(`docker inspect -f
+  '{{.Id}}'`) 불변.
+- [ ] **T-203**(T-CNC-02): geo 클라이언트 connect timeout 분리(규모 S, 전환과 독립 — 먼저 머지 가능).
+  수정 파일: `backend/ktc/etl/admin_region_service.py`(모듈 상수 `GEO_HTTP_TIMEOUT = httpx.Timeout(10.0,
+  connect=2.0)` 추가, `:90`·`:254`의 `httpx.AsyncClient(timeout=10.0)` → `httpx.AsyncClient(timeout=
+  GEO_HTTP_TIMEOUT)`), `backend/tests/test_admin_region_service.py`. 검증 기제는 하나다(ADR-50 결정 4):
+  `http_client` 주입 경로(`:88-89`, `:251-252`)는 timeout을 우회하고 `httpx.MockTransport`는 연결 단계가
+  없으며 비라우팅 주소는 환경 의존이므로 **효과 시험을 SYN 무응답으로 하지 않는다**(설계 T-CNC-02의
+  "연결 거부 호스트에 2 s 안 False"와 결박 층이 다르다 — ADR-50 결정 4). 수용 기준:
+  (1) `GEO_HTTP_TIMEOUT.connect == 2.0`·`.read == 10.0`; (2) `admin_region_service.httpx.AsyncClient`를
+  기록용 더블로 바꾼 뒤 `enrich_place_admin_codes`·`enrich_place_admin_codes_isolated`를 `http_client=None`
+  으로 호출하면 두 경로 모두 `timeout=GEO_HTTP_TIMEOUT`(동일 객체)을 넘긴다 — 더블은 `AsyncClient(**kwargs)`
+  호출을 기록한 뒤 `httpx.ConnectTimeout`을 올린다. 전제(더블이 호출되려면 HTTP 앞 단계를 통과해야 한다):
+  **isolated 경로**는 `httpx.AsyncClient`(`:90`) 앞에서 `session_factory()`로 `TravelPlace` SELECT(`:116-126`,
+  행 없으면 False)와 `settings_service.get_secret`(`:138-140`)을 먼저 하므로 기존 `session_factory` fixture에
+  장소 1건 seed + `get_secret` monkeypatch(기존 테스트 `:106-148` 패턴) 위에서 돌리고, 더블의
+  `ConnectTimeout`은 **쓰기 세션(`:155`) 전**에 `except → False`(`:182-183`)로 흡수된다; **비-isolated
+  경로**는 `get_secret(session, …)`(`:237`)용 session(또는 같은 monkeypatch) + `TravelPlace(...)` 인스턴스로
+  충분하고 예외 흡수는 `:256-257`이다. settings는 `KOR_TRAVEL_GEO_V2_BASE_URL='http://geo.test'`로 주입해
+  `_configured`(`:439-443`)를 통과시킨다; (3) 기존
+  테스트(주입 경로·MockTransport) 불변, `except Exception → False` 불변(더블이 `httpx.ConnectTimeout`을
+  올려도 False); (4, **권장·소유자 결정**) 효과 층 시험 1건: TEST-NET `http://192.0.2.1:12501`로
+  `http_client=None` 호출 → 3 s 안 `False`(네트워크 의존 — `slow` 마커·CI 제외). 실제 SYN 무응답 효과(확정
+  지연 < 3 s)는 Track 2 §11.3 전원 off drill이 운영에서 잰다. 회로차단은 넣지 않는다(ADR-50 결정 4·열린
+  결정).
+- [ ] **T-204**: `docs/journal.md` 아카이브 분리(규모 XS, doc-only, 의존 없음). 현재 439,106 B(2026-10-13,
+  이 PR 포함 `wc -c`; HEAD 7a0f515는 427,466 B)라 에이전트가 한 번에 읽지 못한다. 수정 파일: `docs/journal.md`(최근 N개월만 남김),
+  `docs/archive/journal-YYYY-MM.md`(신규; 상단에 "과거 기록 아카이브" 인덱스 표), `CLAUDE.md`·`AGENTS.md`
+  진입 순서의 journal 설명 1줄. 방식은 kor-travel-map `docs/tasks-rule.md` §8(분리·재분리 규약)을 그대로
+  따른다. 수용 기준: 본문 journal `wc -c` < 262,144 B(256 KiB), 삭제된 항목 0건(아카이브 파일과 합쳐 `## YYYY-MM-DD` 헤더
+  수 불변), 아카이브 인덱스 표가 날짜 범위를 가리킨다.
+
 ### 개선 로드맵 실행 작업
 
 개선 로드맵(`docs/improvement-roadmap-2026-07.md`, Codex 리뷰 §10 반영판) 실행 작업이다. **Agent A / Agent B 두 트랙이 병렬 진행**하며, 트랙 내 순서·교차 선행·파일 소유는 로드맵 §4를 따른다. 각 태스크는 해당 PR 블록의 "개정(2026-07-13)" 항목과 §7.1 acceptance gate(G1~G10)를 완료 조건에 포함한다.

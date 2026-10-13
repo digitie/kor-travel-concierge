@@ -317,6 +317,17 @@ Gemini 결과는 원문을 덮어쓰지 않는다. 영상 설명 원문은 `yout
 재호출하지 않음 `:129-131, 229-230`). **ADR-49 예정(proposed, 미구현)**: geo 데이터 토큰 기록·헤더 인증·
 릴리스 재해결 job — `docs/decisions.md` ADR-49.
 
+geo 호출 경로(정본은 `docs/decisions.md` ADR-50):
+
+| 호출 | 코드 | 값의 자리 | 호스트(현재 → 계획) | timeout | 키 |
+|---|---|---|---|---|---|
+| `POST /v2/reverse` | `admin_region_service.py:264-310` | env `KOR_TRAVEL_GEO_V2_BASE_URL`(`backend/ktc/core/config.py:268`; 비면 보강 skip) — 운영 자리는 n150 concierge 디렉터리 `.env`(Manager compose `env_file`; 수신 컨테이너·재생성 범위는 ADR-50 맥락) | 미확인(코드 기본 `""` = skip; 추정 n150 loopback — ADR-50) → **`http://192.168.1.13:12501`(odroid, 포트 동일; ADR-50 proposed, 미구현 — Track 2 consumer URL 전환 단계(Manager ADR-58 §11.2)에서 전환)** | 10 s(`:90`, `:254`; connect 2 s 분리는 T-203 예정) | DB `system_settings['kor_travel_geo_v2_api_key']` 우선(운영 API로는 비울 수 없음 — DB 행 삭제), 없으면 env `KOR_TRAVEL_GEO_V2_API_KEY` → `VWORLD_SERVICE_KEY`(`settings_service.py:43-53`, `config.py:384-386`) |
+| `POST /v2/regions/within-radius`(reverse가 `OK`일 때만, `:288-304`) | `admin_region_service.py:312-335` | 위와 같음 | 위와 같음 | 위와 같음 | 위와 같음 |
+
+호스트 이동은 concierge 코드·compose를 바꾸지 않는다 — env 값 하나이며, 반영은 env_file을 받는 concierge
+runtime 컨테이너의 **재생성**이다(`env_file`은 생성 시에만 읽힌다; production Manager `ensure`는 거부되므로
+명령은 ADR-50 결정 1·Manager ADR-58 정본). 교차 저장소 정본: Manager ADR-58·geo ADR-070·Map ADR-110.
+
 장소 카테고리는 단일 공급자 결과를 무조건 정답으로 보지 않는다. Kakao Local의 공식 `category_name`은 국내 POI 업종 분류가 풍부하므로 1순위 근거로 사용한다. 다만 VWorld 주소·행정 맥락, Naver 보조 검색 결과, Gemini가 자막 문맥에서 추출한 `candidate_category`를 함께 비교한다. 공급자 간 카테고리가 충돌하거나 좌표·주소 신뢰도가 낮으면 확정하지 않고 검수 큐에서 사용자가 수정하도록 남긴다.
 
 ### 4.6 대표 프레임 추출

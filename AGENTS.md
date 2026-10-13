@@ -105,7 +105,7 @@
 1. `CLAUDE.md` — 현재 작업과 잔존 부채
 2. `SKILL.md` — 에이전트 매뉴얼 및 Linux/Docker 개발 팁
 3. `docs/architecture.md` — 전체 시스템 아키텍처 및 ETL 데이터 흐름
-4. `docs/decisions.md` — ADR-1 ~ ADR-33 (핵심 ADR 본문 + 말미 이력·대체 요약)
+4. `docs/decisions.md` — ADR 기록(핵심 ADR 본문 + 말미 이력·대체 요약; 최신 번호는 마지막 `## ADR-NN` 헤더가 정본)
 5. `docs/tasks.md` — T-NNN 백로그
 
 ## 지시 우선순위
