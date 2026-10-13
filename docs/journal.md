@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-10-13 — Track 1·2 순차 구현 착수
+
+- Concierge → Weather → Transport 순서의 사용자 지시로 최신 원격 기준에서 착수했다. 첫 PR은 T-199의 토큰 컬럼·보강 로직이며 운영값 전환은 선행 배포와 효과 검증 뒤 수행한다.
+- 구현 전 독립 적대 검토에서 동일 global 토큰의 새 stale 장소 누락과 unresolved 옛 코드의 최신 토큰 봉인 위험을 발견했다. refresh는 행별 stale 대상을 확인하고, export는 성공한 보강의 토큰만 제공하도록 계약·회귀를 함께 정정한다.
+- nullable 토큰 컬럼과 geocoded 장소 부분 인덱스를 추가했다. 테스트·독립 리뷰·live E2E·UI E2E는 진행 중이며 완료로 기록하지 않는다.
+
 ## 2026-10-13: geo odroid 재배치 대응 설계(ADR-50)
 
 - 문서만 바꿨다(코드·`.env.example`·CHANGELOG·contracts 없음; 6파일 — `docs/decisions.md`·`docs/tasks.md`·`docs/architecture.md`·`docs/journal.md`·`CLAUDE.md`·`AGENTS.md`). `docs/decisions.md`에 ADR-50(proposed)을 추가하고 `docs/tasks.md`에 T-202a/T-202b/T-203(Track 2 설계 ID T-CNC-01/02)·T-204(journal 아카이브 분리)를 대기로 올렸으며, `docs/architecture.md` §4.5에 geo 호출 경로 표(코드·값의 자리·호스트 현재→계획·timeout·키 자리)를 두었다. 저장소에 geo 연동 전용 문서(`docs/kor-travel-map-integration.md`·`docs/integrations/`)가 없어 §4.5가 그 자리다. `CLAUDE.md` "현재 작업"에 병렬 가능 포인터(T-202a·T-203) 1줄을 더했고, `CLAUDE.md`·`AGENTS.md`의 낡은 ADR 범위 표기(ADR-1~35 / ADR-1~33)를 "마지막 `## ADR-NN` 헤더가 정본" 포인터로 바꿨다(범위 숫자 재기입 없음).

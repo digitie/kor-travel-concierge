@@ -26,6 +26,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -56,6 +57,11 @@ class TravelPlace(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_travel_places_geom_gist", "geom", postgresql_using="gist"),
         Index("ix_travel_places_sigungu_code", "sigungu_code"),
+        Index(
+            "ix_travel_places_admin_geo_token",
+            "admin_code_geo_data_token",
+            postgresql_where=text("is_geocoded"),
+        ),
         Index("ix_travel_places_legal_dong_code", "legal_dong_code"),
         Index("ix_travel_places_origin_candidate_id", "origin_candidate_id"),
         CheckConstraint(
@@ -127,6 +133,8 @@ class TravelPlace(TimestampMixin, Base):
     legal_dong_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sigungu_code: Mapped[str | None] = mapped_column(String(5), nullable=True)
     sigungu_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 최종 성공이 아닌, 마지막 정상 응답을 받은 데이터셋의 시도 토큰.
+    admin_code_geo_data_token: Mapped[str | None] = mapped_column(String(40), nullable=True)
     admin_code_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     admin_code_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
