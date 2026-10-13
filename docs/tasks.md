@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 구현 검증 완료, PR #251 병합 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
+**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
 
 
 ---
@@ -98,7 +98,7 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
 
 설계 정본은 `docs/decisions.md` ADR-50(proposed, 2026-10-13)이며 교차 저장소 정본은 Manager ADR-58·geo
 ADR-070·Map ADR-110·transport ADR-014(Track 2 설계에서 고정된 번호)다. concierge는 n150에 남고 geo만
-odroid(`192.168.1.13`)로 간다 — concierge에게는 env 값 하나(`KOR_TRAVEL_GEO_V2_BASE_URL`; 자리는 n150
+odroid(`<geo-host>`)로 간다 — concierge에게는 env 값 하나(`KOR_TRAVEL_GEO_V2_BASE_URL`; 자리는 n150
 concierge 디렉터리 `.env`, Manager compose `env_file` — 수신 컨테이너·재생성 범위는 ADR-50 맥락 참조)의
 변경이고 저장소 변경은 T-202a(주석)·T-203(timeout)뿐이며 둘 다 전환과 독립이라 먼저 머지할 수 있다.
 ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 2026-10-13 doc-only PR에서 끝났다.
@@ -109,7 +109,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
 - [ ] **T-202a**(T-CNC-01 앞부분): `.env.example` 주석(규모 XS, 의존 없음 — T-203과 같은 코드 PR에 실어도
   된다). 수정 파일: `.env.example`(`:204-207` 주석만 — `KOR_TRAVEL_GEO_V2_API_KEY` "비우면 VWorld 키;
   **DB `system_settings` 값이 있으면 env 무시**(ADR-50); DB 행은 운영 `POST /settings`로 비울 수 없다(행
-  직접 삭제)", `KOR_TRAVEL_GEO_V2_BASE_URL` "운영 기대값 `http://192.168.1.13:12501`(odroid, ADR-50 계획;
+  직접 삭제)", `KOR_TRAVEL_GEO_V2_BASE_URL` "운영 기대값 `http://<geo-host>:12501`(odroid, ADR-50 계획;
   Manager는 이 값을 렌더하지 않고 `env_file`로 전달만 한다 — `env_file`은 컨테이너 생성 시에만 읽히므로
   변경 뒤 concierge runtime 컨테이너를 재생성해야 한다(`restart` 불가; 명령은 ADR-50 결정 1·Manager
   ADR-58)) — 비우면 보강 skip"; 값 자체는 빈 채로 유지). 수용 기준: 주석만 바뀌고 `Settings` 기본값·
@@ -121,7 +121,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   저장소 게이트를 함께 본다; 1단계 전에는 같은 창의 n150 `ensure map`이 geo-api를 다시 띄우거나 실패한다).
   수정 파일: 운영 env 파일(n150 concierge
   디렉터리 `${KOR_TRAVEL_CONCIERGE_REPO_DIR:-../kor-travel-concierge}/.env`, 저장소 밖)
-  `KOR_TRAVEL_GEO_V2_BASE_URL=http://192.168.1.13:12501` → env_file을 받는 runtime 컨테이너(api·mcp·
+  `KOR_TRAVEL_GEO_V2_BASE_URL=http://<geo-host>:12501` → env_file을 받는 runtime 컨테이너(api·mcp·
   dagster-code-server)만 재생성(`env_file`은 생성 시에만 읽히므로 `restart`로는 반영되지 않는다; production
   Manager `ensure conc`는 거부되고 범위도 공용 PG까지 번지므로 쓰지 않는다 — `ktdctl compose-boundary
   activate-concierge --confirm` 또는 호스트 직접 `--no-deps --force-recreate`, ADR-50 결정 1·Manager
@@ -137,11 +137,11 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   재대조. 수용 기준(효과로 결박; 세 컨테이너 모두 `network_mode: host`라 odroid access log peer는 전부
   `.14`로 같아 **컨테이너 구분은 peer로 할 수 없다** — 전파와 효과를 나눈다): ① 전파: 세 컨테이너
   (api·mcp·dagster-code-server; `legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷)
-  `docker exec <ctr> printenv KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://192.168.1.13:12501` + 각 컨테이너
+  `docker exec <ctr> printenv KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://<geo-host>:12501` + 각 컨테이너
   ID가 재생성 전후 바뀜(mcp는 `mcp_server/tools.py:492·540·704·788` 보정 호출 주체라 여기서 잡는다);
   ② 효과: **n150 geo-api가 stop인 상태에서** api 컨테이너 발 장소 확정 1건의 reverse 성공("region 1 call")
   + dagster-code-server 발 1건(ETL 확정 또는 ADR-49 refresh tick; 발신 주체는 Dagster run 로그로 식별)
-  성공 + odroid geo access log에 peer `192.168.1.14`·키 경로 200 기록;
+  성공 + odroid geo access log에 peer `<운영 호스트>`·키 경로 200 기록;
   ③ 음성 프로브: n150에서 잘못된 키로 `POST /v2/reverse` → 4xx(키 경로가 강제됨을 효과로 확인 — 200
   하나로는 VWorld 폴백과 키 대조를 구분하지 못한다); ④ 전환 뒤 첫 ADR-49 refresh tick(T-200 배포 시)이
   새 토큰으로 전 장소를 재해결함을 op 메타로 확인(full load면 수용, dump 복원이면 0건); ⑤ 재생성 범위:
@@ -170,12 +170,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   `http_client=None` 호출 → 3 s 안 `False`(네트워크 의존 — `slow` 마커·CI 제외). 실제 SYN 무응답 효과(확정
   지연 < 3 s)는 Track 2 §11.3 전원 off drill이 운영에서 잰다. 회로차단은 넣지 않는다(ADR-50 결정 4·열린
   결정).
-- [ ] **T-204**: `docs/journal.md` 아카이브 분리(규모 XS, doc-only, 의존 없음). 현재 439,106 B(2026-10-13,
-  이 PR 포함 `wc -c`; HEAD 7a0f515는 427,466 B)라 에이전트가 한 번에 읽지 못한다. 수정 파일: `docs/journal.md`(최근 N개월만 남김),
-  `docs/archive/journal-YYYY-MM.md`(신규; 상단에 "과거 기록 아카이브" 인덱스 표), `CLAUDE.md`·`AGENTS.md`
-  진입 순서의 journal 설명 1줄. 방식은 kor-travel-map `docs/tasks-rule.md` §8(분리·재분리 규약)을 그대로
-  따른다. 수용 기준: 본문 journal `wc -c` < 262,144 B(256 KiB), 삭제된 항목 0건(아카이브 파일과 합쳐 `## YYYY-MM-DD` 헤더
-  수 불변), 아카이브 인덱스 표가 날짜 범위를 가리킨다.
+- [x] **T-204**: 최근 두 달의 일지와 월별 220 KiB 이하 아카이브로 분리했다. 상단 인덱스·항목 보존·상대 링크 재기준화·보안 주소 마스킹을 확인했다. 새 기록은 현재 일지에만 추가한다.
 
 ### 개선 로드맵 실행 작업
 
@@ -834,7 +829,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   `backend/tests/test_feature_export_api.py` + `backend/tests/test_etl_pipeline.py` 26건, backend 전체 pytest,
   backend `compileall` 통과. backend venv에 ruff/mypy가 없어 별도 lint/type gate는 실행하지 못했다.
   (2026-06-25)
-- [~] **T-119**: 공개 도메인 로그인 403(INVALID_ORIGIN) 수정 — 라이브 브라우저 E2E가 발견. 운영 TLS 프록시(라우터 192.168.1.1 HAProxy)가 `X-Forwarded-Proto: https` 미주입 → same-origin(CSRF) 검사가 http로 재구성돼 https 공개 도메인 로그인 403(LAN-http는 정상). 라우터 직접 수정이 막혀(SSH 자격 불일치) `auth.ts`에 신뢰 origin 화이트리스트 `KTC_UI_PUBLIC_ORIGINS` 추가(브라우저 Origin 대조, CSRF 유지) + prod `.env` 설정. HAProxy XFProto 주입도 별도 권장(이중 안전망). vitest 15/15·type-check·lint·build. (2026-06-24)
+- [~] **T-119**: 공개 도메인 로그인 403(INVALID_ORIGIN) 수정 — 라이브 브라우저 E2E가 발견. 운영 TLS 프록시(라우터 <운영 호스트> HAProxy)가 `X-Forwarded-Proto: https` 미주입 → same-origin(CSRF) 검사가 http로 재구성돼 https 공개 도메인 로그인 403(LAN-http는 정상). 라우터 직접 수정이 막혀(SSH 자격 불일치) `auth.ts`에 신뢰 origin 화이트리스트 `KTC_UI_PUBLIC_ORIGINS` 추가(브라우저 Origin 대조, CSRF 유지) + prod `.env` 설정. HAProxy XFProto 주입도 별도 권장(이중 안전망). vitest 15/15·type-check·lint·build. (2026-06-24)
 - [~] **T-118**: docker-manager PR #37/#38 보안 수정 concierge 이식 — 형제 프로젝트 관리자 인증 사후 리뷰의 해당 항목 이식. AUTH-5(username 열거 타이밍: 항상 PBKDF2+상수시간 username 비교), AUTH-1(`login_events` 보존 상한 `LOGIN_AUDIT_MAX_ROWS`=5000), AUTH-4(CORS stray `*` 제거), APIKEY 해시 주석, FE-5(비밀번호 autofocus)·FE-6(생성 키 지우기). durable rate-limit·trusted-proxy-secret(#38)은 분리(인메모리 충분/기존 secret 커버), `datetime.utcnow`·캐시 TTL·모달 a11y는 이미 적용/무관. frontend type-check/lint/build/vitest(10/10)·backend compileall 통과. (2026-06-24)
 - [x] **T-117**: PR #124(T-116) 인증 기능 사후 보안 리뷰 + High/Medium 보강 (prod 배포·검증 완료) — 다중 에이전트 보안 리뷰(원시 32→확정 26: High 1/Medium 5/Low 16/Nit 4)를 PR #124에 코멘트하고 High·Medium을 코드로 보강했다. High(운영 `FORWARDED_ALLOW_IPS=*`에서 `request.client.host`가 X-Forwarded-For로 위조되는 CIDR 신뢰)는 키 없는 우회를 `API_TRUSTED_CLIENT_BYPASS_ENABLED`(기본 false)로 게이트 + 기동 경고 + `.env.example` 가이드(프록시 IP 고정)로 보강. Medium: 비-local `init_db` create_all 비활성(Alembic 단독 소유), `?key=` 누출 가이드, LoginForm 오류 노출, rate-limit 계정+IP 키링, 프런트 vitest 도입(`auth.ts` 10건)+backend auth 음성 테스트. 검증: frontend type-check/lint/build/vitest(10/10)·audit 0, backend compileall. **운영 검증/배포는 prod SSH 접근 확보 후 진행 예정**. (2026-06-24)
 - [x] **T-116**: 관리자 로그인·세션·공개 API 키 관리 — 단일 관리자 계정(`admin`) 로그인 화면과 httpOnly `SameSite=Strict` HMAC 세션 쿠키, user-agent fingerprint, 로그아웃 폐기, 실패 rate-limit을 추가했다. 초기 비밀번호는 PBKDF2-SHA256 해시로 gitignore된 `.env`에만 저장하고 커밋 파일에는 placeholder만 둔다. 로그인 시도/성공/실패/로그아웃은 `login_events`에 저장하고 설정 UI에서 조회한다. VWorld 호환 32자 공개 API 키를 UI에서 생성·목록·폐기하며 DB에는 hash와 hint만 저장하고 활성 키 hash는 짧은 TTL로 메모리 캐시한다. 관리자 API는 Next BFF가 주입한 actor+shared secret+trusted proxy peer로만 허용하고, 공개 API는 `X-API-Key` 또는 `?key=`를 검증하되 신뢰 CIDR은 우회 가능하다. `kor_travel_geo_v2_api_key` 설정을 추가하고 미설정 시 `VWORLD_SERVICE_KEY`로 폴백한다. `kor-travel-geo` PR #399의 후속 리뷰(X-Forwarded-For 미신뢰 기본값, admin proxy secret 음성 테스트, 401 로그인 리다이렉트, 로그인 오류 접근성)를 반영했다. (2026-06-23)
