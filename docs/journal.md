@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-10-14 — T-199 구현 검증과 운영 선행 조건
+
+- 구현 `0dd0e29e`의 전체 13경로를 독립 적대 리뷰 2인이 검토해 OPEN 0/PASS를 확인했다. R1/R2의 오류 응답·mixed epoch·미해결 provenance 지적과 초기 테스트 실패는 보존하고 수정 뒤 재검토했다.
+- 실제 PostGIS migration `0030→0031→0030→0031`에서 행 보존·부분 인덱스·단일 head를 확인했다. 보강/공급 집중 90건 PASS 뒤 symmetric epoch delta는 HTTP 회귀 11건 PASS다. backend 전체 995 PASS는 이전 `d18c3343`에서의 결과이며 최신 SHA 전체 결과로 확대하지 않는다.
+- 최신 구현의 실제 HTTP fixture·PostGIS·기동 API changes 피드 6개 케이스가 통과했다. 성공 token, 503/깨진 응답 무쓰기, unresolved 공급 NULL, 반복 무 dirty와 좌표 변경 fence를 확인했다. 이는 운영 Geo provider 성공 시험이 아니다.
+- 기존 공용 Dagster tick SQL의 정렬 병목은 Manager PR #472로 보강하고 검토 함수를 운영에 적용했다. 그 뒤 후보 API summary ok 및 n150 native Chromium 전체 live UI 90 PASS(0 skip/0 retry/0 flaky)를 확인했다. 초기 fixture 키 누락 1 FAIL은 own DB seed 뒤 단독·전체 재검증에서 통과했으며 첫 실패도 보존한다.
+- 운영 Geo의 공개 인증 확인용 전용 키로 dataset/version 200을 확인했지만 data_token은 미제공이고 reverse/radius는 504다. 신규 키는 운영 Concierge에 아직 적용하지 않았다. T-199 코드 병합/배포는 ADR-49의 병렬 허용 범위이며 T-200 활성화·native Geo force 성공·호스트 이전은 완료로 표시하지 않는다.
+
 ## 2026-10-13 — Track 1·2 순차 구현 착수
 
 - Concierge → Weather → Transport 순서의 사용자 지시로 최신 원격 기준에서 착수했다. 첫 PR은 T-199의 토큰 컬럼·보강 로직이며 운영값 전환은 선행 배포와 효과 검증 뒤 수행한다.
