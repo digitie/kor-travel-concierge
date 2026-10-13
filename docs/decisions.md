@@ -1611,7 +1611,8 @@ geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`�
    (`run_config` `:378`) `admitted()` 게이트(`:119`)를 탄다. 기본 주기 1 h
    (`ADMIN_REGION_REFRESH_ENABLED` / `_INTERVAL_SECONDS` / `_ERROR_RATIO`). 동작:
    - `POST /v2/dataset/version` → `current.data_token`. `system_settings['kor_travel_geo_data_token']`
-     과 같으면 종료(재빌드·데이터 동일이면 무동작). None이면 종료(과도기, 로그 1건).
+     과 같아도 행별 stale 대상이 있는지 먼저 확인한다(신규·좌표 보정 뒤 NULL 토큰 포함).
+     토큰도 같고 stale 대상도 없을 때만 무동작이다. None이면 종료(과도기, 로그 1건).
      이 키는 job 내부 커서이므로 job이 `SystemSetting` 행을 직접 읽고(`get_setting`,
      `backend/ktc/services/settings_service.py:72-77` — 키 검증 없음) 직접 upsert한다.
      `ALLOWED_SETTING_KEYS`(`:37-39`)에는 넣지 않는다 — 넣으면 운영 `POST /settings`
@@ -1656,7 +1657,9 @@ geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`�
    (`feature_export_service.py:389`; reason은 기존 호출처처럼 리터럴 — `place_service.py:1735`
    선례)를 호출한다. 시간당 reconcile(`sync_feature_exports`, `:654-668`)은 안전망이다. export
    payload `place.address`(`:216-222`)에 `geo_data_token`(= `travel_places.admin_code_geo_data_token`,
-   NULL 허용)을 additive로 싣는다(`SCHEMA_VERSION`(`:56`)은 올리지 않는다). concierge 쪽
+   NULL 허용)을 additive로 싣는다(`SCHEMA_VERSION`(`:56`)은 올리지 않는다). 단 성공 source가
+   `kor-travel-geo-v2`일 때만 토큰을 제공한다. `…:unresolved`는 옛 코드를 유지하므로 export
+   토큰을 NULL로 두어 마지막 시도 토큰이 최신 코드의 provenance로 오인되지 않게 한다. concierge 쪽
    `_payload_hash`(`:272-281`)에는 포함되므로 토큰만 바뀐 장소도 재발행된다. **kor-travel-map은
    자기 `raw_payload_hash`에서 이 토큰을 제외**하고, payload 토큰이 Map의 run-scoped 현재
    토큰과 같을 때만 payload 코드를 신뢰한다(Map ADR-109). 그래야 Map 적재 순서와 무관하게

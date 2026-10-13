@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-진행 중 작업 없음.
+**T-199 구현 검증 완료, 병합·배포 진행 중**: 두 독립 source 리뷰 OPEN 0, 실제 PostGIS/HTTP/API 공급 검증과 n150 live UI 90 PASS. 운영 Geo token/backfill·조회 504와 T-200 활성화 gate는 별도로 남는다.
 
 
 ---

@@ -7,7 +7,6 @@ import json
 from types import SimpleNamespace
 
 import httpx
-
 from ktc.etl import admin_region_service
 from ktc.models import AuditLog, TravelPlace
 from ktc.services import settings_service
@@ -16,7 +15,8 @@ from ktc.services import settings_service
 async def test_fetch_admin_region_reads_reverse_v2_region():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v2/reverse"
-        assert request.url.params.get("key") == "test-key"
+        assert "key" not in request.url.params
+        assert request.headers["X-KTG-API-Key"] == "test-key"
         return httpx.Response(
             200,
             json={
@@ -60,7 +60,8 @@ async def test_fetch_admin_region_uses_radius_fallback_for_partial_reverse():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen_paths.append(request.url.path)
-        assert request.url.params.get("key") == "test-key"
+        assert "key" not in request.url.params
+        assert request.headers["X-KTG-API-Key"] == "test-key"
         if request.url.path == "/v2/reverse":
             return httpx.Response(
                 200,

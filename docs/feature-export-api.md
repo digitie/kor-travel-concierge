@@ -110,19 +110,18 @@ payload 계약 버전이며, 계약 확장은 **additive**(새 필드·새 error
 유도한다(경량 옵션). `sigungu_code`가 있으면 그 앞 2자리를, 없고 `legal_dong_code`만 있으면
 법정동 코드 앞 2자리를 쓴다. 시군구·법정동 코드가 모두 없으면 유도 결과도 `null`이다.
 
-#### 예정: `place.address.geo_data_token` (ADR-49 proposed, 미구현)
+#### `place.address.geo_data_token` (T-199 구현, 운영 반영·refresh 활성화 검증 중)
 
-현재 계약은 위 표 그대로다. `docs/decisions.md` ADR-49(T-199)가 구현되면 `place.address`에
-다음 필드가 **additive**로 추가된다(`schema_version`은 올리지 않는다).
+T-199은 `place.address`에 다음 필드를 **additive**로 제공한다(`schema_version` 불변).
+운영 반영과 정기 refresh 활성화의 선행·검증 상태는 `docs/tasks.md`와 journal을 따른다.
 
 | 필드 | 출처 | 규칙 |
 | --- | --- | --- |
-| `geo_data_token` | `travel_places.admin_code_geo_data_token`(계획) | 위 코드를 해석한 kor-travel-geo 데이터 토큰(`dd1-…`). 토큰 열이 없거나 NULL이면 `null` |
+| `geo_data_token` | `travel_places.admin_code_geo_data_token` | 위 코드를 해석한 kor-travel-geo 데이터 토큰(`dd1-…`). 성공 source가 `kor-travel-geo-v2`일 때만 제공. 토큰 NULL·미해결 source는 `null` |
 
 의미: "이 행정코드는 이 geo 데이터셋으로 해석됐다". 토큰은 concierge `payload_hash`에
 포함된다(토큰만 바뀐 장소도 재발행). 소비자 쪽 처리 규칙(토큰 동등성으로 payload 코드 신뢰 여부
-결정, Map `raw_payload_hash`에서 제외)은 kor-travel-map ADR-109가 정본이다. 구현 전까지 이
-필드는 응답에 없다.
+결정, Map `raw_payload_hash`에서 제외)은 kor-travel-map ADR-109가 정본이다. 미해결 장소는 옛 코드를 유지하지만 토큰을 NULL로 공급하므로 최신 릴리스의 코드로 신뢰하지 않는다.
 
 PinVi feature 연계 POI row까지 이어지는 최소 입력은 다음과 같다.
 

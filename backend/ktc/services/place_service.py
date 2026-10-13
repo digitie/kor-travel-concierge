@@ -1728,6 +1728,7 @@ async def correct_place(
         place.sigungu_name = None
         place.legal_dong_code = None
         place.legal_dong_name = None
+        place.admin_code_geo_data_token = None
     place.last_reviewed_at = utcnow()
     # 확정 장소 보정이 export payload(이름·좌표·주소·카테고리·설명)를 바꾸므로, 이 장소를
     # 매칭한 후보 전부를 dirty로 표시해 다음 공급 GET에 반영한다(T-171, 공용 헬퍼).

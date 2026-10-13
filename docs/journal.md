@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-10-14 — T-199 구현 검증과 운영 선행 조건
+
+- 구현 `0dd0e29e`의 전체 13경로를 독립 적대 리뷰 2인이 검토해 OPEN 0/PASS를 확인했다. R1/R2의 오류 응답·mixed epoch·미해결 provenance 지적과 초기 테스트 실패는 보존하고 수정 뒤 재검토했다.
+- 실제 PostGIS migration `0030→0031→0030→0031`에서 행 보존·부분 인덱스·단일 head를 확인했다. 보강/공급 집중 90건 PASS 뒤 symmetric epoch delta는 HTTP 회귀 11건 PASS다. backend 전체 995 PASS는 이전 `d18c3343`에서의 결과이며 최신 SHA 전체 결과로 확대하지 않는다.
+- 최신 구현의 실제 HTTP fixture·PostGIS·기동 API changes 피드 6개 케이스가 통과했다. 성공 token, 503/깨진 응답 무쓰기, unresolved 공급 NULL, 반복 무 dirty와 좌표 변경 fence를 확인했다. 이는 운영 Geo provider 성공 시험이 아니다.
+- 기존 공용 Dagster tick SQL의 정렬 병목은 Manager PR #472로 보강하고 검토 함수를 운영에 적용했다. 그 뒤 후보 API summary ok 및 n150 native Chromium 전체 live UI 90 PASS(0 skip/0 retry/0 flaky)를 확인했다. 초기 fixture 키 누락 1 FAIL은 own DB seed 뒤 단독·전체 재검증에서 통과했으며 첫 실패도 보존한다.
+- 운영 Geo의 공개 인증 확인용 전용 키로 dataset/version 200을 확인했지만 data_token은 미제공이고 reverse/radius는 504다. 신규 키는 운영 Concierge에 아직 적용하지 않았다. T-199 코드 병합/배포는 ADR-49의 병렬 허용 범위이며 T-200 활성화·native Geo force 성공·호스트 이전은 완료로 표시하지 않는다.
+
+## 2026-10-13 — Track 1·2 순차 구현 착수
+
+- Concierge → Weather → Transport 순서의 사용자 지시로 최신 원격 기준에서 착수했다. 첫 PR은 T-199의 토큰 컬럼·보강 로직이며 운영값 전환은 선행 배포와 효과 검증 뒤 수행한다.
+- 구현 전 독립 적대 검토에서 동일 global 토큰의 새 stale 장소 누락과 unresolved 옛 코드의 최신 토큰 봉인 위험을 발견했다. refresh는 행별 stale 대상을 확인하고, export는 성공한 보강의 토큰만 제공하도록 계약·회귀를 함께 정정한다.
+- 첫 격리 PostGIS 실행은 컨테이너 초기화 재시작 중 연결 reset 8건과 additive 응답 필드의 기존 exact-object 검증 1건으로 실패했다. 초기 실패를 기록하며 새 필드를 계약 기대값에 추가해 재실행한다.
+- 정상 reverse·radius의 토큰 전달, 헤더 인증, 오류/미해결 분리, snapshot fence와 동일 transaction dirty를 구현했다. `dd1-` + 32자리 소문자 hex라는 Geo ADR-069 정본을 확인해 초기 잘못된 40자리 hex 검증을 정정했다. 두 HTTP 정상 응답의 토큰이 다르면 기록하지 않는다.
+- 깨진 HTTP200의 nested collection은 정상 미해결로 봉인하지 않고 errored로 재시도 대상에 남긴다. unresolved는 옛 코드를 보존하지만 공급 토큰은 NULL이며 성공 source만 provenance 토큰을 제공한다.
+- 두 golden 테스트의 상대 import 누락을 고쳤다. 현재 admin 보강·신규 토큰 집중 회귀 36건 통과; feature 공급 회귀·전체 검증·두 적대 리뷰·live 검증은 계속 진행 중이다. 초기 실패는 최종 성공으로 덮지 않는다.
+- 리뷰 반례의 행정코드 bool/객체/잘못된 길이를 거부하고, 완성 코드 조회 횟수 0을 서비스 밖에서 확인하도록 회귀를 강화했다. dirty 쓰기는 기존 `export → place → audit` 잠금 순서를 유지한다.
+- 집중 PostGIS 보강·토큰·feature 공급 회귀 90건 통과. 새 migration의 실제 upgrade/downgrade/upgrade와 기존 행 보존·nullable 토큰·부분 인덱스도 확인했다. 최초 migration 하니스 seed는 필수 기본값 누락과 존재하지 않는 timestamp 컬럼으로 실패해 fixture를 실제 이전 schema에 맞췄다(제품 migration 변경 없음). 전체·live/UI·두 리뷰 closure는 아직 진행 중이다.
+- nullable 토큰 컬럼과 geocoded 장소 부분 인덱스를 추가했다. 테스트·독립 리뷰·live E2E·UI E2E는 진행 중이며 완료로 기록하지 않는다.
+
 ## 2026-10-13: geo odroid 재배치 대응 설계(ADR-50)
 
 - 문서만 바꿨다(코드·`.env.example`·CHANGELOG·contracts 없음; 6파일 — `docs/decisions.md`·`docs/tasks.md`·`docs/architecture.md`·`docs/journal.md`·`CLAUDE.md`·`AGENTS.md`). `docs/decisions.md`에 ADR-50(proposed)을 추가하고 `docs/tasks.md`에 T-202a/T-202b/T-203(Track 2 설계 ID T-CNC-01/02)·T-204(journal 아카이브 분리)를 대기로 올렸으며, `docs/architecture.md` §4.5에 geo 호출 경로 표(코드·값의 자리·호스트 현재→계획·timeout·키 자리)를 두었다. 저장소에 geo 연동 전용 문서(`docs/kor-travel-map-integration.md`·`docs/integrations/`)가 없어 §4.5가 그 자리다. `CLAUDE.md` "현재 작업"에 병렬 가능 포인터(T-202a·T-203) 1줄을 더했고, `CLAUDE.md`·`AGENTS.md`의 낡은 ADR 범위 표기(ADR-1~35 / ADR-1~33)를 "마지막 `## ADR-NN` 헤더가 정본" 포인터로 바꿨다(범위 숫자 재기입 없음).
