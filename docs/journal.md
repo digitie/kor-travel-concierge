@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-10-14 — T-200 최신 source·실제 native·UI 검증
+
+- 고정 구현 `9b26e8e1`의 전체 backend 1023 PASS(669.01초), 집중 PostGIS 52 PASS와 두 독립 최신 FULL source 적대 리뷰 PASS/OPEN 0을 확인했다. 이전 오류 prefix·지속 신규 행 유입의 BLOCK 원문은 보존하며 durable checkpoint와 순회 상한으로 수정했다.
+- 별도 PostGIS·실제 HTTP 서버·Dagster code-server/webserver/daemon/default launcher·multiprocess worker와 기동 API에서 10개 효과 검증을 통과했다. 50회 오류 후 native Failure/진행 위치 보존, 다른 maintenance job 성공, 재실행의 tail→prefix 복구, 동일 릴리스 무 reverse 호출, 정상 미해결의 옛 코드 보존, HTTP 대기 중 실제 취소/DB transaction 미점유, 순회 중 새 tail의 다음 run 복구, 최종 changes 피드 토큰 반영과 5개 job 요약을 확인했다. 유료 provider 발화는 비활성화했다.
+- 이는 **운영 Geo provider 성공 시험이 아닌 격리 HTTP fixture 시험**이다. Geo 배포/backfill과 Map의 토큰 신뢰·hash 규칙 반영 뒤 수행할 통합 e2e·첫 운영 run은 남는다. Manager lane PR #473은 `021587e4`로 병합됐으나 운영 설정 반영은 아직 하지 않았다.
+- n150 native Chromium UI 9 PASS(40.18초, skip/retry/flaky 0). 390/1024/1440px에서 실제 refresh Failure/Canceled/Success 실행 조회, 5개 job, runtime 상한, maintenance의 도메인 링크 부재, 실제 native 로그 popup, 재조회와 logout→401을 확인했다. frontend Git source는 기존 `0dd0e29e`와 동일하고 최신 API/native만 별도 DB로 구동했다. 최초 하니스는 테스트 패키지 경로 오류로 브라우저 실행 전에 실패했으며 경로를 보강해 다시 실행했다. 초기 실패도 보존한다.
+
+## 2026-10-14 — T-200 순회 상한으로 지속 유입 중 재시도 보장
+
+- `7b2eb8b9` 전체 backend 1018 PASS(699.43초) 뒤 독립 재리뷰는 기존 오류 prefix 복구를 확인했지만, 새 stale가 계속 추가되면 tail이 비지 않아 과거 오류를 wrap하지 못하는 반례를 재현했다. R2 BLOCK도 보존한다.
+- 진행 checkpoint에 이번 순회의 최대 place ID를 함께 저장했다. 중단 후에도 같은 상한을 유지하고 유한 tail 뒤 앞 구간을 처리한다. 한 바퀴 완료 후에만 다음 run이 새 상한을 캡처한다. 새 token은 이전 위치/상한을 사용하지 않는다.
+- 실제 PostGIS에서 오류 시도 후 중단·재개 중 계속 신규 행을 넣어도 과거 오류 행이 재해결되는 효과와, 남은 신규 행은 다음 순회에서 처리되는 것을 확인했다. 잘못된 상한 4종은 호출/완료 토큰 전진 없이 실패한다. 수정 집중 52 PASS(42.18초), 신규 파일 Ruff PASS다. 두 최신 FULL source 재리뷰·최신 전체·live는 진행 중이다.
+
+## 2026-10-14 — T-200 오류 prefix 순회 복구 보강
+
+- 후보 `a891d802`의 전체 backend 1014 PASS(664.76초) 뒤 두 독립 적대 리뷰가 slow-error prefix의 재개 starvation을 각각 축소 실행 예산으로 재현했다. 기존 완료 장소 제외만으로는 닫히지 않아 원본 BLOCK을 보존했다.
+- token-scoped 내부 keyset checkpoint를 장소별 시도 뒤 저장하고 다음 run이 뒤 ID부터 이어가도록 했다. 한 바퀴 끝에서 앞 구간을 한 번만 wrap하며, 새 token에는 이전 cursor를 재사용하지 않는다. 전역 완료 token의 stale0 조건과 공개 settings allowlist는 유지한다.
+- 오류율 문턱은 50시도부터 즉시 검사하되 failure에도 checkpoint를 보존한다. 중단한 오류 구간 뒤 정상 장소의 처리, 오류 문턱 중단 뒤 뒤 구간 진행, 새 epoch reset, 내부 진행 key public write 거부를 실제 PostGIS 회귀에 추가했다. 수정 집중 47 PASS(37.51초), 신규 파일 Ruff PASS이며 최신 전체/두 재리뷰/live gate는 진행 중이다.
+
+## 2026-10-14 — T-200 재개·cursor·메타데이터 회귀
+
+- 최초 focused 40건은 시험의 async generator/all 오용 2건과 서로 다른 job의 정당한 DB 연결을 refresh 연결 점유로 오인한 1건으로 실패했다. await list와 실제 runtime처럼 job별 engine을 사용해 연결 반환 단언을 유지하고 40 PASS를 확인했다.
+- op 실패 카운터는 output buffer가 아닌 Dagster Failure metadata에 싣는다. 실제 in-process failure event·paid retry 없음과 새 job active/UNKNOWN 격리 검증을 추가했다. 새 active-run fixture의 필수 run_config 누락 1건도 기록하고 보강한다.
+- 같은 global 토큰의 새 stale 장소, partial commit 뒤 재개, 오류 문턱 초과/미만, NULL 토큰, 좌표 fence, 123건 keyset·HTTP 중 refresh pool 점유 0, export 동시 실행/fixpoint, 공개 settings 내부 cursor 400을 실제 PostGIS에서 확인한다. 전체/두 리뷰/live/UI/운영 gate는 진행 중이다.
+
+## 2026-10-14 — T-200 재해결 job 구현 착수
+
+- T-199 고정 구현 위 별도 브랜치에서 maintenance job을 끝에 등록했다. backend/generation admission과 같은 job 활성 metadata gate, 공용 RecoveryPolicy runtime tag와 기존 cooperative 취소를 재사용한다.
+- version 헤더 조회, ID keyset 50개, 단일 HTTP client/connection 재사용, 장소별 짧은 격리 세션 commit, 행별 stale 재검사와 내부 cursor upsert를 구현했다. global 토큰 동일이어도 새 stale 장소를 누락하지 않는다.
+- 코드·회귀·두 적대 리뷰·live/UI는 검증 중이다. Manager lane 및 Geo·Map 선행 운영 gate를 충족하기 전 새 job을 운영 활성화하지 않는다.
+
 ## 2026-10-14 — T-199 구현 검증과 운영 선행 조건
 
 - 구현 `0dd0e29e`의 전체 13경로를 독립 적대 리뷰 2인이 검토해 OPEN 0/PASS를 확인했다. R1/R2의 오류 응답·mixed epoch·미해결 provenance 지적과 초기 테스트 실패는 보존하고 수정 뒤 재검토했다.

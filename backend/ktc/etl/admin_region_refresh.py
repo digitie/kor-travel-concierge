@@ -1,0 +1,256 @@
+"""릴리스별 행정구역 재해결. 짧은 세션·ID keyset·장소별 commit으로 재개한다."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+
+import httpx
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from ktc.core.config import Settings
+from ktc.etl.admin_region_service import (
+    GEO_HTTP_TIMEOUT,
+    parse_data_token,
+    refresh_place_admin_codes_isolated,
+)
+from ktc.models import SystemSetting, TravelPlace, utcnow
+from ktc.services.settings_service import get_secret, get_setting
+
+CURSOR_KEY = "kor_travel_geo_data_token"
+PROGRESS_KEY = "kor_travel_geo_refresh_progress"
+PAGE_SIZE = 50
+
+
+@dataclass
+class RefreshStats:
+    state: str = "pending"
+    scanned: int = 0
+    resolved: int = 0
+    unresolved: int = 0
+    errored: int = 0
+    skipped: int = 0
+    dirty: int = 0
+    token_advanced: bool = False
+
+    def metadata(self) -> dict[str, str | int | bool]:
+        return asdict(self)
+
+
+class RefreshError(RuntimeError):
+    """Dagster 경계에서 실패로 표시할 오류. URL·키·HTTP 본문은 포함하지 않는다."""
+
+    def __init__(self, message: str, stats: RefreshStats) -> None:
+        super().__init__(message)
+        self.stats = stats
+
+
+def stale_condition(token: str):
+    return (
+        TravelPlace.is_geocoded.is_(True),
+        TravelPlace.admin_code_geo_data_token.is_distinct_from(token),
+    )
+
+
+async def stale_exists(session: AsyncSession, token: str) -> bool:
+    return (
+        await session.scalar(
+            select(TravelPlace.place_id).where(*stale_condition(token)).limit(1)
+        )
+        is not None
+    )
+
+
+async def write_setting(session: AsyncSession, key: str, value: str) -> None:
+    await session.execute(
+        insert(SystemSetting)
+        .values(key=key, value=value, updated_at=utcnow())
+        .on_conflict_do_update(
+            index_elements=[SystemSetting.key],
+            set_={"value": value, "updated_at": utcnow()},
+        )
+    )
+
+
+async def save_progress(factory, token: str, after: int, ceiling: int | None) -> None:
+    async with factory() as session:
+        await write_setting(
+            session,
+            PROGRESS_KEY,
+            json.dumps({"token": token, "after": after, "ceiling": ceiling}),
+        )
+        await session.commit()
+
+
+def read_progress(raw: str | None, token: str) -> tuple[int, int | None]:
+    if raw is None:
+        return 0, None
+    value = json.loads(raw)
+    if not isinstance(value, dict) or parse_data_token(value.get("token")) is None:
+        raise ValueError("재해결 진행 위치 형식 오류")
+    after = value.get("after")
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        raise ValueError("재해결 진행 ID 형식 오류")
+    ceiling = value.get("ceiling")
+    if ceiling is not None and (
+        isinstance(ceiling, bool) or not isinstance(ceiling, int) or ceiling < after
+    ):
+        raise ValueError("재해결 순회 상한 형식 오류")
+    return (after, ceiling) if value["token"] == token else (0, None)
+
+
+async def current_token(
+    client: httpx.AsyncClient, base_url: str, api_key: str
+) -> str | None:
+    response = await client.post(
+        base_url.rstrip("/") + "/v2/dataset/version",
+        headers={"X-KTG-API-Key": api_key},
+        json={},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("status") not in {
+        "OK",
+        "NOT_FOUND",
+    }:
+        raise ValueError("geo 버전 응답 형식 오류")
+    if not isinstance(payload.get("available"), bool):
+        raise TypeError("geo 버전 available 형식 오류")
+    current = payload.get("current")
+    if current is None and payload["available"] is False:
+        return None
+    if not isinstance(current, dict) or payload["available"] is False:
+        raise ValueError("geo 현재 릴리스 형식 오류")
+    token = current.get("data_token")
+    if token is None:
+        return None
+    if parse_data_token(token) != token:
+        raise ValueError("geo 데이터 토큰 형식 오류")
+    return token
+
+
+async def refresh_admin_regions(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    settings: Settings,
+    http_client: httpx.AsyncClient | None = None,
+) -> RefreshStats:
+    stats = RefreshStats()
+    base_url = settings.KOR_TRAVEL_GEO_V2_BASE_URL.strip()
+    async with factory() as session:
+        api_key = await get_secret(session, "kor_travel_geo_v2_api_key")
+        await session.commit()
+    if not base_url or not api_key:
+        stats.state = "not_configured"
+        return stats
+    # 단일 순차 client를 재사용한다. 각 HTTP 요청 중 DB transaction/connection은 없다.
+    if http_client is None:
+        async with httpx.AsyncClient(
+            timeout=GEO_HTTP_TIMEOUT,
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+        ) as client:
+            return await _refresh(factory, settings, client, base_url, api_key, stats)
+    return await _refresh(factory, settings, http_client, base_url, api_key, stats)
+
+
+async def _refresh(factory, settings, client, base_url, api_key, stats):
+    try:
+        token = await current_token(client, base_url, api_key)
+    except Exception as error:  # noqa: BLE001 - 공개 I/O 실패를 키/URL 없이 op 실패로 전달
+        raise RefreshError(
+            f"geo 버전 조회 실패 ({type(error).__name__})", stats
+        ) from None
+    if token is None:
+        stats.state = "data_token_unavailable"
+        return stats
+    async with factory() as session:
+        previous = await get_setting(session, CURSOR_KEY)
+        stale = await stale_exists(session, token)
+        progress = await get_setting(session, PROGRESS_KEY)
+        await session.commit()
+    if previous == token and not stale:
+        stats.state = "noop"
+        return stats
+
+    try:
+        after, ceiling = read_progress(progress, token)
+    except (ValueError, TypeError):
+        raise RefreshError("재해결 진행 위치 형식 오류", stats) from None
+    if ceiling is None:
+        async with factory() as session:
+            ceiling = (
+                await session.scalar(
+                    select(func.max(TravelPlace.place_id)).where(
+                        TravelPlace.is_geocoded.is_(True)
+                    )
+                )
+                or 0
+            )
+            await session.commit()
+        after = min(after, ceiling)
+        await save_progress(factory, token, after, ceiling)
+    start = after
+    wrapped = False
+    while True:
+        async with factory() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(TravelPlace.place_id)
+                        .where(
+                            TravelPlace.place_id > after,
+                            *stale_condition(token),
+                            TravelPlace.place_id <= ceiling,
+                            TravelPlace.place_id <= start if wrapped else True,
+                        )
+                        .order_by(TravelPlace.place_id)
+                        .limit(PAGE_SIZE)
+                    )
+                ).all()
+            )
+            await session.commit()
+        if not ids:
+            if start and not wrapped:
+                after = 0
+                wrapped = True
+                await save_progress(factory, token, after, ceiling)
+                continue
+            break
+        for place_id in ids:
+            after = place_id
+            result = await refresh_place_admin_codes_isolated(
+                factory,
+                place_id,
+                data_token=token,
+                settings=settings,
+                http_client=client,
+            )
+            stats.scanned += 1
+            setattr(stats, result.outcome, getattr(stats, result.outcome) + 1)
+            stats.dirty += int(result.dirty)
+            # 실패도 순회 진척으로 저장한다. 느린 오류 prefix가 다음 run을 독점하지 않는다.
+            # 장소 commit 뒤 끊기면 마지막 시도만 반복할 수 있고 뒤 ID를 건너뛰지 않는다.
+            await save_progress(factory, token, after, ceiling)
+            attempted = stats.resolved + stats.unresolved + stats.errored
+            if (
+                attempted >= PAGE_SIZE
+                and stats.errored / attempted
+                > settings.ADMIN_REGION_REFRESH_ERROR_RATIO
+            ):
+                stats.state = "failed"
+                raise RefreshError(
+                    "행정구역 재해결 오류 비율이 문턱을 초과했습니다", stats
+                )
+    await save_progress(factory, token, 0, None)
+    # keyset 순회 끝만으로 전진하지 않는다. 오류·fence drift·새 stale 행을 다시 본다.
+    async with factory() as session:
+        if await stale_exists(session, token):
+            await session.commit()
+            return stats
+        await write_setting(session, CURSOR_KEY, token)
+        await session.commit()
+    stats.token_advanced = previous != token
+    stats.state = "completed"
+    return stats

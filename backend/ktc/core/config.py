@@ -324,6 +324,9 @@ class Settings(BaseSettings):
     # 스케줄러 시작 시 1회 + 주기적으로 전량 sync를 돌린다.
     FEATURE_EXPORT_RECONCILE_ENABLED: bool = True
     FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS: int = 3_600
+    ADMIN_REGION_REFRESH_ENABLED: bool = True
+    ADMIN_REGION_REFRESH_INTERVAL_SECONDS: int = Field(default=3_600, ge=1)
+    ADMIN_REGION_REFRESH_ERROR_RATIO: float = Field(default=0.05, ge=0, le=1)
 
     # --- 프레임 비전/OCR 실험 경로 (T-173, 로드맵 PR-19, 게이트 대기 — 기본 off) ---
     # 자막·whisper가 최종 실패한 영상에서 균등 간격 프레임을 뽑아 Gemini 비전 1콜로

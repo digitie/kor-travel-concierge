@@ -341,7 +341,10 @@ async def test_not_started_same_key_and_preclaim_budget(
 
 def test_defs_resolved_executor_and_paid_retry_policy():
     jobs = defs.resolve_all_job_defs()
-    assert len(jobs) == 4
+    assert {job.name for job in jobs} == {
+        "concierge_interactive", "concierge_batch", "concierge_source_scan",
+        "concierge_feature_exports", "concierge_admin_region_refresh",
+    }
     for job in jobs:
         assert job.tags["dagster/max_retries"] == "0"
         assert job.tags["dagster/retry_on_asset_or_op_failure"] == "false"
@@ -618,6 +621,8 @@ def test_scoped_maintenance_active_unknown_holds_only_job_and_recovers(
             SOURCE_SCAN_INTERVAL_SECONDS=10,
             FEATURE_EXPORT_RECONCILE_ENABLED=True,
             FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS=10,
+            ADMIN_REGION_REFRESH_ENABLED=False,
+            ADMIN_REGION_REFRESH_INTERVAL_SECONDS=3600,
         ),
     )
     cursor = None
@@ -650,3 +655,72 @@ def test_scoped_maintenance_active_unknown_holds_only_job_and_recovers(
         ) as context:
             recovered = module.concierge_maintenance.evaluate_tick(context)
         assert {request.job_name for request in recovered.run_requests} == jobs
+
+
+def test_admin_refresh_failure_emits_actual_failure_metadata(monkeypatch):
+    from ktc.dagster import definitions as module
+    from ktc.etl.admin_region_refresh import RefreshError, RefreshStats
+
+    def fail(coro):
+        coro.close()
+        raise RefreshError("재해결 오류 비율 초과", RefreshStats(scanned=51, resolved=48, errored=3))
+
+    monkeypatch.setattr(module, "cooperative", fail)
+    result = module.concierge_admin_region_refresh.execute_in_process(
+        run_config={"ops": {"admin_region_refresh": {"config": {"control_generation": 1}}}},
+        raise_on_error=False,
+    )
+    assert not result.success
+    failures = result.get_step_failure_events()
+    assert len(failures) == 1
+    metadata = failures[0].event_specific_data.user_failure_data.metadata
+    assert metadata["scanned"].value == 51 and metadata["errored"].value == 3
+    assert not any(event.event_type_value == "STEP_UP_FOR_RETRY" for event in result.all_events)
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_admin_refresh_admission_and_unknown_metadata_are_scoped(monkeypatch, unknown):
+    import json
+    from ktc.dagster import definitions as module
+
+    async def control():
+        return SimpleNamespace(backend="dagster", generation=7)
+
+    monkeypatch.setattr(rt, "control_snapshot", control)
+    monkeypatch.setattr(module.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(
+        SCHEDULER_ENABLED=True, SOURCE_SCAN_ENABLED=unknown,
+        SOURCE_SCAN_INTERVAL_SECONDS=3600,
+        FEATURE_EXPORT_RECONCILE_ENABLED=unknown,
+        FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS=3600,
+        ADMIN_REGION_REFRESH_ENABLED=True, ADMIN_REGION_REFRESH_INTERVAL_SECONDS=3600,
+    ))
+    with DagsterInstance.ephemeral() as instance:
+        original = instance.get_runs
+        if unknown:
+            def get_runs(*args, **kwargs):
+                filters = kwargs.get("filters") or (args[0] if args else None)
+                if filters is not None and filters.job_name == "concierge_admin_region_refresh":
+                    raise RuntimeError("refresh metadata UNKNOWN")
+                return original(*args, **kwargs)
+            monkeypatch.setattr(instance, "get_runs", get_runs)
+        else:
+            row = instance.create_run_for_job(
+                module.concierge_admin_region_refresh, status=DagsterRunStatus.STARTED,
+                run_config={"ops": {"admin_region_refresh": {"config": {"control_generation": 7}}}},
+                tags={"kortravelcommon/project": "concierge", "dagster/code_location": rt.location()},
+            )
+        with build_sensor_context(instance=instance, repository_def=defs.get_repository_def()) as context:
+            first = module.concierge_maintenance.evaluate_tick(context)
+        assert "concierge_admin_region_refresh" not in {request.job_name for request in first.run_requests}
+        assert "concierge_admin_region_refresh" not in json.loads(first.cursor)
+        if unknown:
+            assert {request.job_name for request in first.run_requests} == {"concierge_source_scan", "concierge_feature_exports"}
+            monkeypatch.setattr(instance, "get_runs", original)
+        else:
+            assert not first.run_requests
+            instance.report_run_failed(row)
+        with build_sensor_context(instance=instance, repository_def=defs.get_repository_def(), cursor=first.cursor) as context:
+            recovered = module.concierge_maintenance.evaluate_tick(context)
+        assert [request.job_name for request in recovered.run_requests] == ["concierge_admin_region_refresh"]
+        assert recovered.run_requests[0].run_config["ops"]["admin_region_refresh"]["config"]["control_generation"] == 7
