@@ -1677,7 +1677,9 @@ geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`�
 ### T-200 구현 보강 — 오류 구간 뒤의 재개
 
 전역 완료 토큰과 별도로 내부 `system_settings['kor_travel_geo_refresh_progress']`에
-현재 token·마지막 시도 place ID를 저장한다. 장소별 시도 뒤 짧은 세션으로 checkpoint하고
+현재 token·마지막 시도 place ID·이번 순회의 최대 place ID를 저장한다. 시작 시 최대 ID를
+고정하고 재개에도 유지해 새 장소가 계속 생겨도 tail이 유한하게 끝나 앞 구간으로 돌아온다.
+한 바퀴를 마친 다음 run에서만 새 최대 ID를 잡는다. 장소별 시도 뒤 짧은 세션으로 checkpoint하고
 다음 run은 그 뒤 ID부터 이어간다. 마지막 장소 이후에는 앞 구간으로 한 번만 wrap해 이전
 오류를 재시도한다. token이 달라지면 이전 순회 위치를 사용하지 않는다. 둘 다 공개 settings
 allowlist에는 추가하지 않는다.

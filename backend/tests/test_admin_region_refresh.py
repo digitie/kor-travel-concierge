@@ -400,3 +400,87 @@ async def test_progress_key_is_not_publicly_writable(client):
         json={refresh.PROGRESS_KEY: json.dumps({"token": TOKEN, "after": 999})},
     )
     assert response.status_code == 400
+
+
+async def test_continuous_new_places_do_not_delay_wrapped_retry_after_cancellation(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 3)
+    geo = Geo(engine)
+    geo.bad.add(rows[0][1])
+    geo.cancel_at = rows[1][1]
+    with pytest.raises(asyncio.CancelledError):
+        await run(session_factory, geo)
+    async with session_factory() as session:
+        progress = json.loads(
+            await settings_service.get_setting(session, refresh.PROGRESS_KEY)
+        )
+        assert progress == {"token": TOKEN, "after": rows[0][0], "ceiling": rows[-1][0]}
+    inserted = []
+
+    async def add_tail():
+        async with session_factory() as session:
+            place = TravelPlace(
+                name="연속 신규 stale",
+                latitude=37.5,
+                longitude=128 + len(inserted) * 0.001,
+                is_geocoded=True,
+            )
+            session.add(place)
+            await session.commit()
+            inserted.append(place.place_id)
+
+    await add_tail()
+    geo.bad.clear()
+    geo.cancel_at = None
+
+    async def growing_handler(request):
+        response = geo.handler(request)
+        if request.url.path != "/v2/dataset/version":
+            await add_tail()
+        return response
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(growing_handler)
+    ) as http:
+        result = await asyncio.wait_for(
+            refresh.refresh_admin_regions(
+                session_factory, settings=SETTINGS, http_client=http
+            ),
+            5,
+        )
+    assert result.resolved == 3 and result.state == "pending"
+    assert geo.calls[rows[0][1]] == 2, (
+        "오류 prefix도 tail이 계속 생기는 동안 wrap해 재해결해야 한다"
+    )
+    assert await cursor(session_factory) is None
+    async with session_factory() as session:
+        for row_id, _ in rows:
+            assert (
+                await session.get(TravelPlace, row_id)
+            ).admin_code_geo_data_token == TOKEN
+        for row_id in inserted:
+            assert (
+                await session.get(TravelPlace, row_id)
+            ).admin_code_geo_data_token is None
+    result = await run(session_factory, geo)
+    assert result.resolved == len(inserted) and result.state == "completed"
+
+
+@pytest.mark.parametrize("ceiling", [True, -1, "50", 1])
+async def test_invalid_sweep_ceiling_fails_without_skipping_places(
+    session_factory, engine, ceiling
+):
+    await seed(session_factory, 3)
+    async with session_factory() as session:
+        session.add(
+            SystemSetting(
+                key=refresh.PROGRESS_KEY,
+                value=json.dumps({"token": TOKEN, "after": 2, "ceiling": ceiling}),
+            )
+        )
+        await session.commit()
+    geo = Geo(engine)
+    with pytest.raises(refresh.RefreshError):
+        await run(session_factory, geo)
+    assert not geo.calls and await cursor(session_factory) is None

@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -74,24 +74,31 @@ async def write_setting(session: AsyncSession, key: str, value: str) -> None:
     )
 
 
-async def save_progress(factory, token: str, after: int) -> None:
+async def save_progress(factory, token: str, after: int, ceiling: int | None) -> None:
     async with factory() as session:
         await write_setting(
-            session, PROGRESS_KEY, json.dumps({"token": token, "after": after})
+            session,
+            PROGRESS_KEY,
+            json.dumps({"token": token, "after": after, "ceiling": ceiling}),
         )
         await session.commit()
 
 
-def read_progress(raw: str | None, token: str) -> int:
+def read_progress(raw: str | None, token: str) -> tuple[int, int | None]:
     if raw is None:
-        return 0
+        return 0, None
     value = json.loads(raw)
     if not isinstance(value, dict) or parse_data_token(value.get("token")) is None:
         raise ValueError("재해결 진행 위치 형식 오류")
     after = value.get("after")
     if isinstance(after, bool) or not isinstance(after, int) or after < 0:
         raise ValueError("재해결 진행 ID 형식 오류")
-    return after if value["token"] == token else 0
+    ceiling = value.get("ceiling")
+    if ceiling is not None and (
+        isinstance(ceiling, bool) or not isinstance(ceiling, int) or ceiling < after
+    ):
+        raise ValueError("재해결 순회 상한 형식 오류")
+    return (after, ceiling) if value["token"] == token else (0, None)
 
 
 async def current_token(
@@ -168,9 +175,22 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
         return stats
 
     try:
-        after = read_progress(progress, token)
+        after, ceiling = read_progress(progress, token)
     except (ValueError, TypeError):
         raise RefreshError("재해결 진행 위치 형식 오류", stats) from None
+    if ceiling is None:
+        async with factory() as session:
+            ceiling = (
+                await session.scalar(
+                    select(func.max(TravelPlace.place_id)).where(
+                        TravelPlace.is_geocoded.is_(True)
+                    )
+                )
+                or 0
+            )
+            await session.commit()
+        after = min(after, ceiling)
+        await save_progress(factory, token, after, ceiling)
     start = after
     wrapped = False
     while True:
@@ -182,6 +202,7 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
                         .where(
                             TravelPlace.place_id > after,
                             *stale_condition(token),
+                            TravelPlace.place_id <= ceiling,
                             TravelPlace.place_id <= start if wrapped else True,
                         )
                         .order_by(TravelPlace.place_id)
@@ -194,7 +215,7 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
             if start and not wrapped:
                 after = 0
                 wrapped = True
-                await save_progress(factory, token, after)
+                await save_progress(factory, token, after, ceiling)
                 continue
             break
         for place_id in ids:
@@ -211,7 +232,7 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
             stats.dirty += int(result.dirty)
             # 실패도 순회 진척으로 저장한다. 느린 오류 prefix가 다음 run을 독점하지 않는다.
             # 장소 commit 뒤 끊기면 마지막 시도만 반복할 수 있고 뒤 ID를 건너뛰지 않는다.
-            await save_progress(factory, token, after)
+            await save_progress(factory, token, after, ceiling)
             attempted = stats.resolved + stats.unresolved + stats.errored
             if (
                 attempted >= PAGE_SIZE
@@ -222,7 +243,7 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
                 raise RefreshError(
                     "행정구역 재해결 오류 비율이 문턱을 초과했습니다", stats
                 )
-    await save_progress(factory, token, 0)
+    await save_progress(factory, token, 0, None)
     # keyset 순회 끝만으로 전진하지 않는다. 오류·fence drift·새 stale 행을 다시 본다.
     async with factory() as session:
         if await stale_exists(session, token):
