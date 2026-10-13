@@ -4,6 +4,13 @@
 
 ---
 
+## 2026-10-14 — T-200 최신 source·실제 native·UI 검증
+
+- 고정 구현 `9b26e8e1`의 전체 backend 1023 PASS(669.01초), 집중 PostGIS 52 PASS와 두 독립 최신 FULL source 적대 리뷰 PASS/OPEN 0을 확인했다. 이전 오류 prefix·지속 신규 행 유입의 BLOCK 원문은 보존하며 durable checkpoint와 순회 상한으로 수정했다.
+- 별도 PostGIS·실제 HTTP 서버·Dagster code-server/webserver/daemon/default launcher·multiprocess worker와 기동 API에서 10개 효과 검증을 통과했다. 50회 오류 후 native Failure/진행 위치 보존, 다른 maintenance job 성공, 재실행의 tail→prefix 복구, 동일 릴리스 무 reverse 호출, 정상 미해결의 옛 코드 보존, HTTP 대기 중 실제 취소/DB transaction 미점유, 순회 중 새 tail의 다음 run 복구, 최종 changes 피드 토큰 반영과 5개 job 요약을 확인했다. 유료 provider 발화는 비활성화했다.
+- 이는 **운영 Geo provider 성공 시험이 아닌 격리 HTTP fixture 시험**이다. Geo 배포/backfill과 Map의 토큰 신뢰·hash 규칙 반영 뒤 수행할 통합 e2e·첫 운영 run은 남는다. Manager lane PR #473은 `021587e4`로 병합됐으나 운영 설정 반영은 아직 하지 않았다.
+- n150 native Chromium UI 9 PASS(40.18초, skip/retry/flaky 0). 390/1024/1440px에서 실제 refresh Failure/Canceled/Success 실행 조회, 5개 job, runtime 상한, maintenance의 도메인 링크 부재, 실제 native 로그 popup, 재조회와 logout→401을 확인했다. frontend Git source는 기존 `0dd0e29e`와 동일하고 최신 API/native만 별도 DB로 구동했다. 최초 하니스는 테스트 패키지 경로 오류로 브라우저 실행 전에 실패했으며 경로를 보강해 다시 실행했다. 초기 실패도 보존한다.
+
 ## 2026-10-14 — T-200 순회 상한으로 지속 유입 중 재시도 보장
 
 - `7b2eb8b9` 전체 backend 1018 PASS(699.43초) 뒤 독립 재리뷰는 기존 오류 prefix 복구를 확인했지만, 새 stale가 계속 추가되면 tail이 비지 않아 과거 오류를 wrap하지 못하는 반례를 재현했다. R2 BLOCK도 보존한다.

@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-**T-199 구현 검증 완료, 병합·배포 진행 중**: 두 독립 source 리뷰 OPEN 0, 실제 PostGIS/HTTP/API 공급 검증과 n150 live UI 90 PASS. 운영 Geo token/backfill·조회 504와 T-200 활성화 gate는 별도로 남는다.
+**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 구현 검증 완료, PR #251 병합 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
 
 
 ---
