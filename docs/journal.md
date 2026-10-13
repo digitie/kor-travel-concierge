@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-10-14 — T-200 오류 prefix 순회 복구 보강
+
+- 후보 `a891d802`의 전체 backend 1014 PASS(664.76초) 뒤 두 독립 적대 리뷰가 slow-error prefix의 재개 starvation을 각각 축소 실행 예산으로 재현했다. 기존 완료 장소 제외만으로는 닫히지 않아 원본 BLOCK을 보존했다.
+- token-scoped 내부 keyset checkpoint를 장소별 시도 뒤 저장하고 다음 run이 뒤 ID부터 이어가도록 했다. 한 바퀴 끝에서 앞 구간을 한 번만 wrap하며, 새 token에는 이전 cursor를 재사용하지 않는다. 전역 완료 token의 stale0 조건과 공개 settings allowlist는 유지한다.
+- 오류율 문턱은 50시도부터 즉시 검사하되 failure에도 checkpoint를 보존한다. 중단한 오류 구간 뒤 정상 장소의 처리, 오류 문턱 중단 뒤 뒤 구간 진행, 새 epoch reset, 내부 진행 key public write 거부를 실제 PostGIS 회귀에 추가했다. 수정 집중 47 PASS(37.51초), 신규 파일 Ruff PASS이며 최신 전체/두 재리뷰/live gate는 진행 중이다.
+
 ## 2026-10-14 — T-200 재개·cursor·메타데이터 회귀
 
 - 최초 focused 40건은 시험의 async generator/all 오용 2건과 서로 다른 job의 정당한 DB 연결을 refresh 연결 점유로 오인한 1건으로 실패했다. await list와 실제 runtime처럼 job별 engine을 사용해 연결 반환 단언을 유지하고 40 PASS를 확인했다.

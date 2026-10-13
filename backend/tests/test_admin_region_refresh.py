@@ -185,7 +185,7 @@ async def test_remaining_errors_never_advance_cursor_and_only_failed_places_retr
     else:
         first = await run(session_factory, geo)
     assert (
-        first.scanned == 51
+        first.scanned == (50 if raises else 51)
         and first.errored == errors
         and await cursor(session_factory) is None
     )
@@ -198,7 +198,7 @@ async def test_remaining_errors_never_advance_cursor_and_only_failed_places_retr
     geo.bad.clear()
     second = await run(session_factory, geo)
     assert (
-        second.scanned == errors
+        second.scanned == errors + int(raises)
         and second.state == "completed"
         and await cursor(session_factory) == TOKEN
     )
@@ -324,3 +324,79 @@ async def test_malformed_version_response_is_error_not_noop(body):
     ) as http:
         with pytest.raises((ValueError, TypeError)):
             await refresh.current_token(http, "http://geo.test", "test-key")
+
+
+async def test_persistent_slow_error_prefix_cannot_starve_healthy_suffix(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 10)
+    geo = Geo(engine)
+    geo.bad = {lon for _, lon in rows[:4]}
+    geo.cancel_at = rows[4][1]
+    with pytest.raises(asyncio.CancelledError):
+        await run(session_factory, geo)
+    assert await cursor(session_factory) is None
+    async with session_factory() as session:
+        progress = json.loads(
+            await settings_service.get_setting(session, refresh.PROGRESS_KEY)
+        )
+        assert progress["after"] == rows[3][0] and progress["token"] == TOKEN
+    geo.cancel_at = None
+    result = await run(session_factory, geo)
+    assert result.resolved == 6 and result.errored == 4
+    assert result.state == "pending" and await cursor(session_factory) is None
+    async with session_factory() as session:
+        for row_id, _ in rows[4:]:
+            assert (
+                await session.get(TravelPlace, row_id)
+            ).admin_code_geo_data_token == TOKEN
+    geo.bad.clear()
+    result = await run(session_factory, geo)
+    assert result.resolved == 4 and result.state == "completed"
+    assert all(geo.calls[lon] == 1 for _, lon in rows[5:])
+
+
+async def test_error_budget_keeps_cursor_and_next_run_reaches_remaining_places(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 60)
+    geo = Geo(engine)
+    geo.bad = {lon for _, lon in rows[:50]}
+    with pytest.raises(refresh.RefreshError) as caught:
+        await run(session_factory, geo)
+    assert caught.value.stats.scanned == 50
+    assert not any(geo.calls[lon] for _, lon in rows[50:])
+    with pytest.raises(refresh.RefreshError) as caught:
+        await run(session_factory, geo)
+    assert caught.value.stats.resolved == 10 and caught.value.stats.errored == 40
+    assert all(geo.calls[lon] == 1 for _, lon in rows[50:])
+    assert await cursor(session_factory) is None
+    geo.bad.clear()
+    result = await run(session_factory, geo)
+    assert result.resolved == 50 and result.state == "completed"
+
+
+async def test_new_epoch_does_not_reuse_previous_epoch_progress(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 3)
+    async with session_factory() as session:
+        session.add(
+            SystemSetting(
+                key=refresh.PROGRESS_KEY,
+                value=json.dumps({"token": OTHER, "after": rows[-1][0]}),
+            )
+        )
+        await session.commit()
+    geo = Geo(engine)
+    result = await run(session_factory, geo)
+    assert result.resolved == 3 and result.state == "completed"
+    assert all(geo.calls[lon] == 1 for _, lon in rows)
+
+
+async def test_progress_key_is_not_publicly_writable(client):
+    response = await client.post(
+        "/api/v1/settings",
+        json={refresh.PROGRESS_KEY: json.dumps({"token": TOKEN, "after": 999})},
+    )
+    assert response.status_code == 400

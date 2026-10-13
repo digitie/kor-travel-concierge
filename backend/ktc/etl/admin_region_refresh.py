@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 
 import httpx
@@ -19,6 +20,7 @@ from ktc.models import SystemSetting, TravelPlace, utcnow
 from ktc.services.settings_service import get_secret, get_setting
 
 CURSOR_KEY = "kor_travel_geo_data_token"
+PROGRESS_KEY = "kor_travel_geo_refresh_progress"
 PAGE_SIZE = 50
 
 
@@ -59,6 +61,37 @@ async def stale_exists(session: AsyncSession, token: str) -> bool:
         )
         is not None
     )
+
+
+async def write_setting(session: AsyncSession, key: str, value: str) -> None:
+    await session.execute(
+        insert(SystemSetting)
+        .values(key=key, value=value, updated_at=utcnow())
+        .on_conflict_do_update(
+            index_elements=[SystemSetting.key],
+            set_={"value": value, "updated_at": utcnow()},
+        )
+    )
+
+
+async def save_progress(factory, token: str, after: int) -> None:
+    async with factory() as session:
+        await write_setting(
+            session, PROGRESS_KEY, json.dumps({"token": token, "after": after})
+        )
+        await session.commit()
+
+
+def read_progress(raw: str | None, token: str) -> int:
+    if raw is None:
+        return 0
+    value = json.loads(raw)
+    if not isinstance(value, dict) or parse_data_token(value.get("token")) is None:
+        raise ValueError("재해결 진행 위치 형식 오류")
+    after = value.get("after")
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        raise ValueError("재해결 진행 ID 형식 오류")
+    return after if value["token"] == token else 0
 
 
 async def current_token(
@@ -128,19 +161,29 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
     async with factory() as session:
         previous = await get_setting(session, CURSOR_KEY)
         stale = await stale_exists(session, token)
+        progress = await get_setting(session, PROGRESS_KEY)
         await session.commit()
     if previous == token and not stale:
         stats.state = "noop"
         return stats
 
-    after = 0
+    try:
+        after = read_progress(progress, token)
+    except (ValueError, TypeError):
+        raise RefreshError("재해결 진행 위치 형식 오류", stats) from None
+    start = after
+    wrapped = False
     while True:
         async with factory() as session:
             ids = list(
                 (
                     await session.scalars(
                         select(TravelPlace.place_id)
-                        .where(TravelPlace.place_id > after, *stale_condition(token))
+                        .where(
+                            TravelPlace.place_id > after,
+                            *stale_condition(token),
+                            TravelPlace.place_id <= start if wrapped else True,
+                        )
                         .order_by(TravelPlace.place_id)
                         .limit(PAGE_SIZE)
                     )
@@ -148,6 +191,11 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
             )
             await session.commit()
         if not ids:
+            if start and not wrapped:
+                after = 0
+                wrapped = True
+                await save_progress(factory, token, after)
+                continue
             break
         for place_id in ids:
             after = place_id
@@ -161,26 +209,26 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
             stats.scanned += 1
             setattr(stats, result.outcome, getattr(stats, result.outcome) + 1)
             stats.dirty += int(result.dirty)
-
-    attempted = stats.resolved + stats.unresolved + stats.errored
-    if (
-        attempted >= PAGE_SIZE
-        and stats.errored / attempted > settings.ADMIN_REGION_REFRESH_ERROR_RATIO
-    ):
-        raise RefreshError("행정구역 재해결 오류 비율이 문턱을 초과했습니다", stats)
+            # 실패도 순회 진척으로 저장한다. 느린 오류 prefix가 다음 run을 독점하지 않는다.
+            # 장소 commit 뒤 끊기면 마지막 시도만 반복할 수 있고 뒤 ID를 건너뛰지 않는다.
+            await save_progress(factory, token, after)
+            attempted = stats.resolved + stats.unresolved + stats.errored
+            if (
+                attempted >= PAGE_SIZE
+                and stats.errored / attempted
+                > settings.ADMIN_REGION_REFRESH_ERROR_RATIO
+            ):
+                stats.state = "failed"
+                raise RefreshError(
+                    "행정구역 재해결 오류 비율이 문턱을 초과했습니다", stats
+                )
+    await save_progress(factory, token, 0)
     # keyset 순회 끝만으로 전진하지 않는다. 오류·fence drift·새 stale 행을 다시 본다.
     async with factory() as session:
         if await stale_exists(session, token):
             await session.commit()
             return stats
-        await session.execute(
-            insert(SystemSetting)
-            .values(key=CURSOR_KEY, value=token, updated_at=utcnow())
-            .on_conflict_do_update(
-                index_elements=[SystemSetting.key],
-                set_={"value": token, "updated_at": utcnow()},
-            )
-        )
+        await write_setting(session, CURSOR_KEY, token)
         await session.commit()
     stats.token_advanced = previous != token
     stats.state = "completed"

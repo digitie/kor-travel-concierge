@@ -1674,6 +1674,20 @@ geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`�
    코드를 NULL로 되돌릴 때 토큰 열도 함께 NULL로 되돌려 다음 enrich가 새 토큰을 쓰게 한다
    (`backend/ktc/services/place_service.py` 수정 — T-199).
 
+### T-200 구현 보강 — 오류 구간 뒤의 재개
+
+전역 완료 토큰과 별도로 내부 `system_settings['kor_travel_geo_refresh_progress']`에
+현재 token·마지막 시도 place ID를 저장한다. 장소별 시도 뒤 짧은 세션으로 checkpoint하고
+다음 run은 그 뒤 ID부터 이어간다. 마지막 장소 이후에는 앞 구간으로 한 번만 wrap해 이전
+오류를 재시도한다. token이 달라지면 이전 순회 위치를 사용하지 않는다. 둘 다 공개 settings
+allowlist에는 추가하지 않는다.
+
+표본 50개부터 오류 비율이 문턱을 넘으면 곧바로 Failure로 중단하되 checkpoint는 보존한다.
+실패 앞 구간이 native 실행 예산을 반복 소진해 뒤 정상 장소가 영구 미처리되는 문제를 막는다.
+최종 stale 재검사에서 대상이 0일 때만 전역 완료 토큰을 전진시키며 오류/skip을 성공으로
+봉인하지 않는다. 시도 결과와 checkpoint 사이에 끊기면 마지막 실패 시도는 다시 호출할 수
+있다. 완료된 token의 장소는 keyset 대상에서 제외하므로 완료한 결과를 반복 보강하지 않는다.
+
 ### 대안
 
 - `scripts/backfill-place-admin-codes.py`에 `--stale-token` 옵션: 수동·호스트 실행이라 Dagster
