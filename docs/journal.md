@@ -15,6 +15,11 @@
 
 ---
 
+## 2026-10-14 — T-202a/T-203 연결 실패 계약 검증
+
+- T-199에서 이미 구현한 connect 2초·read/write/pool 10초 timeout을 유지하고 일반 보강·격리 보강·refresh 기본 client 생성 경로의 ConnectTimeout 흡수를 검증했다. 실패 시 기존 행정코드·토큰은 보존되고 일반 호출 session도 정상 commit할 수 있다. 실제 PostGIS 집중 8 PASS와 변경 테스트 Ruff를 확인했다. 이는 timeout 설정 기제 검증이며 실제 SYN 무응답 효과를 측정했다고 주장하지 않는다.
+- 설정 예시에 계획 URL placeholder를 명시했다. Settings 기본값·앱·frontend 구현은 불변이며 T-202b 운영 URL 전환과 장애 drill은 미완료다. source 적대 리뷰 두 명과 live UI 재검증은 진행 중이다.
+
 ## 2026-10-14 — T-204 일지 아카이브 분리
 
 - 최근 두 달을 현재 일지에 남기고 이전 기록을 월별 아카이브로 분리했다. 220 KiB를 넘는 달은 날짜 항목 경계로 나눴다. 인덱스에 기간·항목 수·파일 크기를 기록한다.

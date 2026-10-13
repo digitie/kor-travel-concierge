@@ -1748,7 +1748,7 @@ allowlist에는 추가하지 않는다.
 
 ## ADR-50: kor-travel-geo가 odroid로 옮겨도 concierge는 REST로만 호출한다
 
-- 상태: proposed (미구현 — 구현은 T-202a/T-203(즉시 가능)·T-202b(운영값 전환, Track 2 배포 순서의
+- 상태: proposed (T-202a/T-203 source 구현·검증 완료; 운영값 전환은 T-202b, Track 2 배포 순서의
   **consumer URL 전환 단계** — 이하 "전환 단계"; 설계 §11.2의 9단계, geo 플립·`mv_refresh` 다음 날))
 - 날짜: 2026-10-13
 - 결정자: human, AI agent
@@ -1771,8 +1771,9 @@ odroid(`192.168.1.13`)로 옮긴다. **concierge는 n150에 남는다**(재배�
 
 concierge가 geo를 부르는 곳은 둘이다 — `POST /v2/reverse`
 (`backend/ktc/etl/admin_region_service.py:264-310`)와 `POST /v2/regions/within-radius`(`:312-335`).
-두 호출은 `httpx.AsyncClient(timeout=10.0)`(`:90`, `:254`) 하나의 timeout만 가지며 connect timeout이
-분리돼 있지 않다. 값의 자리는 다음과 같다.
+설계 당시 두 호출은 `httpx.AsyncClient(timeout=10.0)`을 사용했다. T-199 PR #250에서 공통
+`GEO_HTTP_TIMEOUT = httpx.Timeout(10.0, connect=2.0)`으로 분리했으며 기본 client 생성 경로에 적용했다.
+T-203은 일반 보강·격리 보강·refresh의 연결 실패와 상태 보존을 검증한다. 값의 자리는 다음과 같다.
 
 - **base URL** = env `KOR_TRAVEL_GEO_V2_BASE_URL`(`backend/ktc/core/config.py:268`, 기본 `""`). 비어
   있으면 `_configured`(`admin_region_service.py:439-443`)가 거부해 행정코드 보강을 건너뛴다
