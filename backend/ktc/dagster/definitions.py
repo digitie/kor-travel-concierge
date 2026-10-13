@@ -178,8 +178,9 @@ def admin_region_refresh(context, config: MaintenanceConfig):
     try:
         result = cooperative(refresh_maintenance(config))
     except RefreshError as error:
-        context.add_output_metadata(error.stats.metadata())
-        raise Failure(str(error), allow_retries=False) from None
+        raise Failure(
+            str(error), metadata=error.stats.metadata(), allow_retries=False
+        ) from None
     context.add_output_metadata(result)
     return result
 

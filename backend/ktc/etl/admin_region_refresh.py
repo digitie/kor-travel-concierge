@@ -53,12 +53,17 @@ def stale_condition(token: str):
 
 
 async def stale_exists(session: AsyncSession, token: str) -> bool:
-    return await session.scalar(
-        select(TravelPlace.place_id).where(*stale_condition(token)).limit(1)
-    ) is not None
+    return (
+        await session.scalar(
+            select(TravelPlace.place_id).where(*stale_condition(token)).limit(1)
+        )
+        is not None
+    )
 
 
-async def current_token(client: httpx.AsyncClient, base_url: str, api_key: str) -> str | None:
+async def current_token(
+    client: httpx.AsyncClient, base_url: str, api_key: str
+) -> str | None:
     response = await client.post(
         base_url.rstrip("/") + "/v2/dataset/version",
         headers={"X-KTG-API-Key": api_key},
@@ -66,7 +71,10 @@ async def current_token(client: httpx.AsyncClient, base_url: str, api_key: str) 
     )
     response.raise_for_status()
     payload = response.json()
-    if not isinstance(payload, dict) or payload.get("status") not in {"OK", "NOT_FOUND"}:
+    if not isinstance(payload, dict) or payload.get("status") not in {
+        "OK",
+        "NOT_FOUND",
+    }:
         raise ValueError("geo 버전 응답 형식 오류")
     if not isinstance(payload.get("available"), bool):
         raise TypeError("geo 버전 available 형식 오류")
@@ -111,7 +119,9 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
     try:
         token = await current_token(client, base_url, api_key)
     except Exception as error:  # noqa: BLE001 - 공개 I/O 실패를 키/URL 없이 op 실패로 전달
-        raise RefreshError(f"geo 버전 조회 실패 ({type(error).__name__})", stats) from None
+        raise RefreshError(
+            f"geo 버전 조회 실패 ({type(error).__name__})", stats
+        ) from None
     if token is None:
         stats.state = "data_token_unavailable"
         return stats
@@ -126,25 +136,37 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
     after = 0
     while True:
         async with factory() as session:
-            ids = list((await session.scalars(
-                select(TravelPlace.place_id)
-                .where(TravelPlace.place_id > after, *stale_condition(token))
-                .order_by(TravelPlace.place_id).limit(PAGE_SIZE)
-            )).all())
+            ids = list(
+                (
+                    await session.scalars(
+                        select(TravelPlace.place_id)
+                        .where(TravelPlace.place_id > after, *stale_condition(token))
+                        .order_by(TravelPlace.place_id)
+                        .limit(PAGE_SIZE)
+                    )
+                ).all()
+            )
             await session.commit()
         if not ids:
             break
         for place_id in ids:
             after = place_id
             result = await refresh_place_admin_codes_isolated(
-                factory, place_id, data_token=token, settings=settings, http_client=client,
+                factory,
+                place_id,
+                data_token=token,
+                settings=settings,
+                http_client=client,
             )
             stats.scanned += 1
             setattr(stats, result.outcome, getattr(stats, result.outcome) + 1)
             stats.dirty += int(result.dirty)
 
     attempted = stats.resolved + stats.unresolved + stats.errored
-    if attempted >= PAGE_SIZE and stats.errored / attempted > settings.ADMIN_REGION_REFRESH_ERROR_RATIO:
+    if (
+        attempted >= PAGE_SIZE
+        and stats.errored / attempted > settings.ADMIN_REGION_REFRESH_ERROR_RATIO
+    ):
         raise RefreshError("행정구역 재해결 오류 비율이 문턱을 초과했습니다", stats)
     # keyset 순회 끝만으로 전진하지 않는다. 오류·fence drift·새 stale 행을 다시 본다.
     async with factory() as session:
@@ -152,7 +174,8 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
             await session.commit()
             return stats
         await session.execute(
-            insert(SystemSetting).values(key=CURSOR_KEY, value=token, updated_at=utcnow())
+            insert(SystemSetting)
+            .values(key=CURSOR_KEY, value=token, updated_at=utcnow())
             .on_conflict_do_update(
                 index_elements=[SystemSetting.key],
                 set_={"value": token, "updated_at": utcnow()},

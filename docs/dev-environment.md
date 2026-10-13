@@ -245,6 +245,9 @@ SOURCE_SCAN_INTERVAL_SECONDS=300
 SOURCE_SCAN_BATCH_SIZE=20
 SOURCE_SCAN_DEFAULT_INTERVAL_MINUTES=10080
 SOURCE_SCAN_DUPLICATE_BACKOFF_MINUTES=15
+ADMIN_REGION_REFRESH_ENABLED=true
+ADMIN_REGION_REFRESH_INTERVAL_SECONDS=3600
+ADMIN_REGION_REFRESH_ERROR_RATIO=0.05
 ```
 
 검증 시 API/MCP가 직접 장시간 작업을 실행하지 않고 `job_id`만 반환하는지 확인합니다. scheduler는 레인별 APScheduler interval job 2개(`crawl-run-worker-interactive`, `crawl-run-worker-batch`)로 `crawl_runs.pending` 작업을 lane별로 claim하며(T-163), handler 예외나 지원하지 않는 job type은 `failed` 상태와 `last_error`로 남겨야 합니다.

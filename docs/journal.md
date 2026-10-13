@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-10-14 — T-200 재개·cursor·메타데이터 회귀
+
+- 최초 focused 40건은 시험의 async generator/all 오용 2건과 서로 다른 job의 정당한 DB 연결을 refresh 연결 점유로 오인한 1건으로 실패했다. await list와 실제 runtime처럼 job별 engine을 사용해 연결 반환 단언을 유지하고 40 PASS를 확인했다.
+- op 실패 카운터는 output buffer가 아닌 Dagster Failure metadata에 싣는다. 실제 in-process failure event·paid retry 없음과 새 job active/UNKNOWN 격리 검증을 추가했다. 새 active-run fixture의 필수 run_config 누락 1건도 기록하고 보강한다.
+- 같은 global 토큰의 새 stale 장소, partial commit 뒤 재개, 오류 문턱 초과/미만, NULL 토큰, 좌표 fence, 123건 keyset·HTTP 중 refresh pool 점유 0, export 동시 실행/fixpoint, 공개 settings 내부 cursor 400을 실제 PostGIS에서 확인한다. 전체/두 리뷰/live/UI/운영 gate는 진행 중이다.
+
 ## 2026-10-14 — T-200 재해결 job 구현 착수
 
 - T-199 고정 구현 위 별도 브랜치에서 maintenance job을 끝에 등록했다. backend/generation admission과 같은 job 활성 metadata gate, 공용 RecoveryPolicy runtime tag와 기존 cooperative 취소를 재사용한다.
