@@ -1599,6 +1599,7 @@ async def test_isolated_reverse_requeues_dirty_after_core_dirty_was_consumed(
         "legal_dong_code": None,
         "sido_code": None,
         "sigungu_code": None,
+        "geo_data_token": None,
     }
     cursor = first_body["next_cursor"]
     assert await _outbox_ids(session_factory) == set()

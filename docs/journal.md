@@ -8,6 +8,12 @@
 
 - Concierge → Weather → Transport 순서의 사용자 지시로 최신 원격 기준에서 착수했다. 첫 PR은 T-199의 토큰 컬럼·보강 로직이며 운영값 전환은 선행 배포와 효과 검증 뒤 수행한다.
 - 구현 전 독립 적대 검토에서 동일 global 토큰의 새 stale 장소 누락과 unresolved 옛 코드의 최신 토큰 봉인 위험을 발견했다. refresh는 행별 stale 대상을 확인하고, export는 성공한 보강의 토큰만 제공하도록 계약·회귀를 함께 정정한다.
+- 첫 격리 PostGIS 실행은 컨테이너 초기화 재시작 중 연결 reset 8건과 additive 응답 필드의 기존 exact-object 검증 1건으로 실패했다. 초기 실패를 기록하며 새 필드를 계약 기대값에 추가해 재실행한다.
+- 정상 reverse·radius의 토큰 전달, 헤더 인증, 오류/미해결 분리, snapshot fence와 동일 transaction dirty를 구현했다. `dd1-` + 32자리 소문자 hex라는 Geo ADR-069 정본을 확인해 초기 잘못된 40자리 hex 검증을 정정했다. 두 HTTP 정상 응답의 토큰이 다르면 기록하지 않는다.
+- 깨진 HTTP200의 nested collection은 정상 미해결로 봉인하지 않고 errored로 재시도 대상에 남긴다. unresolved는 옛 코드를 보존하지만 공급 토큰은 NULL이며 성공 source만 provenance 토큰을 제공한다.
+- 두 golden 테스트의 상대 import 누락을 고쳤다. 현재 admin 보강·신규 토큰 집중 회귀 36건 통과; feature 공급 회귀·전체 검증·두 적대 리뷰·live 검증은 계속 진행 중이다. 초기 실패는 최종 성공으로 덮지 않는다.
+- 리뷰 반례의 행정코드 bool/객체/잘못된 길이를 거부하고, 완성 코드 조회 횟수 0을 서비스 밖에서 확인하도록 회귀를 강화했다. dirty 쓰기는 기존 `export → place → audit` 잠금 순서를 유지한다.
+- 집중 PostGIS 보강·토큰·feature 공급 회귀 90건 통과. 새 migration의 실제 upgrade/downgrade/upgrade와 기존 행 보존·nullable 토큰·부분 인덱스도 확인했다. 최초 migration 하니스 seed는 필수 기본값 누락과 존재하지 않는 timestamp 컬럼으로 실패해 fixture를 실제 이전 schema에 맞췄다(제품 migration 변경 없음). 전체·live/UI·두 리뷰 closure는 아직 진행 중이다.
 - nullable 토큰 컬럼과 geocoded 장소 부분 인덱스를 추가했다. 테스트·독립 리뷰·live E2E·UI E2E는 진행 중이며 완료로 기록하지 않는다.
 
 ## 2026-10-13: geo odroid 재배치 대응 설계(ADR-50)

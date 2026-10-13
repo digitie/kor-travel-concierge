@@ -219,6 +219,12 @@ def _build_payload(
             "legal_dong_code": legal_dong_code,
             "sido_code": sido_code,
             "sigungu_code": sigungu_code,
+            # 시도 토큰으로 옛 코드를 최신 데이터셋의 결과로 봉인하지 않는다.
+            "geo_data_token": (
+                place.admin_code_geo_data_token
+                if place and place.admin_code_source == "kor-travel-geo-v2"
+                else None
+            ),
         },
     }
     youtube_block = {
