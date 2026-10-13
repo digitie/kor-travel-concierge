@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-10-14 — T-200 재해결 job 구현 착수
+
+- T-199 고정 구현 위 별도 브랜치에서 maintenance job을 끝에 등록했다. backend/generation admission과 같은 job 활성 metadata gate, 공용 RecoveryPolicy runtime tag와 기존 cooperative 취소를 재사용한다.
+- version 헤더 조회, ID keyset 50개, 단일 HTTP client/connection 재사용, 장소별 짧은 격리 세션 commit, 행별 stale 재검사와 내부 cursor upsert를 구현했다. global 토큰 동일이어도 새 stale 장소를 누락하지 않는다.
+- 코드·회귀·두 적대 리뷰·live/UI는 검증 중이다. Manager lane 및 Geo·Map 선행 운영 gate를 충족하기 전 새 job을 운영 활성화하지 않는다.
+
 ## 2026-10-13 — Track 1·2 순차 구현 착수
 
 - Concierge → Weather → Transport 순서의 사용자 지시로 최신 원격 기준에서 착수했다. 첫 PR은 T-199의 토큰 컬럼·보강 로직이며 운영값 전환은 선행 배포와 효과 검증 뒤 수행한다.

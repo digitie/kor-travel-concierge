@@ -157,11 +157,44 @@ def concierge_feature_exports():
     feature_exports()
 
 
+async def refresh_maintenance(config):
+    settings = get_settings()
+    if not settings.ADMIN_REGION_REFRESH_ENABLED:
+        return {"state": "disabled"}
+    async with rt.database() as factory:
+        async with factory() as session:
+            if not await admitted(session, "dagster", config.control_generation):
+                return {"state": "skipped"}
+            await session.commit()
+        from ktc.etl.admin_region_refresh import refresh_admin_regions
+
+        return (await refresh_admin_regions(factory, settings=settings)).metadata()
+
+
+@op
+def admin_region_refresh(context, config: MaintenanceConfig):
+    from ktc.etl.admin_region_refresh import RefreshError
+
+    try:
+        result = cooperative(refresh_maintenance(config))
+    except RefreshError as error:
+        context.add_output_metadata(error.stats.metadata())
+        raise Failure(str(error), allow_retries=False) from None
+    context.add_output_metadata(result)
+    return result
+
+
+@job(executor_def=executor, tags=rt.job_tags("concierge_admin_region_refresh"))
+def concierge_admin_region_refresh():
+    admin_region_refresh()
+
+
 JOBS = [
     concierge_interactive,
     concierge_batch,
     concierge_source_scan,
     concierge_feature_exports,
+    concierge_admin_region_refresh,
 ]
 
 
@@ -360,6 +393,12 @@ def concierge_maintenance(context):
             "feature_exports",
             settings.FEATURE_EXPORT_RECONCILE_ENABLED,
             settings.FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS,
+        ),
+        (
+            "concierge_admin_region_refresh",
+            "admin_region_refresh",
+            settings.ADMIN_REGION_REFRESH_ENABLED,
+            settings.ADMIN_REGION_REFRESH_INTERVAL_SECONDS,
         ),
     ]:
         if not enabled or active(context, name):

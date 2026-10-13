@@ -618,6 +618,8 @@ def test_scoped_maintenance_active_unknown_holds_only_job_and_recovers(
             SOURCE_SCAN_INTERVAL_SECONDS=10,
             FEATURE_EXPORT_RECONCILE_ENABLED=True,
             FEATURE_EXPORT_RECONCILE_INTERVAL_SECONDS=10,
+            ADMIN_REGION_REFRESH_ENABLED=False,
+            ADMIN_REGION_REFRESH_INTERVAL_SECONDS=3600,
         ),
     )
     cursor = None
