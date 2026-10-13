@@ -106,7 +106,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
 다음 날 — 이하 "전환 단계")에서만 한다. "Track 2 설계 §n"은 Manager ADR-58(작성 예정; 2026-10-13 설계
 최종본 절 번호 기준)의 해당 절이다(ADR-50 "용어").
 
-- [ ] **T-202a**(T-CNC-01 앞부분): `.env.example` 주석(규모 XS, 의존 없음 — T-203과 같은 코드 PR에 실어도
+- [x] **T-202a**(T-CNC-01 앞부분): `.env.example` 주석(규모 XS, 의존 없음 — T-203과 같은 코드 PR에 실어도
   된다). 수정 파일: `.env.example`(`:204-207` 주석만 — `KOR_TRAVEL_GEO_V2_API_KEY` "비우면 VWorld 키;
   **DB `system_settings` 값이 있으면 env 무시**(ADR-50); DB 행은 운영 `POST /settings`로 비울 수 없다(행
   직접 삭제)", `KOR_TRAVEL_GEO_V2_BASE_URL` "운영 기대값 `http://<geo-host>:12501`(odroid, ADR-50 계획;
@@ -147,7 +147,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   새 토큰으로 전 장소를 재해결함을 op 메타로 확인(full load면 수용, dump 복원이면 0건); ⑤ 재생성 범위:
   전후 `kor-travel-shared-postgres`·공용 Dagster daemon/webserver 컨테이너 ID(`docker inspect -f
   '{{.Id}}'`) 불변.
-- [ ] **T-203**(T-CNC-02): geo 클라이언트 connect timeout 분리(규모 S, 전환과 독립 — 먼저 머지 가능).
+- [x] **T-203**(T-CNC-02): geo 클라이언트 connect timeout 분리(규모 S, 전환과 독립 — 먼저 머지 가능).
   수정 파일: `backend/ktc/etl/admin_region_service.py`(모듈 상수 `GEO_HTTP_TIMEOUT = httpx.Timeout(10.0,
   connect=2.0)` 추가, `:90`·`:254`의 `httpx.AsyncClient(timeout=10.0)` → `httpx.AsyncClient(timeout=
   GEO_HTTP_TIMEOUT)`), `backend/tests/test_admin_region_service.py`. 검증 기제는 하나다(ADR-50 결정 4):
@@ -170,6 +170,8 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   `http_client=None` 호출 → 3 s 안 `False`(네트워크 의존 — `slow` 마커·CI 제외). 실제 SYN 무응답 효과(확정
   지연 < 3 s)는 Track 2 §11.3 전원 off drill이 운영에서 잰다. 회로차단은 넣지 않는다(ADR-50 결정 4·열린
   결정).
+T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영됐다. 이번 PR은 계획 URL placeholder 주석과 기본 HTTP client의 연결 실패 검증을 추가한다. 실제 PostGIS admin 집중 8 PASS이며 일반 보강·격리 보강·refresh 세 경로의 timeout 객체와 기존 코드·토큰 보존을 확인했다. 네트워크 단절 효과와 운영 URL 전환은 T-202b의 별도 gate로 남는다.
+
 - [x] **T-204**: 최근 두 달의 일지와 월별 220 KiB 이하 아카이브로 분리했다. 상단 인덱스·항목 보존·상대 링크 재기준화·보안 주소 마스킹을 확인했다. 새 기록은 현재 일지에만 추가한다.
 
 ### 개선 로드맵 실행 작업
