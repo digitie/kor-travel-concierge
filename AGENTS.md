@@ -114,7 +114,7 @@
 2. 이 `AGENTS.md`
 3. `SKILL.md`
 4. `docs/architecture.md`, `docs/decisions.md`
-5. `docs/tasks.md`, `docs/journal.md`, `README.md`
+5. `docs/tasks.md`, `docs/journal.md`, `README.md` — 일지는 최근 기록만 읽고 과거 이력은 상단 아카이브 표와 `rg <패턴> docs/archive/`로 찾는다.
 6. 기존 코드와 테스트
 
 ## 절대 하지 말 것 (DO NOT)

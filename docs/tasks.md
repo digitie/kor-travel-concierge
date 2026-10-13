@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 구현 검증 완료, PR #251 병합 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
+**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
 
 
 ---
@@ -170,12 +170,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   `http_client=None` 호출 → 3 s 안 `False`(네트워크 의존 — `slow` 마커·CI 제외). 실제 SYN 무응답 효과(확정
   지연 < 3 s)는 Track 2 §11.3 전원 off drill이 운영에서 잰다. 회로차단은 넣지 않는다(ADR-50 결정 4·열린
   결정).
-- [ ] **T-204**: `docs/journal.md` 아카이브 분리(규모 XS, doc-only, 의존 없음). 현재 439,106 B(2026-10-13,
-  이 PR 포함 `wc -c`; HEAD 7a0f515는 427,466 B)라 에이전트가 한 번에 읽지 못한다. 수정 파일: `docs/journal.md`(최근 N개월만 남김),
-  `docs/archive/journal-YYYY-MM.md`(신규; 상단에 "과거 기록 아카이브" 인덱스 표), `CLAUDE.md`·`AGENTS.md`
-  진입 순서의 journal 설명 1줄. 방식은 kor-travel-map `docs/tasks-rule.md` §8(분리·재분리 규약)을 그대로
-  따른다. 수용 기준: 본문 journal `wc -c` < 262,144 B(256 KiB), 삭제된 항목 0건(아카이브 파일과 합쳐 `## YYYY-MM-DD` 헤더
-  수 불변), 아카이브 인덱스 표가 날짜 범위를 가리킨다.
+- [x] **T-204**: 최근 두 달의 일지와 월별 220 KiB 이하 아카이브로 분리했다. 상단 인덱스·항목 보존·상대 링크 재기준화·보안 주소 마스킹을 확인했다. 새 기록은 현재 일지에만 추가한다.
 
 ### 개선 로드맵 실행 작업
 

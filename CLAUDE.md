@@ -198,7 +198,7 @@ F:\dev\kor-travel-concierge\
     ├── architecture.md   # 전체 시스템 흐름도
     ├── decisions.md      # ADR 기록 — 최신 번호는 이 파일의 마지막 `## ADR-NN` 헤더가 정본
     ├── tasks.md          # 백로그 추적
-    ├── journal.md        # 일지 기록
+    ├── journal.md        # 최근 일지; 과거 이력은 상단 아카이브 표/rg docs/archive/
     └── dev-environment.md# Linux/Docker(및 WSL2) 개발 환경 구축 가이드
 ```
 
