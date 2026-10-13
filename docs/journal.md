@@ -18,7 +18,7 @@
 ## 2026-10-14 — T-202a/T-203 연결 실패 계약 검증
 
 - T-199에서 이미 구현한 connect 2초·read/write/pool 10초 timeout을 유지하고 일반 보강·격리 보강·refresh 기본 client 생성 경로의 ConnectTimeout 흡수를 검증했다. 실패 시 기존 행정코드·토큰은 보존되고 일반 호출 session도 정상 commit할 수 있다. 실제 PostGIS 집중 8 PASS와 변경 테스트 Ruff를 확인했다. 이는 timeout 설정 기제 검증이며 실제 SYN 무응답 효과를 측정했다고 주장하지 않는다.
-- 설정 예시에 계획 URL placeholder를 명시했다. Settings 기본값·앱·frontend 구현은 불변이며 T-202b 운영 URL 전환과 장애 drill은 미완료다. source 적대 리뷰 두 명과 live UI 재검증은 진행 중이다.
+- 설정 예시에 계획 URL placeholder를 명시했다. Settings 기본값·앱·frontend 구현은 불변이며 T-202b 운영 URL 전환과 장애 drill은 미완료다. 고정 테스트 구현의 두 source 적대 리뷰가 PASS/OPEN 0이며 n150 native Chromium UI 9 PASS(71.58초, skip/retry/flaky 0)를 재확인했다. UI는 변경 없는 T-200 제품 runtime을 사용했고 fixture Geo 기반이며 운영 Geo 통합·호스트 전환 효과를 증명하지 않는다.
 
 ## 2026-10-14 — T-204 일지 아카이브 분리
 
