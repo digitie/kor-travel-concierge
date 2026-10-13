@@ -1765,8 +1765,8 @@ allowlist에는 추가하지 않는다.
 
 ### 맥락
 
-Track 2(Manager ADR-58)는 kor-travel-geo·weather·transport 세 tenant를 n150(`192.168.1.14`)에서
-odroid(`192.168.1.13`)로 옮긴다. **concierge는 n150에 남는다**(재배치 없음, 공용 PG도 n150). 포트·URL·
+Track 2(Manager ADR-58)는 kor-travel-geo·weather·transport 세 tenant를 n150(`<운영 호스트>`)에서
+odroid(`<geo-host>`)로 옮긴다. **concierge는 n150에 남는다**(재배치 없음, 공용 PG도 n150). 포트·URL·
 컨테이너명·compose 프로젝트명은 n150과 동일하고 **호스트만** `.14 → .13`이다(geo API `12501` 불변).
 
 concierge가 geo를 부르는 곳은 둘이다 — `POST /v2/reverse`
@@ -1833,7 +1833,7 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
 
 1. **REST만, 재배치·코드 배선 변경 없음.** concierge 코드·compose·Dagster 배선은 geo의 호스트를
    모른다. geo 호스트 이동은 concierge에게 **env 값 하나**의 변경이다 — 운영 env
-   `KOR_TRAVEL_GEO_V2_BASE_URL=http://192.168.1.13:12501`(**계획값**; 전환 전까지는 현재 값 유지). 값의
+   `KOR_TRAVEL_GEO_V2_BASE_URL=http://<geo-host>:12501`(**계획값**; 전환 전까지는 현재 값 유지). 값의
    자리는 맥락의 n150 concierge 디렉터리 `.env`(Manager compose `env_file`)이며 Manager는 그 값을
    **렌더하지 않는다**(Track 2 설계 §7.2 — 외부 저장소 값은 Manager 밖; 파일을 전달만 한다). 이 값은
    운영자가 바꾸고 **env_file을 받는 concierge runtime 컨테이너(api·mcp·dagster-code-server; 맥락 참조)만
@@ -1878,7 +1878,7 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
    통과한다. 검사는 **전파**와 **효과**로 나눈다(세 컨테이너 모두 `network_mode: host`라 odroid access log의
    peer는 전부 `.14`로 같아 **어느 컨테이너가 불렀는지 peer로는 구분할 수 없다**): (a) 전파 = 세 컨테이너
    (`legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷) `docker exec <ctr> printenv
-   KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://192.168.1.13:12501` + 컨테이너 ID가 재생성 전후 바뀜;
+   KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://<geo-host>:12501` + 컨테이너 ID가 재생성 전후 바뀜;
    (b) 효과 = api 발 장소 확정 1건 성공 + code-server 발 1건(ETL 확정 또는 refresh tick — 발신 주체는
    Dagster run 로그로 식별) 성공 + odroid access log에 peer `.14`·키 경로 200 기록. 재생성 범위도 효과로
    검사한다: 전후 `kor-travel-shared-postgres`·공용 Dagster daemon/webserver 컨테이너 ID
