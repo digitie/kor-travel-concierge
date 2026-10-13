@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from ktc.etl import admin_region_service
 from ktc.models import AuditLog, TravelPlace
 from ktc.services import settings_service
@@ -281,3 +282,73 @@ async def test_isolated_admin_enrichment_rejects_column_payload_guard_drift(
         current = await check_session.get(TravelPlace, place_id)
         assert current.sigungu_code is None
         assert current.legal_dong_code is None
+
+
+@pytest.mark.parametrize("path", ["direct", "isolated", "refresh"])
+async def test_geo_connect_timeout_preserves_admin_state(
+    path, session_factory, monkeypatch
+):
+    """연결 실패는 기존 코드·토큰을 보존하며 사용자 확정 흐름에 전파되지 않는다."""
+    calls = []
+
+    def unavailable_client(**kwargs):
+        calls.append(kwargs)
+        raise httpx.ConnectTimeout("simulated geo connection timeout")
+
+    async def secret(_session, _key):
+        return "test-key"
+
+    monkeypatch.setattr(settings_service, "get_secret", secret)
+    monkeypatch.setattr(admin_region_service.httpx, "AsyncClient", unavailable_client)
+    settings = SimpleNamespace(KOR_TRAVEL_GEO_V2_BASE_URL="http://geo.test")
+    async with session_factory() as session:
+        place = TravelPlace(
+            name="연결 실패 검증 장소",
+            latitude=37.501,
+            longitude=127.036,
+            is_geocoded=True,
+            sigungu_code="11680",
+            sigungu_name="기존 행정구역",
+            admin_code_geo_data_token="dd1-" + "a" * 32,
+        )
+        session.add(place)
+        await session.commit()
+        place_id = place.place_id
+
+    if path == "direct":
+        async with session_factory() as session:
+            place = await session.get(TravelPlace, place_id)
+            assert await admin_region_service.enrich_place_admin_codes(
+                session, place, settings=settings, http_client=None
+            ) is False
+            # HTTP 예외 뒤에도 호출자가 같은 session으로 정상 조회·commit할 수 있다.
+            assert await session.get(TravelPlace, place_id) is place
+            await session.commit()
+    elif path == "isolated":
+        assert await admin_region_service.enrich_place_admin_codes_isolated(
+            session_factory, place_id, settings=settings, http_client=None
+        ) is False
+    else:
+        result = await admin_region_service.refresh_place_admin_codes_isolated(
+            session_factory,
+            place_id,
+            data_token="dd1-" + "b" * 32,
+            settings=settings,
+            http_client=None,
+        )
+        assert result.outcome == "errored"
+        assert result.dirty is False
+
+    assert len(calls) == 1
+    timeout = calls[0]["timeout"]
+    assert timeout is admin_region_service.GEO_HTTP_TIMEOUT
+    assert timeout.connect == 2.0
+    assert timeout.read == timeout.write == timeout.pool == 10.0
+    async with session_factory() as session:
+        current = await session.get(TravelPlace, place_id)
+        assert current.sigungu_code == "11680"
+        assert current.sigungu_name == "기존 행정구역"
+        assert current.legal_dong_code is None
+        assert current.admin_code_geo_data_token == "dd1-" + "a" * 32
+        assert current.admin_code_source is None
+        assert current.admin_code_updated_at is None
