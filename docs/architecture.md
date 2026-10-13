@@ -310,6 +310,13 @@ Gemini 결과는 원문을 덮어쓰지 않는다. 영상 설명 원문은 `yout
 - 429 응답: 지수 백오프와 지터 적용
 - 지오코딩 실패, 후보 과다, 신뢰도 부족 결과는 자동 확정하지 않고 `extracted_place_candidates.match_status = needs_review`로 남겨 웹 UI와 MCP에서 검수한다.
 
+확정 장소의 법정동·시군구 코드와 명칭은 지오코딩과 별도로 kor-travel-geo v2
+`POST /v2/reverse`(`include_region`)로 채운다(`backend/ktc/etl/admin_region_service.py:264-310`;
+`POST /v2/regions/within-radius` fallback은 reverse가 `status: OK`이고 후보 코드가 불완전할
+때만 `:288-304`, reverse `NOT_FOUND`는 fallback 없이 None `:286-287`; 두 코드가 모두 있으면
+재호출하지 않음 `:129-131, 229-230`). **ADR-49 예정(proposed, 미구현)**: geo 데이터 토큰 기록·헤더 인증·
+릴리스 재해결 job — `docs/decisions.md` ADR-49.
+
 장소 카테고리는 단일 공급자 결과를 무조건 정답으로 보지 않는다. Kakao Local의 공식 `category_name`은 국내 POI 업종 분류가 풍부하므로 1순위 근거로 사용한다. 다만 VWorld 주소·행정 맥락, Naver 보조 검색 결과, Gemini가 자막 문맥에서 추출한 `candidate_category`를 함께 비교한다. 공급자 간 카테고리가 충돌하거나 좌표·주소 신뢰도가 낮으면 확정하지 않고 검수 큐에서 사용자가 수정하도록 남긴다.
 
 ### 4.6 대표 프레임 추출
@@ -458,6 +465,13 @@ PostGIS가 기준이다. Alembic migration과 PostGIS 공간 컬럼 기준으로
 - `detailed_research_content` (Text, Nullable)
 - `last_reviewed_at` (DateTime, Nullable)
 - `created_at` (DateTime)
+- 행정구역 코드(kor-travel-geo v2 reverse 산물, `backend/ktc/models/travel_place.py:126-133`):
+  `legal_dong_code` (String(10), Nullable), `legal_dong_name` (String(255), Nullable),
+  `sigungu_code` (String(5), Nullable), `sigungu_name` (String(128), Nullable),
+  `admin_code_source` (String(32), Nullable; 현재 값 `kor-travel-geo-v2`),
+  `admin_code_updated_at` (DateTime, Nullable)
+- **ADR-49 예정(proposed, 미구현)**: `admin_code_geo_data_token` (String(40), Nullable) 추가 —
+  의미·`admin_code_source` 새 값·갱신 job은 `docs/decisions.md` ADR-49.
 
 ### 6.5 `extracted_place_candidates`
 

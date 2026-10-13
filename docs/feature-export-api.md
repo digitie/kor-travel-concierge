@@ -110,6 +110,20 @@ payload 계약 버전이며, 계약 확장은 **additive**(새 필드·새 error
 유도한다(경량 옵션). `sigungu_code`가 있으면 그 앞 2자리를, 없고 `legal_dong_code`만 있으면
 법정동 코드 앞 2자리를 쓴다. 시군구·법정동 코드가 모두 없으면 유도 결과도 `null`이다.
 
+#### 예정: `place.address.geo_data_token` (ADR-49 proposed, 미구현)
+
+현재 계약은 위 표 그대로다. `docs/decisions.md` ADR-49(T-199)가 구현되면 `place.address`에
+다음 필드가 **additive**로 추가된다(`schema_version`은 올리지 않는다).
+
+| 필드 | 출처 | 규칙 |
+| --- | --- | --- |
+| `geo_data_token` | `travel_places.admin_code_geo_data_token`(계획) | 위 코드를 해석한 kor-travel-geo 데이터 토큰(`dd1-…`). 토큰 열이 없거나 NULL이면 `null` |
+
+의미: "이 행정코드는 이 geo 데이터셋으로 해석됐다". 토큰은 concierge `payload_hash`에
+포함된다(토큰만 바뀐 장소도 재발행). 소비자 쪽 처리 규칙(토큰 동등성으로 payload 코드 신뢰 여부
+결정, Map `raw_payload_hash`에서 제외)은 kor-travel-map ADR-109가 정본이다. 구현 전까지 이
+필드는 응답에 없다.
+
 PinVi feature 연계 POI row까지 이어지는 최소 입력은 다음과 같다.
 
 | 용도 | export 필드 | 소비 흐름 |
@@ -167,6 +181,11 @@ payload 필드를 바꾸는 배포(예: `place.address` 행정코드 주입, `sc
 2. 배선을 우회한 변경(배포 시 코드만 바뀌어 기존 row의 hash가 달라지는 경우)은 프로세스 시작
    1회 + 시간당 1회 도는 전량 reconcile 안전망(`sync_feature_exports`)이 최대 1시간 내
    재발행한다.
+
+**예정(ADR-49 proposed, 미구현)**: geo 주소 데이터셋 릴리스로 확정 장소의 행정코드가
+재해결되면(dirty reason `geo_release`) 경로 1로 재발행된다. 코드·명칭이 바뀐 장소뿐 아니라
+**토큰만 바뀐 장소도** `geo_data_token`이 payload에 실려 `payload_hash`가 달라지므로 재발행된다.
+재빌드(토큰 동일)는 재발행을 만들지 않는다.
 
 따라서 **행정코드 주입·`schema_version` 도입 배포 후에는 관련 전 item이 재발행된다**.
 `kor-travel-map`은 별도 조치 없이 다음 pull에서 재수신하면 되고, 보유한 `cursor`는 그대로

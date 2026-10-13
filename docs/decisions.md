@@ -1522,6 +1522,211 @@ CAS로 두 실행 방식의 중복 claim과 늦은 쓰기를 차단한다. provi
 
 ---
 
+## ADR-49: geo 데이터 토큰과 행정코드 재해결
+
+- 상태: proposed (미구현 — 구현은 T-199/T-200-pre/T-200/T-201)
+- 날짜: 2026-10-13
+- 결정자: human, AI agent
+- 관계: ADR-19(VWorld 우선 지오코딩), ADR-32(공개 API 키), kor-travel-geo ADR-067(`POST /v2/dataset/version`)·ADR-069(데이터 토큰), kor-travel-map ADR-109(릴리스 재지오코딩)
+
+### 맥락
+
+`travel_places`의 법정동·시군구 코드와 명칭은 kor-travel-geo v2 `POST /v2/reverse` 응답의
+산물이다(`backend/ktc/etl/admin_region_service.py:264-310`, 저장 컬럼
+`backend/ktc/models/travel_place.py:126-133`). `POST /v2/regions/within-radius` fallback은
+reverse가 `status: OK`이고 후보 코드가 불완전할 때만 호출되며(`:288-304`), reverse가
+`status: NOT_FOUND`면 fallback 없이 None이다(`:286-287`). 그러나 어떤 geo 데이터로 해석했는지는
+기록하지 않으며, `enrich_place_admin_codes`(`:229-230`)와
+`enrich_place_admin_codes_isolated`(`:129-131`)는 두 코드가 모두 있으면 다시 호출하지 않는다.
+재해결 경로는 좌표 보정 시 코드를 NULL로
+되돌리는 `correct_place`뿐이고(`backend/ktc/services/place_service.py:1722-1730`), backfill
+스크립트는 NULL 코드만 채운다(`scripts/backfill-place-admin-codes.py:22-48`). 따라서 geo가
+주소 데이터셋을 새 릴리스로 바꿔 법정동이 신설·폐지·개명돼도 확정 장소의 코드·명칭은
+영구히 stale하고, 그 값이 결과 화면의 시군구 facet과 feature export payload
+(`backend/ktc/services/feature_export_service.py:216-222`)를 거쳐 kor-travel-map까지 전파된다.
+
+geo 쪽은 기존 `POST /v2/dataset/version`(ADR-067, 운영 중)의 `current`에 `data_token`을
+더하고 네 v2 응답 최상위에 `dataset{version_token, data_token}`을 싣는다(ADR-069 proposed).
+`version_token`은 릴리스 행마다 바뀌지만 `data_token`(`dd1-` + 서빙 데이터 내용 지문)은
+데이터가 같은 재빌드에서는 바뀌지 않는다. 소비자 규약은 "`data_token` 동등성, 없으면 바뀐
+것으로 본다"이다.
+
+같은 geo를 쓰는 두 호출처는 API 키를 `?key=` 쿼리로 보낸다
+(`admin_region_service.py:275, 322`). geo는 헤더 `X-KTG-API-Key`와 쿼리를 둘 다 받으므로
+(kor-travel-geo `src/kortravelgeo/api/public_api_key.py:23-44`, geo @02a3c2e) 전환에 geo
+변경은 없다.
+
+### 결정
+
+1. **토큰 컬럼 = "마지막으로 geo가 답한 시도의 토큰".** `travel_places.admin_code_geo_data_token
+   VARCHAR(40) NULL` + 부분 인덱스 `(admin_code_geo_data_token) WHERE is_geocoded`(refresh 대상
+   쿼리용; 마이그레이션 직전 head `20261006_0030`). 코드가 채워진 성공뿐 아니라 geo가 정상
+   응답했으나 후보가 없어 None으로 끝난 시도에도 토큰을 쓴다 — 그러지 않으면 해상·섬 등 해결
+   불가 장소가 refresh 대상에 영원히 남아 설정 토큰이 전진하지 못하고 매 주기 geo를 다시
+   때린다. None 시도는 `admin_code_source='kor-travel-geo-v2:unresolved'`로 표시하고 코드 열은
+   건드리지 않는다(기존 상수 `ADMIN_CODE_SOURCE = "kor-travel-geo-v2"`(`admin_region_service.py:17`)는
+   성공에만; 새 상수는 그 옆에 둔다).
+   **`unresolved`/`errored`의 경계(실측 기준)**: geo v2 reverse는 후보 0건을 `status: NOT_FOUND`
+   + **HTTP 200**으로 돌려주고(geo `src/kortravelgeo/core/reverse_geocoder.py:73`,
+   `core/v2.py:77`; geo @02a3c2e), geo의 `status: ERROR` 바디는 예외 핸들러가 항상 4xx/5xx로
+   보내므로(`api/responses.py:174-179`, `exceptions.py`의 모든 `http_status`가 400~504)
+   concierge의 `raise_for_status()`(`:284, :330`)가 `:286/:332`의 `status` 검사보다 먼저
+   예외로 바꾼다. 즉 `:286`의 `status != "OK"` 분기가 실제로 잡는 것은 정상 "후보 없음"이다
+   (`regions/within-radius`는 항상 `status: OK`에 빈 목록 — geo `client.py:730-760`).
+   따라서 **`unresolved` = HTTP 2xx 응답(`status`가 `OK`든 `NOT_FOUND`든)에서 reverse 후보·
+   (호출됐다면) within-radius가 코드를 주지 않은 경우**, **`errored` = `raise_for_status()`
+   예외(4xx/5xx, geo ERROR 바디 포함)·timeout·네트워크 예외·JSON 파싱 실패**다. `errored`는
+   토큰을 쓰지 않고 센다(다음 run이 다시 본다). reverse `NOT_FOUND`에서 within-radius를
+   추가로 부를지는 현재 동작 유지(호출 1회로 unresolved 확정)이며 변경 여부는 열린 결정이다.
+   **`unresolved` 기록은 refresh job의 force 경로(결정 4)에서만 한다.** 기존 bool 경로
+   (`enrich_place_admin_codes`, `:217-262`)와 `enrich_place_admin_codes_isolated`(`:94-183`)는
+   None에서 종전처럼 아무것도 쓰지 않고(`:258-259`, `:152-153`; 토큰 NULL 유지) 다음 refresh가
+   닫는다. 성공/시도 두 열 안보다 열 하나가 단순해 이 안을 채택한다(소유자 승인 대기 — 아래
+   열린 결정).
+2. **토큰은 두 파싱 지점에서 읽는다.** `AdminRegion`(`admin_region_service.py:21-29`)에
+   `data_token: str | None`을 더하고, 응답 최상위 `dataset.data_token`을 쥔 두 곳 —
+   `fetch_admin_region`(`/v2/reverse`, `:264-310`)과 `_fetch_region_within_radius`
+   (`/v2/regions/within-radius`, `:312-335`) — 에서 읽는다. 후보 단위 `_region_from_candidate`
+   (`:377`)는 토큰을 모른다. `_merge_region`(`:406`)은 **실제로 코드를 준 응답**의 토큰을 택하고,
+   두 응답의 토큰이 서로 다르면(두 호출 사이에 geo 릴리스가 바뀐 경우) None으로 둬 다음
+   refresh 대상이 되게 한다. `apply_admin_region`(`:367`)이 토큰 열을 함께 쓴다. 응답에
+   `dataset`이 없으면(옛 geo·과도기) 토큰은 None이다. `AdminEnrichmentSnapshot`/`_admin_snapshot`
+   (`:31-67`)에 토큰 열을 포함해 isolated 경로의 늦은 쓰기 fence(`:167`, 비교 집합)가 refresh
+   job의 선행 쓰기(토큰만 바뀐 경우 포함)를 덮어쓰지 않게 한다. ETL 확정·post-commit
+   (`enrich_place_admin_codes_isolated` `:94-183`, 호출 `place_service.py:1619-1663`)·MCP
+   `correct_place`/`resolve_place_candidate`(`mcp_server/tools.py:467-563, 679-811`) 경로는
+   `apply_admin_region`이 토큰을 함께 쓰게 된 것 외에 변경 없고(단 `correct_place`의 코드 NULL
+   되돌림에 토큰 열을 더한다 — 결정 6) 신규 MCP 도구도 없다.
+3. **geo 호출 인증을 헤더로 바꾼다(소유자 승인 대기 — 열린 결정).** 두 호출처의
+   `params={"key": api_key}`를 `headers={"X-KTG-API-Key": api_key}`로 바꾸고 예외 메시지에서
+   URL query를 제거한다. refresh job이 시간당 전 장소를 호출하면 access log와 Dagster 예외
+   메시지에 키가 반복 남기 때문이다. kor-travel-map 정본(헤더로만 보냄 — Map origin/main
+   @c4d17343e `docs/integration-map.md:567-575`, geo 인증 문단; Map 문서 PR 머지 뒤 줄 번호
+   재조정)과도 일치한다.
+4. **재해결은 maintenance job `concierge_admin_region_refresh`가 한다.**
+   `concierge_maintenance` 센서(`backend/ktc/dagster/definitions.py:338-372`)의 `(name, op,
+   enabled, interval)` 목록에 한 줄을 더해 `scheduler_control.generation`·backend 게이트·
+   `active()` 중복 방지를 그대로 상속한다. 배선 제약: 센서는 `jobs=JOBS[2:]`(`:339`)만 발화할
+   수 있으므로 새 job은 `JOBS`(`:160-165`) **끝에** append하고, op는 `MaintenanceConfig`를 받아
+   (`run_config` `:378`) `admitted()` 게이트(`:119`)를 탄다. 기본 주기 1 h
+   (`ADMIN_REGION_REFRESH_ENABLED` / `_INTERVAL_SECONDS` / `_ERROR_RATIO`). 동작:
+   - `POST /v2/dataset/version` → `current.data_token`. `system_settings['kor_travel_geo_data_token']`
+     과 같으면 종료(재빌드·데이터 동일이면 무동작). None이면 종료(과도기, 로그 1건).
+     이 키는 job 내부 커서이므로 job이 `SystemSetting` 행을 직접 읽고(`get_setting`,
+     `backend/ktc/services/settings_service.py:72-77` — 키 검증 없음) 직접 upsert한다.
+     `ALLOWED_SETTING_KEYS`(`:37-39`)에는 넣지 않는다 — 넣으면 운영 `POST /settings`
+     (`backend/ktc/api/routes.py:3542-3553`, `set_many` 경유)로 편집 가능한 표면이 열려
+     운영자가 임의 값을 넣으면 전 장소 재시도, geo 토큰과 같게 넣으면 영구 무동작이 된다.
+     `GET /settings`(`get_all`)에는 읽기 전용으로 보일 수 있다(무해).
+   - 대상: `is_geocoded AND admin_code_geo_data_token IS DISTINCT FROM :current`
+     (`latitude/longitude`는 NOT NULL, `travel_place.py:110-111`). `place_id` keyset, 페이지 50.
+     1의 "시도 토큰" 의미 덕에 해결 불가 장소는 릴리스당 한 번만 시도된다.
+   - **쓰기 경로는 isolated 경로의 force 변형이다.** 장소마다
+     `enrich_place_admin_codes_isolated`(`:94-183`)의 구조 — 짧은 read 세션(HTTP 전 transaction
+     종료 `:141-142`) → HTTP → `FOR UPDATE` write 세션 + `_admin_snapshot` fence(`:167`; 좌표·xmin·
+     admin 필드·토큰 동일 확인) — 를 재사용하는 `force=True` 변형을 쓴다. skip 조건(`:129-131`)만
+     `force`로 우회한다. 세션을 쥔 채 HTTP를 하는 bool 경로(`enrich_place_admin_codes`,
+     `:217-262`)는 쓰지 않는다 — 50건 × 10 s timeout 동안 transaction·connection을 쥐고, 그 사이
+     `correct_place`(`place_service.py:1722-1730`)가 새 좌표로 commit한 뒤 post-commit enrich가 쓴
+     새 코드·토큰을 옛 좌표로 계산한 코드가 현재 토큰으로 덮어 다음 릴리스까지 틀린 채 남기
+     때문이다. fence 불일치는 `skipped`로 센다(쓰기 0·토큰 미기록 → 다음 tick 대상). 장소마다
+     write 세션이 commit하므로 중단 시 재개 가능하다.
+   - outcome: 현재 함수들은 예외와 None을 모두 `False`로 삼키므로(`:152-153, :182-183`,
+     `:250-261`) refresh 경로용 `EnrichOutcome ∈ {resolved, unresolved, errored, skipped}`를
+     돌려주는 변형을 더한다(기존 bool 호출처는 불변). `resolved` → 코드·명칭·토큰 쓰기,
+     `unresolved` → 토큰 + `…:unresolved`(코드 열 유지), `errored` → 아무것도 쓰지 않고 센다,
+     `skipped` → fence 불일치. dirty 표시(결정 5)는 같은 write 세션에서 한다.
+   - run 끝에 `errored / attempted > 5%`(표본 ≥ 50)이면 op `Failure`(설정 토큰 미전진).
+     설정 토큰은 **대상 쿼리(위 `IS DISTINCT FROM :current`)가 0건이 될 때만**
+     `system_settings['kor_travel_geo_data_token'] = current`로 전진한다 — run이 keyset을 끝까지
+     훑었어도 `errored`/`skipped` 장소(토큰 미기록)가 남아 있으면 문턱 미만이라도 전진하지 않고,
+     다음 tick이 그 장소만 다시 본다. 도중 실패하면 설정은 그대로라 다음 tick이 이어서 한다.
+     op 메타 `scanned/resolved/unresolved/errored/skipped/dirty`.
+   - **Manager lane 1줄 선행.** 공용 Dagster의 `kortravelcommon/job` lane은 job 이름별이라
+     (`kor-travel-docker-manager` `config/dagster-shared/dagster.yaml:95-106`, origin/main
+     @094d397 기준; lane 집합 단언 테스트 `backend/tests/test_concierge_shared_dagster.py:56-57`)
+     새 job은 `concierge/concierge_admin_region_refresh` limit 1 한 줄을 Manager에 먼저 넣는다.
+     이 lane은 refresh job의 자기 중복만 막는다. `feature_exports`와의 동시 실행은 그대로
+     허용하며 무해하다 — 둘 다 멱등이다(아래 5). lane과 별도로 Manager `dagster/code_location`
+     concierge 상한 2(`dagster.yaml:92-94`) 안에서 interactive/batch/source_scan/feature_exports와
+     슬롯을 나누므로 시간당 refresh가 큐에서 기다릴 수 있다(지연 허용, 상향은 열린 결정 아님).
+5. **dirty 배선과 export payload 토큰(해시 정책은 소유자 승인 대기 — 열린 결정).** 코드·명칭
+   4개 중 하나라도 바뀌거나 토큰이 바뀌면 같은 세션에서
+   `mark_place_candidates_dirty(session, place_id, reason="geo_release")`
+   (`feature_export_service.py:389`; reason은 기존 호출처처럼 리터럴 — `place_service.py:1735`
+   선례)를 호출한다. 시간당 reconcile(`sync_feature_exports`, `:654-668`)은 안전망이다. export
+   payload `place.address`(`:216-222`)에 `geo_data_token`(= `travel_places.admin_code_geo_data_token`,
+   NULL 허용)을 additive로 싣는다(`SCHEMA_VERSION`(`:56`)은 올리지 않는다). concierge 쪽
+   `_payload_hash`(`:272-281`)에는 포함되므로 토큰만 바뀐 장소도 재발행된다. **kor-travel-map은
+   자기 `raw_payload_hash`에서 이 토큰을 제외**하고, payload 토큰이 Map의 run-scoped 현재
+   토큰과 같을 때만 payload 코드를 신뢰한다(Map ADR-109). 그래야 Map 적재 순서와 무관하게
+   stale 코드가 현재 토큰으로 봉인되지 않고, 릴리스마다 concierge feature 전부의
+   `row_revision`이 전진하지도 않는다.
+6. **MCP replay 가정 철회.** `review bulk`의 "replay"는 같은 `request_id` 재호출에 receipt의
+   `response_json`을 deepcopy해 돌려주는 경로이고(`place_service.py:3834-3840`;
+   `mcp_server/tools.py:506, 718`의 `replayed=True`) `travel_places` 행정코드 열을 다시 쓰지
+   않는다. 따라서 replay 복원용 토큰 처리는 두지 않는다. 남는 확인은 `audit_logs.payload_json`을
+   DB에 되쓰는 별도 경로 부재 grep(T-199)뿐이며(결과에 따른 닫음은 열린 결정),
+   `correct_place`(`place_service.py:1727-1730`, 네 코드 열을 직접 `None`으로 두는 블록)가
+   코드를 NULL로 되돌릴 때 토큰 열도 함께 NULL로 되돌려 다음 enrich가 새 토큰을 쓰게 한다
+   (`backend/ktc/services/place_service.py` 수정 — T-199).
+
+### 대안
+
+- `scripts/backfill-place-admin-codes.py`에 `--stale-token` 옵션: 수동·호스트 실행이라 Dagster
+  관측 밖이고 dirty 배선이 스크립트 책임이 된다 — 기각. 스크립트는 NULL 채우기용으로 유지한다.
+- `enrich`에 "토큰 다르면 재호출"만: 확정·보정 이벤트가 없는 장소는 영원히 stale — 기각.
+- `version_token` 비교: 데이터가 같은 재빌드마다 전 장소를 다시 호출한다 — geo ADR-069의
+  `data_token` 동등성으로 대체.
+- refresh가 bool 경로 `enrich_place_admin_codes(session, place, force=True)`를 배치 세션에서
+  호출(설계 초안): HTTP 동안 transaction 보유 + `correct_place`와의 경주에 fence 없음 — 기각,
+  결정 4의 isolated force 변형으로 대체(2차 리뷰).
+- `kor_travel_geo_data_token`을 `ALLOWED_SETTING_KEYS`에 추가(설계 초안): 운영 settings API
+  편집 표면 확대 — 기각, 직접 upsert(결정 4)로 대체(2차 리뷰).
+
+### 결과와 한계
+
+- 재빌드(토큰 동일)는 비용 0, 실제 데이터 변경은 전 geocoded 장소 1회 재호출(장소별 commit·
+  재개 가능·예외 비율 가드). 첫 배포 뒤 첫 run은 토큰 NULL인 전 장소를 1회 돈다 — 전 장소가
+  dirty가 되어 전량 재발행된다.
+- **배포 선행**: Map T-GR-03(ADR-109; `raw_payload_hash`에서 `address.geo_data_token` 제외 +
+  토큰 신뢰 규칙) prod 배포 → 그 뒤 concierge T-200 배포. 순서가 뒤집히면 Map concierge
+  provider가 concierge `payload_hash`를 그대로 채택하므로 첫 run과 이후 모든 geo 릴리스마다
+  concierge feature 전부의 `row_revision`이 전진한다. T-199 배포 1회의 전량 재발행(payload 필드
+  추가)은 `docs/feature-export-api.md` 기존 규칙대로 허용된다.
+- **`unresolved` 장소는 옛 코드·명칭을 유지한다**(화면·export에 그대로 나가고 `source`로만
+  구분; 다음 릴리스에서 재시도). 코드를 지우지 않는 이유: 해상·섬처럼 주소 후보가 없는 좌표가
+  대부분이고 옛 값이 없는 값보다 낫다. 구현자는 "unresolved면 코드 NULL"로 만들지 않는다.
+- 재해결 진행 중 결과 화면 시군구 facet에 옛/새 코드가 함께 보일 수 있다(짧은 창, 자가 치유,
+  배지 없음). sessionStorage의 옛 시군구 선택은 0건을 돌려줄 수 있다 — 문서화만 한다.
+- `region_gate.py`의 `SIDO_ALIASES`(`backend/ktc/etl/region_gate.py:25`)는 하드코딩 표라 geo
+  릴리스가 알려 주지 않는다 — 행정구역 개편 시 사람이 고친다.
+- `data_token`이 없는 geo(배포 전·지문 실패)에는 아무것도 하지 않는다(안전 방향은 "바뀜"이지만
+  계획 없이 종료 — 소비자가 헛도는 것을 막는다).
+- `kor_travel_geo_data_token`은 운영 UI·settings API로 편집할 수 없다. 전량 재시도가 필요하면
+  DB에서 행을 지운다(안전 방향 — 다음 tick이 전 장소를 다시 본다).
+
+### 열린 결정(소유자)
+
+- refresh 주기 기본 1 h와 `errored` 비율 문턱 5%/표본 50.
+- 토큰 열 "마지막 시도" 의미(채택) vs 성공/시도 두 열.
+- geo 호출 인증을 `?key=` 쿼리에서 `X-KTG-API-Key` 헤더로 전환(결정 3; geo 변경 0, 두 호출처
+  2줄) 승인.
+- export payload `geo_data_token`의 해시 정책(결정 5): concierge `_payload_hash` 포함·Map
+  `raw_payload_hash` 제외 승인(Map ADR-109와 쌍).
+- reverse `NOT_FOUND`(후보 0건)에서 `regions/within-radius`를 추가로 호출해 해상·섬 장소에
+  시군구만이라도 채울지(현재 동작은 fallback 없이 None, `:286-287`; 기본은 현재 동작 유지).
+- `kor_travel_geo_data_token`을 `ALLOWED_SETTING_KEYS` 밖에서 직접 upsert하는 안(결정 4;
+  설계 §11 초안과 다름) 승인.
+- MCP replay(결정 6): T-199에서 `audit_logs.payload_json` 되쓰기 경로 부재가 확인되면 닫는다.
+  있으면 복원 시 토큰 열을 NULL로 되돌려 다음 refresh 대상화.
+- `region_gate.py` `SIDO_ALIASES` 등 범위 밖 drift(하드코딩 시도 표)를 백로그 항목으로 올릴지.
+- `DestinationWorkspace`의 sessionStorage 시군구 선택이 facet에 없을 때 자동 해제할지(기본
+  문서화만).
+- Map/geo ADR 번호는 각 저장소 문서 PR 머지로 확정되며 이 문서의 참조는 그때 맞춘다.
+
+---
+
 ## 이력·대체·보류 ADR (요약)
 
 핵심 구조·기능과 직접 관련된 ADR만 위 본문에 full로 유지한다. 아래는 다른 ADR로 대체되었거나 보류·이력성 결정이라 한 줄 요약으로 보존한 항목이다. 번호는 사라지지 않으며 상세 맥락이 필요하면 git 이력(이전 본문)을 참조한다.

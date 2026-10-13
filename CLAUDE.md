@@ -17,6 +17,9 @@ Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시�
 
 ### 현재 작업
 
+- **다음**: T-199(ADR-49 proposed, 미구현; 코드 착수 가능 — 활성화 검증만 kor-travel-geo ADR-069
+  배포 뒤) — `docs/tasks.md` 대기 최상단. 저장소에 resume 문서가 없어 이 줄이 "다음 한 작업"
+  포인터다.
 - **T-185 완료**: 검수 bulk를 서버 filter snapshot 기반 `preview`·100건 `execute`로 구현했다. 명시
   선택 최대 500건, filter 최대 10,000건(10,001번째면 전체 413), actor/action/scope/TTL 결합 확인
   token digest, operation/item/receipt ledger, 같은 request/cursor exact replay와 stale cursor 409를
