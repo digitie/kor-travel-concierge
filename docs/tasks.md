@@ -13,6 +13,89 @@
 
 ## 대기 (우선순위 순)
 
+### geo 데이터 토큰 재해결 (T-199~T-201, ADR-49 proposed)
+
+설계 정본은 `docs/decisions.md` ADR-49(proposed, 2026-10-13)다. **T-199·T-200 코드 머지는
+kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면 토큰 None — ADR-49 결정 2).
+선행은 배포·검증 쪽에만 있다: (i) T-200 격리 스택 e2e·prod 첫 run = geo ADR-069(기존
+`dataset/version` 응답의 `current.data_token`·네 v2 응답 최상위 `dataset`) 배포+backfill 뒤,
+(ii) **배포 선행**: Map T-GR-03(ADR-109; `raw_payload_hash`에서 `address.geo_data_token` 제외 +
+토큰 신뢰 규칙) prod 배포 → Manager lane(T-200-pre) 머지 → 그 뒤 concierge T-200 배포(첫 run이
+전 장소를 dirty로 만든다). T-199 배포 1회의 전량 재발행(payload 필드 추가)은 기존 규칙대로
+허용. PR 묶음은 PR-1(T-199) → PR-2(T-200) → PR-3(T-201, doc-only).
+
+- [ ] **T-199**: 토큰 컬럼(시도 의미)·enrich force/outcome 변형·헤더 인증·dirty 배선·payload
+  토큰·replay 확인(규모 S). 수정 파일:
+  `backend/alembic/versions/20261013_0031_place_admin_code_geo_token.py`(신규, 직전 head
+  `20261006_0030`; `admin_code_geo_data_token VARCHAR(40) NULL` + 부분 인덱스
+  `(admin_code_geo_data_token) WHERE is_geocoded` — refresh 대상 쿼리용),
+  `backend/ktc/models/travel_place.py`(:126-133 옆 토큰 컬럼 매핑),
+  `backend/ktc/etl/admin_region_service.py`(`ADMIN_CODE_SOURCE` :17 옆 `ADMIN_CODE_SOURCE_UNRESOLVED =
+  "kor-travel-geo-v2:unresolved"`; `AdminRegion.data_token` :21-29;
+  `AdminEnrichmentSnapshot`/`_admin_snapshot` :31-67에 토큰 열 포함(:167 fence 비교 집합);
+  `fetch_admin_region` :264-310·`_fetch_region_within_radius` :312-335에서 응답 최상위
+  `dataset.data_token` 파싱 + `params={"key"}` → `headers={"X-KTG-API-Key"}` :275, :322 + 예외
+  메시지 query 제거; `_merge_region` :406 코드를 준 쪽의 토큰(두 토큰이 다르면 None);
+  `apply_admin_region` :367 토큰 열 쓰기; **`enrich_place_admin_codes_isolated` :94-183의
+  `force=True` + `EnrichOutcome{resolved,unresolved,errored,skipped}` 변형**(skip 조건 :129-131만
+  우회, read/write 두 세션·FOR UPDATE·snapshot fence :167 그대로; `unresolved`는 HTTP 2xx —
+  `status`가 `OK`든 `NOT_FOUND`든 — 에서 코드 없음, `errored`는 `raise_for_status()` :284/:330
+  예외·timeout·파싱 실패, `skipped`는 fence 불일치; 기존 bool 호출처·bool 경로 :217-262 불변),
+  `backend/ktc/services/place_service.py`(`correct_place` :1727-1730 코드 NULL 블록에
+  `admin_code_geo_data_token = None` 추가),
+  `backend/ktc/services/feature_export_service.py`(:216-222 `place.address.geo_data_token`
+  additive, `SCHEMA_VERSION` 불변; dirty reason은 리터럴 `"geo_release"` — `place_service.py:1735`
+  선례처럼 상수 없음), tests(`backend/tests/test_admin_region_service.py`의 geo fake에 `dataset`
+  있음/없음·`NOT_FOUND` 200 케이스). 수용 기준(효과로 결박): 통합 "코드·토큰 변경 시만 dirty"
+  (golden `sync_dirty` == `sync_feature_exports`); payload에 토큰 실림; 두 코드가 모두 있는 장소에
+  `force=False` → geo HTTP 0회·열 변경 0; `force=True` 경로에서 `status: NOT_FOUND` 200 → 토큰 +
+  `source='…:unresolved'`·코드 열 불변; HTTP 4xx/5xx(geo `status: ERROR` 바디 포함)·timeout →
+  토큰 미기록·`errored`; HTTP 대기 중 좌표가 바뀐 장소 → 쓰기 0·토큰 미기록·`skipped`(fence);
+  `force=False`·isolated 경로는 None에서 토큰 미기록(종전 동작); geo 호출 2곳의 요청에 `?key=`
+  없음(효과 테스트); `correct_place` → 토큰 NULL → enrich 뒤 새 토큰; `audit_logs.payload_json`
+  DB 되쓰기 경로 "없음" grep 결과를 PR 본문에(있으면 복원 시 토큰 NULL 처리 추가); alembic head
+  단일(`20261013_0031`); ruff.
+- [ ] **T-200-pre**: Manager lane 1줄(규모 XS, 저장소 `kor-travel-docker-manager`). lane이 job
+  이름별임은 origin/main @094d397 `config/dagster-shared/dagster.yaml:95-106`에서 확인됨(이 PR,
+  ADR-49 결정 4). 남는 작업은 Manager PR: `- key: kortravelcommon/job, value:
+  concierge/concierge_admin_region_refresh, limit: 1` 1줄 + lane 집합 단언
+  `backend/tests/test_concierge_shared_dagster.py:56-57` 갱신. 완료 조건: Manager origin/main에
+  그 lane 존재(sha를 T-200 PR 본문에 기록) + prod `dagster.yaml` 반영 확인.
+- [ ] **T-200**: `concierge_admin_region_refresh` job(규모 M, 의존 T-199·T-200-pre; 배포는 위
+  머리말 순서). 수정 파일: `backend/ktc/dagster/definitions.py`(`JOBS` :160-165 **끝에** append —
+  센서 `jobs=JOBS[2:]` :339; `concierge_maintenance` 목록 :338-372에
+  `(name, op, ADMIN_REGION_REFRESH_ENABLED, INTERVAL)` 1줄; op는 `MaintenanceConfig` 수신·
+  `admitted()` 게이트 :119), `backend/ktc/dagster/runtime.py`(`job_tags` :46),
+  `backend/ktc/etl/admin_region_refresh.py`(신규: `dataset/version` 조회(헤더 인증) →
+  `system_settings['kor_travel_geo_data_token']` 비교(`get_setting` :72-77로 읽고 `SystemSetting`
+  행 직접 upsert — `ALLOWED_SETTING_KEYS` 불변) → 대상 `is_geocoded AND token IS DISTINCT FROM
+  current` keyset 페이지 50 → 장소마다 T-199의 isolated force 변형(장소별 write 세션 commit, dirty
+  같은 세션) → `errored` 비율 가드 → 대상 0건이면 설정 토큰 전진; op 메타
+  `scanned/resolved/unresolved/errored/skipped/dirty`),
+  `backend/ktc/core/config.py`(`ADMIN_REGION_REFRESH_ENABLED` 기본 True / `_INTERVAL_SECONDS`
+  3600 / `_ERROR_RATIO` 0.05), tests, `.env.example`(:248 옆)·`README.md`(:100 옆)·
+  `docs/dev-environment.md`(:244 옆)에 `ADMIN_REGION_REFRESH_*` 세 키 1줄씩.
+  `backend/ktc/services/settings_service.py`·`docs/contracts/dagster-summary.openapi.json`은
+  변경 없음(후자는 job 이름을 싣지 않는다 — `Repository.jobs`는 string 배열 스키마, 재생성
+  불필요). 수용 기준(효과로 결박): 격리 스택 e2e(refresh 1회 → dirty → `changes` 피드에
+  `geo_data_token` 실린 재발행); 중단·재개 시 중복 호출 0; None 장소 1건 포함 두 번째 run 호출
+  0·설정 토큰 전진; 예외 주입(5xx) 시 토큰 미기록·비율 초과 시 op Failure; 5xx 주입 장소
+  1건(문턱 미만) → 설정 토큰 미전진·다음 run이 그 1건만 호출; 토큰 동일(재빌드) run 무동작;
+  같은 job의 활성 run이 있는 센서 tick → RunRequest 0건(기존 maintenance 테스트 패턴);
+  `feature_exports` 동시 실행 시 같은 candidate에 중복 outbox 행 0; `POST /settings`에
+  `kor_travel_geo_data_token` 넣으면 400(allowlist 불변 효과 테스트).
+- [ ] **T-201**: 문서(규모 S, 의존 T-199·T-200). `docs/decisions.md` ADR-49 상태 proposed →
+  accepted, `docs/feature-export-api.md`의 "예정(ADR-49 proposed)" 절을 현재 계약으로 승격
+  (`place.address` 표에 `geo_data_token` 행, 재발행 사유 `geo_release`), `docs/architecture.md`
+  §4.5/§6.4 예정 문구 제거, `docs/themes-api.md`, `CHANGELOG.md`(컬럼·job·payload 필드·인증
+  헤더·settings 키), `docs/journal.md`, `CLAUDE.md` "현재 작업"(다음 포인터 교체). 수용 기준:
+  현재 동작을 서술하는 문서에 한해 `rg -n 'ADR-49 예정|ADR-49 proposed|proposed, 미구현'
+  docs/architecture.md docs/feature-export-api.md docs/themes-api.md docs/decisions.md CLAUDE.md`
+  0건(`docs/journal.md`·`docs/tasks.md`는 이력이라 제외); ADR-49 본문의 file:line 인용이 머지된
+  head와 일치; geo ADR-069·Map ADR-109 번호가 각 저장소에서 확정된 값인지 확인.
+
+### 개선 로드맵 실행 작업
+
 개선 로드맵(`docs/improvement-roadmap-2026-07.md`, Codex 리뷰 §10 반영판) 실행 작업이다. **Agent A / Agent B 두 트랙이 병렬 진행**하며, 트랙 내 순서·교차 선행·파일 소유는 로드맵 §4를 따른다. 각 태스크는 해당 PR 블록의 "개정(2026-07-13)" 항목과 §7.1 acceptance gate(G1~G10)를 완료 조건에 포함한다.
 
 ### Agent A — 백엔드 상태 모델·파이프라인·정책 (T-158~T-173)

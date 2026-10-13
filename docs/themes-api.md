@@ -73,6 +73,11 @@ metadata를 더한 형태다.
 }
 ```
 
+`address.sigungu_code/sigungu_name`·`legal_dong_code/legal_dong_name`은 kor-travel-geo v2
+reverse 산물이며, **ADR-49 예정(proposed, 미구현)**에 따라 geo 주소 데이터셋 릴리스 뒤
+재해결로 값이 갱신될 수 있다(`docs/decisions.md` ADR-49) — 소비자는 코드를 외부 키로 고정하지
+않는다.
+
 `source_videos`는 **기본 제외**한다(payload 경량화, T-152 철학). 출처 동영상 근거가 필요하면
 `include=sources`로 요청한다. 이때 각 item에 아래 배열이 추가된다.
 

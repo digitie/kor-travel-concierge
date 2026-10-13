@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-10-13: geo 데이터 토큰 재해결 설계
+
+- 문서만 바꿨다(코드·마이그레이션·CHANGELOG 없음). `docs/decisions.md`에 ADR-49(proposed)를 추가하고 `docs/tasks.md`에 T-199/T-200-pre/T-200/T-201을 대기로 올렸다. `docs/feature-export-api.md`·`docs/architecture.md` §4.5/§6.4·`docs/themes-api.md`에는 "ADR-49 예정" 포인터만 두었고, resume 문서가 없어 `CLAUDE.md` "현재 작업" 최상단에 다음 작업 1줄을 두었다.
+- 결정 6개(토큰 열 "마지막 시도" 의미·두 파싱 지점·헤더 인증·refresh job·dirty/payload 토큰·replay 가정 철회)는 ADR-49가 정본이다. 1차 리뷰 뒤 `unresolved` 기록은 `force=True` 경로 전용, 설정 토큰 전진은 대상 쿼리 0건일 때만, `_admin_snapshot` fence에 토큰 포함, `_merge_region` 토큰 불일치 시 None을 ADR 본문에 못박았다.
+- 2차 리뷰 반영(HIGH 1·MED 6): (1) 1차에서 넣은 "`status != "OK"`는 errored" 규칙을 **전제 오류로 철회** — geo v2 reverse는 후보 0건을 `status: NOT_FOUND` + HTTP 200으로 돌려주고(geo `core/reverse_geocoder.py:73`) ERROR 바디는 항상 4xx/5xx라 concierge `raise_for_status()`(`:284`)가 먼저 잡는다; 그 규칙대로면 해상·섬 장소가 refresh 대상에 영원히 남아 설정 토큰이 전진하지 못한다. 경계는 "2xx면 unresolved, 예외·timeout이면 errored"로 되돌렸다. (2) within-radius fallback은 reverse `OK`+불완전 후보일 때만이고 `NOT_FOUND`는 fallback 없이 None(`:286-287`) — 추가 호출 여부는 열린 결정. (3) refresh 쓰기 경로를 bool 경로 배치 세션에서 **isolated 경로의 force 변형**(짧은 세션·FOR UPDATE·snapshot fence, 불일치는 `skipped`)으로 바꿨다 — HTTP 동안 transaction 보유와 `correct_place` 경주를 막는다. (4) T-199·T-200 코드 머지는 geo와 병렬 가능하고 선행은 배포 쪽(Map T-GR-03 → Manager lane → concierge T-200)임을 tasks 머리말·CLAUDE.md에 적었다. (5) `correct_place`의 토큰 NULL 되돌림은 `place_service.py` 수정이므로 T-199 수정 파일에 넣고 결정 2·6의 모순을 풀었다. (6) 설정 키 `kor_travel_geo_data_token`은 `ALLOWED_SETTING_KEYS`에 넣지 않고 job이 직접 upsert한다(운영 settings API 표면 비확대). (7) T-201 `rg … 0건` 범위를 현재 동작 서술 문서로 한정(journal·tasks 제외). LOW: 부분 인덱스 열 명시, `JOBS` 끝 append(`jobs=JOBS[2:]`)·Manager `code_location` 상한 2, reason 리터럴, `dagster-summary.openapi.json` 재생성 불필요 확정, unresolved 장소 옛 코드 유지 명시, 교차 저장소 인용을 origin/main 줄 번호로(Map `:567-575`, Manager 테스트 `:56-57`), `:3834-3840`·`:216-222`·`_payload_hash` 정정.
+- 발견: 두 geo 호출처가 API 키를 `?key=` 쿼리로 보낸다(`admin_region_service.py:275, 322`) — refresh가 시간당 전 장소를 치면 로그에 키가 반복 남는다. `system_settings` 쓰기는 `ALLOWED_SETTING_KEYS` allowlist를 지난다(`settings_service.py:37-39`). 공용 Dagster의 `kortravelcommon/job` lane은 job 이름별이라 Manager에 1줄이 선행한다(lane 단언 테스트 `backend/tests/test_concierge_shared_dagster.py:56-57`, Manager origin/main @094d397).
+- 철회: "MCP replay가 옛 행정코드를 복원한다"는 가정. replay는 receipt `response_json` 반환 경로이고(`place_service.py:3834-3840`) 행정코드 열을 되쓰지 않는다. T-199에서 `audit_logs.payload_json` 되쓰기 경로 부재를 grep으로 닫는다.
+- 미결(소유자, ADR-49 "열린 결정"과 1:1): refresh 주기·예외 비율 문턱, 토큰 열 "시도" 의미 vs 두 열, 헤더 인증 전환 승인, payload 토큰 해시 정책(concierge 포함·Map 제외) 승인, reverse `NOT_FOUND`에서 within-radius 추가 호출 여부, 설정 키 직접 upsert(allowlist 밖) 승인, MCP replay 조건부 닫음, `SIDO_ALIASES` 등 범위 밖 drift 백로그화, sessionStorage 시군구 선택 자동 해제 여부. geo ADR-069·Map ADR-109 번호는 각 저장소 문서 PR 머지로 확정.
+
 ## 2026-10-08: 운영 UI live E2E 확대
 
 - [실행 가이드](live-ui-testing.md)와 운영 전용 config를 추가했다. 로그인·메뉴 21, 폼·작업 22, 운영·Dagster 19, 장소·검수 22, 기존 지도 복구 6개로 총 90개다. 작업자 1개·자동 재시도 0, 실제 조회와 브라우저 장애/fixture를 구분하고 운영 domain write·provider 검색을 막는다.
