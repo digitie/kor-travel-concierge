@@ -62,6 +62,25 @@ describe("감사 HTTP 가용성과 인증 응답의 분리", () => {
     },
   );
 
+  it.each(["fetch", "cancel"])("중단을 무시하는 %s도 호출자 대기를 끝낸다", async (mode) => {
+    let signal: AbortSignal | undefined;
+    const cancel = vi.fn(() => new Promise<void>(() => undefined));
+    vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => {
+      signal = init.signal ?? undefined;
+      return mode === "fetch"
+        ? new Promise<Response>(() => undefined)
+        : Promise.resolve(new Response(new ReadableStream({ cancel })));
+    }));
+    let settled = false;
+    const pending = recordAuthAuditEvent(request(), { eventType: "login", outcome: "succeeded" })
+      .then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(1999); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1); await pending;
+    expect(signal?.aborted).toBe(true);
+    expect(settled).toBe(true); expect(vi.getTimerCount()).toBe(0);
+    if (mode === "cancel") expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("즉시 실패한 감사 요청은 응답을 기다리지 않고 timer를 회수한다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("unit connection refused")));
     await recordAuthAuditEvent(request(), { eventType: "login", outcome: "denied" });

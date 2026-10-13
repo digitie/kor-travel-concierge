@@ -32,24 +32,35 @@ export async function recordAuthAuditEvent(
     headers.set("x-ktc-admin-proxy-secret", proxySecret);
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AUTH_AUDIT_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // signal을 처리하지 않는 fetch/본문 취소 구현에도 호출자의 대기 상한을 보장한다.
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException("Auth audit timeout", "TimeoutError"));
+    }, AUTH_AUDIT_TIMEOUT_MS);
+  });
   try {
-    const response = await fetch(`${INTERNAL_BASE}/api/v1/admin/auth-events`, {
-      method: "POST",
-      signal: controller.signal,
-      headers,
-      body: JSON.stringify({
-        attempted_username: event.attemptedUsername?.trim() || null,
-        client_ip: clientIpForSecurity(request),
-        event_type: event.eventType,
-        next_path: event.nextPath ?? null,
-        outcome: event.outcome,
-        reason: event.reason ?? null,
-        user_agent: request.headers.get("user-agent"),
+    await Promise.race([
+      fetch(`${INTERNAL_BASE}/api/v1/admin/auth-events`, {
+        method: "POST",
+        signal: controller.signal,
+        headers,
+        body: JSON.stringify({
+          attempted_username: event.attemptedUsername?.trim() || null,
+          client_ip: clientIpForSecurity(request),
+          event_type: event.eventType,
+          next_path: event.nextPath ?? null,
+          outcome: event.outcome,
+          reason: event.reason ?? null,
+          user_agent: request.headers.get("user-agent"),
+        }),
+      }).then((response) => {
+        // 감사 결과 본문은 쓰지 않는다. 응답 스트림을 닫아 연결·버퍼를 남기지 않는다.
+        return response.body?.cancel();
       }),
-    });
-    // 감사 결과 본문은 쓰지 않는다. 응답 스트림을 닫아 연결·버퍼를 남기지 않는다.
-    await response.body?.cancel();
+      deadline,
+    ]);
   } catch {
     // 로그인/로그아웃 UX는 감사 로그 저장소 가용성에 종속시키지 않는다.
   } finally {
