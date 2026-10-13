@@ -1250,4 +1250,3 @@
   메시지에 실어 `/place-search` 응답 `errors.google`로 노출하도록 수정했다. prod 진단으로 실제
   원인이 API 키 제한(`PERMISSION_DENIED`, details 없음)임을 확인 — Cloud Console 키 설정
   (Application restrictions/API restrictions)에서 해결할 항목.
-
