@@ -567,3 +567,33 @@ async def test_refresh_and_export_sync_share_lock_and_have_one_change(
         )
         assert len(rows) == 1
         assert rows[0].payload_json["place"]["address"]["geo_data_token"] == TOKEN
+
+
+async def test_empty_reverse_of_other_release_cannot_seal_radius_result():
+    def handler(request):
+        if request.url.path.endswith("reverse"):
+            return httpx.Response(
+                200,
+                json={
+                    "status": "OK",
+                    "dataset": {"data_token": OTHER},
+                    "candidates": [],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "OK",
+                "dataset": {"data_token": TOKEN},
+                "sido": [],
+                "sigungu": [{"code": "11680"}],
+                "emd": [{"code": "11680101"}],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        lookup = await service.fetch_admin_region_lookup(
+            client, lat=37.5, lon=127, base_url="http://geo.test", api_key="test-key"
+        )
+    assert lookup.region.sigungu_code == "11680"
+    assert lookup.data_token is None and lookup.region.data_token is None

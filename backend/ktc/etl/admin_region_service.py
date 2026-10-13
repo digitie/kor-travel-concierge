@@ -468,6 +468,8 @@ async def fetch_admin_region_lookup(
             best_region = replace(best_region, data_token=None)
         return AdminLookup(best_region, best_region.data_token)
     if radius_region.region is not None:
+        if data_token != radius_region.data_token:
+            return AdminLookup(replace(radius_region.region, data_token=None), None)
         return radius_region
     # 코드가 없더라도 두 정상 응답이 같은 릴리스에서 왔을 때만 시도 완료로 삼는다.
     return AdminLookup(
