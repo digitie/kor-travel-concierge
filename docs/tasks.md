@@ -174,6 +174,8 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 
 - [x] **T-204**: 최근 두 달의 일지와 월별 220 KiB 이하 아카이브로 분리했다. 상단 인덱스·항목 보존·상대 링크 재기준화·보안 주소 마스킹을 확인했다. 새 기록은 현재 일지에만 추가한다.
 
+- [ ] **T-205**: 인증 감사 HTTP가 멈춰도 로그인·로그아웃 응답을 반환하도록 2초 중단과 응답 스트림 회수를 적용한다. 기존 구현 RED 7건·수정 인증·정지 fetch/cancel 회귀 10 PASS·실제 HTTP 중단/회수/다음 요청 1 PASS·최신 제품 4e3899da 전체 frontend 358 PASS·lint/type/build PASS·독립 최신 source 리뷰 2인 PASS/OPEN 0. n150의 새 인증 소스+격리 실제 API/native UI 12 PASS와 기존 공개 사이트의 WSL WebGL UI 기준선 9 PASS를 구분한다. PR #254 source 병합과 운영 반영을 구분하며 실제 운영 배포 후 완료한다.
+
 ### 개선 로드맵 실행 작업
 
 개선 로드맵(`docs/improvement-roadmap-2026-07.md`, Codex 리뷰 §10 반영판) 실행 작업이다. **Agent A / Agent B 두 트랙이 병렬 진행**하며, 트랙 내 순서·교차 선행·파일 소유는 로드맵 §4를 따른다. 각 태스크는 해당 PR 블록의 "개정(2026-07-13)" 항목과 §7.1 acceptance gate(G1~G10)를 완료 조건에 포함한다.
