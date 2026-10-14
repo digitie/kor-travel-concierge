@@ -174,7 +174,7 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 
 - [x] **T-204**: 최근 두 달의 일지와 월별 220 KiB 이하 아카이브로 분리했다. 상단 인덱스·항목 보존·상대 링크 재기준화·보안 주소 마스킹을 확인했다. 새 기록은 현재 일지에만 추가한다.
 
-- [ ] **T-205**: 인증 감사 HTTP가 멈춰도 로그인·로그아웃 응답을 반환하도록 2초 중단과 응답 스트림 회수를 적용한다. 기존 구현 RED 7건·수정 인증·정지 fetch/cancel 회귀 10 PASS·실제 HTTP 중단/회수/다음 요청 1 PASS·최신 제품 4e3899da 전체 frontend 358 PASS·lint/type/build PASS·독립 최신 source 리뷰 2인 PASS/OPEN 0. n150의 새 인증 소스+격리 실제 API/native UI 12 PASS와 기존 공개 사이트의 WSL WebGL UI 기준선 9 PASS를 구분한다. PR #254 source 병합과 운영 반영을 구분하며 실제 운영 배포 후 완료한다.
+- [x] **T-205**: 인증 감사 HTTP가 멈춰도 로그인·로그아웃 응답을 반환하도록 2초 중단과 응답 스트림 회수를 적용한다. 기존 구현 RED 7건·수정 인증·정지 fetch/cancel 회귀 10 PASS·실제 HTTP 중단/회수/다음 요청 1 PASS·최신 제품 4e3899da 전체 frontend 358 PASS·lint/type/build PASS·독립 최신 source 리뷰 2인 PASS/OPEN 0. n150의 새 인증 소스+격리 실제 API/native UI 12 PASS와 기존 공개 사이트의 WSL WebGL UI 기준선 9 PASS를 구분한다. PR #254 source 병합 뒤 R5 immutable UI에서 감사 코드·LAN/public 인증 및 실제 UI91을 확인하여 UI 운영 범위를 완료했다. 원 태그 UNKNOWN과 backend 전환은 별도다.
 
 ### 개선 로드맵 실행 작업
 
@@ -959,3 +959,5 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 - 결정 기록: `docs/decisions.md`
 - 작업 일지: `docs/journal.md`
 - 개발 환경: `docs/dev-environment.md`
+
+- [x] **T-206**: 실제 logout 원 cookie 재사용 결함을 수정했다. private FS nonce/marker·bundle별32개 입장 상한·실제 I/O settle 전 슬롯 유지·BFF/Proxy invalid401/unavailable503을 적용했다. frontend376/lint/type/build·소유 backend compiled HTTP12·독립 source/controller 리뷰2인 OPEN0·새 immutable UI의 LAN/public replay401·실제 공개 UI91 PASS를 확인했다. 기존 UI90/원cookie RED/R4 90PASS1FAIL 및 원 태그 UNKNOWN을 별도 보존하며 backend/provider 전환은 포함하지 않는다.

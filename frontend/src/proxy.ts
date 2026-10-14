@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requestHasValidSession, sanitizeLocalPath } from "@/lib/auth";
+import { requestSessionStatus, sanitizeLocalPath } from "@/lib/auth";
 
 const PUBLIC_PATH_PREFIXES = ["/api/auth/", "/_next/", "/favicon.ico"];
 
@@ -10,8 +10,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const validSession = await requestHasValidSession(request);
-  if (validSession) {
+  const session = await requestSessionStatus(request);
+  if (session === "unavailable") {
+    return NextResponse.json({ error: "AUTH_UNAVAILABLE" }, { status: 503, headers: { "Retry-After": "1" } });
+  }
+  if (session === "valid") {
     if (pathname === "/login") {
       const redirectPath = sanitizeLocalPath(request.nextUrl.searchParams.get("next"));
       return NextResponse.redirect(new URL(redirectPath, request.url));

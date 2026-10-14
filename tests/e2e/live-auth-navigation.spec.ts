@@ -84,6 +84,22 @@ test('로그아웃 UI와 새 탭에서 폐기된 세션을 확인한다', async 
   await other.reload(); await expect(other).toHaveURL(/\/login\?next=/);
   await other.close();
 });
+test('로그아웃 전에 저장한 원 쿠키를 직접 다시 보내면 API와 페이지를 거절한다', async ({ page, context, request }) => {
+  await login(page, '/settings');
+  const saved = (await context.cookies()).find(cookie => cookie.name === 'ktc_ui_session');
+  expect(Boolean(saved), '로그인 cookie 발급 여부').toBe(true);
+  const headers = { cookie: `ktc_ui_session=${saved!.value}`, 'user-agent': await page.evaluate(() => navigator.userAgent) };
+  // 같은 User-Agent의 원 cookie가 실제로 허용되는 대조군을 먼저 확인한다.
+  expect((await request.get('/api/v1/destinations?limit=1', { headers })).status()).toBe(200);
+  const loggedOut = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/logout');
+  await page.getByRole('button', { name: '로그아웃', exact: true }).filter({ visible: true }).click();
+  expect((await loggedOut).status()).toBe(200); await expect(page).toHaveURL(/\/login/);
+  // browser cookie jar가 비워졌다는 결과로 대신하지 않고 보관한 값을 재전송한다.
+  expect((await request.get('/api/v1/destinations?limit=1', { headers })).status()).toBe(401);
+  const denied = await request.get('/settings', { headers, maxRedirects: 0 });
+  expect([307, 308]).toContain(denied.status());
+  expect(new URL(denied.headers().location, page.url()).pathname).toBe('/login');
+});
 test('본문 건너뛰기와 사이드바 접기 상태가 새로고침 뒤 유지된다', async ({ page }) => {
   await login(page, '/jobs');
   const skip = page.getByRole('link', { name: '본문으로 건너뛰기', exact: true });

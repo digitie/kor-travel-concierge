@@ -20,7 +20,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "INVALID_ORIGIN" }, { status: 403 });
   }
 
-  await revokeSessionCookieValue(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  try {
+    await revokeSessionCookieValue(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  } catch {
+    await recordAuthAuditEvent(request, { attemptedUsername: adminUsernameFromEnv(), eventType: "logout", outcome: "failed", reason: "session_state_unavailable" });
+    return NextResponse.json({ error: "AUTH_UNAVAILABLE" }, { status: 503 });
+  }
   await recordAuthAuditEvent(request, {
     attemptedUsername: adminUsernameFromEnv(),
     eventType: "logout",
