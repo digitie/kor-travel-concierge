@@ -24,6 +24,14 @@ ADR-49가 허용한 T-199 단독 병렬 배포를 준비한다. 이미 검증한
 
 실제 전환은 아직 진행 중이며 전환 뒤 backend/native/HTTP와 fresh live UI 결과로 완료 여부를 결정한다.
 
+## 중단 관찰과 소유 복구 보강
+
+첫 전환은 root 운영 helper가 API 이미지의 `/app/backend` 작업 디렉터리에서 root Alembic 설정의 상대 script 경로를 해석해 CommandError로 중단됐다. 실패 utility는 EXIT1·제거 상태로 보존했고 실제 DB를 다시 조회해 schema0030·토큰 컬럼 부재·원 소유 DB 연결0을 확인했다. 경로를 `/app`으로 맞춘 별도 복구 제어기를 두 리뷰어가 검토했다.
+
+다음 재개는 migration 전 센서 조회 도구의 caller TimeoutError로 중단됐다. 후속 관찰에서 정확한 소유 utility가4.3초 만에 EXIT0으로 종료한 사실을 확인했다. 이를 native 계산90초 초과나 원 caller ACK 성공으로 바꾸지 않는다. force없는 삭제1회와 부재를 별도 영수증에 기록하고 원 start-intent·실패 영수증은 보존했다. 새 복구는 Docker RPC 응답 대기 상한만 늘리며 native 계산·DB·job·migration 상한과 중복 실행 금지를 유지한다.
+
+추가 적대 리뷰에서 CLI 기록2개가 같은 PID를 반복해 다른 원 PID의 생존 확인을 건너뛸 수 있는 모형 P2를 발견했다. exact 파일 집합·전체 SHA·고유 정수 PID2·filename별 PID/args SHA·EXIT0/부재를 결합해 반례를 닫았다. 최종 고정 제어기 SHA256 `41ee7189f36890df1407fb1615e96925d59a58b5ba985a7d1e4c9827da8c9532`는 독립2인 PASS/OPEN0과 새 config-only runtime3/application mutation0을 확인했다. 실제 전환·auth·live UI 완료 결과는 아직 별도 대기다.
+
 ## 남는 외부 조건
 
 Geo·Weather·Transport의 Odroid live E2E는 장애로 NOT_RUN이며 해당 세 PR의 예외 병합과 분리한다. T-200 배포·첫 refresh에는 Map 토큰 계약 prod 배포·Geo token/backfill·Manager lane 등의 선행이 남는다. T-202b는 정해진 Geo 전환 순서에 따른다. T-199 및 UI 완료를 전체 track의 운영 완료로 확대하지 않는다.
