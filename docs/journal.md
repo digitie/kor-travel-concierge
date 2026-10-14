@@ -15,6 +15,12 @@
 
 ---
 
+## 2026-10-14 — T-199 단독 backend/schema 소유 복구와 운영 UI 검증
+
+- T-199 source0dd의 immutable API/MCP/CS runtime 세 개와 nullable0031을 적용했고 운영 토큰 컬럼/부분 인덱스·장소1233·dagster generation1·원3센서 exact origin/status 복원을 확인했다. 최신 인증 UI와 공유 PG/Dagster webserver/daemon은 유지했다.
+- root 운영 helper의 상대 migration 경로 오류, 정상 종료 utility의 caller TimeoutError와 원 영수증을 보존하고 경로/응답 대기·소유 정리를 보강했다. 두 독립 적대 리뷰에서 Mounts 순서 오탐과 CLI PID중복 반례를 닫은 최종 제어기를 고정했다. 원 tag UNKNOWN 및 R6/R7 실패를 소급 완료로 바꾸지 않는다.
+- 동일 backend tree의 PostGIS996 PASS·실제 내부/외부 auth/replay401·새 backend에 연결한 운영 UI91 PASS(skip/retry/flaky0)와 전후 source/runtime fence를 확인했다. Geo provider 성공·T-200 첫 refresh·T-202b URL 및 전체 track 완료는 별도이며 Odroid 세 저장소의 live NOT_RUN 예외 병합과 분리한다.
+
 ## 2026-10-14 — T-206 번들 간 로그아웃 폐기와 상태 I/O 입장 상한
 
 - 실제 최신 공개 UI90과 별개로 원 cookie를 직접 재사용하면 LAN/public 보호 API가 200임을 발견했다. 독립 모듈에서 RED 1을 재현했고 private 파일 nonce·marker로 공유하도록 수정했다.
