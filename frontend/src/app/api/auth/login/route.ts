@@ -80,8 +80,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "INVALID_CREDENTIALS" }, { status: 401 });
   }
 
+  let session: string;
+  try {
+    await revokeSessionCookieValue(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+    session = await createSessionCookieValue(request);
+  } catch {
+    await recordAuthAuditEvent(request, { attemptedUsername: username, eventType: "login", nextPath, outcome: "failed", reason: "session_state_unavailable" });
+    return NextResponse.json({ error: "AUTH_UNAVAILABLE" }, { status: 503 });
+  }
   clearLoginFailures(request, username);
-  await revokeSessionCookieValue(request.cookies.get(SESSION_COOKIE_NAME)?.value);
   await recordAuthAuditEvent(request, {
     attemptedUsername: username,
     eventType: "login",
@@ -93,7 +100,7 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({ ok: true, next: nextPath });
   response.cookies.set(
     SESSION_COOKIE_NAME,
-    await createSessionCookieValue(request),
+    session,
     sessionCookieOptions(request),
   );
   return response;
