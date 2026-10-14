@@ -25,11 +25,11 @@ it("서로 독립된 인증 번들에서 로그아웃한 쿠키를 거절한다"
 
 it("동시에 nonce를 초기화한 모든 번들이 같은 서명을 검증한다", async () => {
   const auth = await import("./auth");
-  const results = await Promise.allSettled(Array.from({ length: 32 }, () => auth.createSessionCookieValue(null, env)));
+  const results = await Promise.allSettled(Array.from({ length: 64 }, () => auth.createSessionCookieValue(null, env)));
   const cookies = results.filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled").map(result => result.value);
-  expect(cookies).toHaveLength(8);
-  expect(results.filter(result => result.status === "rejected")).toHaveLength(24);
-  expect(await Promise.all(cookies.map(cookie => auth.verifySessionCookieValue(cookie, env)))).toEqual(Array(8).fill(true));
+  expect(cookies).toHaveLength(32);
+  expect(results.filter(result => result.status === "rejected")).toHaveLength(32);
+  expect(await Promise.all(cookies.map(cookie => auth.verifySessionCookieValue(cookie, env)))).toEqual(Array(32).fill(true));
 });
 
 it("상태 디렉터리를 잃으면 기존 쿠키는 거절하고 새 로그인을 허용한다", async () => {
@@ -94,9 +94,9 @@ it("timeout 뒤에도 실제 I/O가 끝나기 전 슬롯을 유지하고 회복 
   const auth = await import("./auth"); vi.useFakeTimers();
   const first = Promise.all(Array.from({ length: 100 }, () => auth.verifySessionCookieValue(cookie, env)));
   await vi.advanceTimersByTimeAsync(2000); expect(await first).toEqual(Array(100).fill(false));
-  expect(blocked).toHaveBeenCalledTimes(8); expect(pending).toHaveLength(8);
+  expect(blocked).toHaveBeenCalledTimes(32); expect(pending).toHaveLength(32);
   const second = await Promise.all(Array.from({ length: 100 }, () => auth.verifySessionCookieValue(cookie, env)));
-  expect(second).toEqual(Array(100).fill(false)); expect(blocked).toHaveBeenCalledTimes(8); expect(vi.getTimerCount()).toBe(0);
+  expect(second).toEqual(Array(100).fill(false)); expect(blocked).toHaveBeenCalledTimes(32); expect(vi.getTimerCount()).toBe(0);
   await expect(auth.createSessionCookieValue(null, env)).rejects.toThrow("busy");
   await expect(auth.revokeSessionCookieValue(cookie, env)).rejects.toThrow("busy");
   vi.useRealTimers();
@@ -138,4 +138,14 @@ it("temp 삭제도 실패하면 새 inode를 만들지 않고 삭제 회복 뒤 
   const cookie = await auth.createSessionCookieValue(null, env);
   expect(await auth.verifySessionCookieValue(cookie, env)).toBe(true);
   expect((await actual.readdir(directory)).filter(name => name.startsWith(".nonce-"))).toHaveLength(0);
+});
+
+it("상태 손상은 unavailable, 잘못된 cookie는 invalid로 구분한다", async () => {
+  const auth = await import("./auth"); const cookie = await auth.createSessionCookieValue(null, env);
+  const request = (value?: string) => ({ cookies: { get: () => value ? { value } : undefined }, headers: { get: () => null } }) as never;
+  expect(await auth.requestSessionStatus(request(cookie), env)).toBe("valid");
+  expect(await auth.requestSessionStatus(request("tampered"), env)).toBe("invalid");
+  await writeFile(join(directory, "nonce"), "invalid", { mode: 0o600 });
+  expect(await auth.requestSessionStatus(request(cookie), env)).toBe("unavailable");
+  expect(await auth.requestSessionStatus(request(), env)).toBe("invalid");
 });

@@ -113,27 +113,40 @@ export async function createSessionCookieValue(
   return `${payloadPart}.${signature}`;
 }
 
+export type SessionStatus = "valid" | "invalid" | "unavailable";
+
+async function sessionStatus(
+  value: string | undefined,
+  env: Env,
+  nowMs: number,
+  source: HeaderReader | RequestLike | null,
+): Promise<SessionStatus> {
+  const secret = env[SESSION_SECRET_ENV]?.trim();
+  if (!value || !sessionSecretIsStrong(secret)) return "invalid";
+  try {
+    const signingSecret = await sessionSigningSecret(env);
+    const payload = await decodeSignedSession(value, signingSecret);
+    if (payload === null) return "invalid";
+    return await validateSessionPayload(payload, {
+      env, nowSeconds: Math.floor(nowMs / 1000), secret: signingSecret, source,
+    }) ? "valid" : "invalid";
+  } catch {
+    // I/O 장애·포화를 잘못된 cookie와 구분한다. 둘 다 보호 데이터는 허용하지 않는다.
+    return "unavailable";
+  }
+}
+
 export async function verifySessionCookieValue(
   value: string | undefined,
   env: Env = process.env,
   nowMs = Date.now(),
   source: HeaderReader | RequestLike | null = null,
 ): Promise<boolean> {
-  const secret = env[SESSION_SECRET_ENV]?.trim();
-  if (!value || !sessionSecretIsStrong(secret)) {
-    return false;
-  }
-  try {
-    const signingSecret = await sessionSigningSecret(env);
-    const payload = await decodeSignedSession(value, signingSecret);
-    if (payload === null) return false;
-    return await validateSessionPayload(payload, {
-      env, nowSeconds: Math.floor(nowMs / 1000), secret: signingSecret, source,
-    });
-  } catch {
-    // 폐기 상태를 읽지 못하면 서명만으로 허용하지 않고 인증을 거절한다.
-    return false;
-  }
+  return await sessionStatus(value, env, nowMs, source) === "valid";
+}
+
+export function requestSessionStatus(request: NextRequest, env: Env = process.env): Promise<SessionStatus> {
+  return sessionStatus(request.cookies.get(SESSION_COOKIE_NAME)?.value, env, Date.now(), request);
 }
 
 export async function revokeSessionCookieValue(

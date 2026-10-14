@@ -148,7 +148,7 @@ async function revoke(env: Env, sessionId: string, expiry: number, now: number):
 }
 
 const STATE_DEADLINE_MS = 2000;
-const MAX_PENDING_STATE_OPERATIONS = 8;
+const MAX_PENDING_STATE_OPERATIONS = 32;
 let pendingStateOperations = 0;
 async function boundedState<T>(run: () => Promise<T>): Promise<T> {
   // 각 고정 server bundle의 입장 상한이다. 인증 정본은 파일이며 전역 공유를 가정하지 않는다.

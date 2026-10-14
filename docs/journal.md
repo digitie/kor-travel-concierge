@@ -18,8 +18,8 @@
 ## 2026-10-14 — T-206 번들 간 로그아웃 폐기와 상태 I/O 입장 상한
 
 - 실제 최신 공개 UI90과 별개로 원 cookie를 직접 재사용하면 LAN/public 보호 API가 200임을 발견했다. 독립 모듈에서 RED 1을 재현했고 private 파일 nonce·marker로 공유하도록 수정했다.
-- 최초 적대 리뷰 2인이 timeout 이후 원 I/O 200개 누적 반례를 확인했다. 초기 BLOCK 원문을 보존하고 thunk admission 8개·실제 settle 전 슬롯 유지·streaming expiry cleanup을 적용했다. 100+100 요청에서 작업 8개 상한과 I/O 회복 뒤 정상 인증을 검증했다.
-- 최신 frontend 371 PASS·lint/type/build PASS·실제 production compiled Proxy/Route Handler HTTP 12 PASS다. backend는 소유 fixture이며 운영 API/provider 성공으로 확대하지 않는다. PR #256 초안이며 신규 운영 반영·두 source 리뷰·live/UI E2E는 진행 중이다.
+- 최초 적대 리뷰 2인이 timeout 이후 원 I/O 200개 누적 반례를 확인했다. 초기 BLOCK 원문을 보존하고 thunk admission 32개·실제 settle 전 슬롯 유지·streaming expiry cleanup을 적용했다. 100+100 요청에서 작업 32개 상한과 I/O 회복 뒤 정상 인증을 검증했다.
+- 최신 frontend 376 PASS·lint/type/build PASS·실제 production compiled Proxy/Route Handler HTTP 12 PASS다. backend는 소유 fixture이며 운영 API/provider 성공으로 확대하지 않는다. PR #256 초안이며 신규 운영 반영·두 source 리뷰·live/UI E2E는 진행 중이다.
 
 ## 2026-10-14 — T-205 인증 감사 요청의 정지 격리
 
