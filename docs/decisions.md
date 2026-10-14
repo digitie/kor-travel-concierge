@@ -1984,11 +1984,11 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
 
 ## ADR-51: UI 세션 폐기는 같은 Linux 컨테이너의 private 파일 상태로 공유한다
 
-- 상태: 제안(소스 검증 완료, 운영 반영·live 검증은 별도)
+- 상태: 채택(2026-10-14, 단일 Linux UI의 운영 인증·공개 UI91 검증 완료)
 - 날짜: 2026-10-14
 
 로그아웃의 모듈 Map은 Next Proxy와 Route Handler 번들 사이에 공유되지 않아 원 쿠키 재사용을 거절하지 못했다. 같은 단일 Linux UI 컨테이너의 private nonce·session ID hash marker를 정본으로 사용한다. nonce는 cookie 서명 namespace를 분리하며 상태 전체를 잃으면 기존 세션을 무효화한다. 프로세스 재시작은 파일 상태를 유지한다.
 
 각 상태 helper의 호출자 대기는 2초다. 포화 시 인증을 거절하고, 고정 bundle별 최대 32개 미완 작업 슬롯을 실제 settle까지 유지한다. 이 정책은 syscall 취소나 전체 인증 요청 2초·총 RSS 상한을 의미하지 않는다. 폐기 목록은 process Map에 누적하지 않고 만료 hour 버킷을 streaming으로 청소한다.
 
-private 저장소가 읽히지 않으면 인증을 거절한다. 기록 실패는 로그인/로그아웃 503이고 성공 cookie·성공 audit로 바꾸지 않는다. UI 컨테이너 교체나 nonce 재생성 시 사용자는 다시 로그인한다. 분산 replica와 nonce 보존/개별 marker 유실은 자동 복구 보장 범위가 아니며, 부분 상태 복원 시 nonce 재생성이 필요하다. 새 backend schema·provider·Dagster plane 변경 없이 UI만 반영한다.
+private 저장소의 일시적 I/O 실패·포화는 보호 요청503/Retry-After로 거절하고 cookie 삭제·로그인 redirect를 하지 않는다. invalid cookie는 기존401/로그인 redirect다. 기록 실패는 로그인/로그아웃 503이고 성공 cookie·성공 audit로 바꾸지 않는다. UI 컨테이너 교체나 nonce 재생성 시 사용자는 다시 로그인한다. 분산 replica와 nonce 보존/개별 marker 유실은 자동 복구 보장 범위가 아니며, 부분 상태 복원 시 nonce 재생성이 필요하다. 새 backend schema·provider·Dagster plane 변경 없이 UI만 반영한다.
