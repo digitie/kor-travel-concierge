@@ -50,6 +50,42 @@ async function readNonce(file: string): Promise<string> {
   } finally { await handle.close(); }
 }
 
+let initialization: { directory: string; promise: Promise<string> } | undefined;
+let pendingTemporary: string | undefined;
+async function removeOwnedTemporary(file: string): Promise<void> {
+  try { await unlink(file); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+}
+
+async function initializeNonce(directory: string, file: string): Promise<string> {
+  // 실패한 own temp를 먼저 회수한다. unlink 장애가 계속되면 새 inode를 만들지 않는다.
+  if (pendingTemporary) { await removeOwnedTemporary(pendingTemporary); pendingTemporary = undefined; }
+  const temporary = join(directory, `.nonce-${randomUUID()}`);
+  const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    try { await handle.writeFile(randomBytes(32).toString("hex")); await handle.sync(); }
+    finally { await handle.close(); }
+    try { await link(temporary, file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  } finally {
+    try { await removeOwnedTemporary(temporary); }
+    catch (error) { pendingTemporary = temporary; throw error; }
+  }
+  await syncDirectory(directory); return readNonce(file);
+}
+
+async function sharedInitialization(directory: string, file: string): Promise<string> {
+  // I/O budget과 마찬가지로 bundle 안의 초기화만 직렬화한다. 번들 간 정본은 atomic link다.
+  if (initialization && initialization.directory !== directory) throw new Error("Session state busy");
+  if (!initialization) {
+    const promise = initializeNonce(directory, file);
+    initialization = { directory, promise };
+    void promise.then(() => { if (initialization?.promise === promise) initialization = undefined; },
+      () => { if (initialization?.promise === promise) initialization = undefined; });
+  }
+  return initialization.promise;
+}
+
 // Linux UI 컨테이너의 Proxy와 Route Handler는 모듈 메모리를 공유한다고 가정하지 않는다.
 // 같은 private 디렉터리의 nonce는 프로세스 재시작에도 유지된다. 디렉터리 자체가 새로
 // 만들어지면 서명 namespace가 달라져 이전 쿠키를 전부 거절한다.
@@ -60,15 +96,7 @@ async function signingSecret(env: Env): Promise<string> {
   try { nonce = await readNonce(file); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const temporary = join(directory, `.nonce-${randomUUID()}`);
-    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { await handle.writeFile(randomBytes(32).toString("hex")); await handle.sync(); }
-    finally { await handle.close(); }
-    try {
-      try { await link(temporary, file); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    } finally { await unlink(temporary); }
-    await syncDirectory(directory); nonce = await readNonce(file);
+    nonce = await sharedInitialization(directory, file);
   }
   return `${env.KTC_UI_SESSION_SECRET}:${nonce}`;
 }

@@ -16,8 +16,10 @@ Next.js Proxy는 Route Handler와 공유 모듈·전역 메모리에 의존하�
 
 ## 검증 상태
 
-전체 frontend **369 PASS**, lint/type/production build PASS다. 독립 번들 폐기·32개 초기화에서 8개 입장/24개 포화 거절·상태 손실·오류·expiry·영구 I/O 100+100 요청과 회복을 확인했다. 실제 Next production compiled Proxy/Route Handler를 소유 테스트 HTTP backend에 연결한 12개 검사에서 cookie 재사용 API 401·페이지 로그인 redirect·다른 세션 보존·Node 재시작·상태 손실 복구·오류 503을 확인했다. 이는 운영 API/provider 검증과 구분한다. 최초 로컬 HTTP 하니스는 backend 환경 변수 이름을 잘못 지정해 실패했고 올바른 BACKEND_ORIGIN으로 수정한 뒤 실행했다. 두 명의 리뷰 및 새 운영 이미지 live/UI 결과는 아직 완료로 표시하지 않는다. 이전 이미지의 90 PASS를 새 이미지의 PASS로 합산하지 않는다.
+전체 frontend **371 PASS**, lint/type/production build PASS다. 독립 번들 폐기·32개 초기화에서 8개 입장/24개 포화 거절·상태 손실·오류·expiry·영구 I/O 100+100 요청과 회복을 확인했다. 실제 Next production compiled Proxy/Route Handler를 소유 테스트 HTTP backend에 연결한 12개 검사에서 cookie 재사용 API 401·페이지 로그인 redirect·다른 세션 보존·Node 재시작·상태 손실 복구·오류 503을 확인했다. 이는 운영 API/provider 검증과 구분한다. 최초 로컬 HTTP 하니스는 backend 환경 변수 이름을 잘못 지정해 실패했고 올바른 BACKEND_ORIGIN으로 수정한 뒤 실행했다. 두 명의 리뷰 및 새 운영 이미지 live/UI 결과는 아직 완료로 표시하지 않는다. 이전 이미지의 90 PASS를 새 이미지의 PASS로 합산하지 않는다.
 
 기존 배포의 태그 명령 UNKNOWN은 별도 원문 기록을 보존한다. 이번 변경으로 과거 명령 완료를 만들어내거나 공용 daemon을 재시작하지 않는다.
 
 최초 두 리뷰의 P2는 2초 이후에도 원 I/O가 100→200개 누적되는 경로였다. lazy admission과 실제 settle 전 슬롯 유지로 수정했고, 만료 버킷 삭제도 opendir·marker별 unlink·rmdir로 바꾸어 recursive rm의 전체 목록 배열에 의존하지 않는다. BFF는 Proxy 판정과 별도로 유효 세션을 확인하고 실패 시 key 주입·upstream 호출 전에 401을 반환한다.
+
+추가 독립 리뷰 A가 nonce write/fsync/close 실패 후 temp 파일이 남는 P2를 실제 소유 FileHandle 실패 3회로 재현했다. 생성 temp의 write·fsync·close·link 전체를 outer finally 정리로 감쌌다. bundle 안에서 초기화를 하나의 Promise로 직렬화하고 temp 삭제도 실패하면 기존 own temp를 회수하기 전 새 inode를 만들지 않는다. fsync 실패 3회 temp 0, fsync+unlink 실패 3회 temp 1, I/O 복구 뒤 temp 0 및 새 쿠키 검증을 회귀로 확인했다. abrupt process crash·분산 저장소의 부분 유실을 보장하는 수치로 확대하지 않는다.

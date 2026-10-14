@@ -103,3 +103,39 @@ it("timeout 뒤에도 실제 I/O가 끝나기 전 슬롯을 유지하고 회복 
   blocked.mockImplementation(actual.mkdir as never); pending.forEach(resolve => resolve());
   await vi.waitFor(async () => { expect(await auth.verifySessionCookieValue(cookie, env)).toBe(true); });
 });
+
+it("nonce fsync 실패를 반복해도 own 임시 파일을 남기지 않고 복구한다", async () => {
+  vi.resetModules();
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const mockedOpen = vi.fn(async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args);
+    if (String(args[0]).includes(".nonce-")) handle.sync = async () => { throw new Error("unit fsync fault"); };
+    return handle;
+  });
+  vi.doMock("node:fs/promises", () => ({ ...actual, open: mockedOpen }));
+  const auth = await import("./auth");
+  for (let index = 0; index < 3; index += 1) await expect(auth.createSessionCookieValue(null, env)).rejects.toThrow();
+  expect(await actual.readdir(directory)).toEqual([]);
+  mockedOpen.mockImplementation(actual.open);
+  const cookie = await auth.createSessionCookieValue(null, env);
+  expect(await auth.verifySessionCookieValue(cookie, env)).toBe(true);
+});
+
+it("temp 삭제도 실패하면 새 inode를 만들지 않고 삭제 회복 뒤 초기화를 재시도한다", async () => {
+  vi.resetModules();
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const mockedOpen = vi.fn(async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args);
+    if (String(args[0]).includes(".nonce-")) handle.sync = async () => { throw new Error("unit fsync fault"); };
+    return handle;
+  });
+  const mockedUnlink = vi.fn(async () => { throw new Error("unit unlink fault"); });
+  vi.doMock("node:fs/promises", () => ({ ...actual, open: mockedOpen, unlink: mockedUnlink }));
+  const auth = await import("./auth");
+  for (let index = 0; index < 3; index += 1) await expect(auth.createSessionCookieValue(null, env)).rejects.toThrow();
+  expect((await actual.readdir(directory)).filter(name => name.startsWith(".nonce-"))).toHaveLength(1);
+  mockedOpen.mockImplementation(actual.open); mockedUnlink.mockImplementation(actual.unlink as never);
+  const cookie = await auth.createSessionCookieValue(null, env);
+  expect(await auth.verifySessionCookieValue(cookie, env)).toBe(true);
+  expect((await actual.readdir(directory)).filter(name => name.startsWith(".nonce-"))).toHaveLength(0);
+});
