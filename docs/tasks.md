@@ -6,7 +6,7 @@
 
 ## 진행 중
 
-**T-199 PR #250 병합 완료, 운영 배포 진행 중**. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
+**T-199 PR #250 병합 및 단독 source0dd/nullable0031 runtime3 운영 전환 검증 완료**. 전체 PostGIS996·새 backend 연동 운영 UI91·원센서/행수/세대·auth 및 보존 fence를 확인했다. Geo 통합 수용 조건은 별도 미완료다. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
 
 
 ---
