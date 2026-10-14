@@ -32,6 +32,8 @@ describe("감사 HTTP 가용성과 인증 응답의 분리", () => {
     auth.requestHasSameOrigin.mockReturnValue(true);
     auth.checkLoginRateLimit.mockReturnValue({ allowed: true });
     auth.verifyAdminLogin.mockResolvedValue("ok");
+    auth.createSessionCookieValue.mockResolvedValue("unit-session");
+    auth.revokeSessionCookieValue.mockResolvedValue(undefined);
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -61,6 +63,18 @@ describe("감사 HTTP 가용성과 인증 응답의 분리", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it.each(["create", "replace", "logout"])("세션 상태 실패 %s는 성공 쿠키나 성공 감사로 바꾸지 않는다", async (mode) => {
+    const fetch = vi.fn().mockResolvedValue(new Response("audit accepted")); vi.stubGlobal("fetch", fetch);
+    if (mode === "create") auth.createSessionCookieValue.mockRejectedValue(new Error("unit storage unavailable"));
+    else auth.revokeSessionCookieValue.mockRejectedValue(new Error("unit storage unavailable"));
+    const response = await (mode === "logout" ? logout(request()) : login(request()));
+    expect(response.status).toBe(503); expect(await response.json()).toEqual({ error: "AUTH_UNAVAILABLE" });
+    expect(response.headers.get("set-cookie")).toBeNull();
+    const event = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(event.outcome).toBe("failed"); expect(event.reason).toBe("session_state_unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it.each(["fetch", "cancel"])("중단을 무시하는 %s도 호출자 대기를 끝낸다", async (mode) => {
     let signal: AbortSignal | undefined;

@@ -959,3 +959,5 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 - 결정 기록: `docs/decisions.md`
 - 작업 일지: `docs/journal.md`
 - 개발 환경: `docs/dev-environment.md`
+
+- [ ] **T-206**: 실제 logout cookie 재사용 결함을 보강한다. 독립 모듈 RED 1·최신 frontend 369 PASS·lint/type/build PASS·Next production compiled HTTP 12 PASS(소유 backend fixture)를 확인했다. FS nonce/marker 공유·bundle별 8개 입장 상한과 I/O 실제 settle 전 슬롯 유지·BFF 자체 401을 적용했다. PR #256 초안이며 독립 리뷰 2명 및 새 운영 image의 원 cookie replay·live/UI E2E 후 완료한다. 기존 UI90/원 태그 UNKNOWN은 별도다.

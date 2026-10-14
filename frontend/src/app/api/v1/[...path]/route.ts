@@ -36,6 +36,9 @@ const SKIP_HEADERS = new Set([
 ]);
 
 async function proxy(request: NextRequest, path: string[]): Promise<Response> {
+  if (!(await requestHasValidSession(request))) {
+    return Response.json({ error: "AUTH_REQUIRED" }, { status: 401 });
+  }
   const suffix = path.map(encodeURIComponent).join("/");
   const target = `${BACKEND_ORIGIN}/api/v1/${suffix}${request.nextUrl.search}`;
 
@@ -48,7 +51,7 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   if (BACKEND_API_KEY) {
     headers.set("X-API-Key", BACKEND_API_KEY);
   }
-  if (ADMIN_PROXY_SECRET && (await requestHasValidSession(request))) {
+  if (ADMIN_PROXY_SECRET) {
     headers.set("X-KTC-Actor", adminUsernameFromEnv());
     headers.set("X-KTC-Admin-Proxy-Secret", ADMIN_PROXY_SECRET);
   }

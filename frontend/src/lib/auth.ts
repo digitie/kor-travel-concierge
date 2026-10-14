@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 
+import { revokeSession, sessionIsRevoked, sessionSigningSecret } from "./auth-session-store";
+
 export const SESSION_COOKIE_NAME = "ktc_ui_session";
 export const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
@@ -10,7 +12,7 @@ const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 310_000;
 const SESSION_ALGORITHM = "HMAC";
 const SESSION_AUDIENCE = "kor-travel-concierge-ui";
-const SESSION_VERSION = 1;
+const SESSION_VERSION = 2;
 const SESSION_ID_BYTES = 32;
 const SESSION_SECRET_MIN_LENGTH = 32;
 const SESSION_CLOCK_SKEW_SECONDS = 60;
@@ -49,7 +51,6 @@ type LoginFailureBucket = {
   resetAt: number;
 };
 
-const revokedSessionIds = new Map<string, number>();
 const loginFailures = new Map<string, LoginFailureBucket>();
 
 export function adminUsernameFromEnv(env: Env = process.env): string {
@@ -96,18 +97,19 @@ export async function createSessionCookieValue(
   if (!sessionSecretIsStrong(secret)) {
     throw new Error("KTC_UI_SESSION_SECRET is not configured or is too short");
   }
+  const signingSecret = await sessionSigningSecret(env);
   const issuedAt = Math.floor(nowMs / 1000);
   const payload: SessionPayload = {
     aud: SESSION_AUDIENCE,
     exp: issuedAt + SESSION_TTL_SECONDS,
-    fp: await sessionFingerprint(source, secret),
+    fp: await sessionFingerprint(source, signingSecret),
     iat: issuedAt,
     sid: base64UrlEncode(randomBytes(SESSION_ID_BYTES)),
     sub: adminUsernameFromEnv(env),
     v: SESSION_VERSION,
   };
   const payloadPart = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
-  const signature = await signSession(payloadPart, secret);
+  const signature = await signSession(payloadPart, signingSecret);
   return `${payloadPart}.${signature}`;
 }
 
@@ -121,16 +123,17 @@ export async function verifySessionCookieValue(
   if (!value || !sessionSecretIsStrong(secret)) {
     return false;
   }
-  const payload = await decodeSignedSession(value, secret);
-  if (payload === null) {
+  try {
+    const signingSecret = await sessionSigningSecret(env);
+    const payload = await decodeSignedSession(value, signingSecret);
+    if (payload === null) return false;
+    return await validateSessionPayload(payload, {
+      env, nowSeconds: Math.floor(nowMs / 1000), secret: signingSecret, source,
+    });
+  } catch {
+    // 폐기 상태를 읽지 못하면 서명만으로 허용하지 않고 인증을 거절한다.
     return false;
   }
-  return validateSessionPayload(payload, {
-    env,
-    nowSeconds: Math.floor(nowMs / 1000),
-    secret,
-    source,
-  });
 }
 
 export async function revokeSessionCookieValue(
@@ -142,11 +145,10 @@ export async function revokeSessionCookieValue(
   if (!value || !sessionSecretIsStrong(secret)) {
     return;
   }
-  const payload = await decodeSignedSession(value, secret);
+  const payload = await decodeSignedSession(value, await sessionSigningSecret(env));
   const nowSeconds = Math.floor(nowMs / 1000);
-  if (payload !== null && payload.exp > nowSeconds && isBase64UrlString(payload.sid)) {
-    cleanupRevokedSessions(nowSeconds);
-    revokedSessionIds.set(payload.sid, payload.exp);
+  if (payload !== null && payload.exp > nowSeconds && payload.exp <= nowSeconds + SESSION_TTL_SECONDS + SESSION_CLOCK_SKEW_SECONDS) {
+    await revokeSession(env, payload.sid, payload.exp, nowSeconds);
   }
 }
 
@@ -336,11 +338,11 @@ async function validateSessionPayload(
   if (payload.exp - payload.iat > SESSION_TTL_SECONDS + SESSION_CLOCK_SKEW_SECONDS) {
     return false;
   }
-  if (sessionIsRevoked(payload.sid, context.nowSeconds)) {
+  if (await sessionIsRevoked(context.env, payload.sid, payload.exp)) {
     return false;
   }
   const expectedFingerprint = await sessionFingerprint(context.source, context.secret);
-  return constantTimeEqual(payload.fp, expectedFingerprint);
+  return constantTimeEqual(payload.fp, expectedFingerprint) && context.secret === await sessionSigningSecret(context.env);
 }
 
 function sessionPayloadHasShape(payload: Partial<SessionPayload>): payload is SessionPayload {
@@ -530,18 +532,6 @@ function cleanupLoginFailures(nowSeconds: number): void {
   }
 }
 
-function sessionIsRevoked(sessionId: string, nowSeconds: number): boolean {
-  cleanupRevokedSessions(nowSeconds);
-  return revokedSessionIds.has(sessionId);
-}
-
-function cleanupRevokedSessions(nowSeconds: number): void {
-  for (const [sessionId, expiresAt] of revokedSessionIds) {
-    if (expiresAt <= nowSeconds) {
-      revokedSessionIds.delete(sessionId);
-    }
-  }
-}
 
 function isEnabled(value: string | undefined): boolean {
   return value === "1" || value?.toLowerCase() === "true";
