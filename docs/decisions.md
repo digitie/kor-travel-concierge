@@ -1714,13 +1714,15 @@ allowlist에는 추가하지 않는다.
 
 ### 결과와 한계
 
-- 재빌드(토큰 동일)는 비용 0, 실제 데이터 변경은 전 geocoded 장소 1회 재호출(장소별 commit·
-  재개 가능·예외 비율 가드). 첫 배포 뒤 첫 run은 토큰 NULL인 전 장소를 1회 돈다 — 전 장소가
-  dirty가 되어 전량 재발행된다.
+- 양 내부 키가 없는 첫 관측은 token과 baseline marker만 원자 저장하며 장소 재해결·dirty·
+  재발행은 없다. 같은 token의 후속 baseline tick도 재해결하지 않는다. 실제 후속 token 변경은
+  stale geocoded 장소를 재호출한다(장소별 commit·재개 가능·예외 비율 가드).
+  기존 CURSOR-only+stale와 일반 progress 재개는 baseline 예외 밖에서 종전처럼 처리한다.
 - **배포 선행**: Map T-GR-03(ADR-109; `raw_payload_hash`에서 `address.geo_data_token` 제외 +
   토큰 신뢰 규칙) prod 배포 → 그 뒤 concierge T-200 배포. 순서가 뒤집히면 Map concierge
-  provider가 concierge `payload_hash`를 그대로 채택하므로 첫 run과 이후 모든 geo 릴리스마다
-  concierge feature 전부의 `row_revision`이 전진한다. T-199 배포 1회의 전량 재발행(payload 필드
+  provider가 concierge `payload_hash`를 그대로 채택하면 실제 token 변경의 재해결·재발행으로
+  concierge feature의 `row_revision`이 불필요하게 전진할 수 있다. 기준선 저장 tick은 재발행하지
+  않는다. T-199 배포 1회의 전량 재발행(payload 필드
   추가)은 `docs/feature-export-api.md` 기존 규칙대로 허용된다.
 - **`unresolved` 장소는 옛 코드·명칭을 유지한다**(화면·export에 그대로 나가고 `source`로만
   구분; 다음 릴리스에서 재시도). 코드를 지우지 않는 이유: 해상·섬처럼 주소 후보가 없는 좌표가
@@ -1731,8 +1733,9 @@ allowlist에는 추가하지 않는다.
   릴리스가 알려 주지 않는다 — 행정구역 개편 시 사람이 고친다.
 - `data_token`이 없는 geo(배포 전·지문 실패)에는 아무것도 하지 않는다(안전 방향은 "바뀜"이지만
   계획 없이 종료 — 소비자가 헛도는 것을 막는다).
-- `kor_travel_geo_data_token`은 운영 UI·settings API로 편집할 수 없다. 전량 재시도가 필요하면
-  DB에서 행을 지운다(안전 방향 — 다음 tick이 전 장소를 다시 본다).
+- `kor_travel_geo_data_token`은 운영 UI·settings API로 편집할 수 없다. 기존 progress를 남기고
+  CURSOR만 명시적으로 없앤 경우는 원 재시도/재개 의미를 유지한다. CURSOR와 PROGRESS를 둘 다
+  없애면 다음 tick은 새 기준선 관측이므로 전량 재해결 수단으로 취급하지 않는다.
 
 ### 열린 결정(소유자)
 
