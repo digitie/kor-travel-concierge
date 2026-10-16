@@ -56,6 +56,13 @@ async def cursor(factory):
         return await settings_service.get_setting(session, refresh.CURSOR_KEY)
 
 
+async def begin_release(factory):
+    """기존 재해결 회귀는 첫 관측과 구별되는 실제 토큰 변경으로 시작한다."""
+    async with factory() as session:
+        session.add(SystemSetting(key=refresh.CURSOR_KEY, value=OTHER))
+        await session.commit()
+
+
 class Geo:
     def __init__(self, engine, *, missing_token=False):
         self.engine = engine
@@ -113,6 +120,7 @@ async def run(factory, geo):
 async def test_resolved_and_unresolved_are_one_attempt_per_release(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(
         session_factory, 2, sigungu_code="11111", legal_dong_code="1111111111"
     )
@@ -153,12 +161,13 @@ async def test_same_global_token_still_refreshes_new_stale_place(
 async def test_cancelled_run_resumes_without_repeating_committed_places(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 4)
     geo = Geo(engine)
     geo.cancel_at = rows[2][1]
     with pytest.raises(asyncio.CancelledError):
         await run(session_factory, geo)
-    assert await cursor(session_factory) is None
+    assert await cursor(session_factory) == OTHER
     async with session_factory() as session:
         assert [
             (await session.get(TravelPlace, row_id)).admin_code_geo_data_token
@@ -175,6 +184,7 @@ async def test_cancelled_run_resumes_without_repeating_committed_places(
 async def test_remaining_errors_never_advance_cursor_and_only_failed_places_retry(
     session_factory, engine, errors, raises
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 51)
     geo = Geo(engine)
     geo.bad = {lon for _, lon in rows[:errors]}
@@ -187,7 +197,7 @@ async def test_remaining_errors_never_advance_cursor_and_only_failed_places_retr
     assert (
         first.scanned == (50 if raises else 51)
         and first.errored == errors
-        and await cursor(session_factory) is None
+        and await cursor(session_factory) == OTHER
     )
     async with session_factory() as session:
         tokens = [
@@ -208,6 +218,7 @@ async def test_remaining_errors_never_advance_cursor_and_only_failed_places_retr
 async def test_only_id_pages_and_current_token_rows_are_excluded(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 123)
     geo = Geo(engine)
     result = await run(session_factory, geo)
@@ -233,6 +244,7 @@ async def test_provider_without_data_token_does_not_seal_cursor_or_places(
 
 
 async def test_coordinate_drift_remains_stale_until_next_run(session_factory, engine):
+    await begin_release(session_factory)
     rows = await seed(session_factory)
     geo = Geo(engine)
     changed = False
@@ -255,7 +267,7 @@ async def test_coordinate_drift_remains_stale_until_next_run(session_factory, en
     assert (
         result.skipped == 1
         and result.state == "pending"
-        and await cursor(session_factory) is None
+        and await cursor(session_factory) == OTHER
     )
     async with session_factory() as session:
         row = await session.get(TravelPlace, rows[0][0])
@@ -267,6 +279,7 @@ async def test_coordinate_drift_remains_stale_until_next_run(session_factory, en
 async def test_refresh_and_full_export_concurrency_have_one_change_and_fixpoint(
     client, session_factory, engine
 ):
+    await begin_release(session_factory)
     candidate_id, place_id = await _seed_ready_candidate(session_factory)
     before = (await client.get("/api/v1/features/changes")).json()["next_cursor"]
     geo = Geo(engine)
@@ -329,13 +342,14 @@ async def test_malformed_version_response_is_error_not_noop(body):
 async def test_persistent_slow_error_prefix_cannot_starve_healthy_suffix(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 10)
     geo = Geo(engine)
     geo.bad = {lon for _, lon in rows[:4]}
     geo.cancel_at = rows[4][1]
     with pytest.raises(asyncio.CancelledError):
         await run(session_factory, geo)
-    assert await cursor(session_factory) is None
+    assert await cursor(session_factory) == OTHER
     async with session_factory() as session:
         progress = json.loads(
             await settings_service.get_setting(session, refresh.PROGRESS_KEY)
@@ -344,7 +358,7 @@ async def test_persistent_slow_error_prefix_cannot_starve_healthy_suffix(
     geo.cancel_at = None
     result = await run(session_factory, geo)
     assert result.resolved == 6 and result.errored == 4
-    assert result.state == "pending" and await cursor(session_factory) is None
+    assert result.state == "pending" and await cursor(session_factory) == OTHER
     async with session_factory() as session:
         for row_id, _ in rows[4:]:
             assert (
@@ -359,6 +373,7 @@ async def test_persistent_slow_error_prefix_cannot_starve_healthy_suffix(
 async def test_error_budget_keeps_cursor_and_next_run_reaches_remaining_places(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 60)
     geo = Geo(engine)
     geo.bad = {lon for _, lon in rows[:50]}
@@ -370,7 +385,7 @@ async def test_error_budget_keeps_cursor_and_next_run_reaches_remaining_places(
         await run(session_factory, geo)
     assert caught.value.stats.resolved == 10 and caught.value.stats.errored == 40
     assert all(geo.calls[lon] == 1 for _, lon in rows[50:])
-    assert await cursor(session_factory) is None
+    assert await cursor(session_factory) == OTHER
     geo.bad.clear()
     result = await run(session_factory, geo)
     assert result.resolved == 50 and result.state == "completed"
@@ -405,6 +420,7 @@ async def test_progress_key_is_not_publicly_writable(client):
 async def test_continuous_new_places_do_not_delay_wrapped_retry_after_cancellation(
     session_factory, engine
 ):
+    await begin_release(session_factory)
     rows = await seed(session_factory, 3)
     geo = Geo(engine)
     geo.bad.add(rows[0][1])
@@ -453,7 +469,7 @@ async def test_continuous_new_places_do_not_delay_wrapped_retry_after_cancellati
     assert geo.calls[rows[0][1]] == 2, (
         "오류 prefix도 tail이 계속 생기는 동안 wrap해 재해결해야 한다"
     )
-    assert await cursor(session_factory) is None
+    assert await cursor(session_factory) == OTHER
     async with session_factory() as session:
         for row_id, _ in rows:
             assert (
@@ -484,3 +500,72 @@ async def test_invalid_sweep_ceiling_fails_without_skipping_places(
     with pytest.raises(refresh.RefreshError):
         await run(session_factory, geo)
     assert not geo.calls and await cursor(session_factory) is None
+
+
+async def test_first_observation_and_next_tick_only_store_baseline(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 2, sigungu_code="11111")
+    geo = Geo(engine)
+    first = await run(session_factory, geo)
+    assert first.state == "baseline" and first.token_advanced
+    second = await run(session_factory, geo)
+    assert second.state == "noop" and not second.token_advanced
+    assert first.scanned == second.scanned == first.dirty == second.dirty == 0
+    assert not geo.calls and geo.version_calls == 2
+    async with session_factory() as session:
+        assert json.loads(
+            await settings_service.get_setting(session, refresh.PROGRESS_KEY)
+        ) == {"token": TOKEN, "after": 0, "ceiling": None, "phase": "baseline"}
+        for place_id, _ in rows:
+            place = await session.get(TravelPlace, place_id)
+            assert place.sigungu_code == "11111"
+            assert place.admin_code_geo_data_token is None
+
+
+async def test_new_release_after_baseline_refreshes_all_stale_places(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 2)
+    assert await refresh.claim_baseline(session_factory, OTHER)
+    geo = Geo(engine)
+    result = await run(session_factory, geo)
+    assert result.state == "completed" and result.resolved == len(rows)
+    assert result.token_advanced and await cursor(session_factory) == TOKEN
+    async with session_factory() as session:
+        assert json.loads(
+            await settings_service.get_setting(session, refresh.PROGRESS_KEY)
+        ) == {"token": TOKEN, "after": 0, "ceiling": None}
+
+
+async def test_existing_same_epoch_progress_without_cursor_resumes(
+    session_factory, engine
+):
+    rows = await seed(session_factory, 2)
+    async with session_factory() as session:
+        first = await session.get(TravelPlace, rows[0][0])
+        first.admin_code_geo_data_token = TOKEN
+        session.add(
+            SystemSetting(
+                key=refresh.PROGRESS_KEY,
+                value=json.dumps(
+                    {"token": TOKEN, "after": rows[0][0], "ceiling": rows[-1][0]}
+                ),
+            )
+        )
+        await session.commit()
+    geo = Geo(engine)
+    result = await run(session_factory, geo)
+    assert result.state == "completed" and result.resolved == 1
+    assert geo.calls[rows[0][1]] == 0 and geo.calls[rows[1][1]] == 1
+
+
+@pytest.mark.parametrize("key", [refresh.CURSOR_KEY, refresh.PROGRESS_KEY])
+async def test_postgres_baseline_claim_conflict_is_atomic(session_factory, key):
+    async with session_factory() as session:
+        session.add(SystemSetting(key=key, value="existing-owner"))
+        await session.commit()
+    assert not await refresh.claim_baseline(session_factory, TOKEN)
+    async with session_factory() as session:
+        rows = list((await session.scalars(select(SystemSetting))).all())
+        assert [(row.key, row.value) for row in rows] == [(key, "existing-owner")]
