@@ -6,6 +6,13 @@
 
 ## 진행 중
 
+**T-200 첫 토큰 기준선 정합 — PR #258**: Geo ADR-069 D8:253에 따라 양 내부 키가
+없는 첫 관측은 token+baseline marker만 원자 저장하고 동일 token의 다음 tick도 재해결하지
+않도록 구현했다. CURSOR-only+stale와 기존 progress 재개·오류·변경 token 처리는 유지한다.
+로컬 설정 SQL 15건과 PG 없는 backend 전체 434 PASS/612 SKIP이며 실제 PostGIS
+회귀·독립 2인 리뷰·운영 적용은 별도 미완료다. 상세: [기준선 설계](geo-first-token-baseline.md).
+T-199/T-200/T-201의 기존 운영·통합 수용 조건을 완료 처리하지 않는다.
+
 **T-199 PR #250 병합 및 단독 source0dd/nullable0031 runtime3 운영 전환 검증 완료**. 전체 PostGIS996·새 backend 연동 운영 UI91·원센서/행수/세대·auth 및 보존 fence를 확인했다. Geo 통합 수용 조건은 별도 미완료다. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
 
 
@@ -20,8 +27,8 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
 선행은 배포·검증 쪽에만 있다: (i) T-200 격리 스택 e2e·prod 첫 run = geo ADR-069(기존
 `dataset/version` 응답의 `current.data_token`·네 v2 응답 최상위 `dataset`) 배포+backfill 뒤,
 (ii) **배포 선행**: Map T-GR-03(ADR-109; `raw_payload_hash`에서 `address.geo_data_token` 제외 +
-토큰 신뢰 규칙) prod 배포 → Manager lane(T-200-pre) 머지 → 그 뒤 concierge T-200 배포(첫 run이
-전 장소를 dirty로 만든다). T-199 배포 1회의 전량 재발행(payload 필드 추가)은 기존 규칙대로
+토큰 신뢰 규칙) prod 배포 → Manager lane(T-200-pre) 머지 → 그 뒤 concierge T-200 배포(양 내부 키가 없는 첫 관측은 기준선만 저장하며,
+실제 후속 token 변경의 재해결이 dirty를 만든다). T-199 배포 1회의 전량 재발행(payload 필드 추가)은 기존 규칙대로
 허용. PR 묶음은 PR-1(T-199) → PR-2(T-200) → PR-3(T-201, doc-only).
 
 - [ ] **T-199**: 토큰 컬럼(시도 의미)·enrich force/outcome 변형·헤더 인증·dirty 배선·payload

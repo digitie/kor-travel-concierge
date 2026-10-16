@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-10-17 — T-200 첫 Geo 토큰 기준선 정합
+
+- 별도 ext4 feature 작업 트리와 초안 PR #258에서 첫 관측 token+baseline marker를 같은
+  transaction의 insert-only claim으로 저장했다. 동일 token의 후속 tick도 장소 재해결·dirty를
+  만들지 않으며 기존 CURSOR-only+stale·중단 재개·오류 prefix·좌표 fence는 유지한다.
+- 원본 main에서 새 첫 관측 회귀의 장소 재해결 도달 실패를 재현했다. 수정 후 소유 in-memory
+  SQLite SQL 원자성/충돌/두 번째 쓰기 실패 등 15건 통과, PG DSN 없는 backend 전체
+  434 PASS/612 SKIP다. 최초 scheduler import 경로 누락 collection error는 보존했다.
+- 변경 Python Ruff와 frontend type-check·376 tests·lint·production build는 통과했다.
+  전체 Ruff는 main 기존 286건 대비 282건으로 실패/신규 0건이며 다른 파일을 수정하지 않았다.
+  실제 PostGIS 회귀·두 독립 리뷰·운영 token/첫 run/배포 검증은 별도 미완료다.
+  기존 T-199/T-200/T-201 운영 수용 조건을 소급 완료하지 않는다.
+
 ## 2026-10-14 — T-199 단독 backend/schema 소유 복구와 운영 UI 검증
 
 - T-199 source0dd의 immutable API/MCP/CS runtime 세 개와 nullable0031을 적용했고 운영 토큰 컬럼/부분 인덱스·장소1233·dagster generation1·원3센서 exact origin/status 복원을 확인했다. 최신 인증 UI와 공유 PG/Dagster webserver/daemon은 유지했다.
