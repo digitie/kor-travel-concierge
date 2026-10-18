@@ -17,12 +17,8 @@ Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시�
 
 ### 현재 작업
 
-- **다음**: T-199(ADR-49 proposed, 미구현; 코드 착수 가능 — 활성화 검증만 kor-travel-geo ADR-069
-  배포 뒤) — `docs/tasks.md` 대기 최상단. 저장소에 resume 문서가 없어 이 줄이 "다음 한 작업"
-  포인터다.
-- **병렬 가능**: T-202a(`.env.example` 주석) + T-203(geo 클라이언트 connect timeout 분리) — ADR-50
-  (proposed), 전환과 독립이라 먼저 머지 가능. 운영 전환 T-202b는 Track 2 consumer URL 전환 단계(Manager
-  ADR-58 §11.2, geo 플립 다음 날)에서만.
+- **현재**: T-199/T-200 제품 구현과 #259 변경 토큰·부분 실패·재개 격리 수용 완료. T-201 문서를 현재형으로 정산한다. 운영 변경 토큰 전량·자동 daemon은 별도 미검증이다. [현재 수용 경계](docs/track-acceptance-current.md)를 따른다.
+- **다음**: 운영 전원 차단 없이 Track2 실제 연결 단절 효과를 격리 검증한다. 추가 성능 튜닝보다 남은 Track 수용을 우선한다.
 - **T-185 완료**: 검수 bulk를 서버 filter snapshot 기반 `preview`·100건 `execute`로 구현했다. 명시
   선택 최대 500건, filter 최대 10,000건(10,001번째면 전체 413), actor/action/scope/TTL 결합 확인
   token digest, operation/item/receipt ledger, 같은 request/cursor exact replay와 stale cursor 409를

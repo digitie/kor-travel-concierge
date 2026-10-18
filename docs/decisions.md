@@ -1524,10 +1524,44 @@ CAS로 두 실행 방식의 중복 claim과 늦은 쓰기를 차단한다. provi
 
 ## ADR-49: geo 데이터 토큰과 행정코드 재해결
 
-- 상태: proposed (미구현 — 구현은 T-199/T-200-pre/T-200/T-201)
+- 상태: accepted (T-199/T-200 구현·격리 수용 완료; 운영 changed-token 전량·자동 실행은 별도 미검증)
 - 날짜: 2026-10-13
 - 결정자: human, AI agent
 - 관계: ADR-19(VWorld 우선 지오코딩), ADR-32(공개 API 키), kor-travel-geo ADR-067(`POST /v2/dataset/version`)·ADR-069(데이터 토큰), kor-travel-map ADR-109(릴리스 재지오코딩)
+
+### 현재 계약과 수용 (2026-10-19)
+
+현재 제품은 PR #250/#251/#258이며 #259에서 실제 HTTP/PostGIS47건과 Map 소비3건,
+운영 UI91을 검증했다. 구현의 accepted 상태는 운영 변경 토큰 전량·자동 실행의 완료와 다르다.
+[현재 수용 경계](track-acceptance-current.md)를 따른다.
+
+| 계약 | 현재 코드의 정본 |
+| --- | --- |
+| nullable 시도 토큰·부분 인덱스 | backend/ktc/models/travel_place.py의 TravelPlace와 migration0031 |
+| 헤더 인증·정상 미해결·쓰기 fence | backend/ktc/etl/admin_region_service.py의 fetch_admin_region_lookup, refresh_place_admin_codes_isolated |
+| 최초 기준선·재개·최종 토큰 | backend/ktc/etl/admin_region_refresh.py의 claim_baseline, read_progress, refresh_admin_regions |
+| job·admission·maintenance | backend/ktc/dagster/definitions.py의 concierge_admin_region_refresh |
+| payload와 dirty outbox | backend/ktc/services/feature_export_service.py |
+
+- 토큰은 마지막 정상 시도의 데이터 지문이다. force 재해결의 정상 미해결은 기존 코드를 유지하고
+  unresolved source·시도 토큰을 기록하며, 통신/파싱 오류는 토큰을 전진시키지 않는다.
+- reverse와 within-radius는 X-KTG-API-Key 헤더를 쓴다. 두 응답의 지문이 다르면 하나의
+  최신 provenance로 봉인하지 않는다. 수정된 좌표·버전과 충돌한 늦은 응답은 쓰지 않는다.
+- 양 내부 키가 없는 첫 관측은 기준선만 원자 저장한다. 같은 기준선 지문은 noop이다.
+  후속 지문 변경은 짧은 DB 세션과 장소별 commit으로 처리하고 진행 위치를 보존한다.
+- 최종 stale 대상이 없어야 완료 토큰을 전진시킨다. 부분 실패 후 이미 성공한 장소는
+  재호출하지 않으며, 실패 대상과 중단 뒤 남은 대상을 재개한다.
+- geo_release dirty와 payload 토큰은 현재 구현이다. Concierge 해시에 포함하고 Map은
+  주소 토큰을 원천 해시에서 제외하며 현재 지문과 맞는 주소만 신뢰한다.
+- 내부 cursor/progress는 공개 settings allowlist에 넣지 않는다. daemon OFF이므로
+  자동 주기와 운영 changed-token 전량 전파는 이번 격리 검증으로 대체하지 않는다.
+
+### 최초 설계 기록의 읽기 범위
+
+아래 맥락·승인 대기 표현·file:line은 2026-10-13 설계 이력이다. 현재 구현 위치는 위
+이름 있는 함수/모델 표가 정본이며, 과거 줄 번호를 현재 소스 위치로 해석하지 않는다.
+역사적 승인 대기를 새 구현 blocker로 부활시키지 않는다. 수용 조건 변경은 현재 수용
+기록에 명시하며 실제 운영 미검증 조건을 성공으로 바꾸지 않는다.
 
 ### 맥락
 
@@ -1760,7 +1794,7 @@ allowlist에는 추가하지 않는다.
 
 ## ADR-50: kor-travel-geo가 odroid로 옮겨도 concierge는 REST로만 호출한다
 
-- 상태: proposed (T-202a/T-203 source 구현·검증 완료; 운영값 전환은 T-202b, Track 2 배포 순서의
+- 상태: accepted (T-202a/T-203 구현 계약; 운영 전환의 개별 수용은 T-202b, Track 2 배포 순서의
   **consumer URL 전환 단계** — 이하 "전환 단계"; 설계 §11.2의 9단계, geo 플립·`mv_refresh` 다음 날))
 - 날짜: 2026-10-13
 - 결정자: human, AI agent
@@ -1774,6 +1808,14 @@ allowlist에는 추가하지 않는다.
   번호 기준)의 해당 절을 뜻한다 — ADR-58 머지 뒤 T-202b 선행 확인 (4)에서 절 번호를 재대조한다. "fact
   base"는 그 설계의 2026-10-13 실측 기록이며 concierge에 닿는 값(odroid 준비 상태·LAN RTT·n150 디렉터리
   성격)은 이 ADR 맥락에 옮겨 적었다.
+
+### 현재 계약과 남은 효과 검증
+
+Concierge는 Geo를 REST로 호출하며 환경값 반영에는 해당 runtime 재생성이 필요하다.
+기본 client의 connect2초/read10초는 구현·회귀 검증됐다. T-202b의 모든 운영 수용 및
+실제 연결 단절의 3초 미만 효과는 별도 증거로 관리한다. 아래 배포 순서·경로·줄 번호는
+최초 설계 맥락이고, 현재 운영 상태를 과거의 미확인 값으로 추정하지 않는다.
+[현재 수용 경계](track-acceptance-current.md)를 따른다.
 
 ### 맥락
 
@@ -1954,8 +1996,8 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
 - odroid 방화벽은 (가) 우리 포트만 제한 + 그 외 accept / (나) default-deny 어느 안(설계 §4.3·§14-28,
   소유자 결정)에서도 `12501`을 n150 addr·HAProxy addr에만 허용하므로 — concierge는 n150에서 부른다 —
   정책과 무관하게 추가 허용이 필요 없다. 다른 호스트에서 concierge를 띄우면 열어야 한다.
-- 이 ADR이 서술하는 odroid 동작은 전부 **계획(proposed, 미구현)**이다. 상태를 accepted로 바꾸는 것은
-  전환 단계 효과 검사 통과 뒤 T-202b에서 한다.
+- 최초 설계에서는 전환 뒤 accepted 승격을 예정했다. 현재는 구현 계약을 accepted로 정산하되
+  T-202b 운영 조건과 장애 drill은 각각의 증거가 있어야 완료로 표시한다.
 
 ### 열린 결정(소유자)
 

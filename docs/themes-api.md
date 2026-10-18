@@ -74,7 +74,7 @@ metadata를 더한 형태다.
 ```
 
 `address.sigungu_code/sigungu_name`·`legal_dong_code/legal_dong_name`은 kor-travel-geo v2
-reverse 산물이며, **ADR-49 예정(proposed, 미구현)**에 따라 geo 주소 데이터셋 릴리스 뒤
+reverse 산물이며, **ADR-49 현재 구현**에 따라 geo 주소 데이터셋 릴리스 뒤
 재해결로 값이 갱신될 수 있다(`docs/decisions.md` ADR-49) — 소비자는 코드를 외부 키로 고정하지
 않는다.
 

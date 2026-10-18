@@ -110,7 +110,7 @@ payload 계약 버전이며, 계약 확장은 **additive**(새 필드·새 error
 유도한다(경량 옵션). `sigungu_code`가 있으면 그 앞 2자리를, 없고 `legal_dong_code`만 있으면
 법정동 코드 앞 2자리를 쓴다. 시군구·법정동 코드가 모두 없으면 유도 결과도 `null`이다.
 
-#### `place.address.geo_data_token` (T-199 구현, 운영 반영·refresh 활성화 검증 중)
+#### `place.address.geo_data_token` (T-199 현재 구현; 자동 운영 별도)
 
 T-199은 `place.address`에 다음 필드를 **additive**로 제공한다(`schema_version` 불변).
 운영 반영과 정기 refresh 활성화의 선행·검증 상태는 `docs/tasks.md`와 journal을 따른다.
@@ -181,7 +181,7 @@ payload 필드를 바꾸는 배포(예: `place.address` 행정코드 주입, `sc
    1회 + 시간당 1회 도는 전량 reconcile 안전망(`sync_feature_exports`)이 최대 1시간 내
    재발행한다.
 
-**예정(ADR-49 proposed, 미구현)**: geo 주소 데이터셋 릴리스로 확정 장소의 행정코드가
+**현재 계약(ADR-49)**: geo 주소 데이터셋 릴리스로 확정 장소의 행정코드가
 재해결되면(dirty reason `geo_release`) 경로 1로 재발행된다. 코드·명칭이 바뀐 장소뿐 아니라
 **토큰만 바뀐 장소도** `geo_data_token`이 payload에 실려 `payload_hash`가 달라지므로 재발행된다.
 재빌드(토큰 동일)는 재발행을 만들지 않는다.
