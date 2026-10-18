@@ -1,0 +1,23 @@
+{
+  "sha256": "7925bcdea8472b069b40b7585b6ab8eb8f7cd03d2bfbb5e252755ff60bacef4f",
+  "lane": [
+    {
+      "path": [
+        "concurrency",
+        "runs",
+        "tag_concurrency_limits",
+        "10"
+      ],
+      "entry": {
+        "key": "kortravelcommon/job",
+        "value": "concierge/concierge_admin_region_refresh",
+        "limit": 1
+      }
+    }
+  ],
+  "literal_present": true,
+  "manager_main": "397a91ca0df6a53a328127065b41e940dd23eaf0",
+  "raw_sha256": "d22e3d382d6ad9d4675c62353ab49308bc0b39b8648e312aabd7597b27c1a5a7",
+  "same_config_on_cs_and_webserver": true,
+  "daemon": "OFF"
+}

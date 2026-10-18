@@ -46,7 +46,7 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
 
 아래 상세 수정 위치·절차는 최초 계획 이력이다. 현재 구현 위치는 ADR-49의 함수/모델 표를
 따른다. 완료 체크는 구현·격리 수용만 뜻하며 운영 changed-token 전량/자동 tick은
-[별도 열린 수용](track-acceptance-current.md)으로 유지한다. T-200-pre는 실제 lane 증거 확인 전 열린 상태다.
+[별도 열린 수용](track-acceptance-current.md)으로 유지한다. T-200-pre는 현재 수용 기록의 정본·실효 YAML 증거로 완료했다.
 
 - [x] **T-199 구현·격리 수용** (운영 전량 전파는 별도): 토큰 컬럼(시도 의미)·enrich force/outcome 변형·헤더 인증·dirty 배선·payload
   토큰·replay 확인(규모 S). 수정 파일:
@@ -79,7 +79,7 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   없음(효과 테스트); `correct_place` → 토큰 NULL → enrich 뒤 새 토큰; `audit_logs.payload_json`
   DB 되쓰기 경로 "없음" grep 결과를 PR 본문에(있으면 복원 시 토큰 NULL 처리 추가); alembic head
   단일(`20261013_0031`); ruff.
-- [ ] **T-200-pre**: Manager lane 1줄(규모 XS, 저장소 `kor-travel-docker-manager`). lane이 job
+- [x] **T-200-pre** (2026-10-19 실제 정본·CS/webserver config 확인): Manager lane 1줄(규모 XS, 저장소 `kor-travel-docker-manager`). lane이 job
   이름별임은 origin/main @094d397 `config/dagster-shared/dagster.yaml:95-106`에서 확인됨(이 PR,
   ADR-49 결정 4). 남는 작업은 Manager PR: `- key: kortravelcommon/job, value:
   concierge/concierge_admin_region_refresh, limit: 1` 1줄 + lane 집합 단언
@@ -108,7 +108,7 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   같은 job의 활성 run이 있는 센서 tick → RunRequest 0건(기존 maintenance 테스트 패턴);
   `feature_exports` 동시 실행 시 같은 candidate에 중복 outbox 행 0; `POST /settings`에
   `kor_travel_geo_data_token` 넣으면 400(allowlist 불변 효과 테스트).
-- [ ] **T-201**: 문서(규모 S, 의존 T-199·T-200). `docs/decisions.md` ADR-49 상태 proposed →
+- [x] **T-201 문서 정산** (운영 미검증은 별도 유지): 문서(규모 S, 의존 T-199·T-200). `docs/decisions.md` ADR-49 상태 proposed →
   accepted, `docs/feature-export-api.md`의 "예정(ADR-49 proposed)" 절을 현재 계약으로 승격
   (`place.address` 표에 `geo_data_token` 행, 재발행 사유 `geo_release`), `docs/architecture.md`
   §4.5/§6.4 예정 문구 제거, `docs/themes-api.md`, `CHANGELOG.md`(컬럼·job·payload 필드·인증
