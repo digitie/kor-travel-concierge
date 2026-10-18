@@ -1,5 +1,18 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-18 — 운영 전환과 자막 탭 E2E 선택자 보강
+
+- API·MCP·코드 서버·UI 네 runtime 전환 후 소스/이미지/환경 보존과 최종 정상 기동을 확인했다. 최초 기준선과 동일 데이터 후속 실행은 모두 장소 변경 0건이었다.
+- 실제 PostgreSQL 회귀 37건, SQLite 기준선 15건, 실제 PostgreSQL 동시성 2건을 통과했다. 두 독립 제품 리뷰의 지적은 해소했다.
+- 최종 UI 검증 소스는 5836c1e7이며 결과 보고서 SHA-256은 96655e5dcf9557429d6d03af823ba04eeaeac45d3917f74155dc3dd60d2df346이다. 실제 로그인·지도·장소/검수 UI와 브라우저 장애 주입을 포함한다. 업무 데이터 쓰기는 실행하지 않았다.
+- 자동 daemon 실행, 실제 변경 데이터의 전량 재해결, 실수집 CPU/RSS 비교는 이번 통과 범위에 포함하지 않는다. GitHub checks가 없어 CI 성공으로 표기하지 않는다.
+
+- 네 runtime 교체와 최초 기준선·동일 데이터 재실행 검증을 완료했다. 자동 daemon은 중지 상태를 유지한다.
+- n150 공개 UI 첫 실행은 81/91이었다. 테스트 브라우저의 WebGL2 비활성화를 재현했고, 브라우저 옵션만 보정한 다음 지도 관련 10개는 통과했다.
+- 두 번째 실행은 90/91이었다. 자막 탭 전환 애니메이션 중 두 tabpanel이 잠시 함께 남아 이름 없는 선택자가 strict 오류를 일으켰다. 활성 탭의 aria-selected와 정확한 패널 이름을 확인하도록 좁게 보강했다.
+- 원문 타임스탬프·정리 문장·타임스탬프 제거·빈 자막 검증은 유지한다. 제품 frontend/backend bytes는 바뀌지 않았다. 최종 공개 UI 91/91 PASS(재시도·생략 0)를 확인했다.
+
+
 최근 두 달의 작업 진행 역사를 역시간순으로 기록한다.
 
 ## 과거 기록 아카이브
@@ -14,6 +27,19 @@
 과거 기록 검색: `rg <패턴> docs/archive/`. 아카이브의 새 분리는 항목 경계·220 KiB 제한과 링크 도달을 확인한다.
 
 ---
+
+## 2026-10-17 — T-200 첫 Geo 토큰 기준선 정합
+
+- 별도 ext4 feature 작업 트리와 초안 PR #258에서 첫 관측 token+baseline marker를 같은
+  transaction의 insert-only claim으로 저장했다. 동일 token의 후속 tick도 장소 재해결·dirty를
+  만들지 않으며 기존 CURSOR-only+stale·중단 재개·오류 prefix·좌표 fence는 유지한다.
+- 원본 main에서 새 첫 관측 회귀의 장소 재해결 도달 실패를 재현했다. 수정 후 소유 in-memory
+  SQLite SQL 원자성/충돌/두 번째 쓰기 실패 등 15건 통과, PG DSN 없는 backend 전체
+  434 PASS/612 SKIP다. 최초 scheduler import 경로 누락 collection error는 보존했다.
+- 변경 Python Ruff와 frontend type-check·376 tests·lint·production build는 통과했다.
+  전체 Ruff는 main 기존 286건 대비 282건으로 실패/신규 0건이며 다른 파일을 수정하지 않았다.
+  실제 PostGIS 회귀·두 독립 리뷰·운영 token/첫 run/배포 검증은 별도 미완료다.
+  기존 T-199/T-200/T-201 운영 수용 조건을 소급 완료하지 않는다.
 
 ## 2026-10-14 — T-199 단독 backend/schema 소유 복구와 운영 UI 검증
 

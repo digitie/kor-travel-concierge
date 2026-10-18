@@ -74,6 +74,27 @@ async def write_setting(session: AsyncSession, key: str, value: str) -> None:
     )
 
 
+async def claim_baseline(factory, token: str) -> bool:
+    """양 키가 여전히 없을 때만 첫 관측을 같은 transaction으로 저장한다."""
+    marker = json.dumps(
+        {"token": token, "after": 0, "ceiling": None, "phase": "baseline"}
+    )
+    async with factory() as session:
+        for key, value in ((PROGRESS_KEY, marker), (CURSOR_KEY, token)):
+            claimed = await session.scalar(
+                insert(SystemSetting)
+                .values(key=key, value=value, updated_at=utcnow())
+                .on_conflict_do_nothing(index_elements=[SystemSetting.key])
+                .returning(SystemSetting.key)
+            )
+            if claimed is None:
+                # 다른 실행이 이미 진행/토큰을 저장했다. 첫 claim도 함께 되돌린다.
+                await session.rollback()
+                return False
+        await session.commit()
+    return True
+
+
 async def save_progress(factory, token: str, after: int, ceiling: int | None) -> None:
     async with factory() as session:
         await write_setting(
@@ -84,9 +105,9 @@ async def save_progress(factory, token: str, after: int, ceiling: int | None) ->
         await session.commit()
 
 
-def read_progress(raw: str | None, token: str) -> tuple[int, int | None]:
+def read_progress(raw: str | None, token: str) -> tuple[int, int | None, bool]:
     if raw is None:
-        return 0, None
+        return 0, None, False
     value = json.loads(raw)
     if not isinstance(value, dict) or parse_data_token(value.get("token")) is None:
         raise ValueError("재해결 진행 위치 형식 오류")
@@ -98,7 +119,16 @@ def read_progress(raw: str | None, token: str) -> tuple[int, int | None]:
         isinstance(ceiling, bool) or not isinstance(ceiling, int) or ceiling < after
     ):
         raise ValueError("재해결 순회 상한 형식 오류")
-    return (after, ceiling) if value["token"] == token else (0, None)
+    baseline = value.get("phase") == "baseline"
+    if "phase" in value and (
+        not baseline
+        or set(value) != {"token", "after", "ceiling", "phase"}
+        or after != 0
+        or ceiling is not None
+        or parse_data_token(value["token"]) != value["token"]
+    ):
+        raise ValueError("재해결 기준선 형식 오류")
+    return (after, ceiling, baseline) if value["token"] == token else (0, None, False)
 
 
 async def current_token(
@@ -170,14 +200,22 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
         stale = await stale_exists(session, token)
         progress = await get_setting(session, PROGRESS_KEY)
         await session.commit()
+    if previous is None and progress is None:
+        if await claim_baseline(factory, token):
+            stats.state = "baseline"
+            stats.token_advanced = True
+        return stats
     if previous == token and not stale:
         stats.state = "noop"
         return stats
 
     try:
-        after, ceiling = read_progress(progress, token)
+        after, ceiling, baseline = read_progress(progress, token)
     except (ValueError, TypeError):
         raise RefreshError("재해결 진행 위치 형식 오류", stats) from None
+    if previous == token and baseline:
+        stats.state = "noop"
+        return stats
     if ceiling is None:
         async with factory() as session:
             ceiling = (
