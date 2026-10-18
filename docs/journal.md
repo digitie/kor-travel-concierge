@@ -1,5 +1,12 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-19 — 변경 token·부분 실패·중단 재개 격리 통합
+
+- 실제 Geo fixture/Concierge loopback HTTP와 PostGIS 회귀 47 PASS, Map main e46c223의 실제 adapter/저장 경로 3 PASS를 확인했다.
+- 부분 503 및 취소 중 cursor 미전진, 성공한 장소만 중간 export, 복구 후 정상 대상 HTTP 재호출/Map row_revision 추가 변경 없음, 재생 중복 없음까지 검증했다.
+- 제품 파일과 운영 데이터/컨테이너를 바꾸지 않았다. 새 n150 live UI91 PASS 및 post-runtime fence PASS를 확인했다. 두 독립 리뷰 OPEN 0이며 운영 changed-token/daemon 수용과 구분한다. 상세는 [수용 문서](geo-changed-token-acceptance.md)에 남겼다.
+
+
 ## 2026-10-18 — 운영 전환과 자막 탭 E2E 선택자 보강
 
 - API·MCP·코드 서버·UI 네 runtime 전환 후 소스/이미지/환경 보존과 최종 정상 기동을 확인했다. 최초 기준선과 동일 데이터 후속 실행은 모두 장소 변경 0건이었다.
