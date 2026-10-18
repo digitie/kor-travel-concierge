@@ -6,14 +6,14 @@
 
 ## 진행 중
 
-- 공개 UI 재검증: 운영 네 runtime과 기준선/동일 데이터 재실행을 확인했다. 브라우저 WebGL 설정 보정 후 90/91이며, 자막 탭의 활성 패널 선택자를 보강해 전체 재검증한다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
+- 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
 
 
 **T-200 첫 토큰 기준선 정합 — PR #258**: Geo ADR-069 D8:253에 따라 양 내부 키가
 없는 첫 관측은 token+baseline marker만 원자 저장하고 동일 token의 다음 tick도 재해결하지
 않도록 구현했다. CURSOR-only+stale와 기존 progress 재개·오류·변경 token 처리는 유지한다.
-로컬 설정 SQL 15건과 PG 없는 backend 전체 434 PASS/612 SKIP이며 실제 PostGIS
-회귀·독립 2인 리뷰·운영 적용은 별도 미완료다. 상세: [기준선 설계](geo-first-token-baseline.md).
+로컬 설정 SQL 15건과 PG 없는 backend 전체 434 PASS/612 SKIP에 이어 실제 PostGIS
+회귀 37건·PostgreSQL 동시성 2건·독립 2인 제품 리뷰·네 runtime 운영 적용·최초 기준선 및 동일 데이터 재실행·공개 UI 91건을 확인했다. 자동 daemon과 실제 변경 데이터 전량 재해결은 미검증이다. 상세: [기준선 설계](geo-first-token-baseline.md).
 T-199/T-200/T-201의 기존 운영·통합 수용 조건을 완료 처리하지 않는다.
 
 **T-199 PR #250 병합 및 단독 source0dd/nullable0031 runtime3 운영 전환 검증 완료**. 전체 PostGIS996·새 backend 연동 운영 UI91·원센서/행수/세대·auth 및 보존 fence를 확인했다. Geo 통합 수용 조건은 별도 미완료다. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
