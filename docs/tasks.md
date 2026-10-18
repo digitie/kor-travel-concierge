@@ -6,6 +6,9 @@
 
 ## 진행 중
 
+- 공개 UI 재검증: 운영 네 runtime과 기준선/동일 데이터 재실행을 확인했다. 브라우저 WebGL 설정 보정 후 90/91이며, 자막 탭의 활성 패널 선택자를 보강해 전체 재검증한다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
+
+
 **T-200 첫 토큰 기준선 정합 — PR #258**: Geo ADR-069 D8:253에 따라 양 내부 키가
 없는 첫 관측은 token+baseline marker만 원자 저장하고 동일 token의 다음 tick도 재해결하지
 않도록 구현했다. CURSOR-only+stale와 기존 progress 재개·오류·변경 token 처리는 유지한다.

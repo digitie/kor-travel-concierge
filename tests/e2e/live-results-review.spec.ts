@@ -185,8 +185,11 @@ for(const text of ['[00:00] E2E 첫 문장\n[00:10] E2E 근거 문장','']){
     const detail=await(await response).json();expect(detail.source_videos.length).toBeGreaterThan(0);const video=detail.source_videos[0];const transcript=`/api/v1/videos/${encodeURIComponent(video.video_id)}/transcript`;
     await page.route(`**${transcript}`,r=>r.fulfill({json:{kind:'corrected',text}}));const area=page.getByRole('dialog',{name:'장소 상세',exact:true});
     await area.getByRole('button',{name:/출처 동영상 상세$/}).first().click();
-    if(text){await expect(area.getByRole('tab',{name:'타임스탬프 포함',exact:true})).toHaveAttribute('aria-selected','true');await expect(area.getByRole('tabpanel')).toContainText('[00:00]');
-      await area.getByRole('tab',{name:'정리본',exact:true}).click();await expect(area.getByRole('tabpanel')).toContainText('E2E 첫 문장');await expect(area.getByRole('tabpanel')).not.toContainText('[00:00]');
+    if(text){await expect(area.getByRole('tab',{name:'타임스탬프 포함',exact:true})).toHaveAttribute('aria-selected','true');await expect(area.getByRole('tabpanel',{name:'타임스탬프 포함',exact:true})).toContainText('[00:00]');
+      await area.getByRole('tab',{name:'정리본',exact:true}).click();
+      await expect(area.getByRole('tab',{name:'정리본',exact:true})).toHaveAttribute('aria-selected','true');
+      const cleanedPanel=area.getByRole('tabpanel',{name:'정리본',exact:true});
+      await expect(cleanedPanel).toContainText('E2E 첫 문장');await expect(cleanedPanel).not.toContainText('[00:00]');
       await expect(area.getByRole('button',{name:'근거 위치로 이동',exact:true})).toBeEnabled();
     }else{await expect(area.getByText('보정 자막 없음',{exact:true})).toBeVisible();await expect(area.getByRole('button',{name:'근거 위치로 이동',exact:true})).toBeDisabled();await expect(area.getByRole('tab')).toHaveCount(0);}
   });
