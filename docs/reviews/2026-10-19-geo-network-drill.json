@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "normal_seconds": 0.049784482922405005,
+  "failure_seconds": 2.019155199173838,
+  "recovered_seconds": 0.007231421768665314,
+  "drop_packets": 2,
+  "http_requests": 2,
+  "state_preserved": true,
+  "scope": "direct enrichment; real TCP SYN drop; synthetic secret lookup; no DB writes",
+  "source_sha256": "181db5064ee3561dc9e03d90299dd860120685e7480dc51144d137bd3b7eabdc",
+  "host_poweroff_tested": false,
+  "map_mois_budget_tested": false,
+  "base_commit": "234c851a09dc46a1ee67306dfc6e6b1402e4f6e1",
+  "raw_sha256": "6e55a0b488c11d66e08b63458f48841f790ac2c3c4947949028889e5a48e90db",
+  "regressions_passed": 4
+}

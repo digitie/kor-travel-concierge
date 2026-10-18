@@ -1,5 +1,10 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-19 — 격리 실제 SYN 단절 수용
+
+- 현재 제품의 기본 HTTP 보강 경로에서 정상→SYN DROP→회복을 검증했다. 단절2.0192초, 기존 코드 보존, 실제 packet drop2개를 확인했다.
+- namespace guard3개+실제 효과1개 PASS. 운영 전원 차단·Map MOIS 전체·확정 route 전체 검증과 구분한다. [근거](geo-network-drill.md).
+
 ## 2026-10-19 — T-201 현재 계약 정산
 
 - #259 근거로 구현·격리 수용과 운영 changed-token/자동 실행을 분리했다.
