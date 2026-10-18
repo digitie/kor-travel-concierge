@@ -24,18 +24,18 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 않도록 구현했다. CURSOR-only+stale와 기존 progress 재개·오류·변경 token 처리는 유지한다.
 로컬 설정 SQL 15건과 PG 없는 backend 전체 434 PASS/612 SKIP에 이어 실제 PostGIS
 회귀 37건·PostgreSQL 동시성 2건·독립 2인 제품 리뷰·네 runtime 운영 적용·최초 기준선 및 동일 데이터 재실행·공개 UI 91건을 확인했다. 자동 daemon과 실제 변경 데이터 전량 재해결은 미검증이다. 상세: [기준선 설계](geo-first-token-baseline.md).
-T-199/T-200/T-201의 기존 운영·통합 수용 조건을 완료 처리하지 않는다.
+이는 #258 당시 기록이다. #259로 구현·격리 통합 수용은 완료했고, 운영 변경 토큰 전량/자동 실행은 별도 미완료다.
 
-**T-199 PR #250 병합 및 단독 source0dd/nullable0031 runtime3 운영 전환 검증 완료**. 전체 PostGIS996·새 backend 연동 운영 UI91·원센서/행수/세대·auth 및 보존 fence를 확인했다. Geo 통합 수용 조건은 별도 미완료다. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 T-199/T-200/T-200-pre 완료 체크는 그 운영 조건까지 충족한 뒤 수행한다.
+**T-199 PR #250 병합 및 단독 source0dd/nullable0031 runtime3 운영 전환 검증 완료**. 전체 PostGIS996·새 backend 연동 운영 UI91·원센서/행수/세대·auth 및 보존 fence를 확인했다. Geo 통합 수용 조건은 별도 미완료다. **T-200 PR #251 병합 완료, 운영 선행 검증 진행 중**: 최신 전체 backend 1023 PASS·두 source 리뷰 OPEN 0·격리 실제 HTTP/native/API 10 PASS·n150 UI 9 PASS. 운영 Geo token/backfill·Map·Manager 설정 반영 뒤의 통합 e2e와 첫 운영 run은 별도 미완료이며 이는 당시의 합산 체크 기준이다. 아래에서 구현·격리 수용과 운영 미검증 조건을 분리한다.
 
 
 ---
 
 ## 대기 (우선순위 순)
 
-### geo 데이터 토큰 재해결 (T-199~T-201, ADR-49 proposed)
+### geo 데이터 토큰 재해결 (T-199~T-201, ADR-49 accepted)
 
-설계 정본은 `docs/decisions.md` ADR-49(proposed, 2026-10-13)다. **T-199·T-200 코드 머지는
+설계 정본은 `docs/decisions.md` ADR-49(accepted, 최초 설계2026-10-13)다. **T-199·T-200 코드 머지는
 kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면 토큰 None — ADR-49 결정 2).
 선행은 배포·검증 쪽에만 있다: (i) T-200 격리 스택 e2e·prod 첫 run = geo ADR-069(기존
 `dataset/version` 응답의 `current.data_token`·네 v2 응답 최상위 `dataset`) 배포+backfill 뒤,
@@ -44,7 +44,11 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
 실제 후속 token 변경의 재해결이 dirty를 만든다). T-199 배포 1회의 전량 재발행(payload 필드 추가)은 기존 규칙대로
 허용. PR 묶음은 PR-1(T-199) → PR-2(T-200) → PR-3(T-201, doc-only).
 
-- [ ] **T-199**: 토큰 컬럼(시도 의미)·enrich force/outcome 변형·헤더 인증·dirty 배선·payload
+아래 상세 수정 위치·절차는 최초 계획 이력이다. 현재 구현 위치는 ADR-49의 함수/모델 표를
+따른다. 완료 체크는 구현·격리 수용만 뜻하며 운영 changed-token 전량/자동 tick은
+[별도 열린 수용](track-acceptance-current.md)으로 유지한다. T-200-pre는 현재 수용 기록의 정본·실효 YAML 증거로 완료했다.
+
+- [x] **T-199 구현·격리 수용** (운영 전량 전파는 별도): 토큰 컬럼(시도 의미)·enrich force/outcome 변형·헤더 인증·dirty 배선·payload
   토큰·replay 확인(규모 S). 수정 파일:
   `backend/alembic/versions/20261013_0031_place_admin_code_geo_token.py`(신규, 직전 head
   `20261006_0030`; `admin_code_geo_data_token VARCHAR(40) NULL` + 부분 인덱스
@@ -75,13 +79,13 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   없음(효과 테스트); `correct_place` → 토큰 NULL → enrich 뒤 새 토큰; `audit_logs.payload_json`
   DB 되쓰기 경로 "없음" grep 결과를 PR 본문에(있으면 복원 시 토큰 NULL 처리 추가); alembic head
   단일(`20261013_0031`); ruff.
-- [ ] **T-200-pre**: Manager lane 1줄(규모 XS, 저장소 `kor-travel-docker-manager`). lane이 job
+- [x] **T-200-pre** (2026-10-19 실제 정본·CS/webserver config 확인): Manager lane 1줄(규모 XS, 저장소 `kor-travel-docker-manager`). lane이 job
   이름별임은 origin/main @094d397 `config/dagster-shared/dagster.yaml:95-106`에서 확인됨(이 PR,
   ADR-49 결정 4). 남는 작업은 Manager PR: `- key: kortravelcommon/job, value:
   concierge/concierge_admin_region_refresh, limit: 1` 1줄 + lane 집합 단언
   `backend/tests/test_concierge_shared_dagster.py:56-57` 갱신. 완료 조건: Manager origin/main에
   그 lane 존재(sha를 T-200 PR 본문에 기록) + prod `dagster.yaml` 반영 확인.
-- [ ] **T-200**: `concierge_admin_region_refresh` job(규모 M, 의존 T-199·T-200-pre; 배포는 위
+- [x] **T-200 구현·격리 수용** (운영 changed-token/자동 tick은 별도): `concierge_admin_region_refresh` job(규모 M, 의존 T-199·T-200-pre; 배포는 위
   머리말 순서). 수정 파일: `backend/ktc/dagster/definitions.py`(`JOBS` :160-165 **끝에** append —
   센서 `jobs=JOBS[2:]` :339; `concierge_maintenance` 목록 :338-372에
   `(name, op, ADMIN_REGION_REFRESH_ENABLED, INTERVAL)` 1줄; op는 `MaintenanceConfig` 수신·
@@ -104,7 +108,7 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   같은 job의 활성 run이 있는 센서 tick → RunRequest 0건(기존 maintenance 테스트 패턴);
   `feature_exports` 동시 실행 시 같은 candidate에 중복 outbox 행 0; `POST /settings`에
   `kor_travel_geo_data_token` 넣으면 400(allowlist 불변 효과 테스트).
-- [ ] **T-201**: 문서(규모 S, 의존 T-199·T-200). `docs/decisions.md` ADR-49 상태 proposed →
+- [x] **T-201 문서 정산** (운영 미검증은 별도 유지): 문서(규모 S, 의존 T-199·T-200). `docs/decisions.md` ADR-49 상태 proposed →
   accepted, `docs/feature-export-api.md`의 "예정(ADR-49 proposed)" 절을 현재 계약으로 승격
   (`place.address` 표에 `geo_data_token` 행, 재발행 사유 `geo_release`), `docs/architecture.md`
   §4.5/§6.4 예정 문구 제거, `docs/themes-api.md`, `CHANGELOG.md`(컬럼·job·payload 필드·인증
@@ -114,9 +118,9 @@ kor-travel-geo ADR-069와 병렬 가능하다**(응답에 `dataset`이 없으면
   0건(`docs/journal.md`·`docs/tasks.md`는 이력이라 제외); ADR-49 본문의 file:line 인용이 머지된
   head와 일치; geo ADR-069·Map ADR-109 번호가 각 저장소에서 확정된 값인지 확인.
 
-### geo odroid 재배치 대응 (T-202a/b~T-203, ADR-50 proposed; Track 2 설계 ID T-CNC-01~02)
+### geo odroid 재배치 대응 (T-202a/b~T-203, ADR-50 accepted; Track 2 설계 ID T-CNC-01~02)
 
-설계 정본은 `docs/decisions.md` ADR-50(proposed, 2026-10-13)이며 교차 저장소 정본은 Manager ADR-58·geo
+설계 정본은 `docs/decisions.md` ADR-50(accepted, 최초 설계2026-10-13)이며 교차 저장소 정본은 Manager ADR-58·geo
 ADR-070·Map ADR-110·transport ADR-014(Track 2 설계에서 고정된 번호)다. concierge는 n150에 남고 geo만
 odroid(`<geo-host>`)로 간다 — concierge에게는 env 값 하나(`KOR_TRAVEL_GEO_V2_BASE_URL`; 자리는 n150
 concierge 디렉터리 `.env`, Manager compose `env_file` — 수신 컨테이너·재생성 범위는 ADR-50 맥락 참조)의

@@ -1,5 +1,12 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-19 — T-201 현재 계약 정산
+
+- #259 근거로 구현·격리 수용과 운영 changed-token/자동 실행을 분리했다.
+- ADR-49/50과 공급 API·아키텍처·다음 작업 포인터를 현재 구현에 맞췄다.
+- Manager lane은 최신 정본과 실제 CS/webserver 동일 config에서 limit1을 확인했다. 실제 연결 단절은 후속 #261의 직접 보강 함수 범위이며 운영 전원 차단과 구분한다.
+
+
 ## 2026-10-19 — 변경 token·부분 실패·중단 재개 격리 통합
 
 - 실제 Geo fixture/Concierge loopback HTTP와 PostGIS 회귀 47 PASS, Map main e46c223의 실제 adapter/저장 경로 3 PASS를 확인했다.

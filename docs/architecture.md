@@ -310,19 +310,22 @@ Gemini 결과는 원문을 덮어쓰지 않는다. 영상 설명 원문은 `yout
 - 429 응답: 지수 백오프와 지터 적용
 - 지오코딩 실패, 후보 과다, 신뢰도 부족 결과는 자동 확정하지 않고 `extracted_place_candidates.match_status = needs_review`로 남겨 웹 UI와 MCP에서 검수한다.
 
-확정 장소의 법정동·시군구 코드와 명칭은 지오코딩과 별도로 kor-travel-geo v2
-`POST /v2/reverse`(`include_region`)로 채운다(`backend/ktc/etl/admin_region_service.py:264-310`;
-`POST /v2/regions/within-radius` fallback은 reverse가 `status: OK`이고 후보 코드가 불완전할
-때만 `:288-304`, reverse `NOT_FOUND`는 fallback 없이 None `:286-287`; 두 코드가 모두 있으면
-재호출하지 않음 `:129-131, 229-230`). **ADR-49 예정(proposed, 미구현)**: geo 데이터 토큰 기록·헤더 인증·
-릴리스 재해결 job — `docs/decisions.md` ADR-49.
+확정 장소의 행정코드는 Geo reverse와 필요한 within-radius 호출로 보강한다.
+현재 헤더 인증·시도 토큰·릴리스 재해결·동시 변경 fence는
+backend/ktc/etl/admin_region_service.py와 admin_region_refresh.py가 소유한다.
+처음 본 지문은 기준선만 저장하고 후속 변경을 재해결한다. 정상 미해결과 통신 오류를
+구분하며 성공한 대상은 중단 재개 때 반복 처리하지 않는다. ADR-49와
+[현재 수용 경계](track-acceptance-current.md)를 함께 따른다.
 
 geo 호출 경로(정본은 `docs/decisions.md` ADR-50):
 
-| 호출 | 코드 | 값의 자리 | 호스트(현재 → 계획) | timeout | 키 |
-|---|---|---|---|---|---|
-| `POST /v2/reverse` | `admin_region_service.py:264-310` | env `KOR_TRAVEL_GEO_V2_BASE_URL`(`backend/ktc/core/config.py:268`; 비면 보강 skip) — 운영 자리는 n150 concierge 디렉터리 `.env`(Manager compose `env_file`; 수신 컨테이너·재생성 범위는 ADR-50 맥락) | 미확인(코드 기본 `""` = skip; 추정 n150 loopback — ADR-50) → **`http://192.168.1.13:12501`(odroid, 포트 동일; ADR-50 proposed, 미구현 — Track 2 consumer URL 전환 단계(Manager ADR-58 §11.2)에서 전환)** | 10 s(`:90`, `:254`; connect 2 s 분리는 T-203 예정) | DB `system_settings['kor_travel_geo_v2_api_key']` 우선(운영 API로는 비울 수 없음 — DB 행 삭제), 없으면 env `KOR_TRAVEL_GEO_V2_API_KEY` → `VWORLD_SERVICE_KEY`(`settings_service.py:43-53`, `config.py:384-386`) |
-| `POST /v2/regions/within-radius`(reverse가 `OK`일 때만, `:288-304`) | `admin_region_service.py:312-335` | 위와 같음 | 위와 같음 | 위와 같음 | 위와 같음 |
+| 호출 | 코드 정본 | 환경 계약 | timeout |
+| --- | --- | --- | --- |
+| POST /v2/reverse | admin_region_service.fetch_admin_region_lookup | KOR_TRAVEL_GEO_V2_BASE_URL; 비면 보강 skip | connect2초/read10초 |
+| POST /v2/regions/within-radius | admin_region_service._fetch_region_within_radius | reverse OK에서 코드가 불완전할 때만 호출 | 동일 |
+
+인증은 DB 설정의 Geo 키, 환경 Geo 키, VWorld 키 순서다. 실제 값은 문서에 기록하지
+않는다. 호출은 헤더 인증이며 현재 endpoint 전파와 운영 효과는 별도 수용 근거를 따른다.
 
 호스트 이동은 concierge 코드·compose를 바꾸지 않는다 — env 값 하나이며, 반영은 env_file을 받는 concierge
 runtime 컨테이너의 **재생성**이다(`env_file`은 생성 시에만 읽힌다; production Manager `ensure`는 거부되므로
@@ -481,7 +484,7 @@ PostGIS가 기준이다. Alembic migration과 PostGIS 공간 컬럼 기준으로
   `sigungu_code` (String(5), Nullable), `sigungu_name` (String(128), Nullable),
   `admin_code_source` (String(32), Nullable; 현재 값 `kor-travel-geo-v2`),
   `admin_code_updated_at` (DateTime, Nullable)
-- **ADR-49 예정(proposed, 미구현)**: `admin_code_geo_data_token` (String(40), Nullable) 추가 —
+- `admin_code_geo_data_token` (String(40), Nullable) —
   의미·`admin_code_source` 새 값·갱신 job은 `docs/decisions.md` ADR-49.
 
 ### 6.5 `extracted_place_candidates`
