@@ -1,0 +1,41 @@
+{
+  "schema": "concierge.track1.acceptance.v1",
+  "source": "98931818fc2d1b49346d3a49100856d942f6003f",
+  "product_changed": false,
+  "producer_postgis": {
+    "passed": 47
+  },
+  "map_consumer": {
+    "source": "e46c223",
+    "passed": 3,
+    "seconds": 15.47,
+    "boundary": "captured actual loopback HTTP responses to public adapter and real load_bundles"
+  },
+  "live_ui": {
+    "passed": 91,
+    "exit_code": 0,
+    "test_source": "5836c1e7a7f0765a38c70803d760715e87a5eeb1",
+    "frontend_tree": "780c5ad5eb4c5636856ce5b9447acda6a58deafb",
+    "report_sha256": "6c6991b1eb467440649af4422a3e6e61c4f6aa2262250fc6f674076d8c97ba6d",
+    "terminal_sha256": "c600ceac92029a384a6cb95355704399561aa77a6fbe508ca104067f93b8686b",
+    "post_runtime_fence": "PASS",
+    "daemon_off": true,
+    "fresh_map_runtime_count": 3
+  },
+  "ci": {
+    "workflows": 0,
+    "checks": 0,
+    "status": "NOT_CONFIGURED"
+  },
+  "reviews": {
+    "source": "98931818fc2d1b49346d3a49100856d942f6003f",
+    "independent_reviewers": 2,
+    "open_findings": 0,
+    "confirmed_by": "root"
+  },
+  "limitations": [
+    "No operational Geo token mutation",
+    "No automatic daemon acceptance",
+    "Consumer DB integration replays captured HTTP responses; not simultaneous production cross-service E2E"
+  ]
+}

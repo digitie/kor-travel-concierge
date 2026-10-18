@@ -24,8 +24,12 @@ Map 제품 파일은 수정하지 않았다. 소유 ephemeral DB는 실행 뒤 �
 
 이는 실제 HTTP로 받은 응답을 별도 소비자 DB에 재생한 계약 통합 검증이다.
 두 운영 서비스의 동시 연결, 실제 Geo 데이터 변경, daemon 자동 실행 및 운영 장애 복구를
-검증한 것으로 확대하지 않는다. 이번 PR의 두 독립 리뷰와 live UI는 아직 NOT_RUN이다.
-기존 PR #258의 UI 91 PASS를 이번 실행으로 재사용하지 않는다.
+검증한 것으로 확대하지 않는다. head9893181의 독립 적대 리뷰 2인 모두 OPEN 0으로 확인됐다.
+이번 head9893181에서 운영 제품 및 기존 UI 테스트 소스와의 tree/hash 동등성을 확인한 뒤,
+새 n150 Linux 브라우저 실행으로 **UI 91/91 PASS, exit0**를 얻었다. 실행 전 API/MCP/CS/UI와
+Map 세 runtime의 healthy 상태, 실행 후 전체 runtime fence 및 daemon OFF를 확인했다.
+기존 PR #258 결과를 재사용하지 않았다. 저장소에 workflow가 없어 GitHub checks도 없으며,
+CI 성공으로 표시하지 않는다. [정산 증거](reviews/2026-10-19-changed-token-acceptance.json)를 따른다.
 
 ## 재현
 
