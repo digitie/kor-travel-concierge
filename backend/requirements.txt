@@ -26,4 +26,4 @@ pytest-asyncio>=0.23.5
 python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/a1fea840531f0b4d8e1b6a0db85e15063532602d.zip
 
 # 공용 HTTP만 설치해 API/MCP에 Dagster를 적재하지 않는다.
-kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@efcd671207d7f9e2fb01251bab6854a8d543279a#subdirectory=packages/py/kor-travel-common
+kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@c289b4624c8640eb918cc915803e72ae754e58fb#subdirectory=packages/py/kor-travel-common

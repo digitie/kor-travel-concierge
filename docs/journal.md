@@ -1,5 +1,20 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-27 — T-207 공통 Python·UI 최신 정렬
+
+- Common Python 핀을 `efcd671`에서 `c289b46`(PR47 병합 `aa232ad` 위 문서 PR48)으로 올렸다. Concierge가 쓰는
+  `bounded_request`·`RecoveryPolicy`·`PROJECT_TAG`·`has_active_run`·`reconciliation_sensor`·`call_with_deadline`과
+  이미지 HEALTHCHECK의 `kortravelcommon.dagster_health` CLI는 하위 호환이라 코드 변경이 없다.
+  `reconciliation_sensor`의 `budget_seconds`/`on_stall`, `call_with_deadline`의 `slots`, daemon-pool·webserver·
+  grpc-health·reverse-address extra와 새 console script는 opt-in이며 채택하지 않았다. Common #44의 daemon workspace
+  갱신 env는 Manager 공용 daemon 설정이고 Concierge는 code location만 제공하므로 범위 밖이다.
+- UI를 `0.1.0-dev.6`에서 `0.1.0-dev.9`로 재vendor했다. 정본에서 공통 CI와 같은 Node 22.23.1/npm 11.19.1로
+  `npm pack -w packages/ui`를 재현한 tarball이 공통 저장소가 기록한 27파일·SHA256과 같다. dev.9 LoginForm은
+  SSR·hydration 전 입력과 제출을 native disabled로 닫는다. dev.7/8 지도 작업면은 opt-in이라 쓰지 않는다.
+  dev.9의 `@base-ui/react ^1.8.0` peer 때문에 `@base-ui/react`를 1.8.0으로 올렸고 dev.9 런타임 의존
+  `lucide-react` 1.41.0을 lock에 반영했다. tokens는 그대로다. 설계 기록 `dagster-migration-plan.md`의
+  `efcd671`은 작성 당시 기준이라 유지한다.
+
 ## 2026-10-19 — 격리 실제 SYN 단절 수용
 
 - 현재 제품의 기본 HTTP 보강 경로에서 정상→SYN DROP→회복을 검증했다. 단절2.0192초, 기존 코드 보존, 실제 packet drop2개를 확인했다.

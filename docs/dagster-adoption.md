@@ -6,7 +6,7 @@ Manager의 공용 webserver/daemon/metadata instance를 Map·PinVi·Geo와 함�
 Concierge는 `ktc.dagster.definitions` code location(gRPC `12603`)만 제공한다.
 API/MCP 이미지에는 Dagster SDK를 설치하지 않는다. 관리자 summary는 내부 GraphQL을
 Common bounded HTTP로 조회하며 공개 URL은 브라우저 링크에만 사용한다.
-Common Python은 `efcd671207d7f9e2fb01251bab6854a8d543279a`, UI는 vendored dev.6을 사용한다.
+Common Python은 `c289b4624c8640eb918cc915803e72ae754e58fb`, UI는 vendored dev.9를 사용한다.
 
 수집 identity·payload·멱등 적재·사용자 중지·재시작 이력은 기존 `crawl_runs`가 소유한다.
 native run은 owner ID·retry·attempt·control generation으로 특정 domain attempt를 claim한다.

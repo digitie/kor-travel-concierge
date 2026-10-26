@@ -16,6 +16,11 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
+- **T-207 공통 Python·UI 최신 정렬**: Common Python 핀 `efcd671`→`c289b46`, vendored UI `0.1.0-dev.6`→`0.1.0-dev.9`
+  (정규 `npm pack` 재현 SHA256 일치), dev.9 peer에 맞춘 `@base-ui/react` 1.8.0. 사용 중인 Common API는 하위 호환이라
+  코드 변경이 없다. 병합 뒤 Manager 공식 경로(`compose-boundary activate-concierge`)의 운영 반영과 공개 로그인 확인은
+  후속 기록으로 완료 처리한다.
+
 - 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
 
 
