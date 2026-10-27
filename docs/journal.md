@@ -1,5 +1,36 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-27 — T-207 공통 Python·UI 최신 정렬
+
+- Common Python 핀을 `efcd671`에서 `c289b46`(PR47 병합 `aa232ad` 위 문서 PR48)으로 올렸다. Concierge가 쓰는
+  `bounded_request`·`RecoveryPolicy`·`PROJECT_TAG`·`has_active_run`·`reconciliation_sensor`·`call_with_deadline`과
+  이미지 HEALTHCHECK의 `kortravelcommon.dagster_health` CLI는 하위 호환이라 코드 변경이 없다.
+  `reconciliation_sensor`의 `budget_seconds`/`on_stall`, `call_with_deadline`의 `slots`, daemon-pool·webserver·
+  grpc-health·reverse-address extra와 새 console script·SQLAlchemy plugin entry point(`kortravel_daemon_pool`, 이름으로
+  지정할 때만 적재)는 opt-in이며 채택하지 않았다. Common #44의 daemon workspace 갱신 env는 Manager 공용 daemon
+  설정이고 Concierge는 code location만 제공하므로 범위 밖이다.
+- UI를 `0.1.0-dev.6`에서 `0.1.0-dev.9`로 재vendor했다. 정본에서 공통 CI와 같은 Node 22.23.1/npm 11.19.1로
+  `npm pack -w packages/ui`를 재현한 tarball이 공통 저장소가 기록한 27파일·SHA256과 같다. tokens tarball은 공통 문서에
+  기록된 정본(SHA256 `554ae3f6…`)인 이전 채택본 그대로다. dev.9 LoginForm은 hydration 준비 전 입력과 제출을 native
+  disabled로 닫지만 Concierge `/login`은 `useSearchParams` Suspense 때문에 정적 SSR HTML에 폼이 없어(운영 확인)
+  사용자 체감 변화는 없다. dev.7/8 지도 작업면은 opt-in이라 쓰지 않는다.
+- dev.9의 `@base-ui/react ^1.8.0` peer 때문에 `@base-ui/react`를 1.5.0에서 1.8.0으로 올렸다. 이 패키지는
+  `components/ui`의 select·dialog·alert-dialog·popover·checkbox·switch·tabs·input·button·separator·badge 밑에 있고,
+  하위 의존 `@base-ui/utils` 0.4.0·`@floating-ui/*`·`reselect` 5.3.0·`use-sync-external-store` 1.7.0도 같은 범위에서 다시
+  해석됐다. dev.9 런타임 의존 `lucide-react` 1.41.0이 root로 올라가 Concierge 자체 아이콘도 1.17.0 대신 1.41.0을
+  쓴다(`package.json` 범위 `^1.17.0`은 그대로, 가져오는 이름 43개 모두 존재).
+- 설계 기록 `dagster-migration-plan.md`의 `efcd671`은 작성 당시 기준이라 유지하고 가이드 링크에 그 뜻과 현재 정본을 적었다.
+  독립 적대 리뷰 1인은 `VERDICT: NOT REFUTED`(BLOCKER/MAJOR 0, MINOR 2·NIT 3)였고 지적한 문서 범위·CHANGELOG 표현·링크를
+  이 기록에서 정정했다.
+- 검증(n150 컨테이너, 제품 commit `e6289aa`의 git archive; 저장소에 GitHub workflow가 없어 PR check는 0건): Node 22.23.1/
+  npm 11.19.1 `npm pack` 재현 SHA256과 lock integrity(sha512) 일치. frontend `npm ci`·type-check·lint·Vitest 376 PASS·
+  production webpack build PASS. 배포 Dockerfile의 dagster target 이미지와 격리 PostGIS 16-3.5에서 backend 전체 pytest
+  1049 PASS(실패·skip 0), contract export check PASS, api target의 Dagster SDK 부재와 두 이미지의 설치 Common commit
+  `c289b46`, 실제 code server의 `kortravelcommon.dagster_health` 양성 0·음성 1, `dagster definitions validate` PASS.
+  후보 production `next start`+Chromium(Playwright 1.63) 2건 PASS: 스크립트 보류 중 로그인 요청 0, hydration 뒤 입력·제출
+  활성, 잘못된 비밀번호 401, 저장소 E2E 자격 로그인 200·httpOnly session cookie. Base UI가 모든 UI 부품 밑에 있으므로
+  운영 화면 동작은 배포 전후 공개 live UI 전체 비교로 확인한다.
+
 ## 2026-10-19 — 격리 실제 SYN 단절 수용
 
 - 현재 제품의 기본 HTTP 보강 경로에서 정상→SYN DROP→회복을 검증했다. 단절2.0192초, 기존 코드 보존, 실제 packet drop2개를 확인했다.

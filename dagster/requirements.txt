@@ -5,4 +5,4 @@ dagster-pipes==1.13.24
 dagster-shared==1.13.24
 # Gemini SDK와의 교집합을 고정한다. 실제 gRPC health positive/negative를 검증한다.
 protobuf==5.29.6
-kor-travel-common[dagster,http] @ git+https://github.com/digitie/kor-travel-common.git@efcd671207d7f9e2fb01251bab6854a8d543279a#subdirectory=packages/py/kor-travel-common
+kor-travel-common[dagster,http] @ git+https://github.com/digitie/kor-travel-common.git@c289b4624c8640eb918cc915803e72ae754e58fb#subdirectory=packages/py/kor-travel-common

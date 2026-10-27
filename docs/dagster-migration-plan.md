@@ -82,7 +82,8 @@ API GraphQL은 Concierge location만 조회하고 최신 종료 실행과 오래
 
 공식 API 근거: [sensor run key·평가 주기](https://dagster.io/docs/guides/automate/sensors),
 [RunRequest·sensor 계약](https://dagster.io/docs/api/dagster/schedules-sensors).
-공통 채택 가이드는 [공통 저장소](https://github.com/digitie/kor-travel-common/blob/efcd671207d7f9e2fb01251bab6854a8d543279a/docs/runbooks/dagster-adoption.md)를 따른다.
+공통 채택 가이드는 이 설계 작성 당시 버전의 [공통 저장소](https://github.com/digitie/kor-travel-common/blob/efcd671207d7f9e2fb01251bab6854a8d543279a/docs/runbooks/dagster-adoption.md)를 따랐다.
+현재 공통 핀과 운영 가이드는 [적용 가이드](dagster-adoption.md)가 정본이다.
 
 
 ## 설계 리뷰 반영: 실행 결과와 인계 계약
