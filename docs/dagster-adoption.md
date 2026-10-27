@@ -44,6 +44,15 @@ metadata UNKNOWN에서는 owner를 보존하며 cursor는 다음 행으로 진�
   Dagster 발화를 중단한 뒤 legacy profile을 명시적으로 실행한다. pending attempt는 세대 전환마다 증가한다.
   owned pending/running이 남으면 migration downgrade도 거부한다.
 
+## 이미지 빌드 context
+
+Manager의 `KOR_TRAVEL_CONCIERGE_REPO_DIR`는 owner-only 600/700 mode를 유지한다. 이 디렉터리를 그대로 build context로
+쓰면 COPY가 mode를 보존해 `USER concierge`로 실행하는 code server가 `/app/backend`를 읽지 못한다
+(`No module named 'ktc.dagster'`). Manager compose의 기본 build context도 같은 디렉터리라 그 경로로 code server를 다시
+빌드하면 같은 문제가 생긴다. 배포 이미지는 병합 commit의 `git archive`를 context로 빌드하고, 재생성 전에 code server
+사용자로 `import ktc.dagster.definitions`와 `kortravelcommon.dagster_health`를 확인한다. 동기화한 디렉터리는 env_file
+위치로 유지하며 이미지 태그는 Manager root `.env`의 Concierge 이미지 변수로 고정한다.
+
 ## 메모리와 실행 상한
 
 code server는 2GiB, location 동시 실행은 2개, job마다 1개, multiprocess step은 1개다.
