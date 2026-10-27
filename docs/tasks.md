@@ -16,13 +16,6 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
-- **T-207 공통 Python·UI 최신 정렬**: Common Python 핀 `efcd671`→`c289b46`, vendored UI `0.1.0-dev.6`→`0.1.0-dev.9`
-  (정규 `npm pack` 재현 SHA256 일치), dev.9 의존에 맞춘 `@base-ui/react` 1.8.0과 root `lucide-react` 1.41.0. 사용 중인
-  Common API는 하위 호환이라 코드 변경이 없다. n150에서 frontend 376·type/lint/build, PostGIS backend 전체 1049,
-  contract, 실제 code server health·정의 검증, 후보 production 로그인 Chromium 2건을 통과했고 독립 적대 리뷰는
-  NOT REFUTED다. 병합 뒤 Manager 공식 경로(`compose-boundary activate-concierge`)의 운영 반영과 배포 전후 공개 live UI
-  전체 비교는 후속 기록으로 완료 처리한다.
-
 - 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
 
 
@@ -223,6 +216,13 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 ---
 
 ## 완료
+
+- [x] **T-207**: 공통 Python·UI 최신 정렬 — Common Python 핀 `efcd671`→`c289b46`, vendored UI `0.1.0-dev.6`→`0.1.0-dev.9`
+  (정규 `npm pack` 재현 SHA256 일치), dev.9 의존에 맞춘 `@base-ui/react` 1.8.0과 root `lucide-react` 1.41.0. 사용 중인 Common
+  API는 하위 호환이라 코드 변경이 없다. PR #262 병합(`16c8461`) 뒤 Manager 공식 경로(`compose-boundary activate-concierge`)로
+  api·mcp·code server·UI만 재생성했다. 운영 health·LAN/공개 로그인·Dagster location·다른 앱 컨테이너 불변과
+  배포 전후 공개 live UI 91/91(최종)을 확인했다. 운영 source 디렉터리를 build context로 쓴 첫 후보의 code server import 실패와 정확한 git archive 재빌드는
+  [일지](journal.md)에 기록했다.
 
 - [x] **T-198**: 운영 UI live E2E 90개 확대 — UI 오류 5종 보강, 두 독립 적대 리뷰 PASS/OPEN0, PR #246 병합·UI 운영 반영. 후보 최신 전체와 공개 최종 전체 각각 90/90 PASS, 초기 실패와 동기화 수정도 보존. [실행 가이드](live-ui-testing.md).
 

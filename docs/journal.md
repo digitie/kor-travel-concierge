@@ -1,5 +1,33 @@
 # JOURNAL — 작업 일지
 
+## 2026-10-27 — T-207 운영 반영
+
+- PR #262 병합 `16c8461`을 Manager 공식 경로로 반영했다. preflight `chain` FAIL=0을 빌드 전과 `.env` 변경 직전에
+  각각 확인했고, 병합 소스를 `KOR_TRAVEL_CONCIERGE_REPO_DIR`에 런북 제외 목록으로 동기화했다(`.env*`·로컬 문서 불변,
+  옛 dev.6 tarball 제거, 추적 파일 checksum 일치).
+- 불변 이미지 `common-c289b46-16c8461f2fea`(api/mcp 공용·code server·UI)는 병합 commit의 git archive를 context로 빌드하고
+  revision label을 붙였다. API의 Dagster SDK 부재, code server 사용자(UID 10001)의 정의 import와
+  `kortravelcommon.dagster_health` 양성, UI 이미지 안 production build를 운영 변경 전에 확인했다.
+- 첫 후보는 운영 source 디렉터리를 context로 빌드해 code server가 `No module named 'ktc.dagster'`로 실패했다. 디렉터리의
+  owner-only 600/700 mode가 COPY로 이미지에 그대로 들어가 `USER concierge`가 `/app/backend/ktc`를 읽지 못했다(API·UI는
+  root 실행이라 영향 없음). 후보 smoke가 운영 변경 전에 걸러 중단했고 git archive context로 다시 빌드했다.
+  [적용 가이드](dagster-adoption.md#이미지-빌드-context)에 빌드 방식을 고정했다.
+- 전역 mutation 잠금 아래 Manager root `.env`의 Concierge 이미지 변수 4개만 교체했다(나머지 줄 byte 동일, root 0600 유지).
+  `ktdctl compose-boundary activate-concierge --confirm`으로 api·mcp·code server·UI만 `--no-deps` 재생성했고 약 40초,
+  UI production build·기동은 약 85초 걸렸다.
+- 검증: 네 컨테이너가 새 이미지·revision `16c8461`이고 api/code server의 설치 Common은 `c289b46`, UI는
+  `@kor-travel/ui` 0.1.0-dev.9·`@base-ui/react` 1.8.0이다. API `/health`·code server health·LAN/공개 `/login` 200,
+  UI 인증 env 길이 0 아님, LAN/공개 로그인 POST 200+session cookie, 잘못된 비밀번호 401을 확인했다. 공용 webserver에서
+  Concierge·Map·PinVi location이 LOADED이고 Concierge 밖 컨테이너 ID는 그대로, Map/PinVi/공용 Dagster·PG는 healthy,
+  사후 preflight는 FAIL=0이다. 공개 Chromium 로그인 2건(스크립트 보류 중 요청 0, hydration 뒤 활성, 401 안내,
+  로그인 200·httpOnly cookie)을 통과했다.
+- 공개 live UI 전체: 배포 전 기준선 91/91. 배포 뒤 첫 실행은 88/91이었다. 실패 3건은 모두 정적 `_next` chunk/CSS의
+  네트워크 실패로 로그인 폼이 그려지지 않은 경우였고 호스트 load 8~11(다른 작업의 시험 동시 실행) 구간이었다. 같은 3건
+  재실행은 7/8, 새 context 로그인 반복 probe는 LAN·공개 모두 실패 0이었으며 UI 컨테이너 재시작·오류 로그는 없었다.
+  최종 재실행은 91/91(실패·skip·flaky 0)이다. 첫 실패 원문은 n150 작업 디렉터리에 보존한다.
+- rollback은 이전 이미지 태그(2026-10-18 runtime, 호스트에 보존)로 네 변수를 되돌린 뒤 같은 `activate-concierge`를
+  실행한다. 실행 기록과 `.env` 백업은 root 보호 receipt 디렉터리에 둔다.
+
 ## 2026-10-27 — T-207 공통 Python·UI 최신 정렬
 
 - Common Python 핀을 `efcd671`에서 `c289b46`(PR47 병합 `aa232ad` 위 문서 PR48)으로 올렸다. Concierge가 쓰는
