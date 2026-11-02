@@ -160,7 +160,7 @@ ADR-50 본문·`docs/architecture.md` §4.5 호출 경로 표·이 백로그는 
   transport 014)가 각 저장소 main에서 확정된 값인지 + ADR-58 머지 뒤 ADR-50이 인용한 설계 절 번호
   재대조. 수용 기준(효과로 결박; 세 컨테이너 모두 `network_mode: host`라 odroid access log peer는 전부
   `.14`로 같아 **컨테이너 구분은 peer로 할 수 없다** — 전파와 효과를 나눈다): ① 전파: 세 컨테이너
-  (api·mcp·dagster-code-server; `legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷)
+  (api·mcp·dagster-code-server; 옛 `legacy-scheduler` profile은 2026-11-02 Manager #578에서 제거)
   `docker exec <ctr> printenv KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://<geo-host>:12501` + 각 컨테이너
   ID가 재생성 전후 바뀜(mcp는 `mcp_server/tools.py:492·540·704·788` 보정 호출 주체라 여기서 잡는다);
   ② 효과: **n150 geo-api가 stop인 상태에서** api 컨테이너 발 장소 확정 1건의 reverse 성공("region 1 call")

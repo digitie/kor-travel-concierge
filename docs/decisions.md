@@ -1518,7 +1518,8 @@ CAS로 두 실행 방식의 중복 claim과 늦은 쓰기를 차단한다. provi
 실패로 표시하고, crash/timeout만 terminal/stale/physical lease 확인 후 최대 3회 복구한다.
 메모리 예약과 stdlib guardian/watchdog은 run worker에서 분리한다. 상세 결정과 운영 경계는
 [설계](dagster-migration-plan.md)와 [적용 가이드](dagster-adoption.md)에 기록한다.
-운영 전환은 별도 drain 창이다. APScheduler는 rollback profile로 보존한다.
+운영 전환은 별도 drain 창이다. APScheduler는 rollback profile로 보존한다(2026-11-02 갱신: 소유자 지시로
+Manager #578이 그 profile 서비스를 지웠다 — rollback은 이전 이미지 재활성화, [적용 가이드](dagster-adoption.md#장애와-rollback)).
 
 ---
 
@@ -1842,7 +1843,8 @@ T-203은 일반 보강·격리 보강·refresh의 연결 실패와 상태 보존
   `services`/`runtime_services`에도 없다. 따라서 **운영에서 env_file을 실제로 읽는 runtime 컨테이너는 셋**
   (api·mcp·dagster-code-server)이며, `--profile legacy-scheduler`로 scheduler **컨테이너**를 기동한 롤백
   상태(ADR-48; DB backend 전환 자체는 `ktc.cli scheduler-backend --activate legacy`, `backend/ktc/cli.py:27`
-  — 둘은 별개 축이고 "넷째"의 조건은 compose profile 기동이다)라면 scheduler가 넷째가 된다. `env_file`은
+  — 둘은 별개 축이고 "넷째"의 조건은 compose profile 기동이다)라면 scheduler가 넷째가 된다(2026-11-02 갱신:
+  Manager #578이 scheduler 서비스를 지워 `env_file` 수신 service는 셋뿐이다). `env_file`은
   컨테이너 **생성 시에만** 읽히므로 값 변경은
   `restart`로는 반영되지 않고 **재생성**이 필요하다. **운영 실값은 이 문서 작성 시점에 미확인**이다(Track 2
   설계 §2.2; 비어 있음·loopback·HAProxy 공개 host 중 무엇인지 읽는 것이 T-202b 선행 확인이다).
@@ -1931,7 +1933,7 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
    돌므로 api 경로만 확인하면 나머지가 옛 값(`.14`, stop)을 보며 best-effort False로 조용히 실패하는 상태가
    통과한다. 검사는 **전파**와 **효과**로 나눈다(세 컨테이너 모두 `network_mode: host`라 odroid access log의
    peer는 전부 `.14`로 같아 **어느 컨테이너가 불렀는지 peer로는 구분할 수 없다**): (a) 전파 = 세 컨테이너
-   (`legacy-scheduler` profile로 scheduler 컨테이너가 떠 있으면 넷) `docker exec <ctr> printenv
+   (옛 `legacy-scheduler` profile은 2026-11-02 Manager #578에서 제거) `docker exec <ctr> printenv
    KOR_TRAVEL_GEO_V2_BASE_URL`이 전부 `http://<geo-host>:12501` + 컨테이너 ID가 재생성 전후 바뀜;
    (b) 효과 = api 발 장소 확정 1건 성공 + code-server 발 1건(ETL 확정 또는 refresh tick — 발신 주체는
    Dagster run 로그로 식별) 성공 + odroid access log에 peer `.14`·키 경로 200 기록. 재생성 범위도 효과로
