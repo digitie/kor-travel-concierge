@@ -137,7 +137,8 @@ transaction lock 아래 backend를 검사한다. Dagster 요청은 control gener
 옛 세대 queued request는 새 세대 claim에서 거절된다. rollback은 모든 owned pending의
 native terminal 확인 뒤 연결을 해제하고 attempt를 증가시킨다. active/running은 강제 인계하지 않는다.
 기존 fence 없는 APScheduler 이미지가 남아 있으면 먼저 stop/drain해야 한다. 새 Manager target은
-공용 code-server만 기본 기동하고 APScheduler는 명시적 legacy profile에서만 선택한다.
+공용 code-server만 기본 기동하고 APScheduler는 명시적 legacy profile에서만 선택한다
+(2026-11-02 갱신: 그 profile 서비스는 Manager #578에서 제거됐다 — rollback은 이전 이미지 재활성화).
 
 ## 설계 리뷰 반영: Whisper 부모 강제 종료
 

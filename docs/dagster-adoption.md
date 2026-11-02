@@ -23,8 +23,9 @@ metadata UNKNOWN에서는 owner를 보존하며 cursor는 다음 행으로 진�
    바꿀 수 없으므로 기존 실행자를 켠 채 모드를 전환하지 않는다. domain과 native 활성 작업을 함께 확인한다.
 2. Concierge migration을 저장소 루트에서 `python -m alembic upgrade head`로 적용한다. 초기 mode는 `legacy`, generation은 0이다.
    shared metadata schema는 Manager의 정식 storage migrate one-shot으로 준비한다.
-3. Manager의 `conc` 기본 target은 code server를 포함한다. old scheduler는 `legacy-scheduler` profile의
-   rollback 정의로 남는다. code image와 공유 instance/workspace를 함께 반영한다.
+3. Manager의 `conc` 기본 target은 code server를 포함한다. code image와 공유 instance/workspace를 함께 반영한다.
+   옛 APScheduler 실행 서비스(`kor-travel-concierge-scheduler`, `legacy-scheduler` profile)는 2026-11-02
+   Manager #578에서 compose·registry에서 지웠다 — 운영에는 Dagster 밖의 실행자가 없다.
 4. Dagster code server의 shared instance 환경에서 CLI를 실행한다(API/MCP target에는 SDK가 없다).
    `python -m ktc.cli scheduler-backend`로 현재 backend/generation을 확인한다.
    같은 설정으로 `python -m ktc.cli scheduler-backend --activate dagster --expected-generation <현재 세대>`를 실행한다.
@@ -40,9 +41,24 @@ metadata UNKNOWN에서는 owner를 보존하며 cursor는 다음 행으로 진�
 - code server container가 재시작하면 Manager의 기존 location/incarnation reaper가 옛 native STARTED를
   실패로 마감한다. 이후 domain recovery가 물리 lease 소멸·heartbeat 만료를 확인한다.
   Docker unhealthy 표시 자체가 재시작을 보장한다고 가정하지 않는다.
-- rollback도 native/domain drain 후 위 CLI에 `--activate legacy --expected-generation <현재 세대>`를 사용한다.
-  Dagster 발화를 중단한 뒤 legacy profile을 명시적으로 실행한다. pending attempt는 세대 전환마다 증가한다.
-  owned pending/running이 남으면 migration downgrade도 거부한다.
+- **rollback은 직전 배포 이미지의 재활성화다.** scheduler backend는 `dagster` 그대로 두고, Manager 공식 경로로
+  api·mcp·code server·UI만 이전 이미지로 재생성한다.
+  1. 이전 이미지(api·code server·UI 태그)가 운영 호스트에 로컬로 남아 있는지 확인한다(`docker image inspect`).
+     이미지 정리 때 직전 배포의 rollback 이미지는 지우지 않는다.
+  2. Manager 전역 mutation lock 아래에서 Manager root `.env`의 Concierge 이미지 변수 넷
+     (`KOR_TRAVEL_CONCIERGE_{API,MCP,DAGSTER,UI}_IMAGE`, MCP는 API 이미지)만 이전 태그로 바꾼다.
+  3. root로 `ktdctl compose-boundary activate-concierge --confirm`을 실행한다. Concierge 네 runtime만 재생성하고
+     공용 PostgreSQL·공용 Dagster plane은 건드리지 않는다.
+  4. 현재 배포(T-207)의 이 절차는 운영 호스트(n150)의 운영자 홈 `cccommon-gate/bin/cccommon_rollback.sh`에
+     스크립트로 있다. root 전용이며 `systemd-run`으로 실행하고 결과는 `journalctl -u <unit>`으로 본다. 스크립트는
+     이미지 존재를 먼저 확인하고(없으면 아무것도 바꾸지 않고 종료) 위 2·3을 수행한다. 이미지 태그는 스크립트에
+     고정돼 있고 비밀값은 담지 않는다.
+  5. 사후 확인은 배포와 같다: API `/health`, code server health, 공용 webserver의 `ktc.dagster.definitions` LOADED,
+     공개 로그인→로그아웃.
+  - 이전 이미지는 현재 DB migration head에서 동작해야 한다. migration을 포함한 배포의 rollback은 이미지 교체
+    전에 downgrade 가능 여부(owned pending/running이 남으면 downgrade는 거부된다)를 따로 정한다.
+  - `scheduler-backend --activate legacy`는 운영 rollback에 쓰지 않는다. legacy 실행 서비스가 Manager에서 제거돼
+    전환하면 어떤 실행자도 작업을 claim하지 않는다.
 
 ## 이미지 빌드 context
 

@@ -1,5 +1,16 @@
 # JOURNAL — 작업 일지
 
+## 2026-11-02 — 옛 APScheduler rollback 경로 문서 정정
+
+- 소유자 지시("concierge 레거시는 모두 삭제")로 Manager #578이 `kor-travel-concierge-scheduler`(`legacy-scheduler`
+  profile)를 compose·registry에서 지웠고, n150의 정지 컨테이너·옛 이미지·10월 cutover 증거 디렉터리도 정리했다.
+  운영 Concierge(api·mcp·code server·UI)와 공용 Dagster location은 바뀌지 않았다.
+- 적용 가이드의 rollback 절이 `scheduler-backend --activate legacy` 뒤 legacy profile을 띄우라고 했다. 지금 따라 하면
+  어떤 실행자도 작업을 claim하지 않는다. rollback을 "직전 배포 이미지 재활성화"(Manager root `.env`의 이미지 변수
+  넷 교체 → `ktdctl compose-boundary activate-concierge --confirm`)로 바꾸고 n150 rollback 스크립트의 자리를 적었다.
+- 같은 뜻의 문장(SKILL·AGENTS·architecture·dagster-migration-plan·ADR-48/50·tasks)에 제거 사실을 반영했다.
+  ADR 본문은 고치지 않고 날짜 붙은 갱신 문구만 더했다.
+
 ## 2026-10-27 — T-207 운영 반영
 
 - PR #262 병합 `16c8461`을 Manager 공식 경로로 반영했다. preflight `chain` FAIL=0을 빌드 전과 `.env` 변경 직전에
