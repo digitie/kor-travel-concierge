@@ -1,5 +1,18 @@
 # JOURNAL — 작업 일지
 
+## 2026-11-11 — T-208 후보6 통합 검증과 리뷰 인계
+
+- integration-6-review 네 tarball·원장을 동일 bytes로 복사하고 UI/tokens/core/web 전부 명시적 file 설치했다.
+  core1.0.1로 교체했으며 구1.0.0 tarball은 제거했다. 라이선스·고지·lock integrity도 확인했다.
+- 키 없는 지도는 더미 키 대신 공개 mapStyle의 빈 sources 스타일을 사용한다.
+- strict 설치·guard·로컬 canonical·lint경고0·타입·단위394·production build·Doctor전체0·n150 browser10/10 PASS다.
+  실제 마커·팝업 선택과 VWorld 요청0도 확인했다. raw 로그는 자기 clone의 .git/c6-*.log에 보존했다.
+- 공유 디스크 ENOSPC와 로그 저장 실패는 공간 확보 후 표준 build 및 전용 /tmp 브라우저 fixture로 재검증했다.
+  종료된 자기 webpack222.8MiB·n150 Chromium약700MiB·일회성 인증 fixture만 정리했다.
+- 부모 소유 common-frontend-policy.yml은 보존·커밋 제외다. 최종 pack refresh·중앙 workflow·원격 CI·
+  PR·원리뷰어2인 재검토는 부모에게 [handoff](reports/common-unification-20261111-handoff.md)로 인계한다.
+
+
 ## 2026-11-11 — T-208 Doctor 진단 수정과 검수 관심사 분리
 
 - 이전26 warning을 계속 수정했다. 검수 선택/편집은 인스턴스별 Zustand 구독과 원자적 전이로 바꾸고,

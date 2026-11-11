@@ -46,12 +46,13 @@ const KOREA_MAX_BOUNDS: [[number, number], [number, number]] = [
 const INITIAL_ZOOM = 6.2;
 const VWORLD_MIN_ZOOM = 6;
 const FOCUS_ZOOM = 12;
-// VWorldMapView는 apiKey가 비어 있으면 지도/마커/팝업을 전혀 마운트하지 않고
-// fallback만 렌더한다(vworld-map-web의 설계). 키가 없는 개발 환경에서도 목록·마커
-// 클릭 UX는 그대로 동작해야 하므로(E2E도 이를 전제), 더미 키로 지도는 항상 띄우고
-// 실제 키 부재는 별도 오버레이 배지로 알린다. 더미 키의 VWorld 타일 요청은
-// unsupportedTileFallback으로 우아하게 대체된다.
-const KEYLESS_PLACEHOLDER_KEY = "keyless-dev-placeholder";
+// 공개 mapStyle API로 키 없이도 로컬 마커·팝업을 마운트한다.
+// sources가 비어 있으므로 더미 키나 외부 VWorld 타일 요청은 만들지 않는다.
+const KEYLESS_MAP_STYLE: NonNullable<VWorldMapViewProps["mapStyle"]> = {
+  version: 8,
+  sources: {},
+  layers: [],
+};
 const MAP_LOADING_TIMEOUT_MS = 15_000;
 
 export function VWorldMap({
@@ -107,7 +108,8 @@ export function VWorldMap({
     >
       <MapWebGLGuard key={mapAttempt} onRetry={retryMap}>
         <VWorldMapView
-          apiKey={VWORLD_SERVICE_KEY || KEYLESS_PLACEHOLDER_KEY}
+          apiKey={VWORLD_SERVICE_KEY}
+          mapStyle={VWORLD_SERVICE_KEY ? undefined : KEYLESS_MAP_STYLE}
           layerType="Base"
           center={KOREA_CENTER}
           zoom={INITIAL_ZOOM}

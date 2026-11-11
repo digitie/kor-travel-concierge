@@ -31,14 +31,14 @@ agent/codex-common-unification-20261111, 인계 HEAD는 4438328704be15592c47281c
 React Doctor 0.9.22, TypeScript 5.9.3과 Node 22 계열 타입 22.20.5를 사용한다.
 TypeScript 7은 openapi-typescript·typescript-eslint peer 범위와 충돌해 정본의 5.9.3을 유지한다.
 
-지도는 GitHub 최신 main 9c46c57181d433c91f7e8837c4e4396204e9b583을 직접 조회해 일치를 확인했다.
-부모의 web tsconfig 보완을 포함한 core1.0.0/web1.0.3을 직접 file 의존성으로 고정한다.
-현재 설치된 공통 UI0.2.0/tokens0.1.1은 integration-4이며 최종 freeze 전이다.
-부모의 다음 integration-6 리뷰용 후보를 요청했으며, 아직 전달되지 않아 그 후보에 대한 최종 검증은 NOT_RUN이다. 해시는
+지도 최초 GitHub main 기준은 9c46c57181d433c91f7e8837c4e4396204e9b583이다.
+현재는 부모의 tsconfig·공개 mapStyle·라이선스 수정을 포함한 지도 source 9a7a348b02d61969b394c681b024d5851eef836b의
+core1.0.1/web1.0.3과 공통 source a14301c01a87d7d56e8da5bcf24c0a7f145d05a1의 UI0.2.0/tokens0.1.1을 소비한다.
+네 패키지와 원장은 integration-6-review의 동일 bytes이며 최종 freeze 전이다. 해시는
 [산출물 원장](../../frontend/common-artifacts.json)과 [출처 기록](../../frontend/vendor/kor-travel-common-provenance.md)을 따른다.
 동일 버전 후보를 교체할 때는 네 파일과 원장을 동일 bytes로 복사하고
-npm install @kor-travel/ui@file:vendor/kor-travel-ui-0.2.0.tgz @kor-travel/tokens@file:vendor/kor-travel-tokens-0.1.1.tgz로
-설치해 이전 integrity를 재사용하지 않게 한다. tokens/radix.css를 로컬 테마 앞에 가져온다.
+npm install --strict-peer-deps @kor-travel/ui@file:vendor/kor-travel-ui-0.2.0.tgz @kor-travel/tokens@file:vendor/kor-travel-tokens-0.1.1.tgz vworld-map-core@file:vendor/vworld-map-core-1.0.1.tgz vworld-map-web@file:vendor/vworld-map-web-1.0.3.tgz로
+네 종 모두 명시적으로 설치해 이전 integrity를 재사용하지 않게 한다. tokens/radix.css를 로컬 테마 앞에 가져온다.
 
 구 eslint-config-next와 ESLint 10 미지원 eslint-plugin-react 대신 Next plugin·typescript-eslint·
 react-hooks·import-x·jsx-a11y-x를 사용한다. shadcn CLI와 불필요한 autoprefixer는 배포 의존성에서 제거했다.
@@ -79,25 +79,43 @@ CI의 lint는 --max-warnings 0이며 Doctor는 warning 한 건도 실패시킨�
 
 | 검사 | 현재 결과 | 범위 |
 | --- | --- | --- |
-| npm ci --strict-peer-deps | PASS | 후보4 lock으로 깨끗한 strict peer 설치 재통과; 우회 옵션 없음 |
-| check:dependencies | PASS | integration-4 tarball·원장·lock·source 검사 |
+| npm ci --strict-peer-deps | PASS | 후보6 lock으로 깨끗한 strict peer 설치 재통과; 우회 옵션 없음 |
+| check:dependencies | PASS | integration-6-review tarball·원장·lock·source 검사 |
 | lint/type-check | PASS | ESLint10 경고 0 및 Next route 타입 |
 | 단위 | PASS 394/394 | 29파일; 상태 구독6·복구 권한/초안/좌표7 포함 |
 | production build | PASS | Doctor 후속 수정의 실제 Next webpack build |
-| n150 Chromium | PASS 9/9 | 7개 표·로그인·글꼴·선택·검색·자막·포커스·Select·초안 초기화·반응형 이동·사이드바 복원 |
+| n150 Chromium | PASS 10/10 | 7개 표·로그인·글꼴·선택·검색·자막·포커스·Select·초안 초기화·반응형 이동·사이드바 복원·키 없는 실제 지도 |
 | Doctor 엄격 gate | PASS, exit 0 | 전체 165파일, error 0/warning 0 |
 | doctor:audit | exit 1, 1 warning | 허용한 viewport deep-link 한 줄만 재현 |
 | backend/실제 DB/RustFS/provider | NOT_RUN | frontend와 격리 UI 검증 범위 |
-| 다음 공통 후보6/최종 singlepack | NOT_RUN | 부모의 파일·원장 전달 뒤 refresh와 최종 앱 gate 필요 |
+| 후보6 refresh/로컬 canonical | PASS | 네 종 명시적 file 설치·원본 bytes·lock·최신 로컬 정책/산출물 비교 |
+| 최종 singlepack | 부모 담당 | 후속 freeze·정책 메타데이터 refresh는 부모가 통합 |
 | 독립 적대 리뷰 2인/원격 CI | NOT_RUN | 부모가 동일 immutable manifest로 통합 실행 |
 | push/PR/merge/이미지 배포 | NOT_RUN | 부모 통합·go 이후 |
 
 n150의 전용 임시 디렉터리와 Chromium을 사용하고 loopback reverse tunnel로 이 clone의 production Next에
 연결했다. 인증값은 매 실행 무작위 생성해 환경/stdin으로만 전달하며 REST는 브라우저 route fixture로
-격리한다. 운영 DB/유료 API를 호출하지 않는다. 9건 모두 retry·skip 없이 통과했다.
-새로 추가한 세 시나리오는 후보 A→B→A의 미저장 초안 초기화, 모바일/데스크톱 deep-link 계약,
-기존 사이드바 저장값 0/1의 boolean 복원·토글·재로드 구독이다.
+격리한다. 운영 DB/유료 API를 호출하지 않는다. 최종 10건은 retry·skip 없이 통과했다.
+후보 A→B→A 초안 초기화·반응형 deep link·사이드바 0/1 복원에 더해, 후보6 공개 mapStyle로
+실제 마커·팝업 선택과 VWorld 요청 0건을 검증했다. 격리 Chromium의 WebGL은 SwiftShader를 사용한다.
 상태 구독·권한 판정 단위 검증과 기존 cache/undo/keyboard 검증도 함께 통과했다.
+
+후보6의 네 종은 파일명 유지 패키지를 포함해 전부 명시적으로 file 설치했다. 구 core1.0.0은 제거했다.
+패키지 라이선스 필드와 고지 파일을 확인했고 공통 UI/tokens는 GPL-3.0-or-later,
+지도 core/web은 GPL-3.0-only 선언을 출처 원장에 기록했다.
+서버 CVA·자동완성·표·포커스·공식 CSS variants는 공통 배포물 그대로 소비한다.
+앱 지도는 더미 키 우회를 없애고 공개 mapStyle에 빈 sources의 안정적인 스타일 참조를 넘긴다.
+
+중간에 공유 ext4의 ENOSPC로 build 및 첫 브라우저 로그 저장이 실패했다. 공간 확보 뒤 표준 .next에서
+production build를 다시 통과했고, 브라우저는 기존 Playwright/Chromium을 재사용해 인증 상태와 결과만
+전용 /tmp에 저장하여 최종 10/10을 확인했다. 추가 대형 install/build는 시작하지 않았다.
+종료된 본인 webpack 캐시222.8MiB와 n150 Chromium 캐시 약700MiB, 일회성 인증 fixture만 정리했다.
+활성 Next 산출물·의존성·다른 저장소·기존 사용자 캐시는 보존했다.
+
+부모가 작성한 .github/workflows/common-frontend-policy.yml은 이번 소비자 커밋에서 제외하고 보존한다.
+reusable code pin은 5e064808fabd3a54968dd20910eaccd04eba9f38이며 foundation merge 뒤에만
+최신 main 정책 데이터와 원격 CI를 통과할 수 있다. 현재는 로컬 canonical 정책과 원장을 명시해 PASS했다.
+
 
 ## 부모 go 이후의 이미지 배포 계획
 
@@ -132,9 +150,8 @@ n150의 전용 임시 디렉터리와 Chromium을 사용하고 loopback reverse 
 
 ## 통합 담당자의 다음 작업
 
-1. 다음 리뷰 후보6 원장을 수신하면 네 tarball 해시를 검증하고 vendor·원장을 같은 bytes로 갱신한다.
-   UI와 tokens를 명시적 file 설치해 lock integrity를 다시 기록한다. 예전 vendor는 이미 제거했다.
-2. 그 후보로 strict peer 설치·guard·lint 경고0·타입·단위·Doctor 전체 warning0·production build·격리 browser를
-   최종 재실행한다. 앱의 공통 API monkeypatch는 없으며 현재 추가 common API blocker는 없다.
-3. 최종 commit과 단일 원장을 독립 리뷰2인·원격 CI에 전달한다. 이번 로컬 결과가 그 gate를 대신하지 않는다.
-4. 통합·리뷰·CI·PR merge와 부모 go 뒤에만 위 순서로 새 이미지를 전환한다.
+1. 이 소비자 커밋과 후보6 원장으로 원리뷰어2인의 재검토를 진행한다. 로컬 필수 gate의 구현 blocker는 없다.
+2. 최종 pack refresh·중앙 policy/RC 메타데이터와 중앙 CI workflow는 부모가 인계받아 정렬한다.
+   foundation merge 전 중앙 원격 CI는 완료로 표시하지 않는다.
+3. 독립2리뷰·원격 CI·PR merge와 부모 go 뒤에만 위 이미지 전환 계획을 실행한다.
+   backend/DB/RustFS/provider와 운영 smoke는 이번 격리 frontend 검증의 수용 범위를 넘는다.

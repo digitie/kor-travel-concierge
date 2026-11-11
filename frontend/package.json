@@ -32,7 +32,7 @@
     "react-dom": "19.3.1",
     "react-hook-form": "7.92.0",
     "tailwind-merge": "3.7.0",
-    "vworld-map-core": "file:vendor/vworld-map-core-1.0.0.tgz",
+    "vworld-map-core": "file:vendor/vworld-map-core-1.0.1.tgz",
     "vworld-map-web": "file:vendor/vworld-map-web-1.0.3.tgz",
     "zod": "4.6.7",
     "zustand": "5.1.0"

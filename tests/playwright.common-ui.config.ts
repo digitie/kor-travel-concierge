@@ -12,7 +12,12 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   outputDir: "./test-results/common-ui",
   reporter: "list",
-  use: { baseURL: "http://127.0.0.1:13119", viewport: { width: 1440, height: 1000 } },
+  // 격리 Chromium에서 실제 WebGL 마커 계약을 검증하기 위한 소프트웨어 렌더러다.
+  use: {
+    launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
+    baseURL: "http://127.0.0.1:13119",
+    viewport: { width: 1440, height: 1000 },
+  },
   webServer: process.env.KTC_COMMON_UI_SKIP_SERVER === "1" ? undefined : {
     command: "node scripts/start-common-ui.mjs",
     url: "http://127.0.0.1:13119/login",

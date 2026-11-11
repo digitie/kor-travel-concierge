@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { CrawlRunSummary, UnmatchedCandidate } from "../../frontend/src/lib/api";
+import type { CrawlRunSummary, DestinationSummary, UnmatchedCandidate } from "../../frontend/src/lib/api";
 
 const run: CrawlRunSummary = {
   job_id: "common-ui-run", job_type: "harvest", source: "keyword",
@@ -16,6 +16,13 @@ const candidates: UnmatchedCandidate[] = [1, 2].map(id => ({
   confidence_score: 0.8, source_kind: "transcript", grounding_status: "missing",
   created_at: "2026-11-11T00:00:00Z", queue_reason: "no_result", timestamp_start: null,
   is_domestic: true,
+}));
+const places: DestinationSummary[] = [1, 2].map(number => ({
+  place_id: 10 + number, name: "키 없는 지도 검증 장소 " + number,
+  description: null, gemini_enriched_description: null,
+  latitude: 37.55 + number / 100, longitude: 126.97 + number / 100,
+  category: null, official_address: null, road_address: null, is_geocoded: true,
+  mention_count: 1, source_channel_count: 1, source_videos: [],
 }));
 function envelope(items: unknown[]) {
   return { items, next_cursor: null, has_more: false, total: items.length, newest_id: 2, newer_than: 0 };
@@ -38,7 +45,7 @@ async function mockApi(page: Page) {
     else if (pathname.endsWith("/transcript")) data = { text: "공통 확장행 자막입니다.", source: "test", segments: [] };
     else if (pathname === "/api/v1/destinations/reprocess") data = { enqueued_jobs: 1, videos: 1, job_ids: ["reprocess-test"], start_stage: "transcript" };
     else if (pathname === "/api/v1/place-search") data = { query: new URL(request.url()).searchParams.get("q") ?? "", searched_at: "2026-11-11T00:00:00Z", google: [], kakao: [], naver: [], errors: {} };
-    else if (pathname === "/api/v1/destinations") data = envelope([]);
+    else if (pathname === "/api/v1/destinations") data = envelope(places);
     else if (/\/destinations\/\d+\/detail$/.test(pathname)) {
       await route.fulfill({ status: 503, json: { detail: "격리 검증의 장소 상세 오류" } });
       return;
@@ -215,4 +222,23 @@ test("기존 사이드바 저장값을 boolean으로 복원하고 토글·재로
   await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
   await page.reload();
   await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+});
+
+test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업을 연결한다", async ({ page }) => {
+  await mockApi(page);
+  const tileRequests: string[] = [];
+  const errors: string[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).hostname.endsWith("vworld.kr")) tileRequests.push(new URL(request.url()).hostname);
+  });
+  page.on("pageerror", error => errors.push(error.message));
+  await login(page, "/");
+  const map = page.getByRole("region", { name: "VWorld 지도", exact: true });
+  await expect(map).toHaveAttribute("data-status", "fallback");
+  const marker = map.getByRole("button", { name: "2번 키 없는 지도 검증 장소 2 선택", exact: true });
+  await expect(marker).toBeVisible();
+  await marker.click();
+  await expect(map.getByText("키 없는 지도 검증 장소 2", { exact: true })).toBeVisible();
+  expect(tileRequests).toEqual([]);
+  expect(errors).toEqual([]);
 });

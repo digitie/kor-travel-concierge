@@ -2073,7 +2073,8 @@ Pretendard Variable은 공통 tokens 경로로 제공한다. 검수 workflow·�
 소비자 소유 경계를 유지한다.
 
 지도는 GitHub main 9c46c57181d433c91f7e8837c4e4396204e9b583을 기준으로 부모가
-web tsconfig를 보완한 core1.0.0/web1.0.3을 사용한다. 공통 UI0.2.0/tokens0.1.1과 같은 bytes를
+web tsconfig·공개 mapStyle·라이선스를 보완한 core1.0.1/web1.0.3을 사용한다.
+키 없는 환경은 빈 sources 스타일을 공개 mapStyle prop에 넘겨 더미 키·외부 타일 요청을 없앤다. 공통 UI0.2.0/tokens0.1.1과 같은 bytes를
 vendor에 복사하고 common-artifacts.json의 SHA512와 npm lock integrity를 함께 검증한다.
 후보 단계의 동일 버전 재pack은 정식 릴리스 재발행이 아니며, 최종 freeze의 단일pack에 다시 정렬한다.
 
