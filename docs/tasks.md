@@ -16,7 +16,7 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
-- [ ] **T-208 공통 관리자 UI·의존성 정렬**: C9 vendor/lock/workflow를 정본에 맞추고 guard/canonical·n150 fresh strict ci/build/browser10 PASS. C8 unit394/lint/type/Doctor0은 117 runtime/CSS/metadata 동등성으로 승계했다. Draft PR265의 foundation PR49·소비자 독립2리뷰·정확 HEAD CI·부모 go와 이미지 전환은 [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 추적한다.
+- [ ] **T-208 공통 관리자 UI·의존성 정렬**: C10 채택과 A-CONS-P2-01 checkbox remount/focus 회귀를 수정했다. 실제 DOM 수정 전2FAIL→수정 후2PASS, 전체unit396·lint/type·Doctor0·guard/canonical 및 actual-source Chromium4PASS다. C11 Scope fix.2·fresh production build/browser10·원 reviewer A closure·독립2리뷰·정확 HEAD CI·부모 go는 [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 추적한다.
 
 - 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
 

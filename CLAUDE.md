@@ -17,7 +17,7 @@ Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시�
 
 ### 현재 작업
 
-- **T-208 공통 UI 통합 후보**: C9 checker 두 파일 갱신와 로컬 canonical, n150 fresh strict ci/build/browser10을 통과했다. C8 unit394/lint/type/Doctor0은 런타임 동등성으로 승계한다. Draft PR265와 foundation PR49·소비자 독립2리뷰·정확 HEAD CI·부모 go는 [최우선 handoff](docs/reports/common-unification-20261111-handoff.md)를 따른다. 기존 T-199/T-200 운영 수용을 소급 완료하지 않는다.
+- **T-208 공통 UI 통합 후보**: C10 채택과 A-CONS-P2-01 checkbox remount/focus 회귀를 수정했다. 실제 DOM 수정 전2FAIL→수정 후2PASS, 전체unit396·lint/type·Doctor0·guard/canonical 및 actual-source Chromium4PASS다. C11 Scope fix.2·fresh production build/browser10·원 reviewer A closure·독립2리뷰·정확 HEAD CI·부모 go는 [최우선 handoff](docs/reports/common-unification-20261111-handoff.md)에서 추적한다.
 
 - **현재**: T-199/T-200 제품 구현과 #259 변경 토큰·부분 실패·재개 격리 수용 완료. T-201 문서를 현재형으로 정산한다. 운영 변경 토큰 전량·자동 daemon은 별도 미검증이다. [현재 수용 경계](docs/track-acceptance-current.md)를 따른다.
 - **다음**: 운영 전원 차단 없이 Track2 실제 연결 단절 효과를 격리 검증한다. 추가 성능 튜닝보다 남은 Track 수용을 우선한다.

@@ -1,7 +1,11 @@
 "use client";
 
 import { memo } from "react";
-import type { ColumnDef } from "@kor-travel/ui/virtual-table";
+import type {
+  ColumnDef,
+  HeaderContext,
+  VirtualTableColumnMeta,
+} from "@kor-travel/ui/virtual-table";
 import { InfoIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 
 import { REVIEW_BULK_SELECTION_MAX, type UnmatchedCandidate } from "@/lib/api";
@@ -42,6 +46,36 @@ export type CandidateTableProps = {
   onRestore: (candidate: UnmatchedCandidate) => void;
 };
 
+type CandidateSelectionMeta = VirtualTableColumnMeta & {
+  selection: {
+    checked: boolean | "indeterminate";
+    disabled: boolean;
+    label: string;
+    onToggle: () => void;
+  };
+};
+
+// flexRender가 컴포넌트로 호출하는 header의 identity는 선택 상태와 무관하게 고정한다.
+function CandidateSelectionHeader({ column }: HeaderContext<UnmatchedCandidate>) {
+  const { selection } = column.columnDef.meta as CandidateSelectionMeta;
+  return (
+    <Checkbox
+      checked={selection.checked}
+      disabled={selection.disabled}
+      aria-label={selection.label}
+      onCheckedChange={selection.onToggle}
+    />
+  );
+}
+
+const candidateColumnIndexes: Record<string, number> = {
+  selection: 0,
+  candidate: 1,
+  source: 2,
+  state: 3,
+  actions: 4,
+};
+
 export function CandidateTable({
   candidates,
   currentCandidateId,
@@ -63,11 +97,11 @@ export function CandidateTable({
   onRequestDelete,
   onRestore,
 }: CandidateTableProps) {
-  const renderCell = (candidate: UnmatchedCandidate, columnIndex: number) => {
+  const renderCell = (candidate: UnmatchedCandidate, columnId: string) => {
     const isChecked = selectedCandidateIds.has(candidate.id);
     return (
       <CandidateCell
-        columnIndex={columnIndex}
+        columnIndex={candidateColumnIndexes[columnId]}
         candidate={candidate}
         actionsDisabled={
           candidateActionPending || !isCandidateActionable(candidate)
@@ -89,30 +123,24 @@ export function CandidateTable({
       />
     );
   };
+  const selectionMeta: CandidateSelectionMeta = {
+    headerStyle: { width: 40 },
+    selection: {
+      checked: someLoadedCandidatesSelected && !allLoadedCandidatesSelected
+        ? "indeterminate" : allLoadedCandidatesSelected,
+      disabled: candidateActionPending || bulkSelectableCandidateIds.size === 0,
+      label: bulkSelectableCandidateIds.size > selectionLimit
+        ? "불러온 후보 중 최대 " + selectionLimit + "건 선택"
+        : "불러온 후보 전체 선택",
+      onToggle: onToggleAllLoadedCandidates,
+    },
+  };
   const columns: ColumnDef<UnmatchedCandidate>[] = [
     {
       id: "selection",
-      header: () => (
-        <Checkbox
-          checked={
-            someLoadedCandidatesSelected && !allLoadedCandidatesSelected
-              ? "indeterminate"
-              : allLoadedCandidatesSelected
-          }
-          onCheckedChange={onToggleAllLoadedCandidates}
-          disabled={
-            candidateActionPending || bulkSelectableCandidateIds.size === 0
-          }
-          aria-label={
-            bulkSelectableCandidateIds.size > selectionLimit
-              ? "불러온 후보 중 최대 " + selectionLimit + "건 선택"
-              : "불러온 후보 전체 선택"
-          }
-        />
-      ),
+      header: CandidateSelectionHeader,
       enableSorting: false,
-      meta: { headerStyle: { width: 40 } },
-      cell: ({ row }) => renderCell(row.original, 0),
+      meta: selectionMeta,
     },
     ...["후보", "출처", "상태", "액션"].map(
       (header, index): ColumnDef<UnmatchedCandidate> => ({
@@ -120,7 +148,6 @@ export function CandidateTable({
         header,
         enableSorting: false,
         meta: { align: index === 3 ? "right" : "left" },
-        cell: ({ row }) => renderCell(row.original, index + 1),
       }),
     ),
   ];
@@ -129,6 +156,7 @@ export function CandidateTable({
       data={[...candidates]}
       getRowId={(candidate) => String(candidate.id)}
       columns={columns}
+      renderCell={renderCell}
       rowProps={(candidate) => ({
         "aria-selected": candidate.id === currentCandidateId,
         tabIndex: 0,

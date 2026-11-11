@@ -4,6 +4,19 @@ integration-8-review의 UI0.2.0/tokens0.1.1·Lightning CSS1.33.0+nativecss.fix.4
 
 # JOURNAL — 작업 일지
 
+## 2026-11-12 — T-208 C10 체크포인트와 A-CONS-P2-01 수정
+
+- C10 정본7종 원장과 사용6종을 채택했다. 공식 Scope fix.1 runtime/override와 actual263파일·SRI를 확인했다.
+  source 변경 전 n150 fresh strict ci·unit394·lint/type·Doctor0·guard·build는 PASS다.
+- 원 A가 지적한 header/row checkbox remount는 실제 DOM2건 및 기존 production Chromium 각각 FAIL로 재현했다.
+  header 참조를 고정하고 meta에 최신 상태·action을, body는 공통 renderCell에 node 반환을 연결했다.
+- 수정 후 전체unit396·lint/type·Doctor0·guard/canonical PASS. actual-source 격리 Chromium의 선택·해제4건도
+  DOM identity·연결·포커스 모두 보존했다. 영구 DOM/production browser 단언을 추가했다.
+- C10 모달 Shift+Tab은 PASS이나 후속 작업 상세 표 timeout은 보존했다. 전체browser10으로 합산하지 않는다.
+  본인 server/browser/tunnel은 종료해 N150 슬롯2를 반환했고 추가 대형 build는 보류했다.
+- C11 Scope fix.2·새 최종 build/unit/browser10·원 A closure/독립2리뷰·CI·부모 go는 잔여 gate다.
+  [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 수용 경계를 유지한다.
+
 
 ## 2026-11-12 — T-208 C9 검증·Draft PR265 인계
 

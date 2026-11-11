@@ -1,6 +1,45 @@
 # Concierge 공통 UI 최종 인계
 
-## 2026-11-12 최우선 현재 상태 — C9 / Draft PR265
+## 2026-11-12 최우선 현재 상태 — C10 체크포인트 / A-CONS-P2-01 수정 / C11 대기
+
+- 기존 bcfc1b8 위에서 integration-10-review 7종 원장과 사용6종을 채택했다. UI/tokens는 명시적 file 설치로
+  integrity를 갱신했고 공식 Scope1.3.1+kortravel.fix.1 runtime 의존성과 npm root의 $@radix-ui/react-focus-scope override를 연결했다.
+- 로컬·n150 actual UI94+tokens25+Scope15파일을 포함한 사용6종263파일을 archive와 byte 비교했다.
+  Dialog/Popover/Menu/radix-ui는 같은 patched Scope root 사본1개를 해석한다.
+- 중앙 workflow code/common-ref는 55a921b55d248106cbe320e7f5305f3d3cdb60fe이다.
+  CSSfix4·VWorld3 bytes는 그대로이며 독립 repack은 없다.
+- C10 fresh strict ci·guard/canonical·unit394·lint·type·Doctor0·production build PASS는 **소스 수정 전 체크포인트**다.
+  모달 panel Shift+Tab 검증은 PASS했고 뒤의 작업 상세 표는10초 안에 찾지 못했다. 전체 browser10 PASS로 표시하지 않는다.
+
+### A-CONS-P2-01 재현과 수정
+
+선택 state가 바뀔 때 inline column header/cell이 새 React component type으로 처리되어 checkbox를 다시 만들었다.
+헤더는 module-scope CandidateSelectionHeader로 고정하고 최신 checked/disabled/label/action을 column meta로 전달했다.
+body는 공통 renderCell callback에서 안정적인 CandidateCell node를 반환한다. 선택 한도·권한·후보 원본·동작 규칙은 보존했다.
+selected 의존 columns useMemo나 앱 monkeypatch는 추가하지 않았다.
+
+- 수정 전: 실제 DOM Space 회귀2건 FAIL. 기존 C10 production Chromium에서도 헤더·행 각각 기존 node 연결/포커스 유실 FAIL.
+- 수정 후: 전체 unit396/30파일·lint경고0·type·Doctor0·guard/canonical PASS.
+  동일 C10 runtime의 실제 source 격리 Chromium에서 헤더/행 Space 선택·해제4건 모두
+  sameNode/oldConnected/focusPreserved=true, activeTag=BUTTON, pageerror0.
+- 영구 회귀는 CandidateTable.test.ts와 기존 browser10 중 검수 시나리오의 header/row identity·focus 단언에 들어갔다.
+  원 reviewer A의 closure와 두 소비자 리뷰는 아직 미완이다.
+- [소스 회귀 증거](candidate-table-focus-20261112.json), [C10 체크포인트](common-unification-20261112-c10-checkpoint.json).
+  원문 로그는 각 JSON의 .git 경로에 보존했다. 격리 fixture는 전체 production 수용을 대신하지 않는다.
+
+### 다음 gate와 자원
+
+C11 공식 Scope fix.2 및 최종 원장이 준비되면 같은 bytes·lock·actual 설치를 정렬하고,
+수정 source로 새 production build·전체 unit·browser10을 다시 실행한다.
+C9의394/10과 수정 전 C10 결과를 최종 결과로 재사용하지 않는다.
+운영 backend/DB/RustFS/API/Dagster·secret은 변경하지 않았다.
+본인 Chromium·Next/probe server·SSH tunnel process group은 모두 종료했고 N150 슬롯2를 반환했다.
+본인 전용 n150 설치 workspace는 C11 재사용을 위해 보존하며 다른 앱·공유 cache는 건드리지 않는다.
+common foundation main 정책 병합·정확 HEAD CI·독립2리뷰·부모 go 전까지 Draft PR265 유지, merge/deploy 보류다.
+기존 frontend 전환 경로·실제 context·불변 태그·secret 보존·로그인/화면/health smoke 계획은
+[배포 계획](common-unification-20261111.md)의 해당 절에 유지한다.
+
+## 이전 검증 기록 — C9 / Draft PR265
 
 - 기준 HEAD: 608d63216c065f87be10130048bb7d41deff00a1; branch: agent/codex-common-unification-20261111.
 - 정본: integration-9-review. 부모의 C9 미커밋 vendor·원장·lock·중앙 workflow pin을 보존하고 마무리했다.

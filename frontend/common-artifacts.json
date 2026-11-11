@@ -1,22 +1,23 @@
 {
   "status": "CANDIDATE_NOT_RELEASED",
-  "candidate": "integration-9-review",
+  "candidate": "integration-10-review",
   "sources": {
-    "common": "2c1182e765bb2bc53e01e0962cf2a73683891e1d",
+    "common": "55a921b55d248106cbe320e7f5305f3d3cdb60fe",
     "maplibre-vworld-react": "9a7a348b02d61969b394c681b024d5851eef836b",
     "lightningcss": "748651cbd845971e65c411166ddee101745dab21",
-    "serde-content": "18e53fcf6f8ace093a292891b34fa3411192617d"
+    "serde-content": "18e53fcf6f8ace093a292891b34fa3411192617d",
+    "radix-ui-primitives": "706e27aaf87bda2df7bbb9da60cc01cebc9ff064"
   },
   "packages": {
     "@kor-travel/tokens": {
       "version": "0.1.1",
       "filename": "kor-travel-tokens-0.1.1.tgz",
-      "integrity": "sha512-+JglXOZhP11afRr/upKHWz7cjsj4IPIKYkoVh8lq9IcJTKU8zIHA8pirC1IOS1++gqOmMCnPkj1oi8EzJsTUyQ=="
+      "integrity": "sha512-ope7vHGRynjiTDllGJj/qqVz6kmQ/NIsQr4+GnFmyh7jB2rdoTJI3UXU7S+CN5Z8sDMamQ1ez253+Y3ShXoqeQ=="
     },
     "@kor-travel/ui": {
       "version": "0.2.0",
       "filename": "kor-travel-ui-0.2.0.tgz",
-      "integrity": "sha512-buhlDym3/Id355Cse+lwBsFk3G1nz3dY2XviAA+X82TZPXmcujYGxItRZafsY0t4xsWkiQ3jAxtCYjFZ7JsbEQ=="
+      "integrity": "sha512-avvikdgmPcgNQ8otiKOPRb/fCRSLRIEyV1dudqM4BsKfExScssK+NM7IirvH78lekd7xtEduReQ8/pyqD1BdNg=="
     },
     "lightningcss": {
       "version": "1.33.0+nativecss.fix.4",
@@ -37,6 +38,11 @@
       "version": "1.0.3",
       "filename": "vworld-map-web-1.0.3.tgz",
       "integrity": "sha512-HPXZcz/wP6tFsCZqlAbansWNICcZPubC+/V7rDWXYTQVlOBLl9cZQ1HSMJd25c2CZoMNreVFTQA0vzkVglkS1w=="
+    },
+    "@radix-ui/react-focus-scope": {
+      "version": "1.3.1+kortravel.fix.1",
+      "filename": "radix-ui-react-focus-scope-1.3.1+kortravel.fix.1.tgz",
+      "integrity": "sha512-550B+tdvg3N/tsIzOFA8zRhoMxGnPeBRl65Wg+9kY2VEEf6TW7RZKBWckVToLNuALHYZR8J9zG8GUP7DROBflg=="
     }
   }
 }

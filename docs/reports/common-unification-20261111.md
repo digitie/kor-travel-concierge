@@ -1,6 +1,13 @@
 # 공통 관리자 UI 이관 — 2026-11-11
 
-## 2026-11-12 현재 결과 — C9
+## 2026-11-12 현재 결과 — C10 및 선택 포커스 수정
+
+C10 사용6종 actual263파일·fresh 설치/build 체크포인트를 확인했다. A-CONS-P2-01은 재현 후 안정적인 header/meta와
+공통 renderCell로 수정했으며 unit396·lint/type·Doctor0·guard/canonical 및 실제 source Chromium4건 PASS다.
+C11 Scope fix.2·fresh build·전체 browser10·원 reviewer A closure·독립2리뷰·정확 HEAD CI가 남았다.
+최신 증거·제약·로그는 [최우선 handoff](common-unification-20261111-handoff.md)를 따른다.
+
+## 이전 결과 — C9
 
 정본은 integration-9-review이고 중앙 code pin은 2c1182e765bb2bc53e01e0962cf2a73683891e1d이다.
 C8→C9는 UI/tokens checker2만 바뀌었으며 런타임·CSS·metadata117파일과 앱 source는 같다.
@@ -131,7 +138,7 @@ reusable code pin은 5e064808fabd3a54968dd20910eaccd04eba9f38이며 foundation m
 
 ## 부모 go 이후의 이미지 배포 계획
 
-1. 최종 단일pack 원장으로 네 tarball·lock을 다시 정렬하고 모든 필수 검사와 Doctor warning 0,
+1. 최종 단일pack 원장으로 사용6종 tarball·lock을 다시 정렬하고 모든 필수 검사와 Doctor warning 0,
    동일 commit의 독립 리뷰 2인, 원격 CI, PR merge를 완료한다. 후보 상태에서는 배포하지 않는다.
 2. 부모 go 직후 비공개 docs/deploy-runbook.local.md와 최신 Manager 절차를 재확인한다.
    원본 checkout의 비공개 런북 존재와 --no-deps, 비밀번호 hash 비어 있지 않음,
@@ -153,7 +160,7 @@ reusable code pin은 5e064808fabd3a54968dd20910eaccd04eba9f38이며 foundation m
    비공개 증거로 보존한다. Manager preflight chain FAIL=0과 global mutation lock을 확인하고
    승인된 compose-boundary activate-concierge --confirm 경로를 사용한다.
    env_file 경로와 secret은 그대로 보존하며 구 이미지 삭제는 하지 않는다.
-6. UI 설치 버전/네 산출물 hash·production build·revision, API /health와 code server health,
+6. UI 설치 버전/사용6종 산출물 hash·production build·revision, API /health와 code server health,
    Dagster location LOADED를 확인한다. GET /login 200 외에 실제 로그인 POST 200+Set-Cookie,
    UI 비밀번호 hash 길이 0 아님, 잘못된 비밀번호 401, 로그아웃 뒤 원 cookie replay401도 검증한다.
    결과·수집·검수·작업 상세·모바일 Select·자막 확장·지도의 대표 화면 smoke와 기존 전체 live UI를 실행한다.

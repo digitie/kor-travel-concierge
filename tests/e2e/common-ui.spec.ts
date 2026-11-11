@@ -112,8 +112,23 @@ test("검수 공통 표는 체크박스·부분 선택·행 키보드를 구분�
   await page.getByRole("button", { name: "목록/관리", exact: true }).click();
   const table = page.getByRole("table").filter({ hasText: "검증 장소 1" });
   await expect(table).toBeVisible();
-  await table.getByRole("checkbox", { name: "검증 장소 1 후보 선택" }).click();
+  const rowCheckbox = table.getByRole("checkbox", { name: "검증 장소 1 후보 선택" });
+  const originalRowCheckbox = await rowCheckbox.elementHandle();
+  await rowCheckbox.focus();
+  await rowCheckbox.press("Space");
+  await expect(rowCheckbox).toBeChecked();
+  expect(await originalRowCheckbox!.evaluate(node => node.isConnected && document.activeElement === node)).toBe(true);
+  expect(await rowCheckbox.evaluate((node, original) => node === original, originalRowCheckbox)).toBe(true);
   await expect(table.getByRole("checkbox", { name: "불러온 후보 전체 선택" })).toHaveAttribute("data-state", "indeterminate");
+  const headerCheckbox = table.getByRole("checkbox", { name: "불러온 후보 전체 선택" });
+  const originalHeaderCheckbox = await headerCheckbox.elementHandle();
+  await headerCheckbox.focus();
+  for (const checked of [true, false]) {
+    await headerCheckbox.press("Space");
+    await expect(headerCheckbox).toBeChecked({ checked });
+    expect(await originalHeaderCheckbox!.evaluate(node => node.isConnected && document.activeElement === node)).toBe(true);
+    expect(await headerCheckbox.evaluate((node, original) => node === original, originalHeaderCheckbox)).toBe(true);
+  }
   const row = table.getByRole("row").filter({ hasText: "검증 장소 2" });
   await row.focus();
   await row.press("Enter");
@@ -162,6 +177,11 @@ test("수집의 두 표와 상세 수집영상·장소 표가 공통 경로로 �
   await recurring.getByRole("button", { name: /공통 반복 대상/ }).first().click();
   const detail = page.getByRole("dialog");
   await expect(detail.getByRole("table").filter({ hasText: "공통 수집 영상" })).toBeVisible();
+  // C10 FocusScope: 패널 자체에서 역방향 Tab을 시작해도 모달의 마지막 항목으로 순환한다.
+  await detail.focus();
+  await expect(detail).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(detail.getByRole("button", { name: "닫기", exact: true }).last()).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(detail).toHaveCount(0);
   await page.goto("/jobs/common-ui-run");
