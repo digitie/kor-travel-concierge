@@ -1,10 +1,14 @@
-# 공통 UI 배포물 출처
+# 공통 UI·지도 후보 배포물 출처
 
-공통 저장소의 GPL-3.0-or-later UI/tokens 배포물을 정규 `npm pack` 산출물과 같은 bytes로 채택한다.
-정본: `kor-travel-common`의 `c289b4624c8640eb918cc915803e72ae754e58fb`(UI 패키지 소스는 PR47 병합
-`aa232ad5f255233184de80eceaab2e9b6ccb00c9`와 같다). `@kor-travel/ui`는 `0.1.0-dev.9`, tokens는 `0.1.0`이다.
-UI tarball은 정본에서 공통 CI와 같은 Node 22.23.1/npm 11.19.1로 `npm ci` 뒤 `npm pack -w packages/ui`로
-재현했고, 공통 저장소가 기록한 27파일·SHA256 `b738d8824e36eb6e58d8cc6b78af7dc31233b6763248d634286044def795b403`과
-일치한다. tokens tarball(SHA256 `554ae3f6a18cbf453130b29f8a2d737ddb880101b55e14535cf8d63174b47505`)은 이전 채택본
-그대로다(정본 사이 tokens 패키지 변경 없음). tarball에 LICENSE·NOTICE·THIRD_PARTY_NOTICES와 실제 dist가 포함된다.
-npm lockfile의 integrity와 Docker의 vendor COPY→npm ci를 함께 보존한다. 인증·세션·BFF actor는 Concierge가 소유한다.
+2026-11-11 부모의 통합 검증 후보 3을 동일 bytes로 소비한다. 상태는 CANDIDATE_NOT_RELEASED이며 정식 릴리스나 최종 freeze가 아니다.
+
+공통 소스의 인계 기준은 kor-travel-common@c289b4624c8640eb918cc915803e72ae754e58fb이고 추가 변경은 부모 통합 커밋 원장에서 확정한다. 지도 기준은 digitie/maplibre-vworld-react@9c46c57181d433c91f7e8837c4e4396204e9b583이며 부모의 web tsconfig 보완을 포함한다. web1.0.3/core1.0.0을 직접 file 의존성으로 고정한다.
+
+| 패키지 | 버전 | SHA512 |
+| --- | --- | --- |
+| @kor-travel/ui | 0.2.0 | sha512-ZugCh1iLt2GjU2TcoqWondPHMNb2PA0dA4/CAK23/yTZhMfPyI4kKmHnrt3xbkNiydEKUATPSF20pH10OeHCHw== |
+| vworld-map-core | 1.0.0 | sha512-tP++7XNg9UYXeeUc+aX8q+RD6/dkVzZuBSXPHUKEqHIRobLjUo1HcPEJruOU0bUzHGxnJL/8reIM7xI+vXYaUw== |
+| @kor-travel/tokens | 0.1.1 | sha512-LJpKb3co9PGl997zBG98u8aZF3jwPHuunDbg5hVu+inMZHbmG1rMoS9Alpxce/ErAUZyTbaZmh6eS6LVT9jfHw== |
+| vworld-map-web | 1.0.3 | sha512-9S0TUlgu4ky9ztjkanf0lhoijydhcX5ehHtyQB1jla+rGnuPLK4POiH4wIb2v5ATKuO5hOnHEG534gfyuEH+5g== |
+
+정본은 frontend/common-artifacts.json이다. tarball의 LICENSE·NOTICE·THIRD_PARTY_NOTICES와 shadcn MIT 출처 고지를 보존하며, 실제 파일·원장·lock integrity를 npm run check:dependencies로 검증한다. 최종 freeze가 새 원장을 제공하면 파일 복사 뒤 명시적 file 설치와 전체 검증을 다시 수행한다. 인증·세션·BFF actor·DB·RustFS는 Concierge의 기존 경계를 따른다.

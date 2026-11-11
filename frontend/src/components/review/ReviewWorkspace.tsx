@@ -56,6 +56,7 @@ import {
   groundingStatusLabel,
   queueReasonLabel,
   sourceKindLabel,
+  candidateReviewStateLabel,
 } from "@/lib/display-labels";
 import { formatDateTimeShort, youtubeWatchUrl } from "@/lib/format";
 import {
@@ -130,7 +131,7 @@ import {
 } from "@/components/ui/select";
 import {
   AlertDialog,
-  AlertDialogClose,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -140,10 +141,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import { ReviewUndoSnackbar } from "@/components/ReviewUndoSnackbar";
-import {
-  CandidateTable,
-  candidateReviewStateLabel,
-} from "@/components/review/CandidateTable";
+import { CandidateTable } from "@/components/review/CandidateTable";
 import { ConfirmForm } from "@/components/review/ConfirmForm";
 import {
   groupOptions,
@@ -4140,13 +4138,10 @@ export function ReviewWorkspace() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose
-              render={
-                <Button type="button" variant="outline" size="sm">
+            <AlertDialogCancel
+              asChild><Button type="button" variant="outline" size="sm">
                   취소
-                </Button>
-              }
-            />
+                </Button></AlertDialogCancel>
             <Button
               type="button"
               size="sm"
@@ -4320,33 +4315,30 @@ function ReviewQueueSearch({
   value: string;
   onDebouncedChange: (value: string) => void;
 }) {
-  const [draft, setDraft] = useState(value);
+  const [searchDraft, setSearchDraft] = useState({
+    draft: value,
+    previousValue: value,
+    pendingValue: null as string | null,
+  });
   const [isComposing, setIsComposing] = useState(false);
-  const previousValueRef = useRef(value);
-  const pendingValueRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const previousValue = previousValueRef.current;
-    const pendingValue = pendingValueRef.current;
-    previousValueRef.current = value;
-    pendingValueRef.current =
-      value === previousValue ? pendingValue : null;
-    setDraft((currentDraft) => {
-      return reconcileReviewSearchDraft({
-        draft: currentDraft,
-        previousValue,
-        value,
-        pendingValue,
-      }).draft;
+  if (value !== searchDraft.previousValue) {
+    const reconciled = reconcileReviewSearchDraft({
+      draft: searchDraft.draft,
+      previousValue: searchDraft.previousValue,
+      value,
+      pendingValue: searchDraft.pendingValue,
     });
-  }, [value]);
+    setSearchDraft({ draft: reconciled.draft, previousValue: value, pendingValue: null });
+  }
+  const draft = searchDraft.draft;
+  const setDraft = (draft: string) => setSearchDraft((current) => ({ ...current, draft }));
 
   useEffect(() => {
     if (isComposing) return;
     const normalized = draft.trim().slice(0, 255);
     if (normalized === value) return;
     const timer = window.setTimeout(() => {
-      pendingValueRef.current = normalized;
+      setSearchDraft((current) => ({ ...current, pendingValue: normalized }));
       onDebouncedChange(normalized);
     }, 300);
     return () => window.clearTimeout(timer);

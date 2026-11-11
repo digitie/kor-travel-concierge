@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -20,6 +20,7 @@ import {
   approximateTranscriptEvidenceScrollTop,
   cleanTranscript,
 } from "@/lib/transcript";
+import { keyedItems } from "@/lib/keyed-items";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -88,11 +89,18 @@ export function PlaceDetailView({
     },
   });
 
-  useEffect(() => {
-    if (transcriptText) {
-      requestAnimationFrame(scrollTranscriptToEvidence);
-    }
-  }, [expandedVideoId, scrollTranscriptToEvidence, transcriptText]);
+  // 자막 DOM이 붙거나 본문이 교체된 다음 근거 위치로 이동한다. 늦은 프레임은 해제한다.
+  const attachTranscript = useCallback((element: HTMLPreElement | null) => {
+    transcriptRef.current = element;
+    if (!element || !transcriptText) return;
+    const frame = requestAnimationFrame(() => {
+      element.scrollTop = approximateTranscriptEvidenceScrollTop(transcriptText, evidenceStart, element.scrollHeight);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      transcriptRef.current = null;
+    };
+  }, [evidenceStart, transcriptText]);
 
   if (detailQuery.isLoading) {
     return <p className="p-2 text-sm text-muted-foreground">불러오는 중…</p>;
@@ -203,9 +211,9 @@ export function PlaceDetailView({
                   .filter(Boolean)
                   .join(" · ")}
               </p>
-              {video.mentions.map((mention, index) => (
+              {keyedItems(video.mentions, (mention) => JSON.stringify([mention.timestamp_start, mention.timestamp_end, mention.source_kind, mention.source_text, mention.speaker_note])).map(({ item: mention, key }) => (
                 <div
-                  key={index}
+                  key={key}
                   className="border-l-2 border-muted pl-2 text-muted-foreground"
                 >
                   {mention.timestamp_start ? (
@@ -250,9 +258,9 @@ export function PlaceDetailView({
                   .join(" · ")}
               </p>
               <div className="flex flex-col gap-1">
-                {expandedVideo.mentions.map((mention, index) => (
+                {keyedItems(expandedVideo.mentions, (mention) => JSON.stringify([mention.timestamp_start, mention.timestamp_end, mention.source_kind, mention.source_text, mention.speaker_note])).map(({ item: mention, key }) => (
                   <div
-                    key={index}
+                    key={key}
                     className="border-l-2 border-muted pl-2 text-muted-foreground"
                   >
                     <div className="font-medium text-foreground">
@@ -302,7 +310,7 @@ export function PlaceDetailView({
                   </TabsList>
                   <TabsContent value="raw" className="mt-2">
                     <pre
-                      ref={transcriptRef}
+                      ref={attachTranscript}
                       className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap"
                     >
                       {transcriptText}

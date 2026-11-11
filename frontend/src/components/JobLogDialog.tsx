@@ -1,5 +1,6 @@
 "use client";
 
+import { keyedItems } from "@/lib/keyed-items";
 import type { RunStatusLog } from "@/lib/api";
 import { runStateBadgeVariant, runStateLabel } from "@/lib/display-labels";
 import { Badge } from "@/components/ui/badge";
@@ -23,17 +24,17 @@ export type JobLogLike = {
   status_logs: RunStatusLog[];
 };
 
+const logTimeFormat = new Intl.DateTimeFormat("ko-KR", {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Seoul",
+});
+
 function formatLogTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
+  return logTimeFormat.format(date);
 }
 
-export function buildJobReport(status: JobLogLike): string {
+function buildJobReport(status: JobLogLike): string {
   const lines = [
     "[작업 정보]",
     `job_id: ${status.job_id ?? "-"}`,
@@ -95,8 +96,8 @@ export function JobLogView({ status }: { status: JobLogLike }) {
           {status.status_logs.length === 0 ? (
             <p className="text-xs text-muted-foreground">로그가 없습니다.</p>
           ) : (
-            status.status_logs.map((log, index) => (
-              <div key={index} className="flex flex-col gap-0.5 text-xs">
+            keyedItems(status.status_logs, (log) => JSON.stringify([log.timestamp, log.level, log.message])).map(({ item: log, key }) => (
+              <div key={key} className="flex flex-col gap-0.5 text-xs">
                 <span className="text-muted-foreground">
                   {formatLogTime(log.timestamp)} · {log.level}
                 </span>

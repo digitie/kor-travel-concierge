@@ -1,6 +1,7 @@
 "use client";
 
 import type { Ref } from "react";
+import { keyedItems } from "@/lib/keyed-items";
 import { Loader2Icon, SparklesIcon } from "lucide-react";
 
 import type {
@@ -182,7 +183,7 @@ function ProviderSection({
           {loading ? "검색 중…" : "결과 없음"}
         </p>
       ) : (
-        hits.map((hit, index) => {
+        keyedItems(hits, (hit) => JSON.stringify([hit.provider, hit.native_id, hit.latitude, hit.longitude, hit.name, hit.road_address, hit.address])).map(({ item: hit, key }) => {
           const hasCoords = hit.latitude != null && hit.longitude != null;
           const selectionNotice = placeHitStorageBlockReason(hit);
           const selectable = hasCoords && isPlaceHitSelectable(hit);
@@ -197,7 +198,7 @@ function ProviderSection({
           );
           return (
             <button
-              key={`${hit.provider}-${hit.native_id ?? index}`}
+              key={key}
               type="button"
               disabled={!selectable}
               aria-pressed={isSelected}

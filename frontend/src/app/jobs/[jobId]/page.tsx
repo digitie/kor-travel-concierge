@@ -1,6 +1,10 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { VirtualTable } from "@kor-travel/ui/virtual-table";
+import { createStore } from "zustand/vanilla";
+import { useStore } from "zustand";
+
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -152,6 +156,16 @@ function VideoStatsSection({
   onRetry: () => void;
   defaultCategory: string;
 }) {
+  const [viewStore] = useState(() =>
+    createStore<{ expanded: Record<string, boolean> }>(() => ({
+      expanded: {},
+    })),
+  );
+  const expanded = useStore(viewStore, (state) => state.expanded);
+  const toggleTranscript = (id: string) =>
+    viewStore.setState((state) => ({
+      expanded: { ...state.expanded, [id]: !state.expanded[id] },
+    }));
   const hasError = Boolean(error);
   const processed = stats.filter((stat) => stat.poi_total > 0).length;
   const totalPoi = stats.reduce((sum, stat) => sum + stat.poi_total, 0);
@@ -202,21 +216,77 @@ function VideoStatsSection({
           <EmptyState>수집된 영상이 없습니다.</EmptyState>
         ) : (
           <div className="max-h-[34rem] overflow-auto rounded-panel border border-border">
-            <table className="w-full min-w-[60rem] text-sm">
-              <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-xs font-semibold text-text-secondary">
-                <tr>
-                  <th className="px-3 py-2">영상</th>
-                  <th className="px-3 py-2">POI</th>
-                  <th className="px-3 py-2">상태</th>
-                  <th className="px-3 py-2 text-right">액션</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.map((stat) => (
-                  <VideoStatRows key={stat.video_id} stat={stat} />
-                ))}
-              </tbody>
-            </table>
+            <VirtualTable
+              data={stats}
+              columns={[
+                {
+                  id: "video-0",
+                  header: "영상",
+                  enableSorting: false,
+                  cell: ({ row: { original: stat } }) => (
+                    <>
+                      <a
+                        href={stat.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex min-w-0 items-start gap-1 font-medium"
+                      >
+                        <span className="line-clamp-2">{stat.title}</span>
+                        <ExternalLinkIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                      </a>
+                      <span className="font-mono text-[11px] text-text-secondary">
+                        {stat.video_id}
+                      </span>
+                    </>
+                  ),
+                },
+                {
+                  id: "video-1",
+                  header: "POI",
+                  enableSorting: false,
+                  cell: ({ row: { original: stat } }) => (
+                    <>
+                      <Badge variant="secondary">POI {stat.poi_total}</Badge>
+                    </>
+                  ),
+                },
+                {
+                  id: "video-2",
+                  header: "상태",
+                  enableSorting: false,
+                  cell: ({ row: { original: stat } }) => (
+                    <>
+                      <div className="flex flex-col gap-1 text-[12px] text-text-secondary">
+                        <span>자동 {stat.poi_auto.toLocaleString()}</span>
+                        <span>
+                          검수 대기 {stat.poi_needs_review.toLocaleString()}
+                        </span>
+                        <span>완료 {stat.poi_resolved.toLocaleString()}</span>
+                      </div>
+                    </>
+                  ),
+                },
+                {
+                  id: "video-3",
+                  header: "액션",
+                  enableSorting: false,
+                  cell: ({ row: { original: stat } }) => (
+                    <VideoStatActions
+                      stat={stat}
+                      expanded={Boolean(expanded[stat.video_id])}
+                      onToggle={() => toggleTranscript(stat.video_id)}
+                    />
+                  ),
+                },
+              ]}
+              getRowId={(stat) => stat.video_id}
+              stickyHeader
+              renderRowDetails={(stat) =>
+                expanded[stat.video_id] ? (
+                  <VideoStatTranscript stat={stat} />
+                ) : null
+              }
+            />
           </div>
         )}
       </Panel>
@@ -224,111 +294,90 @@ function VideoStatsSection({
   );
 }
 
-function VideoStatRows({ stat }: { stat: RunVideoStat }) {
+function VideoStatActions({
+  stat,
+  expanded,
+  onToggle,
+}: {
+  stat: RunVideoStat;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [showTranscript, setShowTranscript] = useState(false);
-  const transcriptQuery = useQuery({
-    queryKey: ["video-transcript", stat.video_id],
-    queryFn: () => getVideoTranscript(stat.video_id),
-    enabled: showTranscript,
-  });
   const reprocess = useMutation({
     mutationFn: () => reprocessVideos([stat.video_id], "transcript"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: RUN_QUEUE_QUERY_KEY });
     },
   });
-
   return (
-    <Fragment>
-      <tr className="border-t border-border">
-        <td className="px-3 py-2 align-top">
-          <a
-            href={stat.url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex min-w-0 items-start gap-1 font-medium"
+    <>
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-end gap-1">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              router.push(`/?video=${encodeURIComponent(stat.video_id)}`)
+            }
           >
-            <span className="line-clamp-2">{stat.title}</span>
-            <ExternalLinkIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-          </a>
-          <span className="font-mono text-[11px] text-text-secondary">
-            {stat.video_id}
-          </span>
-        </td>
-        <td className="px-3 py-2 align-top">
-          <Badge variant="secondary">POI {stat.poi_total}</Badge>
-        </td>
-        <td className="px-3 py-2 align-top">
-          <div className="flex flex-col gap-1 text-[12px] text-text-secondary">
-            <span>자동 {stat.poi_auto.toLocaleString()}</span>
-            <span>검수 대기 {stat.poi_needs_review.toLocaleString()}</span>
-            <span>완료 {stat.poi_resolved.toLocaleString()}</span>
-            {reprocess.isSuccess ? (
-              <span className="text-primary">재처리 작업 등록됨</span>
-            ) : reprocess.error ? (
-              <span className="text-destructive">{reprocess.error.message}</span>
-            ) : null}
-          </div>
-        </td>
-        <td className="px-3 py-2 align-top">
-          <div className="flex justify-end gap-1">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() =>
-                router.push(`/?video=${encodeURIComponent(stat.video_id)}`)
-              }
-            >
-              결과
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => setShowTranscript((value) => !value)}
-            >
-              {showTranscript ? "자막 닫기" : "자막"}
-            </Button>
-            <ConfirmActionButton
-              title="이 영상을 다시 처리할까요?"
-              description="자막 교정 → POI 추출을 처음부터 다시 실행합니다."
-              confirmLabel="재실행"
-              confirmVariant="default"
-              onConfirm={() => reprocess.mutate()}
-              trigger={
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={reprocess.isPending}
-                >
-                  재실행
-                </Button>
-              }
-            />
-          </div>
-        </td>
-      </tr>
-      {showTranscript ? (
-        <tr className="border-t border-border bg-surface-row">
-          <td colSpan={4} className="px-3 py-3">
-            {transcriptQuery.isLoading ? (
-              <EmptyState>불러오는 중...</EmptyState>
-            ) : transcriptQuery.data?.text ? (
-              <pre className="max-h-72 overflow-y-auto rounded-control border border-border bg-surface-subtle p-3 text-xs whitespace-pre-wrap">
-                {transcriptQuery.data.text}
-              </pre>
-            ) : (
-              <EmptyState>
-                보정 자막이 없습니다(RustFS 미구성이거나 아직 저장 전).
-              </EmptyState>
-            )}
-          </td>
-        </tr>
-      ) : null}
-    </Fragment>
+            결과
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => onToggle()}
+          >
+            {expanded ? "자막 닫기" : "자막"}
+          </Button>
+          <ConfirmActionButton
+            title="이 영상을 다시 처리할까요?"
+            description="자막 교정 → POI 추출을 처음부터 다시 실행합니다."
+            confirmLabel="재실행"
+            confirmVariant="default"
+            onConfirm={() => reprocess.mutate()}
+            trigger={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={reprocess.isPending}
+              >
+                재실행
+              </Button>
+            }
+          />
+        </div>
+        {reprocess.isSuccess ? (
+          <span className="text-primary">재처리 작업 등록됨</span>
+        ) : reprocess.error ? (
+          <span className="text-destructive">{reprocess.error.message}</span>
+        ) : null}
+      </div>
+    </>
+  );
+}
+function VideoStatTranscript({ stat }: { stat: RunVideoStat }) {
+  const transcriptQuery = useQuery({
+    queryKey: ["video-transcript", stat.video_id],
+    queryFn: () => getVideoTranscript(stat.video_id),
+  });
+  return (
+    <>
+      {transcriptQuery.isLoading ? (
+        <EmptyState>불러오는 중...</EmptyState>
+      ) : transcriptQuery.data?.text ? (
+        <pre className="max-h-72 overflow-y-auto rounded-control border border-border bg-surface-subtle p-3 text-xs whitespace-pre-wrap">
+          {transcriptQuery.data.text}
+        </pre>
+      ) : (
+        <EmptyState>
+          보정 자막이 없습니다(RustFS 미구성이거나 아직 저장 전).
+        </EmptyState>
+      )}
+    </>
   );
 }

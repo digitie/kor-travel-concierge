@@ -1,4 +1,5 @@
 import type {
+  CandidateReviewState,
   CrawlRunSummary,
   ReviewGroundingStatus,
   RunAttention,
@@ -278,4 +279,14 @@ function normalizeKey(value: string | null | undefined): string {
 function fallbackLabel(value: string | null | undefined, fallback: string): string {
   const trimmed = value?.trim();
   return trimmed ? trimmed.replaceAll("_", " ") : fallback;
+}
+
+export function candidateReviewStateLabel(
+  state: CandidateReviewState,
+): string {
+  if (state === "ignored") return "제외됨";
+  if (state === "deleted") return "삭제됨";
+  if (state === "matched") return "자동 확정";
+  if (state === "user_corrected") return "검수 확정";
+  return "검수 대기";
 }

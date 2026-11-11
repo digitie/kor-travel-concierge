@@ -10,7 +10,7 @@ import { Loader2Icon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 
 import {
   AlertDialog,
-  AlertDialogClose,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -674,18 +674,15 @@ export function ReviewBulkPanel({
                   창 닫기 · 작업은 계속됨
                 </Button>
               ) : (
-                <AlertDialogClose
-                  render={
-                    <Button
+                <AlertDialogCancel
+                  asChild><Button
                       type="button"
                       size="sm"
                       variant="outline"
                       autoFocus
                     >
                       {dialogState.phase === "ready" ? "취소" : "닫기"}
-                    </Button>
-                  }
-                />
+                    </Button></AlertDialogCancel>
               )}
 
               {dialogState.phase === "ready" &&

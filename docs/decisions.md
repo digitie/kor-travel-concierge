@@ -2048,3 +2048,33 @@ v2/buildx 설치·방화벽·fstab bind·swapfile은 **미완**. geo는 아직 n
 각 상태 helper의 호출자 대기는 2초다. 포화 시 인증을 거절하고, 고정 bundle별 최대 32개 미완 작업 슬롯을 실제 settle까지 유지한다. 이 정책은 syscall 취소나 전체 인증 요청 2초·총 RSS 상한을 의미하지 않는다. 폐기 목록은 process Map에 누적하지 않고 만료 hour 버킷을 streaming으로 청소한다.
 
 private 저장소의 일시적 I/O 실패·포화는 보호 요청503/Retry-After로 거절하고 cookie 삭제·로그인 redirect를 하지 않는다. invalid cookie는 기존401/로그인 redirect다. 기록 실패는 로그인/로그아웃 503이고 성공 cookie·성공 audit로 바꾸지 않는다. UI 컨테이너 교체나 nonce 재생성 시 사용자는 다시 로그인한다. 분산 replica와 nonce 보존/개별 marker 유실은 자동 복구 보장 범위가 아니며, 부분 상태 복원 시 nonce 재생성이 필요하다. 새 backend schema·provider·Dagster plane 변경 없이 UI만 반영한다.
+
+## ADR-52: 관리자 UI와 의존성·지도 산출물을 공통 정본으로 고정한다
+
+- 상태: 구현 후보(2026-11-11). 정식 릴리스·독립 리뷰·원격 CI·머지·배포 수용은 아직 아님.
+
+사용자 확정 요구에 따라 shadcn/ui의 Radix 계열을 @kor-travel/ui에서 소비한다.
+관리 표 7개는 모두 공통 VirtualTable을 사용하며, 검수 행의 선택·키보드와 영상 자막 확장행은
+공통 rowProps·renderRowDetails 계약에 연결한다. 모바일 Select의 OS picker와 빈 문자열 값 변환만
+소비자 어댑터에 남긴다. Base UI와 직접 TanStack 표 구현은 제거한다.
+
+공유 의존성은 부모의 version-targets.json exact 값을 따르며 Tailwind/plugin 4.3.5,
+ESLint 10.14.0과 React Doctor 0.9.22를 적용한다. ESLint 10의 API를 지원하는 Next plugin,
+typescript-eslint, react-hooks, import-x, jsx-a11y-x로 검사한다. 호환되지 않는 구 eslint-config-next와
+eslint-plugin-react는 제거한다. --legacy-peer-deps·--force를 사용하지 않는다.
+Doctor는 전체 소스와 inline disable을 우회하는 감사 모드를 검사하며 warning도 CI를 실패시킨다.
+이 감사는 소스를 임시 변경하므로 lint·타입·build·수정과 순차 실행한다.
+
+RHF와 Zod는 수집 폼과 공통 로그인에서, Zustand는 로그인 오류·자막 확장·지도 카메라에서 실제 사용한다.
+Pretendard Variable은 공통 tokens 경로로 제공한다. 검수 workflow·인증·세션·BFF·저장 정책은
+소비자 소유 경계를 유지한다.
+
+지도는 GitHub main 9c46c57181d433c91f7e8837c4e4396204e9b583을 기준으로 부모가
+web tsconfig를 보완한 core1.0.0/web1.0.3을 사용한다. 공통 UI0.2.0/tokens0.1.1과 같은 bytes를
+vendor에 복사하고 common-artifacts.json의 SHA512와 npm lock integrity를 함께 검증한다.
+후보 단계의 동일 버전 재pack은 정식 릴리스 재발행이 아니며, 최종 freeze의 단일pack에 다시 정렬한다.
+
+check:dependencies는 공통 배포물의 check-dependencies.mjs --artifacts common-artifacts.json --source src와
+소비자 경계 검사를 실행한다. CI는 strict peer 설치·guard·lint·Doctor·타입·단위·build·격리 브라우저를
+필수 단계로 둔다. 실패나 미실행 gate를 성공으로 기록하지 않는다. 상세 실행 결과·남은 blocker·배포
+go 조건은 [이관 보고서](reports/common-unification-20261111.md)에 기록한다.

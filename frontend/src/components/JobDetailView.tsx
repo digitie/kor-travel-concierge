@@ -1,5 +1,7 @@
 "use client";
 
+import { VirtualTable } from "@kor-travel/ui/virtual-table";
+
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -37,14 +39,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
 
-function runResultLabel(result: Record<string, unknown>, hasResult: boolean): string {
+function runResultLabel(
+  result: Record<string, unknown>,
+  hasResult: boolean,
+): string {
   if (!hasResult) return "진행 중";
   if (result.quota_deferred === true) return "쿼터로 처리 보류";
   const parts: string[] = [];
-  if (typeof result.discovered === "number") parts.push(`수집 ${result.discovered}`);
-  if (typeof result.inserted === "number") parts.push(`신규 ${result.inserted}`);
+  if (typeof result.discovered === "number")
+    parts.push(`수집 ${result.discovered}`);
+  if (typeof result.inserted === "number")
+    parts.push(`신규 ${result.inserted}`);
   if (typeof result.updated === "number") parts.push(`갱신 ${result.updated}`);
-  if (typeof result.skipped === "number") parts.push(`건너뜀 ${result.skipped}`);
+  if (typeof result.skipped === "number")
+    parts.push(`건너뜀 ${result.skipped}`);
   if (typeof result.enqueued_jobs === "number") {
     parts.push(`등록 ${result.enqueued_jobs}`);
   }
@@ -151,14 +159,13 @@ export function JobDetailView({
           {
             label: "대상 유형",
             value:
-              target.target_type_label ?? targetTypeDisplayLabel(target.target_type),
+              target.target_type_label ??
+              targetTypeDisplayLabel(target.target_type),
           },
           {
             label: "대상",
             value:
-              target.target_label ??
-              target.display_name ??
-              target.source_value,
+              target.target_label ?? target.display_name ?? target.source_value,
             // 검색어/제목처럼 길이가 정해지지 않은 값 — 한 줄로 자르면 실제 대상을
             // 알아볼 수 없게 될 수 있어 줄바꿈을 허용한다.
             wrap: true,
@@ -169,7 +176,10 @@ export function JobDetailView({
               target.default_category_label ?? target.default_category_code,
             ),
           },
-          { label: "반복 간격", value: intervalLabel(target.scan_interval_minutes) },
+          {
+            label: "반복 간격",
+            value: intervalLabel(target.scan_interval_minutes),
+          },
           {
             label: "반복 횟수",
             value: target.max_runs === 0 ? "무한" : String(target.max_runs),
@@ -196,7 +206,11 @@ export function JobDetailView({
   return (
     <div className="flex flex-col gap-5">
       {run ? (
-        <RunSummaryCards run={run} result={result} placesCount={places.length} />
+        <RunSummaryCards
+          run={run}
+          result={result}
+          placesCount={places.length}
+        />
       ) : target ? (
         <TargetSummaryCards target={target} videosCount={videos.length} />
       ) : null}
@@ -374,7 +388,9 @@ function RunProgressPanel({
             {targetName}
           </h2>
           <p className="mt-2 line-clamp-2 text-[13px] text-text-secondary">
-            {run.last_error ?? run.current_message ?? runResultLabel(result, Boolean(run.result))}
+            {run.last_error ??
+              run.current_message ??
+              runResultLabel(result, Boolean(run.result))}
           </p>
           <p className="mt-2 break-all font-mono text-[11px] text-text-secondary">
             {run.job_id}
@@ -410,7 +426,8 @@ function RunProgressPanel({
 }
 
 function TargetProgressPanel({ target }: { target: SourceTargetSummary }) {
-  const targetName = target.target_label ?? target.display_name ?? target.source_value;
+  const targetName =
+    target.target_label ?? target.display_name ?? target.source_value;
   return (
     <Panel title="대상과 일정">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -418,7 +435,8 @@ function TargetProgressPanel({ target }: { target: SourceTargetSummary }) {
           {target.is_active ? "활성" : "중지"}
         </Badge>
         <Badge variant="outline">
-          {target.target_type_label ?? targetTypeDisplayLabel(target.target_type)}
+          {target.target_type_label ??
+            targetTypeDisplayLabel(target.target_type)}
         </Badge>
       </div>
       <h2 className="mt-2 break-words text-[18px] font-bold leading-snug">
@@ -455,40 +473,66 @@ function RunPlacesTable({
       />
     );
   }
-  if (places.length === 0) return <EmptyState>추출된 POI가 없습니다.</EmptyState>;
+  if (places.length === 0)
+    return <EmptyState>추출된 POI가 없습니다.</EmptyState>;
 
   return (
     <div className="max-h-72 overflow-auto rounded-panel border border-border">
-      <table className="w-full min-w-[34rem] text-sm">
-        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
-          <tr>
-            <th className="px-3 py-2">장소</th>
-            <th className="px-3 py-2">상태</th>
-            <th className="px-3 py-2 text-right">이동</th>
-          </tr>
-        </thead>
-        <tbody>
-          {places.map((place) => (
-            <tr
-              key={`${place.kind}-${place.place_id ?? place.candidate_id}`}
-              className="border-t border-border"
-            >
-              <td className="px-3 py-2 align-top">
+      <VirtualTable
+        data={places}
+        getRowId={(place) =>
+          String(`${place.kind}-${place.place_id ?? place.candidate_id}`)
+        }
+        columns={[
+          {
+            id: "column-0",
+            header: () => <>장소</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: place } }) => (
+              <>
                 <span className="line-clamp-2 font-medium">{place.name}</span>
-              </td>
-              <td className="px-3 py-2 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-1",
+            header: () => <>상태</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: place } }) => (
+              <>
                 <div className="flex flex-wrap gap-1">
                   {place.is_domestic === false ? (
                     <Badge variant="outline">해외</Badge>
                   ) : null}
                   <Badge
-                    variant={place.status === "confirmed" ? "secondary" : "outline"}
+                    variant={
+                      place.status === "confirmed" ? "secondary" : "outline"
+                    }
                   >
                     {place.status === "confirmed" ? "확정" : "검수 대기"}
                   </Badge>
                 </div>
-              </td>
-              <td className="px-3 py-2 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-2",
+            header: () => <>이동</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top",
+              headerClassName: "px-3 py-2 text-right",
+            },
+            cell: ({ row: { original: place } }) => (
+              <>
                 <button
                   type="button"
                   onClick={() => onOpenPlace(place)}
@@ -496,11 +540,13 @@ function RunPlacesTable({
                 >
                   {place.status === "confirmed" ? "결과" : "검수"}
                 </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </>
+            ),
+          },
+        ]}
+        stickyHeader
+        manualSorting
+      />
     </div>
   );
 }
@@ -533,23 +579,25 @@ function CollectedVideosTable({
       />
     );
   }
-  if (videos.length === 0) return <EmptyState>수집된 영상이 없습니다.</EmptyState>;
+  if (videos.length === 0)
+    return <EmptyState>수집된 영상이 없습니다.</EmptyState>;
 
   return (
     <div className="max-h-80 overflow-auto rounded-panel border border-border">
-      <table className="w-full min-w-[42rem] text-sm">
-        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-[12px] font-bold text-text-secondary">
-          <tr>
-            <th className="px-3 py-2">영상</th>
-            <th className="px-3 py-2">채널</th>
-            <th className="px-3 py-2">길이</th>
-            <th className="px-3 py-2">공개일</th>
-          </tr>
-        </thead>
-        <tbody>
-          {videos.map((video) => (
-            <tr key={video.video_id} className="border-t border-border">
-              <td className="px-3 py-2 align-top">
+      <VirtualTable
+        data={videos}
+        getRowId={(video) => String(video.video_id)}
+        columns={[
+          {
+            id: "column-0",
+            header: () => <>영상</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: video } }) => (
+              <>
                 <a
                   href={video.url}
                   target="_blank"
@@ -562,20 +610,49 @@ function CollectedVideosTable({
                 <span className="font-mono text-[11px] text-text-secondary">
                   {video.video_id}
                 </span>
-              </td>
-              <td className="px-3 py-2 align-top text-text-secondary">
-                {video.channel_title ?? "-"}
-              </td>
-              <td className="px-3 py-2 align-top text-text-secondary">
-                {durationLabel(video.duration_seconds)}
-              </td>
-              <td className="px-3 py-2 align-top text-text-secondary">
-                {video.published_at?.slice(0, 10) ?? "-"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </>
+            ),
+          },
+          {
+            id: "column-1",
+            header: () => <>채널</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top text-text-secondary",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: video } }) => (
+              <>{video.channel_title ?? "-"}</>
+            ),
+          },
+          {
+            id: "column-2",
+            header: () => <>길이</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top text-text-secondary",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: video } }) => (
+              <>{durationLabel(video.duration_seconds)}</>
+            ),
+          },
+          {
+            id: "column-3",
+            header: () => <>공개일</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-2 align-top text-text-secondary",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: video } }) => (
+              <>{video.published_at?.slice(0, 10) ?? "-"}</>
+            ),
+          },
+        ]}
+        stickyHeader
+        manualSorting
+      />
     </div>
   );
 }

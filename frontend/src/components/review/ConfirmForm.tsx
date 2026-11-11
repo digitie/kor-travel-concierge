@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import {
   AlertDialog,
-  AlertDialogClose,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -252,13 +252,10 @@ export function ConfirmForm({
             ))}
           </div>
           <AlertDialogFooter>
-            <AlertDialogClose
-              render={
-                <Button type="button" variant="outline" size="sm">
+            <AlertDialogCancel
+              asChild><Button type="button" variant="outline" size="sm">
                   취소
-                </Button>
-              }
-            />
+                </Button></AlertDialogCancel>
             <Button
               type="button"
               size="sm"

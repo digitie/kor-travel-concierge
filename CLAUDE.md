@@ -17,6 +17,8 @@ Gemini API 기반의 YouTube 여행 컨텐츠 검색, 정리, VWorld 지도 시�
 
 ### 현재 작업
 
+- **T-208 공통 UI 통합 후보**: Radix·VirtualTable·Tailwind4.3.5·ESLint10·React Doctor·공통 지도 산출물 이관을 진행 중이다. 성공/실패와 다음 단계는 [이관 보고서](docs/reports/common-unification-20261111.md)를 따른다. 기존 T-199/T-200 운영 수용을 소급 완료하지 않는다.
+
 - **현재**: T-199/T-200 제품 구현과 #259 변경 토큰·부분 실패·재개 격리 수용 완료. T-201 문서를 현재형으로 정산한다. 운영 변경 토큰 전량·자동 daemon은 별도 미검증이다. [현재 수용 경계](docs/track-acceptance-current.md)를 따른다.
 - **다음**: 운영 전원 차단 없이 Track2 실제 연결 단절 효과를 격리 검증한다. 추가 성능 튜닝보다 남은 Track 수용을 우선한다.
 - **T-185 완료**: 검수 bulk를 서버 filter snapshot 기반 `preview`·100건 `execute`로 구현했다. 명시

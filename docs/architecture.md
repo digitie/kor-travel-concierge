@@ -725,11 +725,11 @@ item은 함께 cascade한다.
 | 프레임워크 | Next.js + React | App Router 기반 화면 구성 |
 | 폼 | React Hook Form | 키워드, 타겟, 설정 입력 |
 | 검증 | Zod | 폼·API 응답 스키마 검증 |
-| UI | shadcn/ui + Tailwind CSS | 일관된 컴포넌트와 스타일 |
+| UI | common shadcn/ui(Radix) + Tailwind CSS 4.3.5 | 공통 프리미티브·VirtualTable·의미 토큰 |
 | 서버 상태 | TanStack Query | 조회 캐싱, 작업 상태 폴링, mutation |
 | 지도 | `maplibre-gl + VWorld WMTS` | VWorld 지도 표시 |
 
-Zustand는 현 단계에서 도입하지 않는다. 서버 데이터는 TanStack Query가, 폼 상태는 React Hook Form이 처리하므로 별도 전역 클라이언트 상태 수요가 명확해질 때 추가한다.
+클라이언트 상태는 화면 인스턴스별 Zustand store로 관리한다(로그인 오류·영상 자막 확장·지도 카메라). 서버 데이터는 TanStack Query, 입력 검증은 React Hook Form과 Zod 4가 소유한다. 지도 줌은 store에 기록하되 카메라 목표 구독값이 바뀔 때만 화면을 다시 그린다. 글꼴은 @kor-travel/tokens/font.css의 Pretendard Variable이다. 지도는 최신 GitHub 소스로 고정한 vworld-map-web/core wrapper를 소비한다. 배포물·버전 검사와 후보 검증 상태는 ADR-52와 [이관 보고서](reports/common-unification-20261111.md)를 따른다.
 
 검수 undo는 전역 상태 라이브러리 대신 검수 화면 소유의 단일 slot으로 관리한다. mutation 시작
 snapshot, queue scope, workflow epoch, 상세 modal generation을 함께 고정해 필터 전환·A→B→A 선택·
