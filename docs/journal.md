@@ -4,6 +4,16 @@ integration-8-review의 UI0.2.0/tokens0.1.1·Lightning CSS1.33.0+nativecss.fix.4
 
 # JOURNAL — 작업 일지
 
+## 2026-11-12 — T-208 C11 최초릴리스 실제 통합 검증
+
+- C11 UI/tokens/Scope2를 동일 bytes·새 SRI로 채택하고 구 Scope1 vendor를 제거했다. actual6종263파일과 UI/tokens117파일 동일성·lock·원장을 확인했다.
+- 현재 canonical/guard, n150 자기 cache strict설치·단위396·lint/type·Doctor0·새production build·전체browser10/10 PASS다.
+  동일build341파일을 WSL로 제공하고 n150 Chromium을 실행했다. 원래 timeout/expect·단언·retry0을 유지했다.
+- 앱 source50은 그대로이며 header/row Space DOM/포커스 및 모달 initial panel Shift+Tab도 최종 실행에서 PASS다.
+  이전 C10 표 timeout 등 실패 이력은 보존했다. 원 A closure/소비자2리뷰·정확 HEAD CI는 별도 gate다.
+- 본인 server/tunnel/browser 종료·슬롯1 반환 완료. 운영·DB/RustFS/secret 변경 없이 Draft PR265를 갱신한다.
+  [최우선 handoff](reports/common-unification-20261111-handoff.md)에 최종 증거와 병합 뒤 이미지 전환 계획을 유지한다.
+
 ## 2026-11-12 — T-208 C10 체크포인트와 A-CONS-P2-01 수정
 
 - C10 정본7종 원장과 사용6종을 채택했다. 공식 Scope fix.1 runtime/override와 actual263파일·SRI를 확인했다.

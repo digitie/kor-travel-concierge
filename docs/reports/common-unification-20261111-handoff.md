@@ -1,6 +1,44 @@
 # Concierge 공통 UI 최종 인계
 
-## 2026-11-12 최우선 현재 상태 — C10 체크포인트 / A-CONS-P2-01 수정 / C11 대기
+## 2026-11-12 최우선 현재 상태 — C11 격리 최종 검증 / Draft PR265
+
+- 기준 source HEAD는50e707ba45fdf539dec0aacf13a81045de591fd4다. 그 이후 앱 source는 변경하지 않았다.
+- 정본은 foundation 최초릴리스 integration-11-review의 동일7팩 원장이다. 사용6종 vendor와 lock을 정렬하고
+  UI/tokens/Scope는 명시적 strict file 설치했다. 이전 Scope fix.1 vendor는 제거했다.
+- common producer a35481349d6747b4f13b958ae64d9c0bbd0b5413, Scope producer1752a539c8d5ae57961a0fa2702d2573d48fefe7.
+  workflow code/common-ref55a921b55d248106cbe320e7f5305f3d3cdb60fe는 유지한다.
+  common PR49는 main e8ed3ae75000be5cd22a3a11492bd97660635d78로 병합됐다.
+- UI/tokens119파일 중 policy JSON2개만 변경·117파일 byte 동일을 재확인했다.
+  Scope fix.2 runtime은 실제 바뀌었으므로 새 build와 전체 browser를 검증했다.
+  같은 버전의 bytes 변경·독립 repack은 하지 않았으며 후속 runtime 변경은 새 버전을 요구한다.
+
+| gate | C11 실제 결과 | 원문 |
+| --- | --- | --- |
+| vendor/lock/actual | 사용6종263파일·Scope사본1·UI94/tokens25/Scope15 원문 일치 | .git/c11-installed-proof.json, c11-n150/validation/installed-bytes.json |
+| installed/external canonical | 양쪽 PASS, 현재 working policy와 C11 원장 명시 | .git/c11-concierge-installed.log, c11-concierge-canonical.log |
+| 원격 strict 설치·guard | PASS, 종료된 자기 C10 cache만 재사용·lock 구조 동일 | .git/c11-n150/validation/strict-install.log, guard.log, canonical.log |
+| 단위·lint·타입·Doctor | 396/30파일 PASS·lint경고0·type PASS·Doctor0 | 같은 디렉터리 unit/lint/types/doctor.log |
+| 새 production build | PASS, 동일 build341파일 SHA256 모두 일치 | production-build.log, .git/c11-build-transfer.json |
+| 원래 전체 Chromium | 10/10 PASS·skip/retry0·원래45초/expect10초 | .git/c11-n150/validation/browser.log |
+
+최종 browser에는 A-CONS-P2-01의 header/row Space 선택 후 DOM identity·연결·포커스 유지,
+모달 initial panel Shift+Tab, 공통 표/자막/확인 취소/반응형 Select/상태 구독/키 없는 실제 마커·팝업이 포함됐다.
+이전 C10 후속 작업 표 timeout 기록은 보존했으며 새 전체 C11 실행은 같은 단언으로6.8초에 통과했다.
+이전 C9/C10 수치를 최종 C11 결과로 재사용하지 않았다.
+
+[기계판독 최종 증거](common-unification-20261112-c11-validation.json)와
+[출처/SRI](../../frontend/vendor/kor-travel-common-provenance.md)를 따른다.
+원 reviewer A의 source50 closure 및 최종 소비자2리뷰·정확 HEAD CI는 부모 통합 gate다.
+현재 검사 통과를 독립 리뷰 승인으로 표시하지 않는다. Draft PR265 유지, merge/deploy는 부모 go 이후다.
+
+본인 Next·SSH tunnel·브라우저 process를 종료했고 N150 슬롯1을 반환했다.
+로컬 root 공간 제약 때문에 fresh 설치/build는 n150의 자기 cache·전용 source에서 수행했다.
+운영 secret·DB/RustFS/API/Dagster 수명주기는 변경하지 않았다.
+병합 SHA의 frontend context·불변 UI 태그·production override·기존 secret 보존,
+로그인 POST/Set-Cookie·실패 로그인·로그아웃 replay·대표 화면·health 전환 순서는
+[배포 계획](common-unification-20261111.md)의 해당 절을 따른다.
+
+## 이전 기록 — C10 체크포인트 / A-CONS-P2-01 수정
 
 - 기존 bcfc1b8 위에서 integration-10-review 7종 원장과 사용6종을 채택했다. UI/tokens는 명시적 file 설치로
   integrity를 갱신했고 공식 Scope1.3.1+kortravel.fix.1 runtime 의존성과 npm root의 $@radix-ui/react-focus-scope override를 연결했다.

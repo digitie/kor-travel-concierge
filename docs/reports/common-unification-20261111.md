@@ -1,6 +1,14 @@
 # 공통 관리자 UI 이관 — 2026-11-11
 
-## 2026-11-12 현재 결과 — C10 및 선택 포커스 수정
+## 2026-11-12 현재 결과 — C11
+
+foundation 최초릴리스 C11을 동일 bytes로 채택했다. 사용6종263파일·원장/lock·guard/canonical,
+새 n150 strict 설치·unit396·lint/type·Doctor0·production build·전체 browser10/10을 통과했다.
+앱 source50e707b는 그대로이며 checkbox DOM/포커스 회귀와 initial panel Shift+Tab도 최종 suite에서 PASS다.
+[최우선 handoff](common-unification-20261111-handoff.md)와 [검증 JSON](common-unification-20261112-c11-validation.json)을 따른다.
+소비자2리뷰·정확 HEAD CI·merge·부모 go·병합 source 이미지 배포는 별도 잔여 gate다.
+
+## 이전 결과 — C10 및 선택 포커스 수정
 
 C10 사용6종 actual263파일·fresh 설치/build 체크포인트를 확인했다. A-CONS-P2-01은 재현 후 안정적인 header/meta와
 공통 renderCell로 수정했으며 unit396·lint/type·Doctor0·guard/canonical 및 실제 source Chromium4건 PASS다.
