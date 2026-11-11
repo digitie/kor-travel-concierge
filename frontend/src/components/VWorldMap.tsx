@@ -1,7 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useStore } from "zustand";
+import { createMapCameraStore } from "@/lib/map-camera";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { MapLibreMap, MarkerProps, PopupProps, VWorldMapViewProps } from "vworld-map-web";
 
 import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
@@ -36,8 +38,6 @@ type VisiblePlace = {
   lngLat: [number, number];
 };
 
-type CameraTarget = { center: [number, number]; zoom: number };
-
 const KOREA_CENTER: [number, number] = [127.8, 36.4];
 const KOREA_MAX_BOUNDS: [[number, number], [number, number]] = [
   [123.0, 31.0],
@@ -46,12 +46,13 @@ const KOREA_MAX_BOUNDS: [[number, number], [number, number]] = [
 const INITIAL_ZOOM = 6.2;
 const VWORLD_MIN_ZOOM = 6;
 const FOCUS_ZOOM = 12;
-// VWorldMapView는 apiKey가 비어 있으면 지도/마커/팝업을 전혀 마운트하지 않고
-// fallback만 렌더한다(vworld-map-web의 설계). 키가 없는 개발 환경에서도 목록·마커
-// 클릭 UX는 그대로 동작해야 하므로(E2E도 이를 전제), 더미 키로 지도는 항상 띄우고
-// 실제 키 부재는 별도 오버레이 배지로 알린다. 더미 키의 VWorld 타일 요청은
-// unsupportedTileFallback으로 우아하게 대체된다.
-const KEYLESS_PLACEHOLDER_KEY = "keyless-dev-placeholder";
+// 공개 mapStyle API로 키 없이도 로컬 마커·팝업을 마운트한다.
+// sources가 비어 있으므로 더미 키나 외부 VWorld 타일 요청은 만들지 않는다.
+const KEYLESS_MAP_STYLE: NonNullable<VWorldMapViewProps["mapStyle"]> = {
+  version: 8,
+  sources: {},
+  layers: [],
+};
 const MAP_LOADING_TIMEOUT_MS = 15_000;
 
 export function VWorldMap({
@@ -62,26 +63,9 @@ export function VWorldMap({
 }: VWorldMapProps) {
   const [mapAttempt, setMapAttempt] = useState(0);
   const retryMap = useCallback(() => setMapAttempt((attempt) => attempt + 1), []);
-  // react-hooks/refs: ref는 렌더 중 읽을 수 없으므로(값은 커밋 이후에만 접근),
-  // cameraTarget 계산에 쓰이는 두 값은 ref 대신 state로 추적한다. zoomend/moveend는
-  // 제스처가 끝날 때만 발생해(연속 프레임이 아님) 리렌더 비용이 문제되지 않는다.
-  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
-  // 선택 해제 시 카메라를 국가 전체 뷰로 되돌리지 않고 마지막 초점을 유지하기 위한
-  // state. cameraTarget이 undefined가 되면 vworld-map-web은 이를 base center/zoom
-  // props로 취급해 그쪽으로 다시 easeTo한다(선택 해제 = 예상치 못한 카메라 이동).
-  const [lastCameraTarget, setLastCameraTarget] = useState<CameraTarget | undefined>(undefined);
-  // 선택 대상이 "새로" 바뀐(장소·focusKey·좌표 중 하나라도 달라진) 시점에만 그
-  // 순간의 줌을 한 번 캡처해 카메라를 고정한다. pinnedSignature가 같으면 더 이상
-  // 재계산하지 않는다 — 예전엔 activeCameraTarget이 currentZoom에 계속 의존해
-  // 지도의 모든 zoomend/moveend마다 다시 계산됐고, Math.max(currentZoom, FOCUS_ZOOM)가
-  // 매번 재적용돼 선택된 장소가 있는 동안 FOCUS_ZOOM 아래로 축소하면 지도가 즉시
-  // 다시 튕겨 올라왔다(사용자가 지도에서 직접 줌을 바꿀 수 없었던 원인). focusKey는
-  // 목록 재클릭(DestinationWorkspace)을, 좌표 자체는 focusKey 없이 좌표만 바뀌는
-  // 소비처(ReviewWorkspace — 폼에서 좌표를 고치는 동안 selectedPlaceId는 고정 sentinel)를
-  // 함께 커버한다. 렌더 중 조건부 setState(React가 명시적으로 허용하는 "파생 state
-  // 조정" 패턴)로 갱신해 useEffect의 추가 렌더 cascade를 피한다.
-  const [pinnedSignature, setPinnedSignature] = useState<string | undefined>(undefined);
-  const [pinnedFocusTarget, setPinnedFocusTarget] = useState<CameraTarget | undefined>(undefined);
+  const [camera] = useState(() => createMapCameraStore(INITIAL_ZOOM, FOCUS_ZOOM));
+  // zoom만 바뀌면 이 구독 값은 그대로라 마커와 팝업을 다시 그리지 않는다.
+  const cameraTarget = useStore(camera.store, (state) => state.target);
 
   const visiblePlaces = useMemo<VisiblePlace[]>(
     () =>
@@ -103,34 +87,16 @@ export function VWorldMap({
     return entry ? { place: entry.place, lngLat: entry.lngLat } : null;
   }, [visiblePlaces, selectedPlaceId]);
 
-  if (selectedPlaceCoordinates) {
-    const signature = `${selectedPlaceId}:${focusKey}:${selectedPlaceCoordinates.lngLat[0]}:${selectedPlaceCoordinates.lngLat[1]}`;
-    if (signature !== pinnedSignature) {
-      setPinnedSignature(signature);
-      // focusKey가 같은 장소로 다시 증가해도(재중심 요청) vworld-map-web의 값 기반
-      // sameCamera 비교가 "동일 카메라"로 합쳐 애니메이션을 건너뛰지 않도록, 화면에
-      // 보이지 않는 수준의 zoom 지터로 값을 구분한다.
-      setPinnedFocusTarget({
-        center: selectedPlaceCoordinates.lngLat,
-        zoom: Math.max(currentZoom, FOCUS_ZOOM) + focusKey * 1e-9,
-      });
+  useLayoutEffect(() => {
+    if (selectedPlaceId != null && selectedPlaceCoordinates) {
+      camera.focus(selectedPlaceId, focusKey, selectedPlaceCoordinates.lngLat);
     }
-  }
-
-  // 선택된 장소가 있는 동안에는 위에서 고정한 값만 쓴다(currentZoom을 계속
-  // 따라가며 다시 계산하지 않음 — 그러면 사용자의 지도 줌 조작을 덮어쓴다).
-  const activeCameraTarget = selectedPlaceCoordinates ? pinnedFocusTarget : undefined;
-
-  if (activeCameraTarget && activeCameraTarget !== lastCameraTarget) {
-    setLastCameraTarget(activeCameraTarget);
-  }
-
-  // 선택 해제 시 undefined 대신 마지막 초점을 그대로 반환해 카메라를 제자리에 둔다.
-  const cameraTarget = activeCameraTarget ?? lastCameraTarget;
+    // 선택 해제 시 이전 카메라 목표를 유지한다.
+  }, [camera, focusKey, selectedPlaceCoordinates, selectedPlaceId]);
 
   const handleCameraTrackingEvent = useCallback((event: { target: MapLibreMap }) => {
-    setCurrentZoom(event.target.getZoom());
-  }, []);
+    camera.trackZoom(event.target.getZoom());
+  }, [camera]);
 
   return (
     <div
@@ -142,7 +108,8 @@ export function VWorldMap({
     >
       <MapWebGLGuard key={mapAttempt} onRetry={retryMap}>
         <VWorldMapView
-          apiKey={VWORLD_SERVICE_KEY || KEYLESS_PLACEHOLDER_KEY}
+          apiKey={VWORLD_SERVICE_KEY}
+          mapStyle={VWORLD_SERVICE_KEY ? undefined : KEYLESS_MAP_STYLE}
           layerType="Base"
           center={KOREA_CENTER}
           zoom={INITIAL_ZOOM}

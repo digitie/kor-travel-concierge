@@ -1,0 +1,119 @@
+{
+  "candidate": "integration-10-review",
+  "baseHead": "bcfc1b80b78a47319ddcf4918698f19331fb8206",
+  "centralWorkflowCodePin": "55a921b55d248106cbe320e7f5305f3d3cdb60fe",
+  "manifestSha256": "f0bd74c30e59265a974e825e5ccf1d250a6911cd8d51b1a0ca570892e28e8188",
+  "installed": {
+    "@kor-travel/ui": {
+      "files": 94,
+      "version": "0.2.0",
+      "allInstalledBytesMatch": true
+    },
+    "@kor-travel/tokens": {
+      "files": 25,
+      "version": "0.1.1",
+      "allInstalledBytesMatch": true
+    },
+    "lightningcss": {
+      "files": 19,
+      "version": "1.33.0+nativecss.fix.4",
+      "allInstalledBytesMatch": true
+    },
+    "vworld-map-core": {
+      "files": 25,
+      "version": "1.0.1",
+      "allInstalledBytesMatch": true
+    },
+    "vworld-map-web": {
+      "files": 85,
+      "version": "1.0.3",
+      "allInstalledBytesMatch": true
+    },
+    "@radix-ui/react-focus-scope": {
+      "files": 15,
+      "version": "1.3.1+kortravel.fix.1",
+      "allInstalledBytesMatch": true
+    }
+  },
+  "c9ToC10": {
+    "@kor-travel/ui": {
+      "files": 94,
+      "changed": [
+        "package/check-dependencies.mjs",
+        "package/dependency-policy.json"
+      ],
+      "identical": 92
+    },
+    "@kor-travel/tokens": {
+      "files": 25,
+      "changed": [
+        "package/check-dependencies.mjs",
+        "package/dependency-policy.json"
+      ],
+      "identical": 23
+    }
+  },
+  "scopeLockCopies": 1,
+  "scopeRuntimeChanged": true,
+  "runtimeResolution": {
+    "radix-ui": "node_modules/@radix-ui/react-focus-scope/dist/index.js",
+    "@radix-ui/react-dialog": "node_modules/@radix-ui/react-focus-scope/dist/index.js",
+    "@radix-ui/react-popover": "node_modules/@radix-ui/react-focus-scope/dist/index.js",
+    "@radix-ui/react-menu": "node_modules/@radix-ui/react-focus-scope/dist/index.js"
+  },
+  "buildTransfer": {
+    "sameBuild": true,
+    "files": 341,
+    "compressedBytes": 4714991
+  },
+  "c10BeforeCandidateFix": {
+    "candidate": "integration-10-review",
+    "fleetSlot": 2,
+    "strict-ci": {
+      "exit": 0
+    },
+    "guard": {
+      "exit": 0
+    },
+    "canonical": {
+      "exit": 0
+    },
+    "unit": {
+      "exit": 0
+    },
+    "lint": {
+      "exit": 0
+    },
+    "types": {
+      "exit": 0
+    },
+    "doctor": {
+      "exit": 0
+    },
+    "production-build": {
+      "exit": 0
+    },
+    "tests-strict-ci": {
+      "exit": 0
+    },
+    "browser-focus-scope": {
+      "exit": 1
+    },
+    "browser-candidate-before": {
+      "exit": 1
+    },
+    "browser-candidate-row-before": {
+      "exit": 1
+    }
+  },
+  "notFinal": true,
+  "reason": "C11 Scope fix.2 대기. CandidateTable 소스 수정 뒤 fresh production build 및 전체 browser10 재실행 필요.",
+  "browserCheckpoint": {
+    "scopePanelShiftTab": "PASS",
+    "followingJobDetailTable": "FAIL: 10초 안에 검증 추출 장소 표를 찾지 못함",
+    "fullSuite": "NOT_RUN"
+  },
+  "logs": ".git/c10-n150/validation/",
+  "deploymentExecuted": false,
+  "independentRepack": false
+}

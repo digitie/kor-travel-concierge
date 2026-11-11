@@ -611,7 +611,9 @@ export async function probeApi(path: string): Promise<ApiProbeResult> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: buildHeaders(),
   });
-  const rawText = await response.text();
+  const status = response.status;
+  const ok = response.ok;
+  const rawText = response.status === 204 ? "" : await response.text();
   const ended =
     typeof performance !== "undefined" ? performance.now() : Date.now();
   let body: unknown = rawText;
@@ -621,8 +623,8 @@ export async function probeApi(path: string): Promise<ApiProbeResult> {
     // 비 JSON 응답은 원문 문자열 그대로 둔다.
   }
   return {
-    status: response.status,
-    ok: response.ok,
+    status,
+    ok,
     ms: Math.round(ended - started),
     body,
     rawText,

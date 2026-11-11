@@ -1,0 +1,78 @@
+{
+  "candidate": "integration-9-review",
+  "sourceHeadBeforeRefresh": "608d63216c065f87be10130048bb7d41deff00a1",
+  "manifestSha256": "7d76d61565c8076934640538e783624719351edc06fad9bf99ebe4ff943e276e",
+  "centralWorkflowCodePin": "2c1182e765bb2bc53e01e0962cf2a73683891e1d",
+  "appRuntimeSourceChanged": false,
+  "independentRepack": false,
+  "c8ToC9": {
+    "@kor-travel/ui": {
+      "files": 94,
+      "changed": [
+        "package/check-dependencies.mjs"
+      ]
+    },
+    "@kor-travel/tokens": {
+      "files": 25,
+      "changed": [
+        "package/check-dependencies.mjs"
+      ]
+    }
+  },
+  "unchangedUiTokensRuntimeCssMetadataFiles": 117,
+  "installedArchiveFiles": {
+    "@kor-travel/tokens": 25,
+    "@kor-travel/ui": 94,
+    "vworld-map-core": 25,
+    "vworld-map-web": 85,
+    "lightningcss": 19
+  },
+  "fixtureRepair": {
+    "cause": "snapshot omitted .git parent of isolated session-state directory",
+    "before": {
+      "status": 503,
+      "error": "AUTH_UNAVAILABLE",
+      "sessionCookie": false
+    },
+    "after": {
+      "status": 200,
+      "error": null,
+      "sessionCookie": true
+    },
+    "appSourceChanged": false
+  },
+  "buildTransfer": {
+    "sameBuildFiles": 351,
+    "allSha256Identical": true,
+    "from": "n150 C9 production build",
+    "runtime": "WSL Linux Next, n150 Chromium",
+    "cacheCopied": false,
+    "rebuild": false
+  },
+  "freshC9": {
+    "localGuard": "PASS",
+    "localCanonical": "PASS",
+    "n150StrictCi": "PASS",
+    "n150Guard": "PASS",
+    "n150ProductionBuild": "PASS",
+    "n150Browser": {
+      "passed": 10,
+      "retries": 0,
+      "skipped": 0
+    }
+  },
+  "inheritedC8": {
+    "unitPassed": 394,
+    "lint": "PASS",
+    "types": "PASS",
+    "doctorWarnings": 0,
+    "reason": "C9 differs only in two checker files; app source and 117 UI/tokens runtime/CSS/metadata files identical"
+  },
+  "notCompleted": [
+    "common PR49 foundation main policy merge",
+    "two consumer reviews",
+    "exact HEAD GitHub CI",
+    "merge",
+    "deployment"
+  ]
+}

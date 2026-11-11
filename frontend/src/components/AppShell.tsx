@@ -1,11 +1,10 @@
 "use client";
+
 /* Hallmark · genre: editorial-utilitarian · macrostructure: Rail-Workbench · design-system: design.md · designed-as-app */
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { AppMenu, type AppMenuLinkProps } from "@kor-travel/ui/app-menu";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
 import {
   ActivityIcon,
   ClipboardCheckIcon,
@@ -19,7 +18,10 @@ import {
   SettingsIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import type { ReactNode } from "react";
+import { useEffect, useRef } from "react";
 
 import { JobStatusLink } from "@/components/JobStatusLink";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -77,7 +79,12 @@ const railRowActiveClass =
 
 function MenuLink(props: AppMenuLinkProps) {
   const active = props["aria-current"] === "page";
-  return <Link {...props} className={cn(railRowClass, active && railRowActiveClass)} />;
+  return (
+    <Link
+      {...props}
+      className={cn(railRowClass, active && railRowActiveClass)}
+    />
+  );
 }
 
 export function AppShell({
@@ -106,32 +113,29 @@ export function AppShell({
     group.items.some((item) => item.href === activeHref),
   );
   const menuRef = useRef<HTMLDivElement | null>(null);
-  // 서버와 첫 client 렌더는 같은 메뉴를 표시하고, 마운트 뒤 저장값을 복원한다.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarRestored, setSidebarRestored] = useState(false);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    try { setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"); }
-    catch { /* 저장소가 막혀도 현재 탭의 메뉴를 사용할 수 있다. */ }
-    setSidebarRestored(true);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (!sidebarRestored) return;
-    try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0"); }
-    catch { /* 저장 실패는 UI 조작을 막지 않는다. */ }
-  }, [sidebarCollapsed, sidebarRestored]);
+  const [sidebarStored, setSidebarStored] = usePersistedState<boolean | 0 | 1>(
+    SIDEBAR_COLLAPSED_KEY,
+    false,
+    "local",
+  );
+  // 이전 버전의 localStorage는 숫자 0/1을 썼다. DOM에는 항상 boolean을 전달한다.
+  const sidebarCollapsed = sidebarStored === true || sidebarStored === 1;
+  function toggleSidebar() {
+    setSidebarStored((current) => !(current === true || current === 1));
+  }
 
   useEffect(() => {
     if (typeof window === "undefined" || window.innerWidth >= 1024) return;
     const reduceMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-    menuRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
-      behavior: reduceMotion ? "auto" : "smooth",
-      block: "nearest",
-      inline: "center",
-    });
+    menuRef.current
+      ?.querySelector<HTMLElement>('[aria-current="page"]')
+      ?.scrollIntoView({
+        behavior: reduceMotion ? "auto" : "smooth",
+        block: "nearest",
+        inline: "center",
+      });
   }, [activeHref]);
 
   async function logout() {
@@ -157,121 +161,14 @@ export function AppShell({
             : "lg:grid-cols-[16rem_minmax(0,1fr)]",
         )}
       >
-        <aside
-          className="min-w-0 border-b border-white/15 bg-[var(--shell-rail)] text-[var(--shell-rail-text)] lg:sticky lg:top-0 lg:h-dvh lg:self-start lg:border-r lg:border-b-0 lg:border-white/15"
-          data-slot="admin-shell-rail"
-        >
-          <div className="flex h-full min-w-0 flex-col">
-            <div
-              className={cn(
-                "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/15 px-4",
-                sidebarCollapsed &&
-                  "lg:h-auto lg:flex-col lg:justify-center lg:gap-1 lg:px-0 lg:py-2",
-              )}
-            >
-              <Link
-                aria-label="Travel Concierge Admin UI"
-                className={cn(
-                  "flex min-w-0 items-baseline gap-1.5 rounded-control text-[var(--shell-rail-text)] no-underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
-                  sidebarCollapsed && "lg:justify-center",
-                )}
-                href="/"
-              >
-                <span
-                  className={cn(
-                    "truncate text-sm font-semibold tracking-tight",
-                    sidebarCollapsed && "lg:hidden",
-                  )}
-                >
-                  Travel Concierge
-                </span>
-                <span
-                  className={cn(
-                    "text-2xs font-medium tracking-tight text-[var(--shell-rail-muted)]",
-                    sidebarCollapsed && "lg:hidden",
-                  )}
-                >
-                  Admin UI
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "hidden text-xs font-semibold tracking-tight",
-                    sidebarCollapsed && "lg:inline",
-                  )}
-                >
-                  tca
-                </span>
-              </Link>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  aria-label="로그아웃"
-                  className="border border-white/15 text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white lg:hidden"
-                  size="icon-sm"
-                  title="로그아웃"
-                  type="button"
-                  variant="ghost"
-                  onClick={logout}
-                >
-                  <LogOutIcon aria-hidden="true" />
-                </Button>
-                <button
-                  aria-label={
-                    sidebarCollapsed ? "좌측 메뉴 펼치기" : "좌측 메뉴 접기"
-                  }
-                  className={cn(
-                    buttonVariants({ variant: "ghost", size: "icon-sm" }),
-                    "hidden border border-white/15 text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white lg:inline-flex",
-                  )}
-                  title={sidebarCollapsed ? "좌측 메뉴 펼치기" : "좌측 메뉴 접기"}
-                  type="button"
-                  onClick={() => setSidebarCollapsed((current) => !current)}
-                >
-                  {sidebarCollapsed ? (
-                    <PanelLeftOpenIcon aria-hidden="true" />
-                  ) : (
-                    <PanelLeftCloseIcon aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </div>
-            <div ref={menuRef} data-kt-surface data-sidebar-collapsed={sidebarCollapsed}
-              className="concierge-common-menu min-h-0 max-w-full overflow-x-auto px-3 py-2 lg:flex-1 lg:overflow-x-hidden lg:overflow-y-auto lg:py-3">
-              <AppMenu label="주요 메뉴" pathname={pathname} activeItemId={activeHref}
-                linkComponent={MenuLink} testId="concierge-common-menu"
-                groups={navGroups.map(group => ({ id: group.label, label: group.label,
-                  items: group.items.map(item => ({ id: item.href, href: item.href,
-                    label: item.label, exact: item.href === "/", icon: <item.icon className="size-4" /> })) }))} />
-            </div>
-            <div
-              className={cn(
-                "hidden shrink-0 border-t border-white/15 p-2 lg:flex lg:flex-col lg:gap-2",
-                sidebarCollapsed && "lg:items-center",
-              )}
-            >
-              {!sidebarCollapsed ? (
-                <JobStatusLink
-                  className="border-white/15 bg-transparent text-[var(--shell-rail-muted)] hover:border-white/25 hover:bg-white/10 hover:text-white"
-                  variant="menu"
-                />
-              ) : null}
-              <Button
-                aria-label="로그아웃"
-                className={cn(
-                  "h-control-sm w-full justify-start border-0 px-3 text-xs font-medium text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white",
-                  sidebarCollapsed && "lg:size-control lg:justify-center lg:px-0",
-                )}
-                type="button"
-                title={sidebarCollapsed ? "로그아웃" : undefined}
-                variant="ghost"
-                onClick={logout}
-              >
-                <LogOutIcon aria-hidden="true" />
-                <span className={cn(sidebarCollapsed && "lg:hidden")}>로그아웃</span>
-              </Button>
-            </div>
-          </div>
-        </aside>
+        <SidebarRail
+          sidebarCollapsed={sidebarCollapsed}
+          logout={logout}
+          onToggleSidebar={toggleSidebar}
+          menuRef={menuRef}
+          pathname={pathname}
+          activeHref={activeHref}
+        />
         <div
           className={cn(
             "flex min-h-dvh min-w-0 flex-col",
@@ -318,5 +215,158 @@ export function AppShell({
         </div>
       </div>
     </div>
+  );
+}
+
+function SidebarRail({
+  sidebarCollapsed,
+  logout,
+  onToggleSidebar,
+  menuRef,
+  pathname,
+  activeHref,
+}: {
+  sidebarCollapsed: boolean;
+  logout: () => Promise<void>;
+  onToggleSidebar: () => void;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  pathname: string;
+  activeHref: string | undefined;
+}) {
+  return (
+    <aside
+      className="min-w-0 border-b border-white/15 bg-[var(--shell-rail)] text-[var(--shell-rail-text)] lg:sticky lg:top-0 lg:h-dvh lg:self-start lg:border-r lg:border-b-0 lg:border-white/15"
+      data-slot="admin-shell-rail"
+    >
+      <div className="flex h-full min-w-0 flex-col">
+        <div
+          className={cn(
+            "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/15 px-4",
+            sidebarCollapsed &&
+              "lg:h-auto lg:flex-col lg:justify-center lg:gap-1 lg:px-0 lg:py-2",
+          )}
+        >
+          <Link
+            aria-label="Travel Concierge Admin UI"
+            className={cn(
+              "flex min-w-0 items-baseline gap-1.5 rounded-control text-[var(--shell-rail-text)] no-underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
+              sidebarCollapsed && "lg:justify-center",
+            )}
+            href="/"
+          >
+            <span
+              className={cn(
+                "truncate text-sm font-semibold tracking-tight",
+                sidebarCollapsed && "lg:hidden",
+              )}
+            >
+              Travel Concierge
+            </span>
+            <span
+              className={cn(
+                "text-2xs font-medium tracking-tight text-[var(--shell-rail-muted)]",
+                sidebarCollapsed && "lg:hidden",
+              )}
+            >
+              Admin UI
+            </span>
+            <span
+              aria-hidden="true"
+              className={cn(
+                "hidden text-xs font-semibold tracking-tight",
+                sidebarCollapsed && "lg:inline",
+              )}
+            >
+              tca
+            </span>
+          </Link>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              aria-label="로그아웃"
+              className="border border-white/15 text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white lg:hidden"
+              size="icon-sm"
+              title="로그아웃"
+              type="button"
+              variant="ghost"
+              onClick={logout}
+            >
+              <LogOutIcon aria-hidden="true" />
+            </Button>
+            <button
+              aria-label={
+                sidebarCollapsed ? "좌측 메뉴 펼치기" : "좌측 메뉴 접기"
+              }
+              className={cn(
+                buttonVariants({ variant: "ghost", size: "icon-sm" }),
+                "hidden border border-white/15 text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white lg:inline-flex",
+              )}
+              title={sidebarCollapsed ? "좌측 메뉴 펼치기" : "좌측 메뉴 접기"}
+              type="button"
+              onClick={onToggleSidebar}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpenIcon aria-hidden="true" />
+              ) : (
+                <PanelLeftCloseIcon aria-hidden="true" />
+              )}
+            </button>
+          </div>
+        </div>
+        <div
+          ref={menuRef}
+          data-kt-surface
+          data-sidebar-collapsed={sidebarCollapsed}
+          className="concierge-common-menu min-h-0 max-w-full overflow-x-auto px-3 py-2 lg:flex-1 lg:overflow-x-hidden lg:overflow-y-auto lg:py-3"
+        >
+          <AppMenu
+            label="주요 메뉴"
+            pathname={pathname}
+            activeItemId={activeHref}
+            linkComponent={MenuLink}
+            testId="concierge-common-menu"
+            groups={navGroups.map((group) => ({
+              id: group.label,
+              label: group.label,
+              items: group.items.map((item) => ({
+                id: item.href,
+                href: item.href,
+                label: item.label,
+                exact: item.href === "/",
+                icon: <item.icon className="size-4" />,
+              })),
+            }))}
+          />
+        </div>
+        <div
+          className={cn(
+            "hidden shrink-0 border-t border-white/15 p-2 lg:flex lg:flex-col lg:gap-2",
+            sidebarCollapsed && "lg:items-center",
+          )}
+        >
+          {!sidebarCollapsed ? (
+            <JobStatusLink
+              className="border-white/15 bg-transparent text-[var(--shell-rail-muted)] hover:border-white/25 hover:bg-white/10 hover:text-white"
+              variant="menu"
+            />
+          ) : null}
+          <Button
+            aria-label="로그아웃"
+            className={cn(
+              "h-control-sm w-full justify-start border-0 px-3 text-xs font-medium text-[var(--shell-rail-muted)] hover:bg-white/10 hover:text-white",
+              sidebarCollapsed && "lg:size-control lg:justify-center lg:px-0",
+            )}
+            type="button"
+            title={sidebarCollapsed ? "로그아웃" : undefined}
+            variant="ghost"
+            onClick={logout}
+          >
+            <LogOutIcon aria-hidden="true" />
+            <span className={cn(sidebarCollapsed && "lg:hidden")}>
+              로그아웃
+            </span>
+          </Button>
+        </div>
+      </div>
+    </aside>
   );
 }

@@ -1,15 +1,34 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ListChecksIcon,
-  PencilIcon,
-  Trash2Icon,
-  ZapIcon,
-} from "lucide-react";
+import { VirtualTable } from "@kor-travel/ui/virtual-table";
 
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ListChecksIcon, PencilIcon, Trash2Icon, ZapIcon } from "lucide-react";
+import Link from "next/link";
+import { useState } from "react";
+
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { HarvestConsole } from "@/components/HarvestConsole";
+import { HelpTip } from "@/components/HelpTip";
+import { JobDetailDialog } from "@/components/JobDetailDialog";
+import { EmptyState, PanelHeader } from "@/components/panels";
+import { RecurringEditDialog } from "@/components/RecurringEditDialog";
+import {
+  ACTION_BUTTON_WIDTH_CLASS,
+  RunActionButtons,
+} from "@/components/RunActionButtons";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ApiRequestError,
   deleteSourceTarget,
@@ -38,44 +57,18 @@ import {
   formatTime,
   intervalLabel,
 } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { ConfirmActionButton } from "@/components/ConfirmActionButton";
-import { HelpTip } from "@/components/HelpTip";
-import { EmptyState, PanelHeader } from "@/components/panels";
-import { HarvestConsole } from "@/components/HarvestConsole";
-import { JobDetailDialog } from "@/components/JobDetailDialog";
-import { RecurringEditDialog } from "@/components/RecurringEditDialog";
-import {
-  ACTION_BUTTON_WIDTH_CLASS,
-  RunActionButtons,
-} from "@/components/RunActionButtons";
 
 export function CollectWorkspace() {
   const queryClient = useQueryClient();
   const [detailTarget, setDetailTarget] = useState<SourceTargetSummary | null>(
     null,
   );
-  const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(null);
-  const [targetActionError, setTargetActionError] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<SourceTargetSummary | null>(
+    null,
+  );
+  const [targetActionError, setTargetActionError] = useState<string | null>(
+    null,
+  );
 
   const runQueueQuery = useQuery({
     queryKey: RUN_QUEUE_QUERY_KEY,
@@ -168,16 +161,10 @@ export function CollectWorkspace() {
               <ListChecksIcon data-icon="inline-start" />
               미처리 영상 POI 추출(묶음)
             </Button>
-            {poiBatchMutation.data ? (
-              <p className="text-xs text-muted-foreground">
-                영상 {poiBatchMutation.data.videos}개를{" "}
-                {poiBatchMutation.data.enqueued_jobs}개 작업으로 등록했습니다.
-              </p>
-            ) : poiBatchMutation.error ? (
-              <p className="text-xs text-destructive">
-                {poiBatchMutation.error.message}
-              </p>
-            ) : null}
+            <PoiBatchFeedback
+              data={poiBatchMutation.data}
+              error={poiBatchMutation.error}
+            />
           </div>
         </div>
       </div>
@@ -192,7 +179,9 @@ export function CollectWorkspace() {
         ) : null}
         <JobsPanel
           targets={sourceTargetsQuery.data ?? []}
-          errorMessage={targetActionError ?? sourceTargetsQuery.error?.message ?? null}
+          errorMessage={
+            targetActionError ?? sourceTargetsQuery.error?.message ?? null
+          }
           onRunNow={(id, force) => runNowMutation.mutate({ id, force })}
           onDetailTarget={setDetailTarget}
           onEditTarget={setEditTarget}
@@ -266,7 +255,9 @@ function ActiveRunSummary({
                 </span>
               </span>
               <span className="truncate text-[12px] text-text-secondary">
-                {run.current_message ?? latestRunLog(run) ?? "상세 로그 대기 중"}
+                {run.current_message ??
+                  latestRunLog(run) ??
+                  "상세 로그 대기 중"}
               </span>
             </div>
           </div>
@@ -308,19 +299,17 @@ function OneTimeJobsPanel({
       ) : null}
       {runs.length > 0 ? (
         <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>대상</TableHead>
-                <TableHead>상태</TableHead>
-                <TableHead>최근 실행</TableHead>
-                <TableHead className="text-right">액션</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runs.map((run) => (
-                <TableRow key={run.job_id}>
-                  <TableCell>
+          <VirtualTable
+            data={runs}
+            getRowId={(run) => String(run.job_id)}
+            columns={[
+              {
+                id: "column-0",
+                header: () => <>대상</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: run } }) => (
+                  <>
                     <div className="flex max-w-[18rem] flex-col gap-1 whitespace-normal">
                       <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
                         {run.target_type_label ??
@@ -330,18 +319,45 @@ function OneTimeJobsPanel({
                         {runTargetValue(run)}
                       </span>
                     </div>
-                  </TableCell>
-                  <TableCell>
+                  </>
+                ),
+              },
+              {
+                id: "column-1",
+                header: () => <>상태</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: run } }) => (
+                  <>
                     <Badge variant={runOutcomeBadgeVariant(run)}>
                       {runOutcomeLabel(run)}
                     </Badge>
-                  </TableCell>
-                  <TableCell>
+                  </>
+                ),
+              },
+              {
+                id: "column-2",
+                header: () => <>최근 실행</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: run } }) => (
+                  <>
                     <span className="text-[13px] text-text-secondary">
                       {formatDateTimeShort(run.finished_at ?? run.created_at)}
                     </span>
-                  </TableCell>
-                  <TableCell>
+                  </>
+                ),
+              },
+              {
+                id: "column-3",
+                header: () => <>액션</>,
+                enableSorting: false,
+                meta: {
+                  cellClassName: undefined,
+                  headerClassName: "text-right",
+                },
+                cell: ({ row: { original: run } }) => (
+                  <>
                     <div className="flex flex-wrap items-start justify-end gap-1">
                       <Link
                         href={`/jobs/${run.job_id}`}
@@ -351,11 +367,13 @@ function OneTimeJobsPanel({
                       </Link>
                       <RunActionButtons run={run} />
                     </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                  </>
+                ),
+              },
+            ]}
+            stickyHeader
+            manualSorting
+          />
         </div>
       ) : (
         <div className="px-3">
@@ -408,153 +426,205 @@ function JobsPanel({
       ) : null}
       {targets.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>대상</TableHead>
-                <TableHead>주기</TableHead>
-                <TableHead>
-                  <span className="inline-flex items-center gap-1">
-                    기본 카테고리
-                    <HelpTip>
-                      새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할
-                      값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지 않아,
-                      자동 분류에 실패한 장소가 카테고리 없이 검수 큐에
-                      남는다는 뜻입니다.
-                    </HelpTip>
-                  </span>
-                </TableHead>
-                <TableHead>누적</TableHead>
-                <TableHead>일정</TableHead>
-                <TableHead>상태</TableHead>
-                <TableHead className="text-right">액션</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {targets.map((target) => {
-                const targetName =
-                  target.target_label ?? target.display_name ?? target.source_value;
-                return (
-                  <TableRow key={target.id}>
-                    <TableCell>
-                      <button
-                        type="button"
-                        className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
-                        onClick={() => onDetailTarget(target)}
+          <VirtualTable
+            data={targets}
+            getRowId={(target) => String(target.id)}
+            columns={[
+              {
+                id: "column-0",
+                header: () => <>대상</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <button
+                      type="button"
+                      className="flex max-w-[18rem] flex-col gap-1 whitespace-normal text-left"
+                      onClick={() => onDetailTarget(target)}
+                    >
+                      <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
+                        {target.target_type_label ??
+                          targetTypeDisplayLabel(target.target_type)}
+                      </span>
+                      <span className="font-bold leading-snug">
+                        {target.target_label ??
+                          target.display_name ??
+                          target.source_value}
+                      </span>
+                    </button>
+                  </>
+                ),
+              },
+              {
+                id: "column-1",
+                header: () => <>주기</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <div className="flex flex-col text-[13px]">
+                      <span>{intervalLabel(target.scan_interval_minutes)}</span>
+                      <span className="text-[12px] text-text-secondary">
+                        회당 {target.max_videos ?? "-"}개
+                      </span>
+                    </div>
+                  </>
+                ),
+              },
+              {
+                id: "column-2",
+                header: () => (
+                  <>
+                    <span className="inline-flex items-center gap-1">
+                      기본 카테고리
+                      <HelpTip>
+                        새 장소의 카테고리를 자동으로 정하지 못했을 때 대신
+                        저장할 값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지
+                        않아, 자동 분류에 실패한 장소가 카테고리 없이 검수 큐에
+                        남는다는 뜻입니다.
+                      </HelpTip>
+                    </span>
+                  </>
+                ),
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <Badge variant="outline">
+                      {categoryDisplayLabel(
+                        target.default_category_label ??
+                          target.default_category_code,
+                      )}
+                    </Badge>
+                  </>
+                ),
+              },
+              {
+                id: "column-3",
+                header: () => <>누적</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <div className="flex flex-col text-[13px]">
+                      <span>
+                        {target.max_runs === 0
+                          ? `무한 (${target.run_count}회)`
+                          : `${target.run_count}/${target.max_runs}회`}
+                      </span>
+                      <span className="text-[12px] text-text-secondary">
+                        최근 {formatTime(target.last_crawled_at)}
+                      </span>
+                    </div>
+                  </>
+                ),
+              },
+              {
+                id: "column-4",
+                header: () => <>일정</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <div className="flex flex-col text-[12px] text-text-secondary">
+                      <span>다음 {formatDateTime(target.next_crawl_at)}</span>
+                      <span>스캔 {formatDateTime(target.last_scan_at)}</span>
+                    </div>
+                  </>
+                ),
+              },
+              {
+                id: "column-5",
+                header: () => <>상태</>,
+                enableSorting: false,
+                meta: { cellClassName: undefined, headerClassName: undefined },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
+                      <Badge
+                        variant={target.is_active ? "outline" : "secondary"}
                       >
-                        <span className="text-[11px] font-bold tracking-[0.05em] text-text-secondary uppercase">
-                          {target.target_type_label ??
-                            targetTypeDisplayLabel(target.target_type)}
-                        </span>
-                        <span className="font-bold leading-snug">{targetName}</span>
-                      </button>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col text-[13px]">
-                        <span>{intervalLabel(target.scan_interval_minutes)}</span>
-                        <span className="text-[12px] text-text-secondary">
-                          회당 {target.max_videos ?? "-"}개
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {categoryDisplayLabel(
-                          target.default_category_label ??
-                            target.default_category_code,
-                        )}
+                        {target.is_active ? "활성" : "중지"}
                       </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col text-[13px]">
-                        <span>
-                          {target.max_runs === 0
-                            ? `무한 (${target.run_count}회)`
-                            : `${target.run_count}/${target.max_runs}회`}
+                      {target.last_scan_error ? (
+                        <span className="line-clamp-2 text-[12px] text-destructive">
+                          {target.last_scan_error}
                         </span>
+                      ) : (
                         <span className="text-[12px] text-text-secondary">
-                          최근 {formatTime(target.last_crawled_at)}
+                          실패 {target.scan_failure_count}회
                         </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col text-[12px] text-text-secondary">
-                        <span>다음 {formatDateTime(target.next_crawl_at)}</span>
-                        <span>스캔 {formatDateTime(target.last_scan_at)}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex max-w-[14rem] flex-col gap-1 whitespace-normal">
-                        <Badge variant={target.is_active ? "outline" : "secondary"}>
-                          {target.is_active ? "활성" : "중지"}
-                        </Badge>
-                        {target.last_scan_error ? (
-                          <span className="line-clamp-2 text-[12px] text-destructive">
-                            {target.last_scan_error}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-text-secondary">
-                            실패 {target.scan_failure_count}회
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-start justify-end gap-1">
-                        <Button
-                          type="button"
-                          size="xs"
-                          className={ACTION_BUTTON_WIDTH_CLASS}
-                          disabled={isRunningNow}
-                          onClick={() => {
-                            setRunNowForce(false);
-                            setRunNowTarget(target);
-                          }}
-                        >
-                          <ZapIcon data-icon="inline-start" />
-                          실행
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          className={ACTION_BUTTON_WIDTH_CLASS}
-                          onClick={() => onEditTarget(target)}
-                        >
-                          <PencilIcon data-icon="inline-start" />
-                          수정
-                        </Button>
-                        <ConfirmActionButton
-                          title={`${targetName} 반복 작업을 삭제할까요?`}
-                          description="예약된 반복 수집이 중단됩니다. 이미 수집한 영상과 장소는 남습니다."
-                          onConfirm={() => onDeleteTarget(target.id)}
-                          trigger={
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="destructive"
-                              className={ACTION_BUTTON_WIDTH_CLASS}
-                              disabled={isDeleting}
-                              aria-label={`${targetName} 반복 삭제`}
-                            >
-                              <Trash2Icon data-icon="inline-start" />
-                              삭제
-                            </Button>
-                          }
-                        />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                      )}
+                    </div>
+                  </>
+                ),
+              },
+              {
+                id: "column-6",
+                header: () => <>액션</>,
+                enableSorting: false,
+                meta: {
+                  cellClassName: undefined,
+                  headerClassName: "text-right",
+                },
+                cell: ({ row: { original: target } }) => (
+                  <>
+                    <div className="flex flex-wrap items-start justify-end gap-1">
+                      <Button
+                        type="button"
+                        size="xs"
+                        className={ACTION_BUTTON_WIDTH_CLASS}
+                        disabled={isRunningNow}
+                        onClick={() => {
+                          setRunNowForce(false);
+                          setRunNowTarget(target);
+                        }}
+                      >
+                        <ZapIcon data-icon="inline-start" />
+                        실행
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className={ACTION_BUTTON_WIDTH_CLASS}
+                        onClick={() => onEditTarget(target)}
+                      >
+                        <PencilIcon data-icon="inline-start" />
+                        수정
+                      </Button>
+                      <ConfirmActionButton
+                        title={`${target.target_label ?? target.display_name ?? target.source_value} 반복 작업을 삭제할까요?`}
+                        description="예약된 반복 수집이 중단됩니다. 이미 수집한 영상과 장소는 남습니다."
+                        onConfirm={() => onDeleteTarget(target.id)}
+                        trigger={
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="destructive"
+                            className={ACTION_BUTTON_WIDTH_CLASS}
+                            disabled={isDeleting}
+                            aria-label={`${target.target_label ?? target.display_name ?? target.source_value} 반복 삭제`}
+                          >
+                            <Trash2Icon data-icon="inline-start" />
+                            삭제
+                          </Button>
+                        }
+                      />
+                    </div>
+                  </>
+                ),
+              },
+            ]}
+            stickyHeader
+            manualSorting
+          />
         </div>
       ) : (
         <div className="px-3">
           <EmptyState>
-            반복 수집 중인 작업이 없습니다. 수집 시작 시 &ldquo;반복 검색&rdquo;을
-            켜면 등록됩니다.
+            반복 수집 중인 작업이 없습니다. 수집 시작 시 &ldquo;반복
+            검색&rdquo;을 켜면 등록됩니다.
           </EmptyState>
         </div>
       )}
@@ -577,16 +647,15 @@ function JobsPanel({
             강제 다운로드 (전체 재수집)
           </label>
           <p className="text-xs text-muted-foreground">
-            체크하면 이미 본 영상 이후만 받는 증분 수집 대신 처음부터 다시 받습니다.
+            체크하면 이미 본 영상 이후만 받는 증분 수집 대신 처음부터 다시
+            받습니다.
           </p>
           <DialogFooter>
-            <DialogClose
-              render={
-                <Button type="button" variant="outline">
-                  취소
-                </Button>
-              }
-            />
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                취소
+              </Button>
+            </DialogClose>
             <Button
               type="button"
               disabled={isRunningNow}
@@ -601,5 +670,26 @@ function JobsPanel({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function PoiBatchFeedback({
+  data,
+  error,
+}: {
+  data: Awaited<ReturnType<typeof triggerPoiBatch>> | undefined;
+  error: Error | null;
+}) {
+  return (
+    <>
+      {" "}
+      {data ? (
+        <p className="text-xs text-muted-foreground">
+          영상 {data.videos}개를 {data.enqueued_jobs}개 작업으로 등록했습니다.
+        </p>
+      ) : error ? (
+        <p className="text-xs text-destructive">{error.message}</p>
+      ) : null}
+    </>
   );
 }

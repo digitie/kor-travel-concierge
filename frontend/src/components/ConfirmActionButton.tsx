@@ -4,7 +4,7 @@ import { useState, type ReactElement, type ReactNode } from "react";
 
 import {
   AlertDialog,
-  AlertDialogClose,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -35,7 +35,7 @@ export function ConfirmActionButton({
   const [open, setOpen] = useState(false);
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger render={trigger} />
+      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
@@ -44,13 +44,11 @@ export function ConfirmActionButton({
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogClose
-            render={
-              <Button type="button" variant="outline" size="sm">
-                취소
-              </Button>
-            }
-          />
+          <AlertDialogCancel asChild>
+            <Button type="button" variant="outline" size="sm">
+              취소
+            </Button>
+          </AlertDialogCancel>
           <Button
             type="button"
             size="sm"

@@ -1,4 +1,76 @@
+# 2026-11-12 — 공통 후보8 단일 산출물 채택
+
+integration-8-review의 UI0.2.0/tokens0.1.1·Lightning CSS1.33.0+nativecss.fix.4를 같은 정본 파일로 설치했다. 지도 사용 앱은 기존 core1.0.1/web1.0.3의 같은 bytes를 유지한다. 설치된 모든 pack 파일의 원문 일치, 로컬·최신 외부 정책 검사, 단위·lint·타입·Doctor0을 확인했다. 중앙 CI 실행 코드는 common670a753으로 고정했다. 최종 브라우저·원격 CI·독립2리뷰·PR머지·운영 배포는 별도 gate다.
+
 # JOURNAL — 작업 일지
+
+## 2026-11-12 — T-208 C11 최초릴리스 실제 통합 검증
+
+- C11 UI/tokens/Scope2를 동일 bytes·새 SRI로 채택하고 구 Scope1 vendor를 제거했다. actual6종263파일과 UI/tokens117파일 동일성·lock·원장을 확인했다.
+- 현재 canonical/guard, n150 자기 cache strict설치·단위396·lint/type·Doctor0·새production build·전체browser10/10 PASS다.
+  동일build341파일을 WSL로 제공하고 n150 Chromium을 실행했다. 원래 timeout/expect·단언·retry0을 유지했다.
+- 앱 source50은 그대로이며 header/row Space DOM/포커스 및 모달 initial panel Shift+Tab도 최종 실행에서 PASS다.
+  이전 C10 표 timeout 등 실패 이력은 보존했다. 원 A closure/소비자2리뷰·정확 HEAD CI는 별도 gate다.
+- 본인 server/tunnel/browser 종료·슬롯1 반환 완료. 운영·DB/RustFS/secret 변경 없이 Draft PR265를 갱신한다.
+  [최우선 handoff](reports/common-unification-20261111-handoff.md)에 최종 증거와 병합 뒤 이미지 전환 계획을 유지한다.
+
+## 2026-11-12 — T-208 C10 체크포인트와 A-CONS-P2-01 수정
+
+- C10 정본7종 원장과 사용6종을 채택했다. 공식 Scope fix.1 runtime/override와 actual263파일·SRI를 확인했다.
+  source 변경 전 n150 fresh strict ci·unit394·lint/type·Doctor0·guard·build는 PASS다.
+- 원 A가 지적한 header/row checkbox remount는 실제 DOM2건 및 기존 production Chromium 각각 FAIL로 재현했다.
+  header 참조를 고정하고 meta에 최신 상태·action을, body는 공통 renderCell에 node 반환을 연결했다.
+- 수정 후 전체unit396·lint/type·Doctor0·guard/canonical PASS. actual-source 격리 Chromium의 선택·해제4건도
+  DOM identity·연결·포커스 모두 보존했다. 영구 DOM/production browser 단언을 추가했다.
+- C10 모달 Shift+Tab은 PASS이나 후속 작업 상세 표 timeout은 보존했다. 전체browser10으로 합산하지 않는다.
+  본인 server/browser/tunnel은 종료해 N150 슬롯2를 반환했고 추가 대형 build는 보류했다.
+- C11 Scope fix.2·새 최종 build/unit/browser10·원 A closure/독립2리뷰·CI·부모 go는 잔여 gate다.
+  [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 수용 경계를 유지한다.
+
+
+## 2026-11-12 — T-208 C9 검증·Draft PR265 인계
+
+- 608d632(C8) 위 부모의 C9 vendor·원장·lock·중앙 workflow2c1182e pin을 보존했다.
+  archive/설치248파일을 직접 비교했고 C8→C9는 checker2만 변경·런타임117파일 동일임을 재확인했다.
+- C9 guard/canonical PASS. n150 전용 공간의 fresh strict ci·guard·production build·browser10/10도 PASS다.
+  C8 unit394·lint·type·Doctor0은 동등성 증거로 승계하며 C6의 별도 과거 실행과 혼동하지 않는다.
+- 로컬 공간 제약 때문에 local ci/build 반복과 UI runtime 변경·독립 repack은 하지 않았다.
+  런북·현재 UI 태그·production override·bind mount0·frontend context는 읽기 전용으로 확인했다.
+- 보안 감사를 거쳐 같은 브랜치로 push하고 기존 Draft PR265를 갱신한다.
+  foundation PR49·소비자 독립2리뷰·정확 HEAD CI·부모 go·배포는 [최우선 handoff](reports/common-unification-20261111-handoff.md)의 잔여 gate다.
+
+
+## 2026-11-11 — T-208 후보6 통합 검증과 리뷰 인계
+
+- integration-6-review 네 tarball·원장을 동일 bytes로 복사하고 UI/tokens/core/web 전부 명시적 file 설치했다.
+  core1.0.1로 교체했으며 구1.0.0 tarball은 제거했다. 라이선스·고지·lock integrity도 확인했다.
+- 키 없는 지도는 더미 키 대신 공개 mapStyle의 빈 sources 스타일을 사용한다.
+- strict 설치·guard·로컬 canonical·lint경고0·타입·단위394·production build·Doctor전체0·n150 browser10/10 PASS다.
+  실제 마커·팝업 선택과 VWorld 요청0도 확인했다. raw 로그는 자기 clone의 .git/c6-*.log에 보존했다.
+- 공유 디스크 ENOSPC와 로그 저장 실패는 공간 확보 후 표준 build 및 전용 /tmp 브라우저 fixture로 재검증했다.
+  종료된 자기 webpack222.8MiB·n150 Chromium약700MiB·일회성 인증 fixture만 정리했다.
+- 부모 소유 common-frontend-policy.yml은 보존·커밋 제외다. 최종 pack refresh·중앙 workflow·원격 CI·
+  PR·원리뷰어2인 재검토는 부모에게 [handoff](reports/common-unification-20261111-handoff.md)로 인계한다.
+
+
+## 2026-11-11 — T-208 Doctor 진단 수정과 검수 관심사 분리
+
+- 이전26 warning을 계속 수정했다. 검수 선택/편집은 인스턴스별 Zustand 구독과 원자적 전이로 바꾸고,
+  목록·편집·지도·다이얼로그, 삭제/확정/복구/페이지 진행/일괄 작업, 순수 권한·좌표 판정으로 모듈을 나눴다.
+- 공급 패널·그룹 옵션 중복, 큰 상세/수집/설정/운영 지표 컴포넌트도 관심사에 따라 분리했다.
+  저장소 상태는 초기값 덮어쓰기 없는 useSyncExternalStore로 복원·구독한다.
+- integration-4에서 guard·lint경고0·타입·단위394·production build·Doctor전체0 및 n150 Chromium9/9 PASS다.
+  viewport 이동 한 줄만 근거 있는 국소 예외이며 audit는 그1건만 재현한다. baseline/광역off/ignore는 없다.
+- 현재 운영 이미지 태그·production UI 실행·bind mount 없음은 읽기 전용으로 확인했다. 운영 변경은 하지 않았다.
+  부모 후보6 refresh·최종 freeze·독립2리뷰·CI·merge·go 뒤 이미지 전환은 [보고서](reports/common-unification-20261111.md)의 남은 gate다.
+
+
+## 2026-11-11 — T-208 이전 체크포인트: 공통 관리자 UI 통합 후보
+
+- 기존 ext4 clone·branch·미커밋 diff를 보존하고 Concierge만 이어서 수정했다. 관리 표 7개와 Radix 프리미티브를 common으로 이관하고 후보3의 동일 tarball·원장·lock을 정렬했다.
+- Tailwind4.3.5와 공유 exact 의존성, RHF/Zod/Zustand/Pretendard 실사용, ESLint10 지원 plugin·Doctor0.9.22·필수 CI/source guard를 연결했다. strict peer 설치·guard·lint·타입·단위381·production build가 통과했다.
+- Doctor 최초47→최종26 warning이며 동작/성능 진단을 수정하고 재실행했다. 엄격 warning gate는 FAIL이고 n150 격리 Chromium6/6은 PASS다. 같은 exact 의존성으로 인계 HEAD 전체를 비교하면49 warning이고 잔여26은 모두 기준선에도 존재한다(신규 진단0). 최종 freeze·독립 리뷰2인·원격 CI는 [이관 보고서](reports/common-unification-20261111.md)에서 구분한다. 감사 모드의 임시 소스 변경 때문에 다른 검사와 순차 실행한다.
+- push/PR/merge/배포는 미실행이며, 모든 gate와 부모 go 뒤 immutable 이미지·secret 보존·로그인/대표화면/health smoke를 수행하는 구체 계획을 보고서에 남겼다. 운영 DB·RustFS·공용 plane은 변경하지 않았다.
 
 ## 2026-11-02 — 옛 APScheduler rollback 경로 문서 정정
 

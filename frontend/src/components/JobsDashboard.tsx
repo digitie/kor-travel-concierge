@@ -1,36 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import type { CrawlRunSummary, ListEnvelope } from "@/lib/api";
+import type {
+  InfiniteData,
+  UseInfiniteQueryResult,
+} from "@tanstack/react-query";
+
+import { VirtualTable } from "@kor-travel/ui/virtual-table";
+
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ListChecksIcon, RefreshCwIcon } from "lucide-react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 
+import { HelpTip } from "@/components/HelpTip";
+import { DataLoadError } from "@/components/JobDetailView";
+import { EmptyState, Panel } from "@/components/panels";
 import {
-  listRunsPage,
-  listRunQueue,
-  RUN_HISTORY_REFETCH_INTERVAL_MS,
-  RUN_QUEUE_OBSERVER_OPTIONS,
-  RUN_QUEUE_QUERY_KEY,
-  type CrawlRunSummary,
-} from "@/lib/api";
-import {
-  buildRunHistoryParams,
-  JOB_HISTORY_STATE_ALL,
-  JOB_HISTORY_STATE_OPTIONS,
-  JOB_HISTORY_TYPE_ALL,
-} from "@/lib/jobs-history";
-import {
-  categoryDisplayLabel,
-  jobTypeDisplayLabel,
-  runAttentionBadgeVariant,
-  runAttentionLabel,
-  runOutcomeBadgeVariant,
-  runOutcomeLabel,
-  runOutcomeProgressBarClass,
-  targetTypeDisplayLabel,
-} from "@/lib/display-labels";
-import { formatDateTimeShort } from "@/lib/format";
+  ACTION_BUTTON_WIDTH_CLASS,
+  RunActionButtons,
+  type RunActionFeedback,
+} from "@/components/RunActionButtons";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -42,13 +33,29 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  ACTION_BUTTON_WIDTH_CLASS,
-  RunActionButtons,
-  type RunActionFeedback,
-} from "@/components/RunActionButtons";
-import { DataLoadError } from "@/components/JobDetailView";
-import { HelpTip } from "@/components/HelpTip";
-import { EmptyState, Panel } from "@/components/panels";
+  listRunQueue,
+  listRunsPage,
+  RUN_HISTORY_REFETCH_INTERVAL_MS,
+  RUN_QUEUE_OBSERVER_OPTIONS,
+  RUN_QUEUE_QUERY_KEY,
+} from "@/lib/api";
+import {
+  categoryDisplayLabel,
+  jobTypeDisplayLabel,
+  runAttentionBadgeVariant,
+  runAttentionLabel,
+  runOutcomeBadgeVariant,
+  runOutcomeLabel,
+  runOutcomeProgressBarClass,
+  targetTypeDisplayLabel,
+} from "@/lib/display-labels";
+import { formatDateTimeShort } from "@/lib/format";
+import {
+  buildRunHistoryParams,
+  JOB_HISTORY_STATE_ALL,
+  JOB_HISTORY_STATE_OPTIONS,
+  JOB_HISTORY_TYPE_ALL,
+} from "@/lib/jobs-history";
 
 function targetLabel(run: CrawlRunSummary): string {
   return run.target_label ?? run.target_id ?? run.source ?? "-";
@@ -132,44 +139,7 @@ export function JobsDashboard() {
         </Button>
       </div>
 
-      {feedback ? (
-        <div
-          role={feedback.kind === "error" ? "alert" : "status"}
-          className={`rounded-control border px-3 py-2 text-sm ${
-            feedback.kind === "error"
-              ? "border-destructive bg-destructive-tint text-destructive"
-              : "border-border bg-surface-subtle text-text-secondary"
-          }`}
-        >
-          {feedback.kind === "error" ? (
-            <>
-              작업 #{feedback.jobId}의
-              {feedback.action === "stop"
-                ? " 중지"
-                : feedback.action === "delete"
-                  ? " 삭제"
-                  : " 재시작"} 요청에
-              실패했습니다: {feedback.message}
-            </>
-          ) : feedback.kind === "stopped" ? (
-            <>작업 #{feedback.jobId}의 중지를 요청했습니다.</>
-          ) : feedback.kind === "deleted" ? (
-            <>작업 #{feedback.jobId}를 삭제했습니다.</>
-          ) : (
-            <>
-              {feedback.created
-                ? "새 재시작 작업을 등록했습니다."
-                : "이미 진행 중인 재시작 작업을 사용합니다."}{" "}
-              <Link
-                href={`/jobs/${feedback.jobId}`}
-                className="font-bold text-primary underline-offset-2 hover:underline"
-              >
-                작업 보기
-              </Link>
-            </>
-          )}
-        </div>
-      ) : null}
+      {feedback ? <RunActionFeedbackNotice feedback={feedback} /> : null}
 
       <Panel
         title="진행 중 · 대기"
@@ -199,109 +169,19 @@ export function JobsDashboard() {
         )}
       </Panel>
 
-      <Panel title="작업 이력">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Select
-              value={stateFilter}
-              onValueChange={(value) =>
-                setStateFilter(value ?? JOB_HISTORY_STATE_ALL)
-              }
-            >
-              <SelectTrigger className="w-36" aria-label="작업 상태 필터">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {JOB_HISTORY_STATE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select
-              value={typeFilter}
-              onValueChange={(value) =>
-                setTypeFilter(value ?? JOB_HISTORY_TYPE_ALL)
-              }
-            >
-              <SelectTrigger className="w-40" aria-label="작업 유형 필터">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value={JOB_HISTORY_TYPE_ALL}>유형 전체</SelectItem>
-                  {jobTypeOptions.map((jobType) => (
-                    <SelectItem key={jobType} value={jobType}>
-                      {jobTypeDisplayLabel(jobType)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              size="sm"
-              variant={attentionOnly ? "secondary" : "outline"}
-              aria-pressed={attentionOnly}
-              onClick={() => setAttention(!attentionOnly)}
-            >
-              확인 필요만
-            </Button>
-          </div>
-
-          {runsQuery.isPending ? (
-            <EmptyState>작업 이력을 불러오는 중입니다.</EmptyState>
-          ) : runsQuery.isError ? (
-            <DataLoadError
-              error={runsQuery.error}
-              fallback="작업 이력을 불러오지 못했습니다."
-              onRetry={() => void runsQuery.refetch()}
-            />
-          ) : (
-            <>
-              {attentionOnly ? (
-                <div
-                  role="status"
-                  className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-destructive bg-destructive-tint px-3 py-2 text-xs text-text-secondary"
-                >
-                  <span>아직 확인하지 않은 종료 작업만 표시합니다.</span>
-                  <Link
-                    href="/jobs"
-                    className={buttonVariants({ variant: "outline", size: "xs" })}
-                  >
-                    전체 이력 보기
-                  </Link>
-                </div>
-              ) : null}
-              <RunStatusTable
-                runs={historyRuns}
-                empty="완료된 작업 이력이 없습니다."
-                onActionFeedback={setRunActionFeedback}
-              />
-              {runsQuery.isFetchNextPageError ? (
-                <p role="alert" className="mt-2 text-xs text-destructive">
-                  다음 작업 이력을 불러오지 못했습니다. 다시 시도해 주세요.
-                </p>
-              ) : null}
-              {runsQuery.hasNextPage ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="mt-3 w-full"
-                  disabled={runsQuery.isFetchingNextPage}
-                  onClick={() => void runsQuery.fetchNextPage({ cancelRefetch: false })}
-                >
-                  {runsQuery.isFetchingNextPage
-                    ? "작업 이력 불러오는 중"
-                    : `다음 작업 이력 불러오기 (${historyRuns.length}/${historyTotal})`}
-                </Button>
-              ) : null}
-            </>
-          )}
-      </Panel>
+      <RunHistoryPanel
+        stateFilter={stateFilter}
+        setStateFilter={setStateFilter}
+        typeFilter={typeFilter}
+        setTypeFilter={setTypeFilter}
+        jobTypeOptions={jobTypeOptions}
+        attentionOnly={attentionOnly}
+        setAttention={setAttention}
+        runsQuery={runsQuery}
+        historyRuns={historyRuns}
+        setRunActionFeedback={setRunActionFeedback}
+        historyTotal={historyTotal}
+      />
     </div>
   );
 }
@@ -325,32 +205,20 @@ function RunStatusTable({
 
   return (
     <div className="max-h-[28rem] overflow-auto rounded-panel border border-border">
-      <table className="w-full min-w-[52rem] text-sm">
-        <thead className="sticky top-0 z-10 bg-surface-subtle text-left text-xs font-semibold text-text-secondary">
-          <tr>
-            <th className="px-3 py-2">상태</th>
-            <th className="px-3 py-2">작업/대상</th>
-            <th className="px-3 py-2 whitespace-nowrap">
-              <span className="inline-flex items-center gap-1">
-                기본 카테고리
-                <HelpTip>
-                  새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할
-                  값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지 않아, 자동
-                  분류에 실패한 장소가 카테고리 없이 검수 큐에 남는다는
-                  뜻입니다.
-                </HelpTip>
-              </span>
-            </th>
-            <th className="px-3 py-2">진행</th>
-            <th className="px-3 py-2">메시지</th>
-            <th className="px-3 py-2">시간</th>
-            <th className="px-3 py-2 text-right">액션</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <tr key={run.job_id} className="border-t border-border">
-              <td className="px-3 py-3 align-top">
+      <VirtualTable
+        data={runs}
+        getRowId={(run) => String(run.job_id)}
+        columns={[
+          {
+            id: "column-0",
+            header: () => <>상태</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="flex max-w-36 flex-wrap gap-1">
                   <Badge variant={runOutcomeBadgeVariant(run)}>
                     {runOutcomeLabel(run)}
@@ -361,15 +229,29 @@ function RunStatusTable({
                     </Badge>
                   ) : null}
                 </div>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-1",
+            header: () => <>작업/대상</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="flex max-w-[20rem] flex-col gap-1 whitespace-normal">
                   <span className="text-[11px] font-bold text-text-secondary">
-                    {run.target_type_label ?? targetTypeDisplayLabel(run.target_type)}
+                    {run.target_type_label ??
+                      targetTypeDisplayLabel(run.target_type)}
                     {" · "}
                     {run.job_type_label ?? jobTypeDisplayLabel(run.job_type)}
                   </span>
-                  <span className="font-bold leading-snug">{targetLabel(run)}</span>
+                  <span className="font-bold leading-snug">
+                    {targetLabel(run)}
+                  </span>
                   <span className="font-mono text-[11px] text-text-secondary">
                     {run.job_id}
                   </span>
@@ -382,15 +264,49 @@ function RunStatusTable({
                     </Link>
                   ) : null}
                 </div>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-2",
+            header: () => (
+              <>
+                <span className="inline-flex items-center gap-1">
+                  기본 카테고리
+                  <HelpTip>
+                    새 장소의 카테고리를 자동으로 정하지 못했을 때 대신 저장할
+                    값입니다. &ldquo;미분류&rdquo;는 이 값을 지정하지 않아, 자동
+                    분류에 실패한 장소가 카테고리 없이 검수 큐에 남는다는
+                    뜻입니다.
+                  </HelpTip>
+                </span>
+              </>
+            ),
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2 whitespace-nowrap",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <Badge variant="outline">
                   {categoryDisplayLabel(
                     run.default_category_label ?? run.default_category_code,
                   )}
                 </Badge>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-3",
+            header: () => <>진행</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="flex w-28 flex-col gap-1">
                   <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
@@ -402,11 +318,24 @@ function RunStatusTable({
                     {progressPercent(run)}
                   </span>
                 </div>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-4",
+            header: () => <>메시지</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="max-w-[22rem] text-text-secondary">
                   <p className="line-clamp-2 whitespace-normal">
-                    {run.current_message ?? run.status_logs.at(-1)?.message ?? "-"}
+                    {run.current_message ??
+                      run.status_logs.at(-1)?.message ??
+                      "-"}
                   </p>
                   {run.last_error ? (
                     <p className="line-clamp-1 text-destructive">
@@ -414,15 +343,37 @@ function RunStatusTable({
                     </p>
                   ) : null}
                 </div>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-5",
+            header: () => <>시간</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="flex flex-col text-[12px] text-text-secondary">
                   <span>등록 {formatDateTimeShort(run.created_at)}</span>
                   <span>시작 {formatDateTimeShort(run.started_at)}</span>
                   <span>종료 {formatDateTimeShort(run.finished_at)}</span>
                 </div>
-              </td>
-              <td className="px-3 py-3 align-top">
+              </>
+            ),
+          },
+          {
+            id: "column-6",
+            header: () => <>액션</>,
+            enableSorting: false,
+            meta: {
+              cellClassName: "px-3 py-3 align-top",
+              headerClassName: "px-3 py-2 text-right",
+            },
+            cell: ({ row: { original: run } }) => (
+              <>
                 <div className="flex flex-wrap items-start justify-end gap-1">
                   <Link
                     href={`/jobs/${run.job_id}`}
@@ -432,11 +383,254 @@ function RunStatusTable({
                   </Link>
                   <RunActionButtons run={run} onFeedback={onActionFeedback} />
                 </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </>
+            ),
+          },
+        ]}
+        stickyHeader
+        manualSorting
+      />
     </div>
+  );
+}
+
+function RunActionFeedbackNotice({
+  feedback,
+}: {
+  feedback: RunActionFeedback;
+}) {
+  const notice = describeRunAction(feedback);
+  return (
+    <div
+      role={notice.isError ? "alert" : "status"}
+      className={
+        "rounded-control border px-3 py-2 text-sm " +
+        (notice.isError
+          ? "border-destructive bg-destructive-tint text-destructive"
+          : "border-border bg-surface-subtle text-text-secondary")
+      }
+    >
+      {notice.message}
+      {notice.linkJobId ? (
+        <>
+          {" "}
+          <Link
+            href={"/jobs/" + notice.linkJobId}
+            className="font-bold text-primary underline-offset-2 hover:underline"
+          >
+            작업 보기
+          </Link>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function describeRunAction(feedback: RunActionFeedback) {
+  switch (feedback.kind) {
+    case "error": {
+      const action = { stop: "중지", delete: "삭제", restart: "재시작" }[
+        feedback.action
+      ];
+      return {
+        isError: true,
+        message:
+          "작업 #" +
+          feedback.jobId +
+          "의 " +
+          action +
+          " 요청에 실패했습니다: " +
+          feedback.message,
+        linkJobId: null,
+      };
+    }
+    case "stopped":
+      return {
+        isError: false,
+        message: "작업 #" + feedback.jobId + "의 중지를 요청했습니다.",
+        linkJobId: null,
+      };
+    case "deleted":
+      return {
+        isError: false,
+        message: "작업 #" + feedback.jobId + "를 삭제했습니다.",
+        linkJobId: null,
+      };
+    case "restarted":
+      return {
+        isError: false,
+        message: feedback.created
+          ? "새 재시작 작업을 등록했습니다."
+          : "이미 진행 중인 재시작 작업을 사용합니다.",
+        linkJobId: feedback.jobId,
+      };
+  }
+}
+
+function RunHistoryPanel({
+  stateFilter,
+  setStateFilter,
+  typeFilter,
+  setTypeFilter,
+  jobTypeOptions,
+  attentionOnly,
+  setAttention,
+  runsQuery,
+  historyRuns,
+  setRunActionFeedback,
+  historyTotal,
+}: {
+  stateFilter: string;
+  setStateFilter: React.Dispatch<React.SetStateAction<string>>;
+  typeFilter: string;
+  setTypeFilter: React.Dispatch<React.SetStateAction<string>>;
+  jobTypeOptions: string[];
+  attentionOnly: boolean;
+  setAttention: (next: boolean) => void;
+  runsQuery: UseInfiniteQueryResult<
+    InfiniteData<ListEnvelope<CrawlRunSummary>, unknown>,
+    Error
+  >;
+  historyRuns: CrawlRunSummary[];
+  setRunActionFeedback: React.Dispatch<
+    React.SetStateAction<RunActionFeedback | null>
+  >;
+  historyTotal: number;
+}) {
+  return (
+    <Panel title="작업 이력">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Select
+          value={stateFilter}
+          onValueChange={(value) =>
+            setStateFilter(value ?? JOB_HISTORY_STATE_ALL)
+          }
+        >
+          <SelectTrigger className="w-36" aria-label="작업 상태 필터">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {JOB_HISTORY_STATE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Select
+          value={typeFilter}
+          onValueChange={(value) =>
+            setTypeFilter(value ?? JOB_HISTORY_TYPE_ALL)
+          }
+        >
+          <SelectTrigger className="w-40" aria-label="작업 유형 필터">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value={JOB_HISTORY_TYPE_ALL}>유형 전체</SelectItem>
+              {jobTypeOptions.map((jobType) => (
+                <SelectItem key={jobType} value={jobType}>
+                  {jobTypeDisplayLabel(jobType)}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          size="sm"
+          variant={attentionOnly ? "secondary" : "outline"}
+          aria-pressed={attentionOnly}
+          onClick={() => setAttention(!attentionOnly)}
+        >
+          확인 필요만
+        </Button>
+      </div>
+
+      <RunHistoryContent
+        runsQuery={runsQuery}
+        attentionOnly={attentionOnly}
+        historyRuns={historyRuns}
+        setRunActionFeedback={setRunActionFeedback}
+        historyTotal={historyTotal}
+      />
+    </Panel>
+  );
+}
+
+function RunHistoryContent({
+  runsQuery,
+  attentionOnly,
+  historyRuns,
+  setRunActionFeedback,
+  historyTotal,
+}: {
+  runsQuery: UseInfiniteQueryResult<
+    InfiniteData<ListEnvelope<CrawlRunSummary>, unknown>,
+    Error
+  >;
+  attentionOnly: boolean;
+  historyRuns: CrawlRunSummary[];
+  setRunActionFeedback: React.Dispatch<
+    React.SetStateAction<RunActionFeedback | null>
+  >;
+  historyTotal: number;
+}) {
+  if (runsQuery.isPending) {
+    return <EmptyState>작업 이력을 불러오는 중입니다.</EmptyState>;
+  }
+  if (runsQuery.isError) {
+    return (
+      <DataLoadError
+        error={runsQuery.error}
+        fallback="작업 이력을 불러오지 못했습니다."
+        onRetry={() => void runsQuery.refetch()}
+      />
+    );
+  }
+  return (
+    <>
+      {attentionOnly ? (
+        <div
+          role="status"
+          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-destructive bg-destructive-tint px-3 py-2 text-xs text-text-secondary"
+        >
+          <span>아직 확인하지 않은 종료 작업만 표시합니다.</span>
+          <Link
+            href="/jobs"
+            className={buttonVariants({ variant: "outline", size: "xs" })}
+          >
+            전체 이력 보기
+          </Link>
+        </div>
+      ) : null}
+      <RunStatusTable
+        runs={historyRuns}
+        empty="완료된 작업 이력이 없습니다."
+        onActionFeedback={setRunActionFeedback}
+      />
+      {runsQuery.isFetchNextPageError ? (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          다음 작업 이력을 불러오지 못했습니다. 다시 시도해 주세요.
+        </p>
+      ) : null}
+      {runsQuery.hasNextPage ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3 w-full"
+          disabled={runsQuery.isFetchingNextPage}
+          onClick={() => void runsQuery.fetchNextPage({ cancelRefetch: false })}
+        >
+          {runsQuery.isFetchingNextPage
+            ? "작업 이력 불러오는 중"
+            : `다음 작업 이력 불러오기 (${historyRuns.length}/${historyTotal})`}
+        </Button>
+      ) : null}
+    </>
   );
 }

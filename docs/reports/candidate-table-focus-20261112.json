@@ -1,0 +1,86 @@
+{
+  "finding": "A-CONS-P2-01",
+  "status": "OWNER_FIXED_A_RECHECK_PENDING",
+  "baseHead": "bcfc1b80b78a47319ddcf4918698f19331fb8206",
+  "sourceSha256": "1d41971d20bb2e3e025723a785a03e10bc163a8e4849bdb463daec07e1e853bf",
+  "regressionTestSha256": "b1a174c8cb94947c8514e5bc7ce7636eb7f62b4957a5a839d167e1ba0b3ab4ea",
+  "before": {
+    "actualDom": {
+      "failed": 2,
+      "reason": "선택은 반영되지만 checkbox DOM identity 변경"
+    },
+    "actualProductionBrowser": {
+      "header": "FAIL: old node disconnected/focus lost",
+      "row": "FAIL: old node disconnected/focus lost"
+    }
+  },
+  "after": {
+    "unitPassed": 396,
+    "unitFiles": 30,
+    "lintWarnings": 0,
+    "types": "PASS",
+    "doctorIssues": 0,
+    "guard": "PASS",
+    "canonical": "PASS",
+    "actualSourceBrowser": {
+      "browser": "158.0.8127.18",
+      "results": [
+        {
+          "name": "불러온 후보 전체 선택",
+          "checked": "true",
+          "sameNode": true,
+          "oldConnected": true,
+          "focusPreserved": true,
+          "activeTag": "BUTTON"
+        },
+        {
+          "name": "불러온 후보 전체 선택",
+          "checked": "false",
+          "sameNode": true,
+          "oldConnected": true,
+          "focusPreserved": true,
+          "activeTag": "BUTTON"
+        },
+        {
+          "name": "키보드 후보 후보 선택",
+          "checked": "true",
+          "sameNode": true,
+          "oldConnected": true,
+          "focusPreserved": true,
+          "activeTag": "BUTTON"
+        },
+        {
+          "name": "키보드 후보 후보 선택",
+          "checked": "false",
+          "sameNode": true,
+          "oldConnected": true,
+          "focusPreserved": true,
+          "activeTag": "BUTTON"
+        }
+      ],
+      "pageErrors": []
+    }
+  },
+  "implementation": "module-scope header와 최신 column meta; body는 공통 renderCell에서 CandidateCell node 반환",
+  "domainDataOrSelectionRulesChanged": false,
+  "browserScope": "수정된 실제 CandidateTable 소스를 같은 C10 설치본으로 bundle한 격리 fixture. 전체 Next production 검증과 구분.",
+  "logs": [
+    ".git/candidate-focus-before.log",
+    ".git/c10-n150/validation/browser-candidate-before.log",
+    ".git/c10-n150/validation/browser-candidate-row-before.log",
+    ".git/candidate-fix-unit.log",
+    ".git/candidate-fix-lint.log",
+    ".git/candidate-fix-types.log",
+    ".git/candidate-fix-doctor.log",
+    ".git/candidate-fix-guard.log",
+    ".git/candidate-fix-canonical.log",
+    ".git/candidate-browser-after.log"
+  ],
+  "remaining": [
+    "C11 공식 정본/Scope fix.2 채택",
+    "최종 설치 바이트·fresh build·전체 단위/browser10",
+    "원 reviewer A closure 및 독립2리뷰",
+    "정확 HEAD CI/common foundation main gate",
+    "부모 go 이전 merge/deploy 보류"
+  ]
+}

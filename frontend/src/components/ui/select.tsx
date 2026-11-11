@@ -1,331 +1,130 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { Select as SelectPrimitive } from "@base-ui/react/select"
-
-import { cn } from "@/lib/utils"
-import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
-
-const selectTriggerBaseClassName =
-  "flex w-fit items-center justify-between gap-1.5 rounded-control border border-input bg-card px-3 text-sm whitespace-nowrap transition-[color,background-color,border-color] duration-fast ease-out select-none focus-visible:border-text-secondary focus-visible:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:opacity-55 aria-invalid:border-destructive data-[placeholder]:text-text-tertiary data-[size=default]:h-control data-[size=sm]:h-control-sm data-[size=sm]:rounded-control [&>[data-slot=select-value]]:line-clamp-1 [&>[data-slot=select-value]]:flex [&>[data-slot=select-value]]:items-center [&>[data-slot=select-value]]:gap-1.5 hover:bg-surface-subtle [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
-
-// 터치(coarse pointer) 기기 여부. SSR/첫 렌더는 false(데스크톱 Base UI)로 두고,
-// 마운트 후 갱신해 hydration 불일치를 피한다.
-function useCoarsePointer() {
-  const [coarse, setCoarse] = React.useState(false)
-  React.useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return
-    const mq = window.matchMedia("(pointer: coarse)")
-    const update = () => setCoarse(mq.matches)
-    update()
-    mq.addEventListener?.("change", update)
-    return () => mq.removeEventListener?.("change", update)
-  }, [])
-  return coarse
-}
-
-type NativeItem = { value: string; label: React.ReactNode; disabled?: boolean }
-
-// Select 자식 트리에서 SelectItem(값·라벨)을 재귀 수집한다.
-function collectNativeItems(
-  children: React.ReactNode,
-  acc: NativeItem[] = []
-): NativeItem[] {
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return
-    const props = child.props as Record<string, unknown>
-    if (child.type === SelectItem) {
-      acc.push({
-        value: String(props.value ?? ""),
-        label: props.children as React.ReactNode,
-        disabled: Boolean(props.disabled),
-      })
-    } else if (props.children) {
-      collectNativeItems(props.children as React.ReactNode, acc)
-    }
-  })
-  return acc
-}
-
-// 호출부 SelectTrigger의 className/aria-invalid를 native select에 그대로 전달하기 위해 추출한다.
-function findTriggerProps(
-  children: React.ReactNode
-): { className?: string; "aria-invalid"?: boolean } {
-  let found: { className?: string; "aria-invalid"?: boolean } = {}
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child) || found.className !== undefined) return
-    const props = child.props as Record<string, unknown>
-    if (child.type === SelectTrigger) {
-      found = {
-        className: (props.className as string) ?? "",
-        "aria-invalid": Boolean(props["aria-invalid"]),
-      }
-    } else if (props.children) {
-      const nested = findTriggerProps(props.children as React.ReactNode)
-      if (nested.className !== undefined) found = nested
-    }
-  })
-  return found
-}
-
-// 모바일/터치 fallback: OS 네이티브 picker라 Samsung Internet 등 모든 모바일 브라우저에서 동작한다.
-function NativeSelect({
-  value,
-  onValueChange,
-  items,
-  triggerClassName,
-  ariaInvalid,
-  disabled,
-}: {
-  value: string
-  onValueChange: (value: string) => void
-  items: NativeItem[]
-  triggerClassName?: string
-  ariaInvalid?: boolean
-  disabled?: boolean
-}) {
-  return (
-    <div className={cn("relative w-full", triggerClassName)}>
-      <select
-        data-slot="select-native"
-        value={value}
-        disabled={disabled}
-        aria-invalid={ariaInvalid}
-        onChange={(event) => onValueChange(event.currentTarget.value)}
-        className={cn(
-          selectTriggerBaseClassName,
-          "w-full cursor-pointer appearance-none bg-transparent pr-9"
-        )}
-      >
-        {items.map((item) => (
-          <option key={item.value} value={item.value} disabled={item.disabled}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-      <ChevronDownIcon className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-    </div>
-  )
-}
-
-// 데스크톱(fine pointer)은 Base UI Select, 터치 기기는 native <select>로 렌더링한다.
-// 제네릭을 유지해 호출부의 value 타입 추론(onValueChange 파라미터)을 보존한다.
-function Select<Value>(props: SelectPrimitive.Root.Props<Value>) {
-  const coarse = useCoarsePointer()
-  const { value, onValueChange, children, disabled } = props
-  if (
-    coarse &&
-    value !== undefined &&
-    !Array.isArray(value) &&
-    typeof onValueChange === "function"
-  ) {
-    const items = collectNativeItems(children)
-    if (items.length > 0) {
-      const trigger = findTriggerProps(children)
-      const emit = onValueChange as unknown as (next: string) => void
-      return (
-        <NativeSelect
-          value={String(value)}
-          onValueChange={(next) => emit(next)}
-          items={items}
-          triggerClassName={trigger.className}
-          ariaInvalid={trigger["aria-invalid"]}
-          disabled={Boolean(disabled)}
-        />
-      )
-    }
-  }
-  return <SelectPrimitive.Root {...props} />
-}
-
-function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
-  return (
-    <SelectPrimitive.Group
-      data-slot="select-group"
-      className={cn("scroll-my-1 p-1", className)}
-      {...props}
-    />
-  )
-}
-
-function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
-  return (
-    <SelectPrimitive.Value
-      data-slot="select-value"
-      className={cn("flex flex-1 text-left", className)}
-      {...props}
-    />
-  )
-}
-
-function SelectTrigger({
-  className,
-  size = "default",
-  children,
-  ...props
-}: SelectPrimitive.Trigger.Props & {
-  size?: "sm" | "default"
-}) {
-  return (
-    <SelectPrimitive.Trigger
-      data-slot="select-trigger"
-      data-size={size}
-      className={cn(selectTriggerBaseClassName, className)}
-      {...props}
-    >
-      {children}
-      <SelectPrimitive.Icon
-        render={
-          <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
-        }
-      />
-    </SelectPrimitive.Trigger>
-  )
-}
-
-function SelectContent({
-  className,
-  children,
-  side = "bottom",
-  sideOffset = 4,
-  align = "center",
-  alignOffset = 0,
-  alignItemWithTrigger = true,
-  ...props
-}: SelectPrimitive.Popup.Props &
-  Pick<
-    SelectPrimitive.Positioner.Props,
-    "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
-  >) {
-  return (
-    <SelectPrimitive.Portal>
-      <SelectPrimitive.Positioner
-        side={side}
-        sideOffset={sideOffset}
-        align={align}
-        alignOffset={alignOffset}
-        alignItemWithTrigger={alignItemWithTrigger}
-        className="isolate z-50"
-      >
-        <SelectPrimitive.Popup
-          data-slot="select-content"
-          data-align-trigger={alignItemWithTrigger}
-          className={cn(
-            "relative isolate z-50 max-h-[var(--available-height)] w-[var(--anchor-width)] min-w-36 origin-[var(--transform-origin)] overflow-x-hidden overflow-y-auto rounded-panel border border-border bg-card text-text-primary shadow-modal transition-[opacity,transform] duration-fast ease-out data-[align-trigger=true]:animate-none data-[closed]:opacity-0 data-[open]:opacity-100",
-            className
-          )}
-          {...props}
-        >
-          <SelectScrollUpButton />
-          <SelectPrimitive.List>{children}</SelectPrimitive.List>
-          <SelectScrollDownButton />
-        </SelectPrimitive.Popup>
-      </SelectPrimitive.Positioner>
-    </SelectPrimitive.Portal>
-  )
-}
-
-function SelectLabel({
-  className,
-  ...props
-}: SelectPrimitive.GroupLabel.Props) {
-  return (
-    <SelectPrimitive.GroupLabel
-      data-slot="select-label"
-      className={cn("px-1.5 py-1 text-xs text-text-secondary", className)}
-      {...props}
-    />
-  )
-}
-
-function SelectItem({
-  className,
-  children,
-  ...props
-}: SelectPrimitive.Item.Props) {
-  return (
-    <SelectPrimitive.Item
-      data-slot="select-item"
-      className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-control py-1.5 pr-8 pl-2.5 text-sm outline-none select-none focus:bg-brand-tint focus:text-text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-55 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&>span:last-child]:flex [&>span:last-child]:items-center [&>span:last-child]:gap-2",
-        className
-      )}
-      {...props}
-    >
-      <SelectPrimitive.ItemText className="flex flex-1 shrink-0 gap-2 whitespace-nowrap">
-        {children}
-      </SelectPrimitive.ItemText>
-      <SelectPrimitive.ItemIndicator
-        render={
-          <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
-        }
-      >
-        <CheckIcon className="pointer-events-none" />
-      </SelectPrimitive.ItemIndicator>
-    </SelectPrimitive.Item>
-  )
-}
-
-function SelectSeparator({
-  className,
-  ...props
-}: SelectPrimitive.Separator.Props) {
-  return (
-    <SelectPrimitive.Separator
-      data-slot="select-separator"
-      className={cn("pointer-events-none -mx-1 my-1 h-px bg-border", className)}
-      {...props}
-    />
-  )
-}
-
-function SelectScrollUpButton({
-  className,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollUpArrow>) {
-  return (
-    <SelectPrimitive.ScrollUpArrow
-      data-slot="select-scroll-up-button"
-      className={cn(
-        "top-0 z-10 flex w-full cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
-      {...props}
-    >
-      <ChevronUpIcon
-      />
-    </SelectPrimitive.ScrollUpArrow>
-  )
-}
-
-function SelectScrollDownButton({
-  className,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollDownArrow>) {
-  return (
-    <SelectPrimitive.ScrollDownArrow
-      data-slot="select-scroll-down-button"
-      className={cn(
-        "bottom-0 z-10 flex w-full cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
-      {...props}
-    >
-      <ChevronDownIcon
-      />
-    </SelectPrimitive.ScrollDownArrow>
-  )
-}
-
+import * as React from "react";
+import { NativeSelect, NativeSelectOption } from "@kor-travel/ui/native-select";
+import {
+  Select as CommonSelect,
+  SelectItem as CommonSelectItem,
+  SelectTrigger as CommonSelectTrigger,
+} from "@kor-travel/ui/select";
 export {
-  Select,
   SelectContent,
   SelectGroup,
-  SelectItem,
   SelectLabel,
   SelectScrollDownButton,
   SelectScrollUpButton,
   SelectSeparator,
-  SelectTrigger,
   SelectValue,
+} from "@kor-travel/ui/select";
+
+// Radix가 예약한 빈 문자열을 기존 필터의 전체/없음 값과 구분한다.
+const EMPTY_VALUE = "__concierge_empty_option__";
+export function SelectItem({
+  value,
+  ...props
+}: React.ComponentProps<typeof CommonSelectItem>) {
+  return (
+    <CommonSelectItem value={value === "" ? EMPTY_VALUE : value} {...props} />
+  );
+}
+export const SelectTrigger = CommonSelectTrigger;
+
+type NativeItem = { value: string; label: React.ReactNode; disabled?: boolean };
+function collectItems(children: React.ReactNode, items: NativeItem[] = []) {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    const props = child.props as {
+      value?: string;
+      children?: React.ReactNode;
+      disabled?: boolean;
+    };
+    if (child.type === SelectItem)
+      items.push({
+        value: props.value ?? "",
+        label: props.children,
+        disabled: props.disabled,
+      });
+    else if (props.children) collectItems(props.children, items);
+  });
+  return items;
+}
+function triggerProps(
+  children: React.ReactNode,
+): React.ComponentProps<typeof CommonSelectTrigger> | undefined {
+  let result: React.ComponentProps<typeof CommonSelectTrigger> | undefined;
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    const props = child.props as React.ComponentProps<
+      typeof CommonSelectTrigger
+    >;
+    if (child.type === SelectTrigger) result = props;
+    else if (props.children) result ??= triggerProps(props.children);
+  });
+  return result;
+}
+/** 터치 환경은 기존 OS picker, 데스크톱은 공통 Radix 프리미티브를 사용한다. */
+export function Select({
+  value,
+  defaultValue,
+  onValueChange,
+  children,
+  disabled,
+  ...props
+}: React.ComponentProps<typeof CommonSelect>) {
+  const [coarse, setCoarse] = React.useState(false);
+  React.useEffect(() => {
+    const query = window.matchMedia?.("(pointer: coarse)");
+    if (!query) return;
+    const update = () => setCoarse(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  const items = collectItems(children);
+  const encode = (next: string | undefined) =>
+    next === "" && items.some((item) => item.value === "") ? EMPTY_VALUE : next;
+  if (coarse && value !== undefined && onValueChange && items.length) {
+    const trigger = triggerProps(children);
+    return (
+      <NativeSelect
+        data-slot="select-native"
+        value={value}
+        disabled={disabled ?? trigger?.disabled}
+        name={props.name}
+        required={props.required}
+        form={props.form}
+        dir={props.dir}
+        id={trigger?.id}
+        size={trigger?.size}
+        aria-label={trigger?.["aria-label"]}
+        aria-labelledby={trigger?.["aria-labelledby"]}
+        aria-invalid={trigger?.["aria-invalid"]}
+        className={trigger?.className ?? "w-full"}
+        onChange={(event) => onValueChange(event.currentTarget.value)}
+      >
+        {items.map((item) => (
+          <NativeSelectOption
+            key={item.value}
+            value={item.value}
+            disabled={item.disabled}
+          >
+            {item.label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    );
+  }
+  return (
+    <CommonSelect
+      {...props}
+      disabled={disabled}
+      value={encode(value)}
+      defaultValue={encode(defaultValue)}
+      onValueChange={(next) =>
+        onValueChange?.(next === EMPTY_VALUE ? "" : next)
+      }
+    >
+      {children}
+    </CommonSelect>
+  );
 }

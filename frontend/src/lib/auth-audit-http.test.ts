@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { Socket } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 

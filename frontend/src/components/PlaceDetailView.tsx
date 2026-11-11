@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+
+import type {
+  CandidateTranscript,
+  PlaceDetail,
+  PlaceDetailVideo,
+} from "@/lib/api";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLinkIcon,
@@ -8,7 +15,13 @@ import {
   Loader2Icon,
   Trash2Icon,
 } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
+import { DetailSection } from "@/components/detail";
+import { Metric } from "@/components/panels";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   deletePlace,
   getPlaceDetail,
@@ -16,15 +29,11 @@ import {
   RUN_QUEUE_QUERY_KEY,
   triggerDeepResearch,
 } from "@/lib/api";
+import { keyedItems } from "@/lib/keyed-items";
 import {
   approximateTranscriptEvidenceScrollTop,
   cleanTranscript,
 } from "@/lib/transcript";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DetailSection } from "@/components/detail";
-import { Metric } from "@/components/panels";
 
 function dateLabel(value: string | null): string {
   return value ? value.slice(0, 10) : "";
@@ -48,8 +57,9 @@ export function PlaceDetailView({
   const [transcriptTab, setTranscriptTab] = useState("raw");
   const expandedVideo = useMemo(
     () =>
-      detail?.source_videos.find((video) => video.video_id === expandedVideoId) ??
-      null,
+      detail?.source_videos.find(
+        (video) => video.video_id === expandedVideoId,
+      ) ?? null,
     [detail?.source_videos, expandedVideoId],
   );
   const transcriptQuery = useQuery({
@@ -59,9 +69,9 @@ export function PlaceDetailView({
   });
   const transcriptText = transcriptQuery.data?.text ?? "";
   const transcriptRef = useRef<HTMLPreElement>(null);
-  const evidenceStart = expandedVideo?.mentions.find(
-    (mention) => mention.timestamp_start,
-  )?.timestamp_start ?? null;
+  const evidenceStart =
+    expandedVideo?.mentions.find((mention) => mention.timestamp_start)
+      ?.timestamp_start ?? null;
   const scrollTranscriptToEvidence = useCallback(() => {
     const element = transcriptRef.current;
     if (!element || !transcriptText) return;
@@ -88,11 +98,25 @@ export function PlaceDetailView({
     },
   });
 
-  useEffect(() => {
-    if (transcriptText) {
-      requestAnimationFrame(scrollTranscriptToEvidence);
-    }
-  }, [expandedVideoId, scrollTranscriptToEvidence, transcriptText]);
+  // 자막 DOM이 붙거나 본문이 교체된 다음 근거 위치로 이동한다. 늦은 프레임은 해제한다.
+  const attachTranscript = useCallback(
+    (element: HTMLPreElement | null) => {
+      transcriptRef.current = element;
+      if (!element || !transcriptText) return;
+      const frame = requestAnimationFrame(() => {
+        element.scrollTop = approximateTranscriptEvidenceScrollTop(
+          transcriptText,
+          evidenceStart,
+          element.scrollHeight,
+        );
+      });
+      return () => {
+        cancelAnimationFrame(frame);
+        transcriptRef.current = null;
+      };
+    },
+    [evidenceStart, transcriptText],
+  );
 
   if (detailQuery.isLoading) {
     return <p className="p-2 text-sm text-muted-foreground">불러오는 중…</p>;
@@ -110,47 +134,24 @@ export function PlaceDetailView({
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-base font-semibold">{p.name}</h3>
-          {p.category ? <Badge variant="outline">{p.category}</Badge> : null}
-          {p.category_code_suggestion ? (
-            <Badge variant="outline">{p.category_code_suggestion}</Badge>
-          ) : null}
-          {p.is_geocoded ? (
-            <Badge variant="secondary">지오코딩</Badge>
-          ) : (
-            <Badge variant="outline">좌표 없음</Badge>
-          )}
-        </div>
-        {address ? (
-          <p className="mt-1 text-sm text-muted-foreground">{address}</p>
-        ) : null}
-        {p.sigungu_code || p.legal_dong_code ? (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {p.sigungu_code ? (
-              <Badge variant="outline">
-                {p.sigungu_name ?? "시군구"} {p.sigungu_code}
-              </Badge>
-            ) : null}
-            {p.legal_dong_code ? (
-              <Badge variant="outline">
-                {p.legal_dong_name ?? "법정동"} {p.legal_dong_code}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
-        {p.latitude != null && p.longitude != null ? (
-          <p className="text-xs text-muted-foreground">
-            {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}
-          </p>
-        ) : null}
-      </div>
+      <PlaceOverview p={p} address={address} />
 
       <div className="grid grid-cols-3 gap-2">
-        <Metric size="lg" label="언급 횟수" value={detail.stats.mention_count.toLocaleString()} />
-        <Metric size="lg" label="동영상 수" value={detail.stats.video_count.toLocaleString()} />
-        <Metric size="lg" label="유튜버 수" value={detail.stats.channel_count.toLocaleString()} />
+        <Metric
+          size="lg"
+          label="언급 횟수"
+          value={detail.stats.mention_count.toLocaleString()}
+        />
+        <Metric
+          size="lg"
+          label="동영상 수"
+          value={detail.stats.video_count.toLocaleString()}
+        />
+        <Metric
+          size="lg"
+          label="유튜버 수"
+          value={detail.stats.channel_count.toLocaleString()}
+        />
       </div>
 
       {p.description ? (
@@ -175,227 +176,385 @@ export function PlaceDetailView({
         </DetailSection>
       ) : null}
 
-      <DetailSection
-        divided
-        title={`출처 동영상 · 어디에 나왔는지 (${detail.source_videos.length})`}
-      >
-        <div className="flex flex-col gap-2">
-          {detail.source_videos.map((video) => (
-            <div
-              key={video.video_id}
-              className="flex flex-col gap-1 rounded-lg border p-2 text-xs"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => setExpandedVideoId(video.video_id)}
-                  aria-label={`${video.title ?? video.video_id} 출처 동영상 상세`}
-                  className="flex min-w-0 items-start gap-1 text-left font-medium text-primary hover:underline"
-                >
-                  <span className="min-w-0 break-words">
-                    {video.title ?? video.video_id}
-                  </span>
-                </button>
-                <Badge variant="secondary">{video.mention_count}회</Badge>
-              </div>
-              <p className="text-muted-foreground">
-                {[video.channel_title, dateLabel(video.published_at)]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-              {video.mentions.map((mention, index) => (
-                <div
-                  key={index}
-                  className="border-l-2 border-muted pl-2 text-muted-foreground"
-                >
-                  {mention.timestamp_start ? (
-                    <span className="mr-1 font-medium text-foreground">
-                      {mention.timestamp_start}
-                    </span>
-                  ) : null}
-                  {mention.source_text ?? mention.source_kind ?? ""}
-                </div>
-              ))}
-            </div>
-          ))}
-          {detail.source_videos.length === 0 ? (
-            <p className="rounded-lg border p-2 text-muted-foreground">
-              출처 동영상이 없습니다.
-            </p>
-          ) : null}
-        </div>
-      </DetailSection>
+      <PlaceVideoList detail={detail} setExpandedVideoId={setExpandedVideoId} />
 
       {expandedVideo ? (
-        <DetailSection divided title="출처 동영상 상세">
-          <div className="grid gap-3 lg:grid-cols-[0.85fr_1.15fr]">
-            <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs">
-              <div className="flex items-start justify-between gap-2">
-                <h5 className="min-w-0 break-words text-sm font-semibold">
-                  {expandedVideo.title ?? expandedVideo.video_id}
-                </h5>
-                <a
-                  href={expandedVideo.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
-                >
-                  YouTube
-                  <ExternalLinkIcon className="size-3" />
-                </a>
-              </div>
-              <p className="text-muted-foreground">
-                {[expandedVideo.channel_title, dateLabel(expandedVideo.published_at)]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-              <div className="flex flex-col gap-1">
-                {expandedVideo.mentions.map((mention, index) => (
-                  <div
-                    key={index}
-                    className="border-l-2 border-muted pl-2 text-muted-foreground"
-                  >
-                    <div className="font-medium text-foreground">
-                      {[mention.timestamp_start, mention.timestamp_end]
-                        .filter(Boolean)
-                        .join(" ~ ") || "시간 정보 없음"}
-                    </div>
-                    <p className="whitespace-pre-wrap">
-                      {mention.source_text ?? mention.source_kind ?? ""}
-                    </p>
-                    {mention.speaker_note ? (
-                      <p>메모: {mention.speaker_note}</p>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex min-w-0 flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <h5 className="text-xs font-semibold text-muted-foreground">
-                  {transcriptQuery.data?.kind === "raw"
-                    ? "자막 (원본 — 보정본 없음)"
-                    : "보정 자막"}
-                </h5>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={!transcriptText}
-                  onClick={scrollTranscriptToEvidence}
-                >
-                  근거 위치로 이동
-                </Button>
-              </div>
-              {transcriptQuery.isLoading ? (
-                <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-                  불러오는 중…
-                </p>
-              ) : transcriptText ? (
-                <Tabs
-                  value={transcriptTab}
-                  onValueChange={(value) => setTranscriptTab(value ?? "raw")}
-                >
-                  <TabsList className="w-full">
-                    <TabsTrigger value="raw">타임스탬프 포함</TabsTrigger>
-                    <TabsTrigger value="clean">정리본</TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="raw" className="mt-2">
-                    <pre
-                      ref={transcriptRef}
-                      className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap"
-                    >
-                      {transcriptText}
-                    </pre>
-                  </TabsContent>
-                  <TabsContent value="clean" className="mt-2">
-                    <pre className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap">
-                      {cleanTranscript(transcriptText)}
-                    </pre>
-                  </TabsContent>
-                </Tabs>
-              ) : (
-                <p className="rounded-lg border p-2 text-xs text-muted-foreground">
-                  보정 자막 없음
-                </p>
-              )}
-            </div>
-          </div>
-        </DetailSection>
+        <PlaceVideoEvidence
+          expandedVideo={expandedVideo}
+          transcriptQuery={transcriptQuery}
+          transcriptText={transcriptText}
+          scrollTranscriptToEvidence={scrollTranscriptToEvidence}
+          transcriptTab={transcriptTab}
+          setTranscriptTab={setTranscriptTab}
+          attachTranscript={attachTranscript}
+        />
       ) : null}
 
-      <div className="flex flex-col gap-2 border-t pt-3">
+      <PlaceLifecycleActions
+        deepResearchMutation={deepResearchMutation}
+        confirmDelete={confirmDelete}
+        deleteMutation={deleteMutation}
+        setConfirmDelete={setConfirmDelete}
+      />
+    </div>
+  );
+}
+
+function PlaceVideoList({
+  detail,
+  setExpandedVideoId,
+}: {
+  detail: PlaceDetail;
+  setExpandedVideoId: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  return (
+    <DetailSection
+      divided
+      title={`출처 동영상 · 어디에 나왔는지 (${detail.source_videos.length})`}
+    >
+      <div className="flex flex-col gap-2">
+        {detail.source_videos.map((video) => (
+          <div
+            key={video.video_id}
+            className="flex flex-col gap-1 rounded-lg border p-2 text-xs"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setExpandedVideoId(video.video_id)}
+                aria-label={`${video.title ?? video.video_id} 출처 동영상 상세`}
+                className="flex min-w-0 items-start gap-1 text-left font-medium text-primary hover:underline"
+              >
+                <span className="min-w-0 break-words">
+                  {video.title ?? video.video_id}
+                </span>
+              </button>
+              <Badge variant="secondary">{video.mention_count}회</Badge>
+            </div>
+            <p className="text-muted-foreground">
+              {[video.channel_title, dateLabel(video.published_at)]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            {keyedItems(video.mentions, (mention) =>
+              JSON.stringify([
+                mention.timestamp_start,
+                mention.timestamp_end,
+                mention.source_kind,
+                mention.source_text,
+                mention.speaker_note,
+              ]),
+            ).map(({ item: mention, key }) => (
+              <div
+                key={key}
+                className="border-l-2 border-muted pl-2 text-muted-foreground"
+              >
+                {mention.timestamp_start ? (
+                  <span className="mr-1 font-medium text-foreground">
+                    {mention.timestamp_start}
+                  </span>
+                ) : null}
+                {mention.source_text ?? mention.source_kind ?? ""}
+              </div>
+            ))}
+          </div>
+        ))}
+        {detail.source_videos.length === 0 ? (
+          <p className="rounded-lg border p-2 text-muted-foreground">
+            출처 동영상이 없습니다.
+          </p>
+        ) : null}
+      </div>
+    </DetailSection>
+  );
+}
+
+function PlaceVideoEvidence({
+  expandedVideo,
+  transcriptQuery,
+  transcriptText,
+  scrollTranscriptToEvidence,
+  transcriptTab,
+  setTranscriptTab,
+  attachTranscript,
+}: {
+  expandedVideo: PlaceDetailVideo;
+  transcriptQuery: UseQueryResult<CandidateTranscript, Error>;
+  transcriptText: string;
+  scrollTranscriptToEvidence: () => void;
+  transcriptTab: string;
+  setTranscriptTab: React.Dispatch<React.SetStateAction<string>>;
+  attachTranscript: (
+    element: HTMLPreElement | null,
+  ) => (() => void) | undefined;
+}) {
+  return (
+    <DetailSection divided title="출처 동영상 상세">
+      <div className="grid gap-3 lg:grid-cols-[0.85fr_1.15fr]">
+        <div className="flex flex-col gap-2 rounded-lg border p-3 text-xs">
+          <div className="flex items-start justify-between gap-2">
+            <h5 className="min-w-0 break-words text-sm font-semibold">
+              {expandedVideo.title ?? expandedVideo.video_id}
+            </h5>
+            <a
+              href={expandedVideo.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
+            >
+              YouTube
+              <ExternalLinkIcon className="size-3" />
+            </a>
+          </div>
+          <p className="text-muted-foreground">
+            {[
+              expandedVideo.channel_title,
+              dateLabel(expandedVideo.published_at),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          <div className="flex flex-col gap-1">
+            {keyedItems(expandedVideo.mentions, (mention) =>
+              JSON.stringify([
+                mention.timestamp_start,
+                mention.timestamp_end,
+                mention.source_kind,
+                mention.source_text,
+                mention.speaker_note,
+              ]),
+            ).map(({ item: mention, key }) => (
+              <div
+                key={key}
+                className="border-l-2 border-muted pl-2 text-muted-foreground"
+              >
+                <div className="font-medium text-foreground">
+                  {[mention.timestamp_start, mention.timestamp_end]
+                    .filter(Boolean)
+                    .join(" ~ ") || "시간 정보 없음"}
+                </div>
+                <p className="whitespace-pre-wrap">
+                  {mention.source_text ?? mention.source_kind ?? ""}
+                </p>
+                {mention.speaker_note ? (
+                  <p>메모: {mention.speaker_note}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <h5 className="text-xs font-semibold text-muted-foreground">
+              {transcriptQuery.data?.kind === "raw"
+                ? "자막 (원본 — 보정본 없음)"
+                : "보정 자막"}
+            </h5>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={!transcriptText}
+              onClick={scrollTranscriptToEvidence}
+            >
+              근거 위치로 이동
+            </Button>
+          </div>
+          {transcriptQuery.isLoading ? (
+            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+              불러오는 중…
+            </p>
+          ) : transcriptText ? (
+            <Tabs
+              value={transcriptTab}
+              onValueChange={(value) => setTranscriptTab(value ?? "raw")}
+            >
+              <TabsList className="w-full">
+                <TabsTrigger value="raw">타임스탬프 포함</TabsTrigger>
+                <TabsTrigger value="clean">정리본</TabsTrigger>
+              </TabsList>
+              <TabsContent value="raw" className="mt-2">
+                <pre
+                  ref={attachTranscript}
+                  className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap"
+                >
+                  {transcriptText}
+                </pre>
+              </TabsContent>
+              <TabsContent value="clean" className="mt-2">
+                <pre className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-2 text-xs whitespace-pre-wrap">
+                  {cleanTranscript(transcriptText)}
+                </pre>
+              </TabsContent>
+            </Tabs>
+          ) : (
+            <p className="rounded-lg border p-2 text-xs text-muted-foreground">
+              보정 자막 없음
+            </p>
+          )}
+        </div>
+      </div>
+    </DetailSection>
+  );
+}
+
+function PlaceOverview({
+  p,
+  address,
+}: {
+  p: {
+    place_id: number;
+    name: string;
+    category: string | null;
+    category_code_suggestion: string | null;
+    sigungu_code: string | null;
+    sigungu_name: string | null;
+    legal_dong_code: string | null;
+    legal_dong_name: string | null;
+    official_address: string | null;
+    road_address: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    is_geocoded: boolean;
+    description: string | null;
+    gemini_enriched_description: string | null;
+    detailed_research_content: string | null;
+  };
+  address: string | null;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-base font-semibold">{p.name}</h3>
+        {p.category ? <Badge variant="outline">{p.category}</Badge> : null}
+        {p.category_code_suggestion ? (
+          <Badge variant="outline">{p.category_code_suggestion}</Badge>
+        ) : null}
+        {p.is_geocoded ? (
+          <Badge variant="secondary">지오코딩</Badge>
+        ) : (
+          <Badge variant="outline">좌표 없음</Badge>
+        )}
+      </div>
+      {address ? (
+        <p className="mt-1 text-sm text-muted-foreground">{address}</p>
+      ) : null}
+      {p.sigungu_code || p.legal_dong_code ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {p.sigungu_code ? (
+            <Badge variant="outline">
+              {p.sigungu_name ?? "시군구"} {p.sigungu_code}
+            </Badge>
+          ) : null}
+          {p.legal_dong_code ? (
+            <Badge variant="outline">
+              {p.legal_dong_name ?? "법정동"} {p.legal_dong_code}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
+      {p.latitude != null && p.longitude != null ? (
+        <p className="text-xs text-muted-foreground">
+          {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function PlaceLifecycleActions({
+  deepResearchMutation,
+  confirmDelete,
+  deleteMutation,
+  setConfirmDelete,
+}: {
+  deepResearchMutation: UseMutationResult<
+    { job_id: string; state: string; place_id: number },
+    Error,
+    void,
+    unknown
+  >;
+  confirmDelete: boolean;
+  deleteMutation: UseMutationResult<
+    { deleted: boolean; place_id: number; reverted_candidates: number },
+    Error,
+    void,
+    unknown
+  >;
+  setConfirmDelete: React.Dispatch<React.SetStateAction<boolean>>;
+}) {
+  return (
+    <div className="flex flex-col gap-2 border-t pt-3">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={deepResearchMutation.isPending}
+        onClick={() => deepResearchMutation.mutate()}
+      >
+        {deepResearchMutation.isPending ? (
+          <Loader2Icon data-icon="inline-start" className="animate-spin" />
+        ) : (
+          <FlaskConicalIcon data-icon="inline-start" />
+        )}
+        Deep Research
+      </Button>
+      {deepResearchMutation.error ? (
+        <p className="text-xs text-destructive">
+          {deepResearchMutation.error.message}
+        </p>
+      ) : deepResearchMutation.isSuccess ? (
+        <p className="text-xs text-muted-foreground">
+          Deep Research 작업을 시작했습니다. 완료되면 심층 조사에 반영됩니다.
+        </p>
+      ) : null}
+      {confirmDelete ? (
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium text-destructive">
+            정말 삭제할까요? 이 장소를 만든 검수 후보는 검수 큐로 되돌아갑니다.
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteMutation.mutate()}
+            >
+              {deleteMutation.isPending ? (
+                <Loader2Icon
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+              ) : null}
+              삭제
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmDelete(false)}
+            >
+              취소
+            </Button>
+          </div>
+        </div>
+      ) : (
         <Button
           type="button"
           size="sm"
           variant="outline"
-          disabled={deepResearchMutation.isPending}
-          onClick={() => deepResearchMutation.mutate()}
+          onClick={() => setConfirmDelete(true)}
         >
-          {deepResearchMutation.isPending ? (
-            <Loader2Icon data-icon="inline-start" className="animate-spin" />
-          ) : (
-            <FlaskConicalIcon data-icon="inline-start" />
-          )}
-          Deep Research
+          <Trash2Icon data-icon="inline-start" />
+          장소 삭제
         </Button>
-        {deepResearchMutation.error ? (
-          <p className="text-xs text-destructive">
-            {deepResearchMutation.error.message}
-          </p>
-        ) : deepResearchMutation.isSuccess ? (
-          <p className="text-xs text-muted-foreground">
-            Deep Research 작업을 시작했습니다. 완료되면 심층 조사에 반영됩니다.
-          </p>
-        ) : null}
-        {confirmDelete ? (
-          <div className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-destructive">
-              정말 삭제할까요? 이 장소를 만든 검수 후보는 검수 큐로 되돌아갑니다.
-            </span>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate()}
-              >
-                {deleteMutation.isPending ? (
-                  <Loader2Icon
-                    data-icon="inline-start"
-                    className="animate-spin"
-                  />
-                ) : null}
-                삭제
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setConfirmDelete(false)}
-              >
-                취소
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2Icon data-icon="inline-start" />
-            장소 삭제
-          </Button>
-        )}
-        {deleteMutation.error ? (
-          <p className="mt-1 text-xs text-destructive">
-            {deleteMutation.error.message}
-          </p>
-        ) : null}
-      </div>
+      )}
+      {deleteMutation.error ? (
+        <p className="mt-1 text-xs text-destructive">
+          {deleteMutation.error.message}
+        </p>
+      ) : null}
     </div>
   );
 }
