@@ -4,6 +4,19 @@ integration-8-review의 UI0.2.0/tokens0.1.1·Lightning CSS1.33.0+nativecss.fix.4
 
 # JOURNAL — 작업 일지
 
+
+## 2026-11-12 — T-208 C9 검증·Draft PR265 인계
+
+- 608d632(C8) 위 부모의 C9 vendor·원장·lock·중앙 workflow2c1182e pin을 보존했다.
+  archive/설치248파일을 직접 비교했고 C8→C9는 checker2만 변경·런타임117파일 동일임을 재확인했다.
+- C9 guard/canonical PASS. n150 전용 공간의 fresh strict ci·guard·production build·browser10/10도 PASS다.
+  C8 unit394·lint·type·Doctor0은 동등성 증거로 승계하며 C6의 별도 과거 실행과 혼동하지 않는다.
+- 로컬 공간 제약 때문에 local ci/build 반복과 UI runtime 변경·독립 repack은 하지 않았다.
+  런북·현재 UI 태그·production override·bind mount0·frontend context는 읽기 전용으로 확인했다.
+- 보안 감사를 거쳐 같은 브랜치로 push하고 기존 Draft PR265를 갱신한다.
+  foundation PR49·소비자 독립2리뷰·정확 HEAD CI·부모 go·배포는 [최우선 handoff](reports/common-unification-20261111-handoff.md)의 잔여 gate다.
+
+
 ## 2026-11-11 — T-208 후보6 통합 검증과 리뷰 인계
 
 - integration-6-review 네 tarball·원장을 동일 bytes로 복사하고 UI/tokens/core/web 전부 명시적 file 설치했다.

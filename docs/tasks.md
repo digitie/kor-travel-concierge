@@ -16,7 +16,7 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
-- [ ] **T-208 공통 관리자 UI·의존성 정렬**: common Radix 프리미티브와 관리 표 7개의 VirtualTable, Tailwind4.3.5·공유 exact 의존성·RHF/Zod/Zustand/Pretendard 실사용·GitHub 최신 지도 후보·ESLint10/Doctor/CI 검사 이관. 로컬 guard/lint/type/394unit/build/Doctor0·n150 browser10 PASS(후보6 및 로컬 canonical 검증 완료). 부모의 최종 pack refresh·freeze·독립 리뷰 2인·원격 CI·머지·부모 go 뒤 이미지 배포까지 [이관 보고서](reports/common-unification-20261111.md)에서 추적한다. 미완료 후보는 배포하지 않는다.
+- [ ] **T-208 공통 관리자 UI·의존성 정렬**: C9 vendor/lock/workflow를 정본에 맞추고 guard/canonical·n150 fresh strict ci/build/browser10 PASS. C8 unit394/lint/type/Doctor0은 117 runtime/CSS/metadata 동등성으로 승계했다. Draft PR265의 foundation PR49·소비자 독립2리뷰·정확 HEAD CI·부모 go와 이미지 전환은 [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 추적한다.
 
 - 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.
 

@@ -1,5 +1,17 @@
 # 공통 관리자 UI 이관 — 2026-11-11
 
+## 2026-11-12 현재 결과 — C9
+
+정본은 integration-9-review이고 중앙 code pin은 2c1182e765bb2bc53e01e0962cf2a73683891e1d이다.
+C8→C9는 UI/tokens checker2만 바뀌었으며 런타임·CSS·metadata117파일과 앱 source는 같다.
+C9 로컬 guard/canonical, n150 fresh strict ci·production build·browser10/10을 새로 통과했다.
+C8 unit394·lint·type·Doctor0은 부모의 원문 증거와 동등성에 근거해 승계한다.
+C6의 이전 실행 결과와 구분한 최종 표·로그·잔여 gate는 [최우선 handoff](common-unification-20261111-handoff.md)를 따른다.
+
+Draft PR265는 같은 브랜치에서 갱신한다. common PR49 foundation merge·소비자 독립2리뷰·정확 HEAD CI·
+부모 go 전까지 merge/deploy하지 않는다. 아래 본문은 2026-11-11 C6 구현·검증의 이력이다.
+
+
 ## 정본과 작업 보존
 
 정본은 /home/digitie/dev/common-unification-20261111/kor-travel-concierge이며 브랜치는
