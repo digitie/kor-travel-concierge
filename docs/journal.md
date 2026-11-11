@@ -4,7 +4,7 @@
 
 - 기존 ext4 clone·branch·미커밋 diff를 보존하고 Concierge만 이어서 수정했다. 관리 표 7개와 Radix 프리미티브를 common으로 이관하고 후보3의 동일 tarball·원장·lock을 정렬했다.
 - Tailwind4.3.5와 공유 exact 의존성, RHF/Zod/Zustand/Pretendard 실사용, ESLint10 지원 plugin·Doctor0.9.22·필수 CI/source guard를 연결했다. strict peer 설치·guard·lint·타입·단위381·production build가 통과했다.
-- Doctor 최초47→최종26 warning이며 동작/성능 진단을 수정하고 재실행했다. 엄격 warning gate는 FAIL이고 n150 격리 Chromium6/6은 PASS다. 최종 freeze·독립 리뷰2인·원격 CI는 [이관 보고서](reports/common-unification-20261111.md)에서 구분한다. 감사 모드의 임시 소스 변경 때문에 다른 검사와 순차 실행한다.
+- Doctor 최초47→최종26 warning이며 동작/성능 진단을 수정하고 재실행했다. 엄격 warning gate는 FAIL이고 n150 격리 Chromium6/6은 PASS다. 같은 exact 의존성으로 인계 HEAD 전체를 비교하면49 warning이고 잔여26은 모두 기준선에도 존재한다(신규 진단0). 최종 freeze·독립 리뷰2인·원격 CI는 [이관 보고서](reports/common-unification-20261111.md)에서 구분한다. 감사 모드의 임시 소스 변경 때문에 다른 검사와 순차 실행한다.
 - push/PR/merge/배포는 미실행이며, 모든 gate와 부모 go 뒤 immutable 이미지·secret 보존·로그인/대표화면/health smoke를 수행하는 구체 계획을 보고서에 남겼다. 운영 DB·RustFS·공용 plane은 변경하지 않았다.
 
 ## 2026-11-02 — 옛 APScheduler rollback 경로 문서 정정

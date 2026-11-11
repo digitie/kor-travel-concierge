@@ -69,6 +69,13 @@ Doctor 잔여는 warning을 숨기거나 baseline/ignore로 우회하지 않는�
 초기 deep-link redirect를 계속 추적한다. 최종 26건은 복잡한 함수 14·대형 컴포넌트 9·JSX 중복 2·반응형 초기 redirect 1이다.
 검수 workflow의 fencing/IME/undo 정책을 대규모 기계적 분할로 바꾸지 않는다.
 
+기준선 추가 검증: 인계 HEAD 4438328704be15592c47281cd19b525e91567767의 frontend 소스를
+별도 임시 스냅샷으로 추출하고 현재 package.json의 exact 의존성/같은 설치본을 연결해 동일한 전체
+Doctor 감사를 실행했다. 기준선은 130개 파일 완전 검사에서 error 0/warning 49였다.
+현재 후보의 26건은 모두 기준선에도 존재하는 파일·규칙 진단이며 신규 진단은 없다.
+이 비교는 잔여 gate의 면제나 baseline 필터 적용이 아니다. 현재 CI의 엄격 실패는 그대로 유지한다.
+
+
 n150 브라우저는 그 호스트의 전용 임시 테스트 디렉터리와 Chromium에서 실행하고,
 loopback reverse tunnel로 이 clone의 production Next에 연결했다. 인증값은 매 실행 무작위 생성해
 환경/stdin으로만 전달한다. REST는 브라우저 route fixture로 격리해 운영 DB/유료 API를 호출하지 않는다.
