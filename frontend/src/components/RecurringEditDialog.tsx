@@ -1,19 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-
-import {
-  getSourceTargetVideos,
-  listCategories,
-  RUN_QUEUE_QUERY_KEY,
-  runSourceTargetNow,
-  updateSourceTarget,
-  type CategoryOption,
-  type SourceTargetSummary,
+import type {
+  CategoryOption,
+  CollectedVideo,
+  SourceTargetSummary,
 } from "@/lib/api";
-import { categoryDisplayLabel, targetTypeDisplayLabel } from "@/lib/display-labels";
-import { formatDate, formatDateTime } from "@/lib/format";
+import type { UseQueryResult } from "@tanstack/react-query";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { HelpTip } from "@/components/HelpTip";
+import { Metric } from "@/components/panels";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -34,8 +32,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { HelpTip } from "@/components/HelpTip";
-import { Metric } from "@/components/panels";
+import {
+  getSourceTargetVideos,
+  listCategories,
+  RUN_QUEUE_QUERY_KEY,
+  runSourceTargetNow,
+  updateSourceTarget,
+} from "@/lib/api";
+import {
+  categoryDisplayLabel,
+  targetTypeDisplayLabel,
+} from "@/lib/display-labels";
+import { formatDate, formatDateTime } from "@/lib/format";
 
 const INTERVAL_OPTIONS = [
   { value: 60, label: "1시간" },
@@ -87,17 +95,24 @@ export function RecurringEditDialog({
   );
   const [forceRunOnce, setForceRunOnce] = useState(false);
 
-  const isKeywordTarget = target?.target_type === "keyword";
-  const query = queryEdit ?? target?.source_value ?? "";
-  const interval = intervalEdit ?? target?.scan_interval_minutes ?? 1440;
-  const maxRuns = maxRunsEdit ?? target?.max_runs ?? 0;
-  const maxVideos = maxVideosEdit ?? target?.max_videos ?? 20;
-  const active = activeEdit ?? target?.is_active ?? true;
-  const defaultCategoryCode =
-    defaultCategoryEdit ?? target?.default_category_code ?? "0";
-  const title = `${targetDisplayName(target)} 작업 수정`;
-  const targetKind =
-    target?.target_type_label ?? targetTypeDisplayLabel(target?.target_type);
+  const {
+    isKeywordTarget,
+    query,
+    interval,
+    maxRuns,
+    maxVideos,
+    active,
+    defaultCategoryCode,
+    title,
+    targetKind,
+  } = deriveRecurringDraft(target, {
+    queryEdit,
+    intervalEdit,
+    maxRunsEdit,
+    maxVideosEdit,
+    activeEdit,
+    defaultCategoryEdit,
+  });
 
   const videosQuery = useQuery({
     queryKey: ["source-target-videos", target?.id],
@@ -201,30 +216,14 @@ export function RecurringEditDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <section className="grid gap-2 sm:grid-cols-2">
-          <Metric
-            label="누적 수집 영상"
-            value={
-              videosQuery.isLoading ? "확인 중" : `${videos.length.toLocaleString()}개`
-            }
-          />
-          <Metric
-            label="실행 횟수"
-            value={
-              target?.max_runs === 0
-                ? `${target?.run_count ?? 0}회 / 무한`
-                : `${target?.run_count ?? 0}회 / ${target?.max_runs ?? 0}회`
-            }
-          />
-          <Metric label="마지막 수집" value={formatDateTime(target?.last_crawled_at)} />
-          <Metric label="마지막 영상 날짜" value={formatDate(lastVideoPublishedAt)} />
-          <Metric label="마지막 스캔" value={formatDateTime(target?.last_scan_at)} />
-          <Metric label="다음 실행" value={formatDateTime(target?.next_crawl_at)} />
-          <Metric
-            label="기본 카테고리"
-            value={categoryLabel(categoriesQuery.data, defaultCategoryCode)}
-          />
-        </section>
+        <RecurringRunSummary
+          videosQuery={videosQuery}
+          videos={videos}
+          target={target}
+          lastVideoPublishedAt={lastVideoPublishedAt}
+          categoriesQuery={categoriesQuery}
+          defaultCategoryCode={defaultCategoryCode}
+        />
 
         {target?.last_scan_error ? (
           <p className="rounded-control border border-destructive bg-destructive-tint p-3 text-xs text-destructive">
@@ -232,134 +231,24 @@ export function RecurringEditDialog({
           </p>
         ) : null}
 
-        <section className="flex flex-col gap-4 border-t pt-4">
-          {isKeywordTarget ? (
-            <Field>
-              <div className="flex items-center gap-1">
-                <FieldLabel htmlFor="recurring-edit-query">검색어</FieldLabel>
-                <HelpTip>
-                  검색어를 바꾸면 이전 검색의 증분 기준과 실행 횟수는 초기화됩니다.
-                  이미 수집된 영상과 장소는 삭제하지 않습니다.
-                </HelpTip>
-              </div>
-              <Input
-                id="recurring-edit-query"
-                value={query}
-                maxLength={255}
-                onChange={(event) => setQueryEdit(event.target.value)}
-              />
-            </Field>
-          ) : null}
-
-          <Field>
-            <FieldLabel htmlFor="recurring-edit-interval">반복 간격</FieldLabel>
-            <Select
-              value={String(interval)}
-              onValueChange={(value) => setIntervalEdit(Number(value))}
-            >
-              <SelectTrigger id="recurring-edit-interval" className="w-full">
-                <SelectValue>{intervalOptionLabel(interval)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {INTERVAL_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={String(option.value)}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field>
-              <div className="flex items-center gap-1">
-                <FieldLabel htmlFor="recurring-edit-count">반복 횟수</FieldLabel>
-                <HelpTip>0이면 중지할 때까지 무한 반복합니다.</HelpTip>
-              </div>
-              <Input
-                id="recurring-edit-count"
-                type="number"
-                min={0}
-                value={String(maxRuns)}
-                onChange={(event) =>
-                  setMaxRunsEdit(Math.max(0, Number(event.target.value) || 0))
-                }
-              />
-            </Field>
-
-            <Field>
-              <div className="flex items-center gap-1">
-                <FieldLabel htmlFor="recurring-edit-max-videos">
-                  수집개수(영상 수)
-                </FieldLabel>
-                <HelpTip>반복 1회당 받을 영상 수(1~300)입니다.</HelpTip>
-              </div>
-              <Input
-                id="recurring-edit-max-videos"
-                type="number"
-                min={1}
-                max={300}
-                value={String(maxVideos)}
-                onChange={(event) =>
-                  setMaxVideosEdit(
-                    Math.max(1, Math.min(300, Number(event.target.value) || 1)),
-                  )
-                }
-              />
-            </Field>
-          </div>
-
-          <Field>
-            <div className="flex items-center gap-1">
-              <FieldLabel htmlFor="recurring-edit-category">기본 카테고리</FieldLabel>
-              <HelpTip>카테고리 매칭에 실패한 장소는 이 값으로 저장합니다.</HelpTip>
-            </div>
-            <Select
-              value={defaultCategoryCode}
-              onValueChange={(value) => setDefaultCategoryEdit(value)}
-            >
-              <SelectTrigger id="recurring-edit-category" className="w-full">
-                <SelectValue>
-                  {categoryLabel(categoriesQuery.data, defaultCategoryCode)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                <SelectGroup>
-                  {(categoriesQuery.data ?? []).map((option) => (
-                    <SelectItem key={option.code} value={option.code}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-
-          {/* 저장 버튼으로 반영되는 폼 값이므로 Switch(즉시 적용 암시)가 아니라 Checkbox. */}
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <Checkbox
-              checked={active}
-              onCheckedChange={(checked) => setActiveEdit(Boolean(checked))}
-            />
-            반복 수집 사용
-          </label>
-
-          <label className="flex items-start gap-2 rounded-control border border-warning bg-warning-tint p-3 text-sm">
-            <Checkbox
-              className="mt-0.5"
-              checked={forceRunOnce}
-              onCheckedChange={(checked) => setForceRunOnce(Boolean(checked))}
-            />
-            <span className="flex flex-col gap-0.5">
-              <span className="font-medium">강제 다운로드 (전체 재수집)</span>
-              <span className="text-xs text-muted-foreground">
-                저장 직후 한 번만 전체 재수집 작업을 실행합니다. 이 체크 상태는 저장되지 않습니다.
-              </span>
-            </span>
-          </label>
-        </section>
+        <RecurringScheduleFields
+          isKeywordTarget={isKeywordTarget}
+          query={query}
+          setQueryEdit={setQueryEdit}
+          interval={interval}
+          setIntervalEdit={setIntervalEdit}
+          maxRuns={maxRuns}
+          setMaxRunsEdit={setMaxRunsEdit}
+          maxVideos={maxVideos}
+          setMaxVideosEdit={setMaxVideosEdit}
+          defaultCategoryCode={defaultCategoryCode}
+          setDefaultCategoryEdit={setDefaultCategoryEdit}
+          categoriesQuery={categoriesQuery}
+          active={active}
+          setActiveEdit={setActiveEdit}
+          forceRunOnce={forceRunOnce}
+          setForceRunOnce={setForceRunOnce}
+        />
 
         {mutation.error ? (
           <p className="text-xs text-destructive">{mutation.error.message}</p>
@@ -385,4 +274,271 @@ export function RecurringEditDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function RecurringRunSummary({
+  videosQuery,
+  videos,
+  target,
+  lastVideoPublishedAt,
+  categoriesQuery,
+  defaultCategoryCode,
+}: {
+  videosQuery: UseQueryResult<CollectedVideo[], Error>;
+  videos: CollectedVideo[];
+  target: SourceTargetSummary | null;
+  lastVideoPublishedAt: string | null;
+  categoriesQuery: UseQueryResult<CategoryOption[], Error>;
+  defaultCategoryCode: string;
+}) {
+  return (
+    <section className="grid gap-2 sm:grid-cols-2">
+      <Metric
+        label="누적 수집 영상"
+        value={
+          videosQuery.isLoading
+            ? "확인 중"
+            : `${videos.length.toLocaleString()}개`
+        }
+      />
+      <Metric
+        label="실행 횟수"
+        value={
+          target?.max_runs === 0
+            ? `${target?.run_count ?? 0}회 / 무한`
+            : `${target?.run_count ?? 0}회 / ${target?.max_runs ?? 0}회`
+        }
+      />
+      <Metric
+        label="마지막 수집"
+        value={formatDateTime(target?.last_crawled_at)}
+      />
+      <Metric
+        label="마지막 영상 날짜"
+        value={formatDate(lastVideoPublishedAt)}
+      />
+      <Metric
+        label="마지막 스캔"
+        value={formatDateTime(target?.last_scan_at)}
+      />
+      <Metric label="다음 실행" value={formatDateTime(target?.next_crawl_at)} />
+      <Metric
+        label="기본 카테고리"
+        value={categoryLabel(categoriesQuery.data, defaultCategoryCode)}
+      />
+    </section>
+  );
+}
+
+function RecurringScheduleFields({
+  isKeywordTarget,
+  query,
+  setQueryEdit,
+  interval,
+  setIntervalEdit,
+  maxRuns,
+  setMaxRunsEdit,
+  maxVideos,
+  setMaxVideosEdit,
+  defaultCategoryCode,
+  setDefaultCategoryEdit,
+  categoriesQuery,
+  active,
+  setActiveEdit,
+  forceRunOnce,
+  setForceRunOnce,
+}: {
+  isKeywordTarget: boolean;
+  query: string;
+  setQueryEdit: React.Dispatch<React.SetStateAction<string | null>>;
+  interval: number;
+  setIntervalEdit: React.Dispatch<React.SetStateAction<number | null>>;
+  maxRuns: number;
+  setMaxRunsEdit: React.Dispatch<React.SetStateAction<number | null>>;
+  maxVideos: number;
+  setMaxVideosEdit: React.Dispatch<React.SetStateAction<number | null>>;
+  defaultCategoryCode: string;
+  setDefaultCategoryEdit: React.Dispatch<React.SetStateAction<string | null>>;
+  categoriesQuery: UseQueryResult<CategoryOption[], Error>;
+  active: boolean;
+  setActiveEdit: React.Dispatch<React.SetStateAction<boolean | null>>;
+  forceRunOnce: boolean;
+  setForceRunOnce: React.Dispatch<React.SetStateAction<boolean>>;
+}) {
+  return (
+    <section className="flex flex-col gap-4 border-t pt-4">
+      {isKeywordTarget ? (
+        <Field>
+          <div className="flex items-center gap-1">
+            <FieldLabel htmlFor="recurring-edit-query">검색어</FieldLabel>
+            <HelpTip>
+              검색어를 바꾸면 이전 검색의 증분 기준과 실행 횟수는 초기화됩니다.
+              이미 수집된 영상과 장소는 삭제하지 않습니다.
+            </HelpTip>
+          </div>
+          <Input
+            id="recurring-edit-query"
+            value={query}
+            maxLength={255}
+            onChange={(event) => setQueryEdit(event.target.value)}
+          />
+        </Field>
+      ) : null}
+
+      <Field>
+        <FieldLabel htmlFor="recurring-edit-interval">반복 간격</FieldLabel>
+        <Select
+          value={String(interval)}
+          onValueChange={(value) => setIntervalEdit(Number(value))}
+        >
+          <SelectTrigger id="recurring-edit-interval" className="w-full">
+            <SelectValue>{intervalOptionLabel(interval)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {INTERVAL_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={String(option.value)}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <div className="flex items-center gap-1">
+            <FieldLabel htmlFor="recurring-edit-count">반복 횟수</FieldLabel>
+            <HelpTip>0이면 중지할 때까지 무한 반복합니다.</HelpTip>
+          </div>
+          <Input
+            id="recurring-edit-count"
+            type="number"
+            min={0}
+            value={String(maxRuns)}
+            onChange={(event) =>
+              setMaxRunsEdit(Math.max(0, Number(event.target.value) || 0))
+            }
+          />
+        </Field>
+
+        <Field>
+          <div className="flex items-center gap-1">
+            <FieldLabel htmlFor="recurring-edit-max-videos">
+              수집개수(영상 수)
+            </FieldLabel>
+            <HelpTip>반복 1회당 받을 영상 수(1~300)입니다.</HelpTip>
+          </div>
+          <Input
+            id="recurring-edit-max-videos"
+            type="number"
+            min={1}
+            max={300}
+            value={String(maxVideos)}
+            onChange={(event) =>
+              setMaxVideosEdit(
+                Math.max(1, Math.min(300, Number(event.target.value) || 1)),
+              )
+            }
+          />
+        </Field>
+      </div>
+
+      <Field>
+        <div className="flex items-center gap-1">
+          <FieldLabel htmlFor="recurring-edit-category">
+            기본 카테고리
+          </FieldLabel>
+          <HelpTip>카테고리 매칭에 실패한 장소는 이 값으로 저장합니다.</HelpTip>
+        </div>
+        <Select
+          value={defaultCategoryCode}
+          onValueChange={(value) => setDefaultCategoryEdit(value)}
+        >
+          <SelectTrigger id="recurring-edit-category" className="w-full">
+            <SelectValue>
+              {categoryLabel(categoriesQuery.data, defaultCategoryCode)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="max-h-72">
+            <SelectGroup>
+              {(categoriesQuery.data ?? []).map((option) => (
+                <SelectItem key={option.code} value={option.code}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+
+      {/* 저장 버튼으로 반영되는 폼 값이므로 Switch(즉시 적용 암시)가 아니라 Checkbox. */}
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <Checkbox
+          checked={active}
+          onCheckedChange={(checked) => setActiveEdit(Boolean(checked))}
+        />
+        반복 수집 사용
+      </label>
+
+      <label className="flex items-start gap-2 rounded-control border border-warning bg-warning-tint p-3 text-sm">
+        <Checkbox
+          className="mt-0.5"
+          checked={forceRunOnce}
+          onCheckedChange={(checked) => setForceRunOnce(Boolean(checked))}
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="font-medium">강제 다운로드 (전체 재수집)</span>
+          <span className="text-xs text-muted-foreground">
+            저장 직후 한 번만 전체 재수집 작업을 실행합니다. 이 체크 상태는
+            저장되지 않습니다.
+          </span>
+        </span>
+      </label>
+    </section>
+  );
+}
+
+function deriveRecurringDraft(
+  target: SourceTargetSummary | null,
+  {
+    queryEdit,
+    intervalEdit,
+    maxRunsEdit,
+    maxVideosEdit,
+    activeEdit,
+    defaultCategoryEdit,
+  }: {
+    queryEdit: string | null;
+    intervalEdit: number | null;
+    maxRunsEdit: number | null;
+    maxVideosEdit: number | null;
+    activeEdit: boolean | null;
+    defaultCategoryEdit: string | null;
+  },
+) {
+  const isKeywordTarget = target?.target_type === "keyword";
+  const query = queryEdit ?? target?.source_value ?? "";
+  const interval = intervalEdit ?? target?.scan_interval_minutes ?? 1440;
+  const maxRuns = maxRunsEdit ?? target?.max_runs ?? 0;
+  const maxVideos = maxVideosEdit ?? target?.max_videos ?? 20;
+  const active = activeEdit ?? target?.is_active ?? true;
+  const defaultCategoryCode =
+    defaultCategoryEdit ?? target?.default_category_code ?? "0";
+  const title = `${targetDisplayName(target)} 작업 수정`;
+  const targetKind =
+    target?.target_type_label ?? targetTypeDisplayLabel(target?.target_type);
+
+  return {
+    isKeywordTarget,
+    query,
+    interval,
+    maxRuns,
+    maxVideos,
+    active,
+    defaultCategoryCode,
+    title,
+    targetKind,
+  };
 }

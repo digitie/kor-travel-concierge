@@ -1,12 +1,7 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
 import { Loader2Icon, RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import {
   AlertDialog,
@@ -242,9 +237,7 @@ function abandonButtonLabel(state: ReviewBulkDialogState): string | null {
         : null;
     case "failed":
       if (!state.abandonable) return null;
-      return state.retryable
-        ? "재시도 중단 · 목록 새로고침"
-        : "목록 새로고침";
+      return state.retryable ? "재시도 중단 · 목록 새로고침" : "목록 새로고침";
     default:
       return null;
   }
@@ -275,7 +268,12 @@ function BulkProgress({
           style={{ width: `${percent}%` }}
         />
       </div>
-      <p role="status" aria-live="polite" aria-atomic="true" className="text-xs font-medium">
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-xs font-medium"
+      >
         {formatCount(safeProcessed)} / {formatCount(safeTotal)}건 처리됨
       </p>
     </div>
@@ -292,7 +290,8 @@ function BulkProgressSummary({
       <BulkProgress processed={progress.processed} total={progress.total} />
       <p className="mt-2 text-muted-foreground">
         서버 응답으로 확인됨: 성공 {formatCount(progress.succeeded)}건 · 충돌{" "}
-        {formatCount(progress.conflicts)}건 · 실패 {formatCount(progress.failed)}건 · 남음{" "}
+        {formatCount(progress.conflicts)}건 · 실패{" "}
+        {formatCount(progress.failed)}건 · 남음{" "}
         {formatCount(progress.remaining)}건
       </p>
     </div>
@@ -308,8 +307,8 @@ function RecoveryNotice({ intent }: { intent: ReviewBulkIntent }) {
       >
         <p className="font-medium">해외 판정 기준을 확인하세요.</p>
         <p className="mt-1">
-          <code>is_domestic=false</code>는 LLM 판정 결과이므로 실제 위치와 다를 수
-          있습니다. 제외한 후보는 제외·삭제 목록에서 다시 복구할 수 있습니다.
+          <code>is_domestic=false</code>는 LLM 판정 결과이므로 실제 위치와 다를
+          수 있습니다. 제외한 후보는 제외·삭제 목록에서 다시 복구할 수 있습니다.
         </p>
       </div>
     );
@@ -331,10 +330,13 @@ function RecoveryNotice({ intent }: { intent: ReviewBulkIntent }) {
 
 function ProgressPersistenceNotice() {
   return (
-    <p role="note" className="rounded-control border border-border p-3 text-xs text-text-secondary">
-      실행 중에는 이 창만 닫아도 작업은 계속되지만, 페이지를 새로고침하거나 탭을 닫으면
-      현재 진행 정보를 잃습니다. 이 경우 최신 대상을 다시 미리보기해 남은 항목을
-      확인하세요.
+    <p
+      role="note"
+      className="rounded-control border border-border p-3 text-xs text-text-secondary"
+    >
+      실행 중에는 이 창만 닫아도 작업은 계속되지만, 페이지를 새로고침하거나 탭을
+      닫으면 현재 진행 정보를 잃습니다. 이 경우 최신 대상을 다시 미리보기해 남은
+      항목을 확인하세요.
     </p>
   );
 }
@@ -397,19 +399,12 @@ export function ReviewBulkPanel({
     actionGuard?.state === dialogState && actionGuard?.kind === "retry";
   const retryLabel = dialogState ? retryButtonLabel(dialogState) : null;
   const abandonLabel = dialogState ? abandonButtonLabel(dialogState) : null;
-  const selectedStatus =
-    selectedCount > 0
-      ? `현재 후보 ${formatCount(selectedCount)}건 선택됨${
-          selectedCount >= selectionLimit ? " · 직접 선택 상한" : ""
-        }`
-      : null;
-  const resultClosedWithNewSelection =
-    !dialogOpen &&
-    selectedStatus != null &&
-    (dialogState?.phase === "succeeded" || dialogState?.phase === "partial");
-  const status = resultClosedWithNewSelection
-    ? selectedStatus
-    : compactStatus(dialogState);
+  const { selectedStatus, status } = buildSelectionStatus(
+    selectedCount,
+    selectionLimit,
+    dialogOpen,
+    dialogState,
+  );
 
   function rememberTrigger(event: MouseEvent<HTMLButtonElement>) {
     returnFocusRef.current = event.currentTarget;
@@ -475,264 +470,429 @@ export function ReviewBulkPanel({
 
   return (
     <>
-      <section
-        ref={panelRef}
-        tabIndex={-1}
-        aria-label="일괄 검수 도구"
-        aria-busy={bulkBusy}
-        className={cn(
-          "rounded-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
-          className,
-        )}
-      >
-        <div className="sticky bottom-0 z-30 flex flex-col gap-2 border-y border-border bg-surface-page px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:static lg:rounded-panel lg:border lg:p-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p role="status" aria-live="polite" aria-atomic="true" className="text-xs font-medium">
-              {status ??
-                selectedStatus ??
-                "후보를 선택하면 일괄 처리할 수 있습니다."}
-            </p>
-            {dialogState && !dialogOpen ? (
-              <Button
-                ref={reopenButtonRef}
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={reopenDialog}
-              >
-                {dialogState.phase === "running"
-                  ? "진행 상황 보기"
-                  : dialogState.phase === "ready"
-                    ? "확인 계속"
-                    : "일괄 처리 결과 보기"}
-              </Button>
-            ) : null}
-          </div>
+      <BulkSelectionToolbar
+        panelRef={panelRef}
+        bulkBusy={bulkBusy}
+        className={className}
+        status={status}
+        selectedStatus={selectedStatus}
+        dialogState={dialogState}
+        dialogOpen={dialogOpen}
+        reopenButtonRef={reopenButtonRef}
+        reopenDialog={reopenDialog}
+        mode={mode}
+        selectedActionsDisabled={selectedActionsDisabled}
+        requestPreview={requestPreview}
+        selectedCount={selectedCount}
+        panelActionsDisabled={panelActionsDisabled}
+        onClearSelection={onClearSelection}
+        foreignActionDisabled={foreignActionDisabled}
+      />
 
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-            {mode === "review" ? (
-              <>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="destructive"
-                  disabled={selectedActionsDisabled}
-                  onClick={(event) =>
-                    requestPreview(event, {
-                      action: "ignore",
-                      scope: "selection",
-                    })
-                  }
-                >
-                  선택 제외
-                </Button>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="destructive"
-                  disabled={selectedActionsDisabled}
-                  onClick={(event) =>
-                    requestPreview(event, {
-                      action: "delete",
-                      scope: "selection",
-                    })
-                  }
-                >
-                  <Trash2Icon data-icon="inline-start" />
-                  선택 삭제
-                </Button>
-              </>
-            ) : (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={selectedActionsDisabled}
-                onClick={(event) =>
-                  requestPreview(event, {
-                    action: "reopen",
-                    scope: "selection",
-                  })
-                }
-              >
-                <RotateCcwIcon data-icon="inline-start" />
-                선택 복구
-              </Button>
-            )}
-
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              disabled={selectedCount <= 0 || panelActionsDisabled}
-              onClick={onClearSelection}
-            >
-              선택 해제
-            </Button>
-
-            {mode === "review" ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className="col-span-2 sm:ml-auto"
-                disabled={panelActionsDisabled || foreignActionDisabled}
-                onClick={(event) =>
-                  requestPreview(event, {
-                    action: "ignore",
-                    scope: "foreign_filter",
-                  })
-                }
-              >
-                현재 필터의 해외 판정 후보 모두 제외
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <AlertDialog
-        open={isDialogVisible}
-        onOpenChange={handleDialogOpenChange}
-      >
+      <AlertDialog open={isDialogVisible} onOpenChange={handleDialogOpenChange}>
         {dialogState ? (
-          <AlertDialogContent
-            data-phase={dialogState.phase}
-            aria-busy={bulkBusy}
-            className="max-w-lg"
-          >
-            <AlertDialogHeader>
-              <AlertDialogTitle>{dialogTitle(dialogState)}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {dialogDescription(dialogState)}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-
-            {dialogState.phase === "previewing" ? (
-              <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm">
-                <Loader2Icon className="animate-spin" />
-                정확한 대상 건수를 확인하는 중…
-              </div>
-            ) : null}
-
-            {dialogState.phase === "ready" && dialogState.expiresAtLabel ? (
-              <p className="rounded-control border border-border px-3 py-2 text-xs text-text-secondary">
-                확인 유효 시간: {dialogState.expiresAtLabel}
-              </p>
-            ) : null}
-
-            {dialogState.phase === "running" ||
-            dialogState.phase === "succeeded" ||
-            dialogState.phase === "partial" ? (
-              <BulkProgress
-                processed={dialogState.processed}
-                total={dialogState.total}
-              />
-            ) : null}
-
-            {dialogState.phase === "partial" ? (
-              <p role="alert" className="rounded-control border border-warning bg-warning-tint p-3 text-xs text-warning">
-                {dialogState.message ??
-                  `상태 충돌 ${formatCount(dialogState.conflictCount)}건은 목록에서 직접 다시 선택해야 하며, 처리 실패 ${formatCount(dialogState.failedCount)}건만 다시 확인할 수 있습니다.`}
-              </p>
-            ) : null}
-
-            {(dialogState.phase === "expired" ||
-              dialogState.phase === "failed") &&
-            dialogState.progress ? (
-              <BulkProgressSummary progress={dialogState.progress} />
-            ) : null}
-
-            {dialogState.phase === "failed" &&
-            dialogState.currentChunkOutcomeUnknown ? (
-              <p role="alert" className="rounded-control border border-warning bg-warning-tint p-3 text-xs text-warning">
-                {dialogState.retryable
-                  ? "현재 묶음은 응답이 끊겨 반영 여부를 알 수 없습니다. 새 request로 넘기지 말고 같은 묶음을 다시 요청해 저장된 처리 결과를 확인해야 합니다."
-                  : "현재 묶음의 응답 계약을 신뢰할 수 없어 반영 여부를 알 수 없습니다. 확인 token은 폐기했으므로 목록을 새로고침해 실제 상태를 확인해야 합니다."}
-              </p>
-            ) : null}
-
-            {dialogState.phase === "expired" ||
-            dialogState.phase === "failed" ? (
-              <p role="alert" className="sr-only">
-                {dialogDescription(dialogState)}
-              </p>
-            ) : null}
-
-            <RecoveryNotice intent={dialogState.intent} />
-            <ProgressPersistenceNotice />
-
-            <AlertDialogFooter>
-              {dialogState.phase === "running" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  autoFocus
-                  onClick={closeRunningDialog}
-                >
-                  창 닫기 · 작업은 계속됨
-                </Button>
-              ) : (
-                <AlertDialogCancel
-                  asChild><Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      autoFocus
-                    >
-                      {dialogState.phase === "ready" ? "취소" : "닫기"}
-                    </Button></AlertDialogCancel>
-              )}
-
-              {dialogState.phase === "ready" &&
-              dialogState.exactCount > 0 ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={
-                    dialogState.intent.action === "reopen"
-                      ? "default"
-                      : "destructive"
-                  }
-                  disabled={confirmGuarded}
-                  onClick={confirmReadyState}
-                >
-                  {confirmGuarded ? (
-                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                  ) : null}
-                  {formatCount(dialogState.exactCount)}건 {actionLabel(dialogState.intent.action)} 시작
-                </Button>
-              ) : null}
-
-              {retryLabel ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={retryGuarded}
-                  onClick={retryOperation}
-                >
-                  {retryGuarded ? (
-                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                  ) : null}
-                  {retryLabel}
-                </Button>
-              ) : null}
-
-              {abandonLabel ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={onAbandon}
-                >
-                  {abandonLabel}
-                </Button>
-              ) : null}
-            </AlertDialogFooter>
-          </AlertDialogContent>
+          <BulkExecutionDialog
+            dialogState={dialogState}
+            bulkBusy={bulkBusy}
+            closeRunningDialog={closeRunningDialog}
+            confirmGuarded={confirmGuarded}
+            confirmReadyState={confirmReadyState}
+            retryLabel={retryLabel}
+            retryGuarded={retryGuarded}
+            retryOperation={retryOperation}
+            abandonLabel={abandonLabel}
+            onAbandon={onAbandon}
+          />
         ) : null}
       </AlertDialog>
     </>
   );
+}
+
+function BulkSelectionToolbar({
+  panelRef,
+  bulkBusy,
+  className,
+  status,
+  selectedStatus,
+  dialogState,
+  dialogOpen,
+  reopenButtonRef,
+  reopenDialog,
+  mode,
+  selectedActionsDisabled,
+  requestPreview,
+  selectedCount,
+  panelActionsDisabled,
+  onClearSelection,
+  foreignActionDisabled,
+}: {
+  panelRef: React.RefObject<HTMLElement | null>;
+  bulkBusy: boolean;
+  className: string | undefined;
+  status: string | null;
+  selectedStatus: string | null;
+  dialogState: ReviewBulkDialogState | null;
+  dialogOpen: boolean;
+  reopenButtonRef: React.RefObject<HTMLButtonElement | null>;
+  reopenDialog: (event: MouseEvent<HTMLButtonElement>) => void;
+  mode: "review" | "removed";
+  selectedActionsDisabled: boolean;
+  requestPreview: (
+    event: MouseEvent<HTMLButtonElement>,
+    intent: ReviewBulkIntent,
+  ) => void;
+  selectedCount: number;
+  panelActionsDisabled: boolean;
+  onClearSelection: () => void;
+  foreignActionDisabled: boolean;
+}) {
+  return (
+    <section
+      ref={panelRef}
+      tabIndex={-1}
+      aria-label="일괄 검수 도구"
+      aria-busy={bulkBusy}
+      className={cn(
+        "rounded-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+        className,
+      )}
+    >
+      <div className="sticky bottom-0 z-30 flex flex-col gap-2 border-y border-border bg-surface-page px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:static lg:rounded-panel lg:border lg:p-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            className="text-xs font-medium"
+          >
+            {status ??
+              selectedStatus ??
+              "후보를 선택하면 일괄 처리할 수 있습니다."}
+          </p>
+          {dialogState && !dialogOpen ? (
+            <Button
+              ref={reopenButtonRef}
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={reopenDialog}
+            >
+              {dialogState.phase === "running"
+                ? "진행 상황 보기"
+                : dialogState.phase === "ready"
+                  ? "확인 계속"
+                  : "일괄 처리 결과 보기"}
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          {mode === "review" ? (
+            <>
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                disabled={selectedActionsDisabled}
+                onClick={(event) =>
+                  requestPreview(event, {
+                    action: "ignore",
+                    scope: "selection",
+                  })
+                }
+              >
+                선택 제외
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                disabled={selectedActionsDisabled}
+                onClick={(event) =>
+                  requestPreview(event, {
+                    action: "delete",
+                    scope: "selection",
+                  })
+                }
+              >
+                <Trash2Icon data-icon="inline-start" />
+                선택 삭제
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={selectedActionsDisabled}
+              onClick={(event) =>
+                requestPreview(event, {
+                  action: "reopen",
+                  scope: "selection",
+                })
+              }
+            >
+              <RotateCcwIcon data-icon="inline-start" />
+              선택 복구
+            </Button>
+          )}
+
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={selectedCount <= 0 || panelActionsDisabled}
+            onClick={onClearSelection}
+          >
+            선택 해제
+          </Button>
+
+          {mode === "review" ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="col-span-2 sm:ml-auto"
+              disabled={panelActionsDisabled || foreignActionDisabled}
+              onClick={(event) =>
+                requestPreview(event, {
+                  action: "ignore",
+                  scope: "foreign_filter",
+                })
+              }
+            >
+              현재 필터의 해외 판정 후보 모두 제외
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BulkExecutionDialog({
+  dialogState,
+  bulkBusy,
+  closeRunningDialog,
+  confirmGuarded,
+  confirmReadyState,
+  retryLabel,
+  retryGuarded,
+  retryOperation,
+  abandonLabel,
+  onAbandon,
+}: {
+  dialogState: ReviewBulkDialogState;
+  bulkBusy: boolean;
+  closeRunningDialog: () => void;
+  confirmGuarded: boolean;
+  confirmReadyState: () => void;
+  retryLabel: string | null;
+  retryGuarded: boolean;
+  retryOperation: () => void;
+  abandonLabel: string | null;
+  onAbandon: () => void;
+}) {
+  return (
+    <AlertDialogContent
+      data-phase={dialogState.phase}
+      aria-busy={bulkBusy}
+      className="max-w-lg"
+    >
+      <AlertDialogHeader>
+        <AlertDialogTitle>{dialogTitle(dialogState)}</AlertDialogTitle>
+        <AlertDialogDescription>
+          {dialogDescription(dialogState)}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+
+      {dialogState.phase === "previewing" ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 text-sm"
+        >
+          <Loader2Icon className="animate-spin" />
+          정확한 대상 건수를 확인하는 중…
+        </div>
+      ) : null}
+
+      {dialogState.phase === "ready" && dialogState.expiresAtLabel ? (
+        <p className="rounded-control border border-border px-3 py-2 text-xs text-text-secondary">
+          확인 유효 시간: {dialogState.expiresAtLabel}
+        </p>
+      ) : null}
+
+      {dialogState.phase === "running" ||
+      dialogState.phase === "succeeded" ||
+      dialogState.phase === "partial" ? (
+        <BulkProgress
+          processed={dialogState.processed}
+          total={dialogState.total}
+        />
+      ) : null}
+
+      {dialogState.phase === "partial" ? (
+        <p
+          role="alert"
+          className="rounded-control border border-warning bg-warning-tint p-3 text-xs text-warning"
+        >
+          {dialogState.message ??
+            `상태 충돌 ${formatCount(dialogState.conflictCount)}건은 목록에서 직접 다시 선택해야 하며, 처리 실패 ${formatCount(dialogState.failedCount)}건만 다시 확인할 수 있습니다.`}
+        </p>
+      ) : null}
+
+      {(dialogState.phase === "expired" || dialogState.phase === "failed") &&
+      dialogState.progress ? (
+        <BulkProgressSummary progress={dialogState.progress} />
+      ) : null}
+
+      <BulkUnknownOutcomeNotice dialogState={dialogState} />
+
+      {dialogState.phase === "expired" || dialogState.phase === "failed" ? (
+        <p role="alert" className="sr-only">
+          {dialogDescription(dialogState)}
+        </p>
+      ) : null}
+
+      <RecoveryNotice intent={dialogState.intent} />
+      <ProgressPersistenceNotice />
+
+      <BulkDialogActions
+        dialogState={dialogState}
+        closeRunningDialog={closeRunningDialog}
+        confirmGuarded={confirmGuarded}
+        confirmReadyState={confirmReadyState}
+        retryLabel={retryLabel}
+        retryGuarded={retryGuarded}
+        retryOperation={retryOperation}
+        abandonLabel={abandonLabel}
+        onAbandon={onAbandon}
+      />
+    </AlertDialogContent>
+  );
+}
+
+function BulkDialogActions({
+  dialogState,
+  closeRunningDialog,
+  confirmGuarded,
+  confirmReadyState,
+  retryLabel,
+  retryGuarded,
+  retryOperation,
+  abandonLabel,
+  onAbandon,
+}: {
+  dialogState: ReviewBulkDialogState;
+  closeRunningDialog: () => void;
+  confirmGuarded: boolean;
+  confirmReadyState: () => void;
+  retryLabel: string | null;
+  retryGuarded: boolean;
+  retryOperation: () => void;
+  abandonLabel: string | null;
+  onAbandon: () => void;
+}) {
+  return (
+    <AlertDialogFooter>
+      {dialogState.phase === "running" ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          autoFocus
+          onClick={closeRunningDialog}
+        >
+          창 닫기 · 작업은 계속됨
+        </Button>
+      ) : (
+        <AlertDialogCancel asChild>
+          <Button type="button" size="sm" variant="outline" autoFocus>
+            {dialogState.phase === "ready" ? "취소" : "닫기"}
+          </Button>
+        </AlertDialogCancel>
+      )}
+
+      {dialogState.phase === "ready" && dialogState.exactCount > 0 ? (
+        <Button
+          type="button"
+          size="sm"
+          variant={
+            dialogState.intent.action === "reopen" ? "default" : "destructive"
+          }
+          disabled={confirmGuarded}
+          onClick={confirmReadyState}
+        >
+          {confirmGuarded ? (
+            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+          ) : null}
+          {formatCount(dialogState.exactCount)}건{" "}
+          {actionLabel(dialogState.intent.action)} 시작
+        </Button>
+      ) : null}
+
+      {retryLabel ? (
+        <Button
+          type="button"
+          size="sm"
+          disabled={retryGuarded}
+          onClick={retryOperation}
+        >
+          {retryGuarded ? (
+            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+          ) : null}
+          {retryLabel}
+        </Button>
+      ) : null}
+
+      {abandonLabel ? (
+        <Button type="button" size="sm" variant="outline" onClick={onAbandon}>
+          {abandonLabel}
+        </Button>
+      ) : null}
+    </AlertDialogFooter>
+  );
+}
+
+function buildSelectionStatus(
+  selectedCount: number,
+  selectionLimit: number,
+  dialogOpen: boolean,
+  dialogState: ReviewBulkDialogState | null,
+) {
+  const selectedStatus =
+    selectedCount > 0
+      ? `현재 후보 ${formatCount(selectedCount)}건 선택됨${
+          selectedCount >= selectionLimit ? " · 직접 선택 상한" : ""
+        }`
+      : null;
+  const resultClosedWithNewSelection =
+    !dialogOpen &&
+    selectedStatus != null &&
+    (dialogState?.phase === "succeeded" || dialogState?.phase === "partial");
+  const status = resultClosedWithNewSelection
+    ? selectedStatus
+    : compactStatus(dialogState);
+
+  return { selectedStatus, status };
+}
+
+function BulkUnknownOutcomeNotice({
+  dialogState,
+}: {
+  dialogState: ReviewBulkDialogState;
+}) {
+  return dialogState.phase === "failed" &&
+    dialogState.currentChunkOutcomeUnknown ? (
+    <p
+      role="alert"
+      className="rounded-control border border-warning bg-warning-tint p-3 text-xs text-warning"
+    >
+      {dialogState.retryable
+        ? "현재 묶음은 응답이 끊겨 반영 여부를 알 수 없습니다. 새 request로 넘기지 말고 같은 묶음을 다시 요청해 저장된 처리 결과를 확인해야 합니다."
+        : "현재 묶음의 응답 계약을 신뢰할 수 없어 반영 여부를 알 수 없습니다. 확인 token은 폐기했으므로 목록을 새로고침해 실제 상태를 확인해야 합니다."}
+    </p>
+  ) : null;
 }

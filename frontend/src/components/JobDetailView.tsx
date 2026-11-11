@@ -1,10 +1,9 @@
 "use client";
 
+import type { UseQueryResult } from "@tanstack/react-query";
+
 import { VirtualTable } from "@kor-travel/ui/virtual-table";
 
-import type { ReactNode } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2Icon,
@@ -13,7 +12,14 @@ import {
   MapPinIcon,
   TimerIcon,
 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { ReactNode } from "react";
 
+import { JobLogView } from "@/components/JobLogDialog";
+import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   getRunPlaces,
   getRunVideos,
@@ -34,10 +40,6 @@ import {
   targetTypeDisplayLabel,
 } from "@/lib/display-labels";
 import { durationLabel, formatDateTime, intervalLabel } from "@/lib/format";
-import { JobLogView } from "@/components/JobLogDialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { EmptyState, MetricCard, Panel, Section } from "@/components/panels";
 
 function runResultLabel(
   result: Record<string, unknown>,
@@ -147,57 +149,7 @@ export function JobDetailView({
   }
 
   const result = (run?.result ?? {}) as Record<string, unknown>;
-  const fields: { label: string; value: string; wrap?: boolean }[] = run
-    ? [
-        { label: "재시도", value: `${run.retry_count}회` },
-        { label: "등록", value: formatDateTime(run.created_at) },
-        { label: "시작", value: formatDateTime(run.started_at) },
-        { label: "종료", value: formatDateTime(run.finished_at) },
-      ]
-    : target
-      ? [
-          {
-            label: "대상 유형",
-            value:
-              target.target_type_label ??
-              targetTypeDisplayLabel(target.target_type),
-          },
-          {
-            label: "대상",
-            value:
-              target.target_label ?? target.display_name ?? target.source_value,
-            // 검색어/제목처럼 길이가 정해지지 않은 값 — 한 줄로 자르면 실제 대상을
-            // 알아볼 수 없게 될 수 있어 줄바꿈을 허용한다.
-            wrap: true,
-          },
-          {
-            label: "기본 카테고리",
-            value: categoryDisplayLabel(
-              target.default_category_label ?? target.default_category_code,
-            ),
-          },
-          {
-            label: "반복 간격",
-            value: intervalLabel(target.scan_interval_minutes),
-          },
-          {
-            label: "반복 횟수",
-            value: target.max_runs === 0 ? "무한" : String(target.max_runs),
-          },
-          { label: "실행 횟수", value: String(target.run_count) },
-          { label: "활성", value: target.is_active ? "예" : "아니오" },
-          { label: "다음 실행", value: formatDateTime(target.next_crawl_at) },
-          { label: "최근 실행", value: formatDateTime(target.last_crawled_at) },
-          { label: "최근 스캔", value: formatDateTime(target.last_scan_at) },
-          {
-            label: "최근 오류",
-            value: target.last_scan_error ?? "-",
-            // 오류 메시지는 길 수 있어(한 줄 자르기+hover title은 터치 기기에서
-            // 확인할 방법이 없다) 줄바꿈을 허용한다.
-            wrap: true,
-          },
-        ]
-      : [];
+  const fields = buildDetailFields(run, target);
   const detailGridClass =
     variant === "page"
       ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]"
@@ -215,52 +167,25 @@ export function JobDetailView({
         <TargetSummaryCards target={target} videosCount={videos.length} />
       ) : null}
 
-      <Section title={run ? "작업" : "반복 작업"}>
-        <section className={detailGridClass}>
-          {run ? (
-            <RunProgressPanel run={run} result={result} />
-          ) : target ? (
-            <TargetProgressPanel target={target} />
-          ) : null}
-          <Panel title="세부 정보">
-            <MetricGrid fields={fields} singleColumn={variant === "page"} />
-          </Panel>
-        </section>
-      </Section>
+      <JobExecutionSummary
+        run={run}
+        detailGridClass={detailGridClass}
+        result={result}
+        target={target}
+        fields={fields}
+        variant={variant}
+      />
 
       {afterDetails}
 
-      {run && hideLog ? (
-        // 로그는 이 화면에서 숨기고(호출부가 맨 아래에 직접 배치), 추출된 POI만 둔다.
-        <Section title="추출된 POI">
-          <Panel title="추출된 POI">
-            <RunPlacesTable
-              places={places}
-              isLoading={placesQuery.isLoading}
-              error={placesQuery.error}
-              onRetry={() => void placesQuery.refetch()}
-              onOpenPlace={openPlace}
-            />
-          </Panel>
-        </Section>
-      ) : run ? (
-        <Section title="로그와 결과">
-          <section className={detailGridClass}>
-            <Panel title="상태 로그·오류">
-              <JobLogView status={run} />
-            </Panel>
-            <Panel title="추출된 POI">
-              <RunPlacesTable
-                places={places}
-                isLoading={placesQuery.isLoading}
-                error={placesQuery.error}
-                onRetry={() => void placesQuery.refetch()}
-                onOpenPlace={openPlace}
-              />
-            </Panel>
-          </section>
-        </Section>
-      ) : null}
+      <JobResultSections
+        run={run}
+        hideLog={hideLog}
+        places={places}
+        placesQuery={placesQuery}
+        openPlace={openPlace}
+        detailGridClass={detailGridClass}
+      />
 
       {!hideVideos ? (
         <Section title="수집 영상">
@@ -699,4 +624,144 @@ function MetricGrid({
       ))}
     </div>
   );
+}
+
+function buildDetailFields(
+  run: CrawlRunSummary | null | undefined,
+  target: SourceTargetSummary | null | undefined,
+): { label: string; value: string; wrap?: boolean }[] {
+  return run
+    ? [
+        { label: "재시도", value: `${run.retry_count}회` },
+        { label: "등록", value: formatDateTime(run.created_at) },
+        { label: "시작", value: formatDateTime(run.started_at) },
+        { label: "종료", value: formatDateTime(run.finished_at) },
+      ]
+    : target
+      ? [
+          {
+            label: "대상 유형",
+            value:
+              target.target_type_label ??
+              targetTypeDisplayLabel(target.target_type),
+          },
+          {
+            label: "대상",
+            value:
+              target.target_label ?? target.display_name ?? target.source_value,
+            // 검색어/제목처럼 길이가 정해지지 않은 값 — 한 줄로 자르면 실제 대상을
+            // 알아볼 수 없게 될 수 있어 줄바꿈을 허용한다.
+            wrap: true,
+          },
+          {
+            label: "기본 카테고리",
+            value: categoryDisplayLabel(
+              target.default_category_label ?? target.default_category_code,
+            ),
+          },
+          {
+            label: "반복 간격",
+            value: intervalLabel(target.scan_interval_minutes),
+          },
+          {
+            label: "반복 횟수",
+            value: target.max_runs === 0 ? "무한" : String(target.max_runs),
+          },
+          { label: "실행 횟수", value: String(target.run_count) },
+          { label: "활성", value: target.is_active ? "예" : "아니오" },
+          { label: "다음 실행", value: formatDateTime(target.next_crawl_at) },
+          { label: "최근 실행", value: formatDateTime(target.last_crawled_at) },
+          { label: "최근 스캔", value: formatDateTime(target.last_scan_at) },
+          {
+            label: "최근 오류",
+            value: target.last_scan_error ?? "-",
+            // 오류 메시지는 길 수 있어(한 줄 자르기+hover title은 터치 기기에서
+            // 확인할 방법이 없다) 줄바꿈을 허용한다.
+            wrap: true,
+          },
+        ]
+      : [];
+}
+
+function JobExecutionSummary({
+  run,
+  detailGridClass,
+  result,
+  target,
+  fields,
+  variant,
+}: {
+  run: CrawlRunSummary | null | undefined;
+  detailGridClass:
+    | "grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]"
+    | "grid gap-4";
+  result: Record<string, unknown>;
+  target: SourceTargetSummary | null | undefined;
+  fields: { label: string; value: string; wrap?: boolean }[];
+  variant: "compact" | "page";
+}) {
+  return (
+    <Section title={run ? "작업" : "반복 작업"}>
+      <section className={detailGridClass}>
+        {run ? (
+          <RunProgressPanel run={run} result={result} />
+        ) : target ? (
+          <TargetProgressPanel target={target} />
+        ) : null}
+        <Panel title="세부 정보">
+          <MetricGrid fields={fields} singleColumn={variant === "page"} />
+        </Panel>
+      </section>
+    </Section>
+  );
+}
+
+function JobResultSections({
+  run,
+  hideLog,
+  places,
+  placesQuery,
+  openPlace,
+  detailGridClass,
+}: {
+  run: CrawlRunSummary | null | undefined;
+  hideLog: boolean | undefined;
+  places: RunPlace[];
+  placesQuery: UseQueryResult<RunPlace[], Error>;
+  openPlace: (place: RunPlace) => void;
+  detailGridClass:
+    | "grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]"
+    | "grid gap-4";
+}) {
+  return run && hideLog ? (
+    // 로그는 이 화면에서 숨기고(호출부가 맨 아래에 직접 배치), 추출된 POI만 둔다.
+    <Section title="추출된 POI">
+      <Panel title="추출된 POI">
+        <RunPlacesTable
+          places={places}
+          isLoading={placesQuery.isLoading}
+          error={placesQuery.error}
+          onRetry={() => void placesQuery.refetch()}
+          onOpenPlace={openPlace}
+        />
+      </Panel>
+    </Section>
+  ) : run ? (
+    <Section title="로그와 결과">
+      <section className={detailGridClass}>
+        <Panel title="상태 로그·오류">
+          <JobLogView status={run} />
+        </Panel>
+        <Panel title="추출된 POI">
+          <RunPlacesTable
+            places={places}
+            isLoading={placesQuery.isLoading}
+            error={placesQuery.error}
+            onRetry={() => void placesQuery.refetch()}
+            onOpenPlace={openPlace}
+          />
+        </Panel>
+      </section>
+    </Section>
+  ) : null;
 }

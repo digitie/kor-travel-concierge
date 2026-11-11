@@ -1,6 +1,18 @@
 # JOURNAL — 작업 일지
 
-## 2026-11-11 — T-208 공통 관리자 UI 통합 후보
+## 2026-11-11 — T-208 Doctor 진단 수정과 검수 관심사 분리
+
+- 이전26 warning을 계속 수정했다. 검수 선택/편집은 인스턴스별 Zustand 구독과 원자적 전이로 바꾸고,
+  목록·편집·지도·다이얼로그, 삭제/확정/복구/페이지 진행/일괄 작업, 순수 권한·좌표 판정으로 모듈을 나눴다.
+- 공급 패널·그룹 옵션 중복, 큰 상세/수집/설정/운영 지표 컴포넌트도 관심사에 따라 분리했다.
+  저장소 상태는 초기값 덮어쓰기 없는 useSyncExternalStore로 복원·구독한다.
+- integration-4에서 guard·lint경고0·타입·단위394·production build·Doctor전체0 및 n150 Chromium9/9 PASS다.
+  viewport 이동 한 줄만 근거 있는 국소 예외이며 audit는 그1건만 재현한다. baseline/광역off/ignore는 없다.
+- 현재 운영 이미지 태그·production UI 실행·bind mount 없음은 읽기 전용으로 확인했다. 운영 변경은 하지 않았다.
+  부모 후보6 refresh·최종 freeze·독립2리뷰·CI·merge·go 뒤 이미지 전환은 [보고서](reports/common-unification-20261111.md)의 남은 gate다.
+
+
+## 2026-11-11 — T-208 이전 체크포인트: 공통 관리자 UI 통합 후보
 
 - 기존 ext4 clone·branch·미커밋 diff를 보존하고 Concierge만 이어서 수정했다. 관리 표 7개와 Radix 프리미티브를 common으로 이관하고 후보3의 동일 tarball·원장·lock을 정렬했다.
 - Tailwind4.3.5와 공유 exact 의존성, RHF/Zod/Zustand/Pretendard 실사용, ESLint10 지원 plugin·Doctor0.9.22·필수 CI/source guard를 연결했다. strict peer 설치·guard·lint·타입·단위381·production build가 통과했다.

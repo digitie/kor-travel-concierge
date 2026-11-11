@@ -1,26 +1,21 @@
 "use client";
 
-import { useEffect } from "react";
-import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ActivityIcon, ListChecksIcon } from "lucide-react";
+import Link from "next/link";
+import { useEffect } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   listRunQueue,
   RUN_QUEUE_OBSERVER_OPTIONS,
   RUN_QUEUE_QUERY_KEY,
   runQueueRefetchInterval,
-  type CrawlRunSummary,
 } from "@/lib/api";
-import { runStateLabel } from "@/lib/display-labels";
+import { buildRunQueueDisplay } from "@/lib/run-queue-display";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 
 let previouslyObservedActiveRunIds: Set<string> | null = null;
-
-function targetLabel(run: CrawlRunSummary): string {
-  return run.target_label ?? run.target_id ?? run.source ?? "작업";
-}
 
 export function JobStatusLink({
   className,
@@ -36,27 +31,21 @@ export function JobStatusLink({
     ...RUN_QUEUE_OBSERVER_OPTIONS,
     refetchInterval: (query) => runQueueRefetchInterval(query.state),
   });
-  const runs = queueQuery.data?.items ?? [];
-  const openAttentionCount = queueQuery.data?.open_attention_count ?? 0;
-  const runningCount = queueQuery.data?.running_count ?? 0;
-  const pendingCount = queueQuery.data?.pending_count ?? 0;
-  const activeCount = runningCount + pendingCount;
-  const running = runs.filter((run) => run.state.toLowerCase() === "running");
-  const pending = runs.filter((run) => run.state.toLowerCase() === "pending");
-  const current = running[0] ?? pending[0] ?? null;
-  const statusHref =
-    openAttentionCount > 0 ? "/jobs?attention=open" : "/jobs";
-  const summary = queueQuery.isError
-    ? "작업 상태 오류"
-    : current
-      ? `${runStateLabel(current.state)} · ${targetLabel(current)} · ${
-          current.current_message ?? "로그 대기 중"
-        }`
-      : "유휴 상태";
+  const {
+    openAttentionCount,
+    runningCount,
+    pendingCount,
+    activeCount,
+    current,
+    statusHref,
+    summary,
+  } = buildRunQueueDisplay(queueQuery.data, queueQuery.isError);
 
   useEffect(() => {
     if (!queueQuery.data) return;
-    const activeRunIds = new Set(queueQuery.data.items.map((run) => run.job_id));
+    const activeRunIds = new Set(
+      queueQuery.data.items.map((run) => run.job_id),
+    );
     const runDisappeared =
       previouslyObservedActiveRunIds != null &&
       [...previouslyObservedActiveRunIds].some(
@@ -87,9 +76,7 @@ export function JobStatusLink({
         ) : (
           <ListChecksIcon className="size-3.5 shrink-0 text-text-secondary" />
         )}
-          <span className="tabular-nums text-current">
-          {activeCount}
-        </span>
+        <span className="tabular-nums text-current">{activeCount}</span>
         {queueQuery.isError ? (
           <Badge variant="destructive" className="h-5 px-1 text-[10px]">
             오류

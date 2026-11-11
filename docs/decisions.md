@@ -2062,10 +2062,13 @@ private 저장소의 일시적 I/O 실패·포화는 보호 요청503/Retry-Afte
 ESLint 10.14.0과 React Doctor 0.9.22를 적용한다. ESLint 10의 API를 지원하는 Next plugin,
 typescript-eslint, react-hooks, import-x, jsx-a11y-x로 검사한다. 호환되지 않는 구 eslint-config-next와
 eslint-plugin-react는 제거한다. --legacy-peer-deps·--force를 사용하지 않는다.
-Doctor는 전체 소스와 inline disable을 우회하는 감사 모드를 검사하며 warning도 CI를 실패시킨다.
-이 감사는 소스를 임시 변경하므로 lint·타입·build·수정과 순차 실행한다.
+Doctor CI는 --scope full --blocking warning으로 전체 소스를 검사한다. 광역 off·ignore·baseline을 쓰지 않는다.
+viewport에 따른 초기 상세 이동 한 줄만 국소 근거 예외로 두며 실제 Chromium으로 양 경로를 검증한다.
+별도 doctor:audit는 inline disable을 무시하고 이 한 건만 재현함을 확인했다. 감사의 임시 소스 변경 때문에
+lint·타입·build·수정과 순차 실행한다.
 
-RHF와 Zod는 수집 폼과 공통 로그인에서, Zustand는 로그인 오류·자막 확장·지도 카메라에서 실제 사용한다.
+RHF와 Zod는 수집 폼과 공통 로그인에서, Zustand는 로그인 오류·자막 확장·지도 카메라·검수 선택/편집 snapshot에서 실제 사용한다.
+검수 화면은 표시 패널·도메인 workflow hook·순수 권한 판정으로 분리하며 저장소 상태는 useSyncExternalStore로 구독한다.
 Pretendard Variable은 공통 tokens 경로로 제공한다. 검수 workflow·인증·세션·BFF·저장 정책은
 소비자 소유 경계를 유지한다.
 

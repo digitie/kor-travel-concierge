@@ -1,25 +1,32 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import {
-  ArrowDownUpIcon,
-  DownloadIcon,
-  InfoIcon,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  DestinationExportFormat,
+  DestinationFacets,
+  DestinationGroupDim,
+  DestinationSort,
+  DestinationSummary,
+  ListEnvelope,
+  PlaceSourceVideo,
+} from "@/lib/api";
+import type {
+  InfiniteData,
+  UseInfiniteQueryResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
-  buildDestinationExportUrl,
-  listDestinationFacets,
-  listDestinationsPage,
-  type DestinationExportFormat,
-  type DestinationFacets,
-  type DestinationGroupDim,
-  type DestinationSort,
-  type DestinationSummary,
-  type PlaceSourceVideo,
-} from "@/lib/api";
+  SOURCE_GROUP_OPTIONS,
+  sourceGroupLabel as groupDimLabel,
+} from "@/lib/source-groups";
+
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { ArrowDownUpIcon, DownloadIcon, InfoIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { PanelHeader } from "@/components/panels";
+import { PlaceDetailView } from "@/components/PlaceDetailView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +36,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -37,80 +45,45 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { VWorldMap } from "@/components/VWorldMap";
+import {
+  buildDestinationExportUrl,
+  listDestinationFacets,
+  listDestinationsPage,
+} from "@/lib/api";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePersistedState } from "@/lib/use-persisted-state";
-import { PanelHeader } from "@/components/panels";
-import { PlaceDetailView } from "@/components/PlaceDetailView";
-import { VWorldMap } from "@/components/VWorldMap";
 
 const DESTINATION_PAGE_SIZE = 100;
 const MAX_DATABASE_ID = 2_147_483_647;
 
 export function DestinationWorkspace() {
-  const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
   const [mapFocusKey, setMapFocusKey] = useState(0);
-  // 정렬·그룹 필터는 상세 페이지를 다녀와도 유지되도록 sessionStorage에 보존한다.
-  const [destinationSort, setDestinationSort] = usePersistedState<DestinationSort>(
-    "ktc.destinations.sort",
-    "mention_count",
-  );
-  const [exportFormat, setExportFormat] = useState<DestinationExportFormat>("xlsx");
-  // 내보내기 장바구니: 필터를 바꿔도, 상세 페이지를 다녀와도 선택이 유지된다(쇼핑몰 장바구니).
-  const [selectedExportIds, setSelectedExportIds] = usePersistedState<number[]>(
-    "ktc.destinations.exportCart",
-    [],
-  );
-  // 결과 보기 그룹화: 출처 기준(유튜버/재생목록/검색어) + 선택 값.
-  const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
-    "ktc.destinations.groupDim",
-    "none",
-  );
-  const [groupValue, setGroupValue] = usePersistedState<string | null>(
-    "ktc.destinations.groupValue",
-    null,
-  );
-  const [categoryFilter, setCategoryFilter] = usePersistedState<string | null>(
-    "ktc.destinations.category",
-    null,
-  );
-  const [districtFilter, setDistrictFilter] = usePersistedState<string | null>(
-    "ktc.destinations.district",
-    null,
-  );
-  const [textFilter, setTextFilter] = usePersistedState<string>(
-    "ktc.destinations.query",
-    "",
-  );
-  const router = useRouter();
-  const isMobile = useIsMobile();
-  const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
-  const deepLinkHandledRef = useRef(false);
-
-  // 작업 상세에서 `?place=<id>`로 들어오면 목록 page에 없더라도 단건 상세를 직접 연다.
-  // 현재 filter는 보존하며 모바일은 기존 상세 route, 데스크톱은 modal을 사용한다.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (deepLinkHandledRef.current) return;
-    const placeParam = new URLSearchParams(window.location.search).get("place");
-    if (!placeParam) return;
-    const placeId = Number(placeParam);
-    if (
-      !Number.isInteger(placeId) ||
-      placeId <= 0 ||
-      placeId > MAX_DATABASE_ID
-    ) {
-      return;
-    }
-    deepLinkHandledRef.current = true;
-    setSelectedPlaceId(placeId);
-    if (window.matchMedia("(max-width: 767px)").matches) {
-      router.replace(`/place/${placeId}`);
-    } else {
-      setDetailPlaceId(placeId);
-    }
-  }, [router]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  const {
+    destinationSort,
+    setDestinationSort,
+    exportFormat,
+    setExportFormat,
+    selectedExportIds,
+    setSelectedExportIds,
+    groupDim,
+    setGroupDim,
+    groupValue,
+    setGroupValue,
+    categoryFilter,
+    setCategoryFilter,
+    districtFilter,
+    setDistrictFilter,
+    textFilter,
+    setTextFilter,
+  } = useDestinationPreferences();
+  const {
+    selectedPlaceId,
+    setSelectedPlaceId,
+    detailPlaceId,
+    openPlaceDetail,
+    closePlaceDetail,
+  } = useDestinationDetail();
 
   // 작업 상세에서 영상별 POI를 누르면 `?video=<id>`로 들어온다 — 그 영상이 언급한
   // 장소만 필터로 보여준다(최초 1회, 그룹 필터는 해제).
@@ -125,7 +98,13 @@ export function DestinationWorkspace() {
     setDistrictFilter(null);
     setTextFilter("");
     setVideoFilter(v);
-  }, [setCategoryFilter, setDistrictFilter, setGroupDim, setGroupValue, setTextFilter]);
+  }, [
+    setCategoryFilter,
+    setDistrictFilter,
+    setGroupDim,
+    setGroupValue,
+    setTextFilter,
+  ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const facetsQuery = useQuery({
@@ -155,7 +134,14 @@ export function DestinationWorkspace() {
       return { ...common, playlistId: groupValue };
     }
     return { ...common, keyword: groupValue };
-  }, [categoryFilter, districtFilter, groupDim, groupValue, textFilter, videoFilter]);
+  }, [
+    categoryFilter,
+    districtFilter,
+    groupDim,
+    groupValue,
+    textFilter,
+    videoFilter,
+  ]);
 
   const destinationQueryIdentity = useMemo(
     () =>
@@ -207,29 +193,7 @@ export function DestinationWorkspace() {
     if (previousIdentityRef.current === destinationQueryIdentity) return;
     previousIdentityRef.current = destinationQueryIdentity;
     setSelectedPlaceId(null);
-  }, [destinationQueryIdentity]);
-
-  // 장소 상세: 모바일=새 페이지, PC=모달.
-  function openPlaceDetail(placeId: number) {
-    if (isMobile) {
-      router.push(`/place/${placeId}`);
-    } else {
-      setDetailPlaceId(placeId);
-    }
-  }
-
-  function closePlaceDetail() {
-    setDetailPlaceId(null);
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("place")) {
-      url.searchParams.delete("place");
-      window.history.replaceState(
-        window.history.state,
-        "",
-        `${url.pathname}${url.search}${url.hash}`,
-      );
-    }
-  }
+  }, [destinationQueryIdentity, setSelectedPlaceId]);
 
   const places = useMemo(() => {
     const orderedIds: number[] = [];
@@ -247,8 +211,7 @@ export function DestinationWorkspace() {
   }, [destinationsQuery.data]);
   const destinationPages = destinationsQuery.data?.pages ?? [];
   const lastDestinationPage = destinationPages[destinationPages.length - 1];
-  const destinationTotal =
-    lastDestinationPage?.total ?? 0;
+  const destinationTotal = lastDestinationPage?.total ?? 0;
   const paginationContractError =
     lastDestinationPage?.has_more && !lastDestinationPage.next_cursor
       ? "다음 페이지 cursor가 없어 목록을 계속 불러올 수 없습니다."
@@ -256,7 +219,7 @@ export function DestinationWorkspace() {
   const selectedPlace = useMemo(
     () =>
       places.find((place) => place.place_id === selectedPlaceId) ??
-      (selectedPlaceId == null ? places[0] ?? null : null),
+      (selectedPlaceId == null ? (places[0] ?? null) : null),
     [places, selectedPlaceId],
   );
   const visiblePlaceIds = useMemo(
@@ -330,64 +293,35 @@ export function DestinationWorkspace() {
       <div className="grid h-full min-h-[30rem] flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[0.72fr_1.6fr] lg:overflow-hidden">
         {/* 좁은 화면(스택): 지도가 위, 리스트가 아래(order). 데스크톱(lg): 좌 리스트 / 우 지도 유지. */}
         <div className="order-2 flex min-h-[22rem] flex-col overflow-y-auto bg-card lg:order-none lg:min-h-0 lg:overflow-hidden lg:border-r">
-          <DestinationList
+          <DestinationCursorList
             places={places}
-            total={destinationTotal}
+            destinationTotal={destinationTotal}
             selectedPlace={selectedPlace}
-            isLoading={destinationsQuery.isLoading}
-            hasMore={Boolean(destinationsQuery.hasNextPage)}
-            isFetchingMore={destinationsQuery.isFetchingNextPage}
-            isBusy={destinationsQuery.isFetching}
-            isRefreshing={
-              destinationsQuery.isFetching && !destinationsQuery.isFetchingNextPage
-            }
-            errorMessage={
-              paginationContractError ??
-              (destinationsQuery.isError
-                ? destinationsQuery.error?.message ?? "장소를 불러오지 못했습니다."
-                : null)
-            }
-            onLoadMore={() => {
-              if (
-                !destinationsQuery.hasNextPage ||
-                destinationsQuery.isFetching
-              ) {
-                return;
-              }
-              void destinationsQuery.fetchNextPage({ cancelRefetch: false });
-            }}
-            onRefresh={() => {
-              if (destinationsQuery.isFetching) return;
-              void Promise.all([
-                destinationsQuery.refetch(),
-                facetsQuery.refetch(),
-              ]);
-            }}
-            onSelect={focusPlace}
-            sort={destinationSort}
-            onSortChange={setDestinationSort}
+            destinationsQuery={destinationsQuery}
+            paginationContractError={paginationContractError}
+            facetsQuery={facetsQuery}
+            focusPlace={focusPlace}
+            destinationSort={destinationSort}
+            setDestinationSort={setDestinationSort}
             exportFormat={exportFormat}
-            onExportFormatChange={setExportFormat}
-            selectedExportIds={selectedExportIdSet}
-            selectedExportCount={selectedExportIds.length}
+            setExportFormat={setExportFormat}
+            selectedExportIdSet={selectedExportIdSet}
+            selectedExportIds={selectedExportIds}
             isAllSelected={isAllSelected}
-            onToggleExportSelection={toggleExportSelection}
-            onToggleAllExportSelection={toggleAllExportSelection}
-            onExport={exportPlaces}
-            onShowDetail={openPlaceDetail}
+            toggleExportSelection={toggleExportSelection}
+            toggleAllExportSelection={toggleAllExportSelection}
+            exportPlaces={exportPlaces}
+            openPlaceDetail={openPlaceDetail}
             groupDim={groupDim}
             groupValue={groupValue}
-            facets={facetsQuery.data}
             categoryFilter={categoryFilter}
             districtFilter={districtFilter}
             textFilter={textFilter}
-            onGroupChange={(dim, value) => {
-              setGroupDim(dim);
-              setGroupValue(value);
-            }}
-            onCategoryFilterChange={setCategoryFilter}
-            onDistrictFilterChange={setDistrictFilter}
-            onTextFilterChange={setTextFilter}
+            setGroupDim={setGroupDim}
+            setGroupValue={setGroupValue}
+            setCategoryFilter={setCategoryFilter}
+            setDistrictFilter={setDistrictFilter}
+            setTextFilter={setTextFilter}
           />
         </div>
         <div className="order-1 min-h-[22rem] overflow-hidden border-b bg-surface-subtle lg:order-none lg:h-full lg:min-h-0 lg:border-b-0">
@@ -497,8 +431,9 @@ function DestinationList({
   const rowsScrollRef = useRef<HTMLDivElement | null>(null);
   const selectedPlaceId = selectedPlace?.place_id ?? null;
   const districtFilterLabel =
-    (facets?.districts ?? []).find((district) => district.value === districtFilter)
-      ?.label ?? districtFilter;
+    (facets?.districts ?? []).find(
+      (district) => district.value === districtFilter,
+    )?.label ?? districtFilter;
 
   useEffect(() => {
     if (selectedPlaceId == null) {
@@ -511,13 +446,20 @@ function DestinationList({
     // 선택 행만 목록의 scrollport 안으로 이동한다.
     const rowBox = row.getBoundingClientRect();
     const scrollBox = scroll.getBoundingClientRect();
-    const top = rowBox.top < scrollBox.top ? rowBox.top - scrollBox.top
-      : rowBox.bottom > scrollBox.bottom ? rowBox.bottom - scrollBox.bottom : 0;
+    const top =
+      rowBox.top < scrollBox.top
+        ? rowBox.top - scrollBox.top
+        : rowBox.bottom > scrollBox.bottom
+          ? rowBox.bottom - scrollBox.bottom
+          : 0;
     if (top) scroll.scrollBy({ top, behavior: "smooth" });
   }, [selectedPlaceId]);
 
   return (
-    <section aria-label="장소 목록" className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1 lg:p-5">
+    <section
+      aria-label="장소 목록"
+      className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1 lg:p-5"
+    >
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <PanelHeader
@@ -541,98 +483,30 @@ function DestinationList({
         value={textFilter}
         onChange={(event) => onTextFilterChange(event.target.value)}
       />
+      <DestinationCategoryFilters
+        categoryFilter={categoryFilter}
+        onCategoryFilterChange={onCategoryFilterChange}
+        facets={facets}
+        districtFilter={districtFilter}
+        onDistrictFilterChange={onDistrictFilterChange}
+        districtFilterLabel={districtFilterLabel}
+      />
+      <DestinationSourceFilters
+        groupDim={groupDim}
+        onGroupChange={onGroupChange}
+        groupValue={groupValue}
+        facets={facets}
+      />
       <div className="grid grid-cols-2 gap-2">
         <Select
-          value={categoryFilter ?? "all"}
-          onValueChange={(value) =>
-            onCategoryFilterChange(value === "all" ? null : value)
-          }
+          value={sort}
+          onValueChange={(value) => onSortChange(value as DestinationSort)}
         >
-          <SelectTrigger className="w-full" aria-label="카테고리 필터">
-            <SelectValue>
-              {categoryFilter ? categoryFilter : "카테고리 전체"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">카테고리 전체</SelectItem>
-              {(facets?.categories ?? []).map((category) => (
-                <SelectItem key={category.value} value={category.value}>
-                  {category.value} ({category.place_count})
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <Select
-          value={districtFilter ?? "all"}
-          onValueChange={(value) =>
-            onDistrictFilterChange(value === "all" ? null : value)
-          }
-        >
-          <SelectTrigger className="w-full" aria-label="시군구 필터">
-            <SelectValue>
-              {districtFilter ? districtFilterLabel : "시군구 전체"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">시군구 전체</SelectItem>
-              {(facets?.districts ?? []).map((district) => (
-                <SelectItem key={district.value} value={district.value}>
-                  {district.label} ({district.place_count})
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Select
-          value={groupDim}
-          onValueChange={(value) =>
-            onGroupChange(value as DestinationGroupDim, null)
-          }
-        >
-          <SelectTrigger className="w-full" aria-label="결과 그룹 기준">
-            <SelectValue>{groupDimLabel(groupDim)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="none">전체</SelectItem>
-              <SelectItem value="channel">유튜버별</SelectItem>
-              <SelectItem value="playlist">재생목록별</SelectItem>
-              <SelectItem value="keyword">검색어별</SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        {groupDim !== "none" ? (
-          <Select
-            value={groupValue ?? ""}
-            onValueChange={(value) => onGroupChange(groupDim, value || null)}
+          <SelectTrigger
+            id="destination-sort-select"
+            className="w-full"
+            aria-label="장소 정렬"
           >
-            <SelectTrigger className="w-full" aria-label="그룹 값 선택">
-              <SelectValue placeholder={`${groupDimLabel(groupDim)} 선택`}>
-                {groupValueLabel(groupDim, groupValue, facets)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {groupOptions(groupDim, facets).map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label} ({opt.count})
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        ) : (
-          <div />
-        )}
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Select value={sort} onValueChange={(value) => onSortChange(value as DestinationSort)}>
-          <SelectTrigger id="destination-sort-select" className="w-full" aria-label="장소 정렬">
             <ArrowDownUpIcon className="size-4 text-muted-foreground" />
             <SelectValue>{sortLabel(sort)}</SelectValue>
           </SelectTrigger>
@@ -651,7 +525,11 @@ function DestinationList({
             onExportFormatChange(value as DestinationExportFormat)
           }
         >
-          <SelectTrigger id="destination-export-format" className="w-full" aria-label="내보내기 형식">
+          <SelectTrigger
+            id="destination-export-format"
+            className="w-full"
+            aria-label="내보내기 형식"
+          >
             <SelectValue>{exportFormat.toUpperCase()}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -674,125 +552,30 @@ function DestinationList({
         </Button>
         <Button type="button" onClick={onExport}>
           <DownloadIcon data-icon="inline-start" />
-          {selectedExportCount > 0 ? `선택 ${selectedExportCount}` : "전체"} 내보내기
+          {selectedExportCount > 0
+            ? `선택 ${selectedExportCount}`
+            : "전체"}{" "}
+          내보내기
         </Button>
       </div>
-      <div ref={rowsScrollRef} className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
-        {isLoading ? <p className="text-sm text-muted-foreground">로딩 중</p> : null}
-        {!isLoading && places.length === 0 && !errorMessage ? (
-          <p className="text-sm text-muted-foreground">조건에 맞는 장소가 없습니다.</p>
-        ) : null}
-        {places.map((place, index) => {
-          const isSelected = place.place_id === selectedPlaceId;
-          // 마커 번호와 동일한 1-based 목록 행 번호(index + 1).
-          const number = index + 1;
-          return (
-          <div
-            key={place.place_id}
-            ref={(node) => {
-              if (node) {
-                rowRefs.current.set(place.place_id, node);
-              } else {
-                rowRefs.current.delete(place.place_id);
-              }
-            }}
-            className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-control border border-border bg-card p-2 transition-[color,background-color,border-color] duration-fast data-[selected=true]:border-brand data-[selected=true]:bg-brand-tint"
-            data-selected={isSelected}
-          >
-            <Checkbox
-              aria-label={`${place.name} 내보내기 선택`}
-              checked={selectedExportIds.has(place.place_id)}
-              className="mt-3"
-              onCheckedChange={() => onToggleExportSelection(place.place_id)}
-            />
-            <button
-              className="flex min-w-0 flex-col gap-1 rounded-md p-1 text-left hover:bg-muted"
-              onClick={() => onSelect(place.place_id)}
-              type="button"
-            >
-              <span className="flex min-w-0 items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span
-                    aria-hidden="true"
-                    data-marker-number={number}
-                    className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums ${
-                      isSelected
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {number}
-                  </span>
-                  <span className="truncate text-sm font-medium">{place.name}</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  <Badge variant={place.is_geocoded ? "secondary" : "outline"}>
-                    {place.category ?? "미분류"}
-                  </Badge>
-                  <Badge variant="outline">{place.mention_count}회</Badge>
-                </span>
-              </span>
-              <span className="truncate text-xs text-muted-foreground">
-                {place.official_address ?? place.road_address ?? "-"}
-              </span>
-              <span className="truncate text-xs text-muted-foreground">
-                {sourceLine(place.source_videos[0])}
-              </span>
-            </button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              aria-label={`${place.name} 상세`}
-              onClick={() => onShowDetail(place.place_id)}
-            >
-              <InfoIcon className="size-4" />
-            </Button>
-          </div>
-          );
-        })}
-        {errorMessage ? (
-          <div className="flex flex-col gap-2">
-            <p role="alert" className="text-sm text-destructive">
-              {errorMessage}
-            </p>
-            {places.length === 0 ? (
-              <Button type="button" variant="outline" onClick={onRefresh}>
-                다시 시도
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-        {hasMore ? (
-          <div className="flex flex-col gap-2 border-t pt-2">
-            <p className="text-xs text-muted-foreground">
-              총 {total.toLocaleString()}개 중 {places.length.toLocaleString()}개 표시
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isBusy}
-              onClick={onLoadMore}
-            >
-              {isFetchingMore ? "불러오는 중…" : "장소 더 불러오기"}
-            </Button>
-          </div>
-        ) : places.length > 0 && places.length === total ? (
-          <p role="status" className="border-t pt-2 text-xs text-muted-foreground">
-            총 {total.toLocaleString()}개를 모두 불러왔습니다.
-          </p>
-        ) : places.length > 0 ? (
-          <div className="flex flex-col gap-2 border-t pt-2">
-            <p role="status" className="text-xs text-muted-foreground">
-              목록 변경이 감지되었습니다. {places.length.toLocaleString()}개 표시 · 기준{" "}
-              {total.toLocaleString()}개
-            </p>
-            <Button type="button" variant="outline" onClick={onRefresh}>
-              최신 목록 다시 불러오기
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      <DestinationRows
+        rowsScrollRef={rowsScrollRef}
+        isLoading={isLoading}
+        places={places}
+        errorMessage={errorMessage}
+        selectedPlaceId={selectedPlaceId}
+        rowRefs={rowRefs}
+        selectedExportIds={selectedExportIds}
+        onToggleExportSelection={onToggleExportSelection}
+        onSelect={onSelect}
+        onShowDetail={onShowDetail}
+        onRefresh={onRefresh}
+        hasMore={hasMore}
+        total={total}
+        isBusy={isBusy}
+        onLoadMore={onLoadMore}
+        isFetchingMore={isFetchingMore}
+      />
     </section>
   );
 }
@@ -808,19 +591,6 @@ function sortLabel(sort: DestinationSort) {
     return "카테고리 순";
   }
   return "최신 등록 순";
-}
-
-function groupDimLabel(dim: DestinationGroupDim) {
-  if (dim === "channel") {
-    return "유튜버별";
-  }
-  if (dim === "playlist") {
-    return "재생목록별";
-  }
-  if (dim === "keyword") {
-    return "검색어별";
-  }
-  return "전체";
 }
 
 function groupOptions(
@@ -870,7 +640,11 @@ function sourceLine(source: PlaceSourceVideo | undefined) {
   if (!source) {
     return "언급 영상 없음";
   }
-  return [source.channel_name ?? source.channel_id, source.video_title, timestampLabel(source)]
+  return [
+    source.channel_name ?? source.channel_id,
+    source.video_title,
+    timestampLabel(source),
+  ]
     .filter(Boolean)
     .join(" · ");
 }
@@ -880,4 +654,541 @@ function timestampLabel(source: PlaceSourceVideo) {
     return `${source.timestamp_start}-${source.timestamp_end}`;
   }
   return source.timestamp_start ?? source.timestamp_end ?? "";
+}
+
+function DestinationCursorList({
+  places,
+  destinationTotal,
+  selectedPlace,
+  destinationsQuery,
+  paginationContractError,
+  facetsQuery,
+  focusPlace,
+  destinationSort,
+  setDestinationSort,
+  exportFormat,
+  setExportFormat,
+  selectedExportIdSet,
+  selectedExportIds,
+  isAllSelected,
+  toggleExportSelection,
+  toggleAllExportSelection,
+  exportPlaces,
+  openPlaceDetail,
+  groupDim,
+  groupValue,
+  categoryFilter,
+  districtFilter,
+  textFilter,
+  setGroupDim,
+  setGroupValue,
+  setCategoryFilter,
+  setDistrictFilter,
+  setTextFilter,
+}: {
+  places: DestinationSummary[];
+  destinationTotal: number;
+  selectedPlace: DestinationSummary | null;
+  destinationsQuery: UseInfiniteQueryResult<
+    InfiniteData<ListEnvelope<DestinationSummary>>,
+    Error
+  >;
+  paginationContractError:
+    | "다음 페이지 cursor가 없어 목록을 계속 불러올 수 없습니다."
+    | null;
+  facetsQuery: UseQueryResult<DestinationFacets, Error>;
+  focusPlace: (placeId: number) => void;
+  destinationSort: DestinationSort;
+  setDestinationSort: React.Dispatch<React.SetStateAction<DestinationSort>>;
+  exportFormat: DestinationExportFormat;
+  setExportFormat: React.Dispatch<
+    React.SetStateAction<DestinationExportFormat>
+  >;
+  selectedExportIdSet: Set<number>;
+  selectedExportIds: number[];
+  isAllSelected: boolean;
+  toggleExportSelection: (placeId: number) => void;
+  toggleAllExportSelection: () => void;
+  exportPlaces: () => void;
+  openPlaceDetail: (placeId: number) => void;
+  groupDim: DestinationGroupDim;
+  groupValue: string | null;
+  categoryFilter: string | null;
+  districtFilter: string | null;
+  textFilter: string;
+  setGroupDim: React.Dispatch<React.SetStateAction<DestinationGroupDim>>;
+  setGroupValue: React.Dispatch<React.SetStateAction<string | null>>;
+  setCategoryFilter: React.Dispatch<React.SetStateAction<string | null>>;
+  setDistrictFilter: React.Dispatch<React.SetStateAction<string | null>>;
+  setTextFilter: React.Dispatch<React.SetStateAction<string>>;
+}) {
+  return (
+    <DestinationList
+      places={places}
+      total={destinationTotal}
+      selectedPlace={selectedPlace}
+      isLoading={destinationsQuery.isLoading}
+      hasMore={Boolean(destinationsQuery.hasNextPage)}
+      isFetchingMore={destinationsQuery.isFetchingNextPage}
+      isBusy={destinationsQuery.isFetching}
+      isRefreshing={
+        destinationsQuery.isFetching && !destinationsQuery.isFetchingNextPage
+      }
+      errorMessage={
+        paginationContractError ??
+        (destinationsQuery.isError
+          ? (destinationsQuery.error?.message ?? "장소를 불러오지 못했습니다.")
+          : null)
+      }
+      onLoadMore={() => {
+        if (!destinationsQuery.hasNextPage || destinationsQuery.isFetching) {
+          return;
+        }
+        void destinationsQuery.fetchNextPage({ cancelRefetch: false });
+      }}
+      onRefresh={() => {
+        if (destinationsQuery.isFetching) return;
+        void Promise.all([destinationsQuery.refetch(), facetsQuery.refetch()]);
+      }}
+      onSelect={focusPlace}
+      sort={destinationSort}
+      onSortChange={setDestinationSort}
+      exportFormat={exportFormat}
+      onExportFormatChange={setExportFormat}
+      selectedExportIds={selectedExportIdSet}
+      selectedExportCount={selectedExportIds.length}
+      isAllSelected={isAllSelected}
+      onToggleExportSelection={toggleExportSelection}
+      onToggleAllExportSelection={toggleAllExportSelection}
+      onExport={exportPlaces}
+      onShowDetail={openPlaceDetail}
+      groupDim={groupDim}
+      groupValue={groupValue}
+      facets={facetsQuery.data}
+      categoryFilter={categoryFilter}
+      districtFilter={districtFilter}
+      textFilter={textFilter}
+      onGroupChange={(dim, value) => {
+        setGroupDim(dim);
+        setGroupValue(value);
+      }}
+      onCategoryFilterChange={setCategoryFilter}
+      onDistrictFilterChange={setDistrictFilter}
+      onTextFilterChange={setTextFilter}
+    />
+  );
+}
+
+function DestinationCategoryFilters({
+  categoryFilter,
+  onCategoryFilterChange,
+  facets,
+  districtFilter,
+  onDistrictFilterChange,
+  districtFilterLabel,
+}: {
+  categoryFilter: string | null;
+  onCategoryFilterChange: (value: string | null) => void;
+  facets: DestinationFacets | undefined;
+  districtFilter: string | null;
+  onDistrictFilterChange: (value: string | null) => void;
+  districtFilterLabel: string | null;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <Select
+        value={categoryFilter ?? "all"}
+        onValueChange={(value) =>
+          onCategoryFilterChange(value === "all" ? null : value)
+        }
+      >
+        <SelectTrigger className="w-full" aria-label="카테고리 필터">
+          <SelectValue>
+            {categoryFilter ? categoryFilter : "카테고리 전체"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="all">카테고리 전체</SelectItem>
+            {(facets?.categories ?? []).map((category) => (
+              <SelectItem key={category.value} value={category.value}>
+                {category.value} ({category.place_count})
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select
+        value={districtFilter ?? "all"}
+        onValueChange={(value) =>
+          onDistrictFilterChange(value === "all" ? null : value)
+        }
+      >
+        <SelectTrigger className="w-full" aria-label="시군구 필터">
+          <SelectValue>
+            {districtFilter ? districtFilterLabel : "시군구 전체"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="all">시군구 전체</SelectItem>
+            {(facets?.districts ?? []).map((district) => (
+              <SelectItem key={district.value} value={district.value}>
+                {district.label} ({district.place_count})
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function DestinationSourceFilters({
+  groupDim,
+  onGroupChange,
+  groupValue,
+  facets,
+}: {
+  groupDim: DestinationGroupDim;
+  onGroupChange: (dim: DestinationGroupDim, value: string | null) => void;
+  groupValue: string | null;
+  facets: DestinationFacets | undefined;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <Select
+        value={groupDim}
+        onValueChange={(value) =>
+          onGroupChange(value as DestinationGroupDim, null)
+        }
+      >
+        <SelectTrigger className="w-full" aria-label="결과 그룹 기준">
+          <SelectValue>{groupDimLabel(groupDim)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {SOURCE_GROUP_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      {groupDim !== "none" ? (
+        <Select
+          value={groupValue ?? ""}
+          onValueChange={(value) => onGroupChange(groupDim, value || null)}
+        >
+          <SelectTrigger className="w-full" aria-label="그룹 값 선택">
+            <SelectValue placeholder={`${groupDimLabel(groupDim)} 선택`}>
+              {groupValueLabel(groupDim, groupValue, facets)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {groupOptions(groupDim, facets).map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label} ({opt.count})
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      ) : (
+        <div />
+      )}
+    </div>
+  );
+}
+
+function useDestinationPreferences() {
+  // 정렬·그룹 필터는 상세 페이지를 다녀와도 유지되도록 sessionStorage에 보존한다.
+  const [destinationSort, setDestinationSort] =
+    usePersistedState<DestinationSort>(
+      "ktc.destinations.sort",
+      "mention_count",
+    );
+  const [exportFormat, setExportFormat] =
+    useState<DestinationExportFormat>("xlsx");
+  // 내보내기 장바구니: 필터를 바꿔도, 상세 페이지를 다녀와도 선택이 유지된다(쇼핑몰 장바구니).
+  const [selectedExportIds, setSelectedExportIds] = usePersistedState<number[]>(
+    "ktc.destinations.exportCart",
+    [],
+  );
+  // 결과 보기 그룹화: 출처 기준(유튜버/재생목록/검색어) + 선택 값.
+  const [groupDim, setGroupDim] = usePersistedState<DestinationGroupDim>(
+    "ktc.destinations.groupDim",
+    "none",
+  );
+  const [groupValue, setGroupValue] = usePersistedState<string | null>(
+    "ktc.destinations.groupValue",
+    null,
+  );
+  const [categoryFilter, setCategoryFilter] = usePersistedState<string | null>(
+    "ktc.destinations.category",
+    null,
+  );
+  const [districtFilter, setDistrictFilter] = usePersistedState<string | null>(
+    "ktc.destinations.district",
+    null,
+  );
+  const [textFilter, setTextFilter] = usePersistedState<string>(
+    "ktc.destinations.query",
+    "",
+  );
+
+  return {
+    destinationSort,
+    setDestinationSort,
+    exportFormat,
+    setExportFormat,
+    selectedExportIds,
+    setSelectedExportIds,
+    groupDim,
+    setGroupDim,
+    groupValue,
+    setGroupValue,
+    categoryFilter,
+    setCategoryFilter,
+    districtFilter,
+    setDistrictFilter,
+    textFilter,
+    setTextFilter,
+  };
+}
+
+function DestinationRows({
+  rowsScrollRef,
+  isLoading,
+  places,
+  errorMessage,
+  selectedPlaceId,
+  rowRefs,
+  selectedExportIds,
+  onToggleExportSelection,
+  onSelect,
+  onShowDetail,
+  onRefresh,
+  hasMore,
+  total,
+  isBusy,
+  onLoadMore,
+  isFetchingMore,
+}: {
+  rowsScrollRef: React.RefObject<HTMLDivElement | null>;
+  isLoading: boolean;
+  places: DestinationSummary[];
+  errorMessage: string | null;
+  selectedPlaceId: number | null;
+  rowRefs: React.RefObject<Map<number, HTMLDivElement | null>>;
+  selectedExportIds: Set<number>;
+  onToggleExportSelection: (placeId: number) => void;
+  onSelect: (placeId: number) => void;
+  onShowDetail: (placeId: number) => void;
+  onRefresh: () => void;
+  hasMore: boolean;
+  total: number;
+  isBusy: boolean;
+  onLoadMore: () => void;
+  isFetchingMore: boolean;
+}) {
+  return (
+    <div
+      ref={rowsScrollRef}
+      className="flex max-h-80 flex-col gap-2 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1"
+    >
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">로딩 중</p>
+      ) : null}
+      {!isLoading && places.length === 0 && !errorMessage ? (
+        <p className="text-sm text-muted-foreground">
+          조건에 맞는 장소가 없습니다.
+        </p>
+      ) : null}
+      {places.map((place, index) => {
+        const isSelected = place.place_id === selectedPlaceId;
+        // 마커 번호와 동일한 1-based 목록 행 번호(index + 1).
+        const number = index + 1;
+        return (
+          <div
+            key={place.place_id}
+            ref={(node) => {
+              if (node) {
+                rowRefs.current.set(place.place_id, node);
+              } else {
+                rowRefs.current.delete(place.place_id);
+              }
+            }}
+            className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-control border border-border bg-card p-2 transition-[color,background-color,border-color] duration-fast data-[selected=true]:border-brand data-[selected=true]:bg-brand-tint"
+            data-selected={isSelected}
+          >
+            <Checkbox
+              aria-label={`${place.name} 내보내기 선택`}
+              checked={selectedExportIds.has(place.place_id)}
+              className="mt-3"
+              onCheckedChange={() => onToggleExportSelection(place.place_id)}
+            />
+            <button
+              className="flex min-w-0 flex-col gap-1 rounded-md p-1 text-left hover:bg-muted"
+              aria-pressed={isSelected}
+              onClick={() => onSelect(place.place_id)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    data-marker-number={number}
+                    className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums ${
+                      isSelected
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {number}
+                  </span>
+                  <span className="truncate text-sm font-medium">
+                    {place.name}
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <Badge variant={place.is_geocoded ? "secondary" : "outline"}>
+                    {place.category ?? "미분류"}
+                  </Badge>
+                  <Badge variant="outline">{place.mention_count}회</Badge>
+                </span>
+              </span>
+              <span className="truncate text-xs text-muted-foreground">
+                {place.official_address ?? place.road_address ?? "-"}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">
+                {sourceLine(place.source_videos[0])}
+              </span>
+            </button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={`${place.name} 상세`}
+              onClick={() => onShowDetail(place.place_id)}
+            >
+              <InfoIcon className="size-4" />
+            </Button>
+          </div>
+        );
+      })}
+      {errorMessage ? (
+        <div className="flex flex-col gap-2">
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage}
+          </p>
+          {places.length === 0 ? (
+            <Button type="button" variant="outline" onClick={onRefresh}>
+              다시 시도
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {hasMore ? (
+        <div className="flex flex-col gap-2 border-t pt-2">
+          <p className="text-xs text-muted-foreground">
+            총 {total.toLocaleString()}개 중 {places.length.toLocaleString()}개
+            표시
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isBusy}
+            onClick={onLoadMore}
+          >
+            {isFetchingMore ? "불러오는 중…" : "장소 더 불러오기"}
+          </Button>
+        </div>
+      ) : places.length > 0 && places.length === total ? (
+        <p
+          role="status"
+          className="border-t pt-2 text-xs text-muted-foreground"
+        >
+          총 {total.toLocaleString()}개를 모두 불러왔습니다.
+        </p>
+      ) : places.length > 0 ? (
+        <div className="flex flex-col gap-2 border-t pt-2">
+          <p role="status" className="text-xs text-muted-foreground">
+            목록 변경이 감지되었습니다. {places.length.toLocaleString()}개 표시
+            · 기준 {total.toLocaleString()}개
+          </p>
+          <Button type="button" variant="outline" onClick={onRefresh}>
+            최신 목록 다시 불러오기
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function useDestinationDetail() {
+  const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
+  const router = useRouter();
+  const isMobile = useIsMobile();
+  const [detailPlaceId, setDetailPlaceId] = useState<number | null>(null);
+  const deepLinkHandledRef = useRef(false);
+
+  // 작업 상세에서 `?place=<id>`로 들어오면 목록 page에 없더라도 단건 상세를 직접 연다.
+  // 현재 filter는 보존하며 모바일은 기존 상세 route, 데스크톱은 modal을 사용한다.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const placeParam = new URLSearchParams(window.location.search).get("place");
+    if (!placeParam) return;
+    const placeId = Number(placeParam);
+    if (
+      !Number.isInteger(placeId) ||
+      placeId <= 0 ||
+      placeId > MAX_DATABASE_ID
+    ) {
+      return;
+    }
+    deepLinkHandledRef.current = true;
+    setSelectedPlaceId(placeId);
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      // 서버는 viewport를 알 수 없다. 동일 deep link를 데스크톱에서는 모달로,
+      // 모바일에서는 독립 상세 경로로 여는 기존 계약에만 한정한다.
+      // react-doctor-disable-next-line nextjs-no-client-side-redirect
+      router.replace(`/place/${placeId}`);
+    } else {
+      setDetailPlaceId(placeId);
+    }
+  }, [router]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // 장소 상세: 모바일=새 페이지, PC=모달.
+  function openPlaceDetail(placeId: number) {
+    if (isMobile) {
+      router.push(`/place/${placeId}`);
+    } else {
+      setDetailPlaceId(placeId);
+    }
+  }
+
+  function closePlaceDetail() {
+    setDetailPlaceId(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("place")) {
+      url.searchParams.delete("place");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
+    }
+  }
+  return {
+    selectedPlaceId,
+    setSelectedPlaceId,
+    detailPlaceId,
+    openPlaceDetail,
+    closePlaceDetail,
+  };
 }

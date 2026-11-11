@@ -2,11 +2,33 @@
 
 import { VirtualTable } from "@kor-travel/ui/virtual-table";
 
-import { useState } from "react";
-import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListChecksIcon, PencilIcon, Trash2Icon, ZapIcon } from "lucide-react";
+import Link from "next/link";
+import { useState } from "react";
 
+import { ConfirmActionButton } from "@/components/ConfirmActionButton";
+import { HarvestConsole } from "@/components/HarvestConsole";
+import { HelpTip } from "@/components/HelpTip";
+import { JobDetailDialog } from "@/components/JobDetailDialog";
+import { EmptyState, PanelHeader } from "@/components/panels";
+import { RecurringEditDialog } from "@/components/RecurringEditDialog";
+import {
+  ACTION_BUTTON_WIDTH_CLASS,
+  RunActionButtons,
+} from "@/components/RunActionButtons";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ApiRequestError,
   deleteSourceTarget,
@@ -35,28 +57,6 @@ import {
   formatTime,
   intervalLabel,
 } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { ConfirmActionButton } from "@/components/ConfirmActionButton";
-import { HelpTip } from "@/components/HelpTip";
-import { EmptyState, PanelHeader } from "@/components/panels";
-import { HarvestConsole } from "@/components/HarvestConsole";
-import { JobDetailDialog } from "@/components/JobDetailDialog";
-import { RecurringEditDialog } from "@/components/RecurringEditDialog";
-import {
-  ACTION_BUTTON_WIDTH_CLASS,
-  RunActionButtons,
-} from "@/components/RunActionButtons";
 
 export function CollectWorkspace() {
   const queryClient = useQueryClient();
@@ -161,16 +161,10 @@ export function CollectWorkspace() {
               <ListChecksIcon data-icon="inline-start" />
               미처리 영상 POI 추출(묶음)
             </Button>
-            {poiBatchMutation.data ? (
-              <p className="text-xs text-muted-foreground">
-                영상 {poiBatchMutation.data.videos}개를{" "}
-                {poiBatchMutation.data.enqueued_jobs}개 작업으로 등록했습니다.
-              </p>
-            ) : poiBatchMutation.error ? (
-              <p className="text-xs text-destructive">
-                {poiBatchMutation.error.message}
-              </p>
-            ) : null}
+            <PoiBatchFeedback
+              data={poiBatchMutation.data}
+              error={poiBatchMutation.error}
+            />
           </div>
         </div>
       </div>
@@ -676,5 +670,26 @@ function JobsPanel({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function PoiBatchFeedback({
+  data,
+  error,
+}: {
+  data: Awaited<ReturnType<typeof triggerPoiBatch>> | undefined;
+  error: Error | null;
+}) {
+  return (
+    <>
+      {" "}
+      {data ? (
+        <p className="text-xs text-muted-foreground">
+          영상 {data.videos}개를 {data.enqueued_jobs}개 작업으로 등록했습니다.
+        </p>
+      ) : error ? (
+        <p className="text-xs text-destructive">{error.message}</p>
+      ) : null}
+    </>
   );
 }

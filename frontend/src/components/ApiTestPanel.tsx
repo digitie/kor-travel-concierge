@@ -1,15 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { SupplyApiHeading } from "@/components/SupplyApiHeading";
+
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2Icon, PlayIcon } from "lucide-react";
+import { useState } from "react";
 
-import {
-  listThemes,
-  probeApi,
-  type ApiProbeResult,
-  type ThemeList,
-} from "@/lib/api";
+import { CopyButton } from "@/components/CopyButton";
+import { EmptyState, Panel } from "@/components/panels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -22,17 +20,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CopyButton } from "@/components/CopyButton";
-import { HelpTip } from "@/components/HelpTip";
-import { EmptyState, Panel } from "@/components/panels";
+import {
+  listThemes,
+  probeApi,
+  type ApiProbeResult,
+  type ThemeList,
+} from "@/lib/api";
 
-type ParamKind =
-  | "kind"
-  | "value"
-  | "video_id"
-  | "cursor"
-  | "limit"
-  | "include";
+type ParamKind = "kind" | "value" | "video_id" | "cursor" | "limit" | "include";
 
 type EndpointDef = {
   id: string;
@@ -49,7 +44,8 @@ const ENDPOINTS: EndpointDef[] = [
     label: "GET /themes — 테마 목록",
     method: "GET",
     params: [],
-    description: "공급 가능한 테마(유튜버/재생목록/보정 검색어)와 각 확정 POI 수.",
+    description:
+      "공급 가능한 테마(유튜버/재생목록/보정 검색어)와 각 확정 POI 수.",
     buildPath: () => "/api/v1/themes",
   },
   {
@@ -145,23 +141,21 @@ export function ApiTestPanel() {
   return (
     <div className="ktc-workspace grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="flex flex-col gap-5 rounded-panel border border-border bg-card p-4">
-        <div>
-          <div className="flex items-center gap-1">
-            <div>
-              <p className="ktc-eyebrow mb-1">공급 검증</p>
-              <h2 className="text-[18px] font-extrabold tracking-[-0.025em]">요청</h2>
-            </div>
-            <HelpTip>
+        <SupplyApiHeading
+          eyebrow="공급 검증"
+          title="요청"
+          help={
+            <>
               브라우저는 same-origin BFF를 거쳐 호출하므로 서버 전용 백엔드 키가
-              자동 주입됩니다. 외부(비-브라우저)에서는 아래 curl처럼 읽기 전용으로
-              발급받은 공개 API 키를 X-API-Key로 직접 보냅니다. 예시의 REST API
-              도메인은 Web/BFF 도메인이 아니라 공개 backend API 도메인으로 바꾸세요.
-            </HelpTip>
-          </div>
-          <p className="text-[13px] text-text-secondary">
-            외부 공급 API(features·themes)를 호출해 응답을 확인합니다.
-          </p>
-        </div>
+              자동 주입됩니다. 외부(비-브라우저)에서는 아래 curl처럼 읽기
+              전용으로 발급받은 공개 API 키를 X-API-Key로 직접 보냅니다. 예시의
+              REST API 도메인은 Web/BFF 도메인이 아니라 공개 backend API
+              도메인으로 바꾸세요.
+            </>
+          }
+        >
+          외부 공급 API(features·themes)를 호출해 응답을 확인합니다.
+        </SupplyApiHeading>
 
         <Field>
           <FieldLabel htmlFor="api-test-endpoint">엔드포인트</FieldLabel>
@@ -182,7 +176,9 @@ export function ApiTestPanel() {
               </SelectGroup>
             </SelectContent>
           </Select>
-          <p className="text-[12px] text-text-secondary">{endpoint.description}</p>
+          <p className="text-[12px] text-text-secondary">
+            {endpoint.description}
+          </p>
         </Field>
 
         {endpoint.params.includes("kind") ? (
@@ -247,7 +243,9 @@ export function ApiTestPanel() {
                 id={`api-test-${paramKind}`}
                 value={params[paramKind] ?? ""}
                 inputMode={paramKind === "limit" ? "numeric" : "text"}
-                placeholder={paramKind === "value" ? "예: UC... / PL... / 부산 여행" : ""}
+                placeholder={
+                  paramKind === "value" ? "예: UC... / PL... / 부산 여행" : ""
+                }
                 onChange={(event) =>
                   setParams((prev) => ({
                     ...prev,
@@ -259,9 +257,7 @@ export function ApiTestPanel() {
                 <ThemeHints
                   kind={params.kind ?? "channel"}
                   themes={themesQuery.data}
-                  onPick={(value) =>
-                    setParams((prev) => ({ ...prev, value }))
-                  }
+                  onPick={(value) => setParams((prev) => ({ ...prev, value }))}
                 />
               ) : null}
             </Field>
@@ -305,9 +301,13 @@ export function ApiTestPanel() {
           ) : probe.data ? (
             <ResponseView result={probe.data} />
           ) : probe.error ? (
-            <p className="text-[13px] text-destructive">{probe.error.message}</p>
+            <p className="text-[13px] text-destructive">
+              {probe.error.message}
+            </p>
           ) : (
-            <EmptyState>실행을 누르면 상태·지연·응답 본문이 표시됩니다.</EmptyState>
+            <EmptyState>
+              실행을 누르면 상태·지연·응답 본문이 표시됩니다.
+            </EmptyState>
           )}
         </Panel>
       </section>
@@ -373,7 +373,9 @@ function ResponseView({ result }: { result: ApiProbeResult }) {
           HTTP {result.status}
         </Badge>
         <Badge variant="outline">{result.ms}ms</Badge>
-        <Badge variant="outline">{result.rawText.length.toLocaleString()}B</Badge>
+        <Badge variant="outline">
+          {result.rawText.length.toLocaleString()}B
+        </Badge>
         {count != null ? <Badge variant="outline">{count}건</Badge> : null}
         <span className="ml-auto">
           <CopyButton size="xs" text={pretty} label="본문 복사" />

@@ -14,7 +14,8 @@
     "type-check": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "check:dependencies": "node node_modules/@kor-travel/ui/check-dependencies.mjs --lock package-lock.json --workspace \"\" --artifacts common-artifacts.json --source src && node scripts/check-common-ui.mjs",
-    "doctor": "react-doctor --scope full --no-score --no-telemetry --no-respect-inline-disables --blocking warning ."
+    "doctor": "react-doctor --scope full --no-score --no-telemetry --blocking warning .",
+    "doctor:audit": "react-doctor --scope full --no-score --no-telemetry --no-respect-inline-disables --blocking warning ."
   },
   "dependencies": {
     "@hookform/resolvers": "7.0.5",

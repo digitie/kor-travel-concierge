@@ -37,6 +37,12 @@ async function mockApi(page: Page) {
     else if (pathname.endsWith("/video-stats")) data = [{ video_id: "sample-video", title: "공통 검증 영상", url: "https://www.youtube.com/watch?v=sample-video", poi_auto: 1, poi_needs_review: 1, poi_resolved: 0, poi_total: 2 }];
     else if (pathname.endsWith("/transcript")) data = { text: "공통 확장행 자막입니다.", source: "test", segments: [] };
     else if (pathname === "/api/v1/destinations/reprocess") data = { enqueued_jobs: 1, videos: 1, job_ids: ["reprocess-test"], start_stage: "transcript" };
+    else if (pathname === "/api/v1/place-search") data = { query: new URL(request.url()).searchParams.get("q") ?? "", searched_at: "2026-11-11T00:00:00Z", google: [], kakao: [], naver: [], errors: {} };
+    else if (pathname === "/api/v1/destinations") data = envelope([]);
+    else if (/\/destinations\/\d+\/detail$/.test(pathname)) {
+      await route.fulfill({ status: 503, json: { detail: "격리 검증의 장소 상세 오류" } });
+      return;
+    }
     else if (pathname === "/api/v1/destinations/unmatched") data = envelope(candidates);
     else if (pathname.includes("facets")) data = { channels: [], playlists: [], keywords: [] };
     else if (/\/destinations\/unmatched\/\d+/.test(pathname)) {
@@ -153,4 +159,60 @@ test("수집의 두 표와 상세 수집영상·장소 표가 공통 경로로 �
   await expect(detail).toHaveCount(0);
   await page.goto("/jobs/common-ui-run");
   await expect(page.getByRole("table").filter({ hasText: "검증 추출 장소" })).toBeVisible();
+});
+
+
+test("후보 전환은 이전 후보의 편집 초안과 확정 가능 상태를 함께 초기화한다", async ({ page }) => {
+  await mockApi(page);
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await login(page, "/review");
+  await page.getByRole("button", { name: "목록/관리", exact: true }).click();
+  const name = page.getByRole("textbox", { name: "확정 장소명", exact: true });
+  const latitude = page.getByRole("textbox", { name: "위도", exact: true });
+  await expect(name).toBeVisible();
+  await name.fill("첫 후보의 미저장 초안");
+  await latitude.fill("37.5");
+  await page.getByRole("textbox", { name: "경도", exact: true }).fill("127");
+  const second = page.getByRole("row").filter({ hasText: "검증 장소 2" });
+  await second.focus();
+  await second.press("Enter");
+  await expect(second).toHaveAttribute("aria-selected", "true");
+  await expect(name).toHaveValue("");
+  await expect(latitude).toHaveValue("");
+  const first = page.getByRole("row").filter({ hasText: "검증 장소 1" });
+  await first.focus();
+  await first.press("Enter");
+  await expect(name).toHaveValue("");
+  expect(errors).toEqual([]);
+});
+
+test("장소 deep link는 데스크톱 모달과 모바일 상세 경로를 구분한다", async ({ page, browser }) => {
+  await mockApi(page);
+  await login(page, "/");
+  await page.goto("/?place=7");
+  await expect(page.getByRole("dialog", { name: "장소 상세" })).toBeVisible();
+  await expect(page).toHaveURL(/\/?\?place=7$/);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => new URL(page.url()).searchParams.has("place")).toBe(false);
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mobile = await context.newPage();
+  await mockApi(mobile);
+  await login(mobile, "/");
+  await mobile.goto("/?place=7");
+  await expect(mobile).toHaveURL(/\/place\/7$/);
+  await context.close();
+});
+
+test("기존 사이드바 저장값을 boolean으로 복원하고 토글·재로드를 구독한다", async ({ page }) => {
+  await mockApi(page);
+  await login(page, "/jobs");
+  await page.evaluate(() => localStorage.setItem("kor-travel-concierge:sidebar-collapsed", "1"));
+  await page.reload();
+  const rail = page.locator("[data-sidebar-collapsed]");
+  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "true");
+  await page.getByRole("button", { name: "좌측 메뉴 펼치기" }).click();
+  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+  await page.reload();
+  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
 });
