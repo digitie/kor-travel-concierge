@@ -10,13 +10,18 @@ COPY vendor ./vendor
 RUN npm ci --engine-strict
 
 FROM dependencies AS builder
+# NEXT_PUBLIC 값만 client build 입력이다. server-only 인증값은 ARG로 전달하지 않는다.
+ARG NEXT_PUBLIC_API_BASE_URL=""
+ARG NEXT_PUBLIC_VWORLD_SERVICE_KEY=""
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
+    NEXT_PUBLIC_VWORLD_SERVICE_KEY=${NEXT_PUBLIC_VWORLD_SERVICE_KEY}
 COPY . .
 RUN npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production
 COPY --from=builder /app/package.json /app/package-lock.json /app/.npmrc ./
-COPY --from=builder /app/next.config.mjs /app/postcss.config.mjs /app/tailwind.config.ts ./
+COPY --from=builder /app/next.config.mjs /app/postcss.config.mjs /app/tailwind.config.ts /app/tokens.css ./
 COPY --from=builder /app/tsconfig.json /app/next-env.d.ts ./
 # Manager의 기존 command는 build 후 start한다. standalone 전환이나 runtime 의존성
 # pruning 없이 같은 소스·설정·full node_modules를 유지한다.

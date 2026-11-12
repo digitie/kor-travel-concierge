@@ -1,6 +1,6 @@
 ## 2026-11-13 — Docker profile·Archive fixture 수용
 
-- [ ] 후보3 helper를 수동 준비 없는 fresh archive에서 원10개로 검증한다. 앱·라이브러리 불변 native gate bridge를 기록한다.
+- [x] source31997 후보3 helper를 수동 준비 없는 fresh archive에서 첫 실행 원10개 PASS(52.1초)로 확인했다. UID1000/state0700/nonce0600·소스577 불변·cleanup을 기록했다. 새 Docker profile 수용은 별도다.
 - [ ] 다단계 nonroot 이미지의 UID/cache/파일 읽기·native ABI·기존 build/start·auth/proxy/worker 수용을 부모 image 슬롯에서 완료한다. 운영 적용은 기존 리뷰/정확CI/merged source 뒤 별도다.
 
 ## 2026-11-13 — 프론트엔드·tests 도구 선택 정합성

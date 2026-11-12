@@ -14,7 +14,7 @@ npm install --global "$(node -p 'require("./package.json").packageManager')"
 npm ci --engine-strict
 ~~~
 
-운영 global Node/npm을 갱신하는 지시가 아니다. N150는 별도 private pinned runtime을 준비하고 source별 격리 stage로 검증한다. 새 Common toolchain 검사 ref와 지원 옵션은 부모 확정 뒤 연결하며 가짜 ref/미지원 input은 넣지 않는다. extra toolchain anchor는 tests/package.json, production Node Dockerfile은 frontend/Dockerfile이다.
+운영 global Node/npm을 갱신하는 지시가 아니다. N150는 별도 private pinned runtime을 준비하고 source별 격리 stage로 검증한다. Common PR51의 실제 병합 36e4d285ea926b9d8c20da4221ade86ebf74c04d를 uses/common-ref에 같이 고정한다. 추가 toolchain-manifests는 명시 JSON ["tests/package.json"], node-dockerfiles는 ["frontend/Dockerfile"]이다. frontend workflow의 PR/push paths에 중앙 policy workflow를 포함해 policy 연결만 바뀌어도 정확한 최종 source의 기능 검사를 실행한다.
 
 ## C11 수용과 지도 문서의 범위
 
@@ -32,4 +32,15 @@ f2db107cc4bfb58115b890ea6198a2fe0c321e17 배포·로그인/공통 표·Pretendar
 
 공통 UI 하니스의 상태 경로는 repo .git/common-ui-session이며 부모는 tests/.tmp가 아니다. git archive에는 .git이 없어서 후보2 첫 실행이 로그인503/10실패였고, 소유 archive에 부모를 준비한 뒤 단일1/전체10이 통과했다. 정상 GitHub checkout에는 .git이 있으므로 이를 fresh CI 결함으로 일반화했던 주장은 철회했다. 기존 실패·0개 선택 오류 원문은 보존한다.
 
-후보3의 테스트 helper는 같은 경로의 부모만 스스로 준비한다. 인증값·production 계정·assertion·timeout·retry를 바꾸지 않는다. 수동 부모 준비가 없는 fresh archive에서 원래10개를 다시 확인해야 하며, 후보2의 수동 준비 후10PASS를 새 소스 결과로 소급하지 않는다. 후보2의 native unit396/Doctor0/build는 앱 소스·의존성 불변 bridge로만 연결하며 새 Docker 이미지 결과와 구분한다.
+후보3의 테스트 helper는 같은 경로의 부모만 스스로 준비한다. 인증값·production 계정·assertion·timeout·retry를 바꾸지 않는다. 31997b9 source의 수동 부모 준비 없는 fresh archive에서 원래10개가 첫 실행 10PASS(52.1초)였다. 초기 .git ABSENT와 helper 생성 뒤 UID1000/state0700/nonce0600, 소스577파일 불변·프로세스/포트 정리를 확인했다. 후보2의 수동 준비 후10PASS와 별도 증거다. 후보2의 native unit396/Doctor0/build는 앱 소스·의존성 불변 bridge로만 연결하며 새 Docker 이미지 결과와 구분한다.
+
+
+## 공개 build 입력과 기존 공식 재빌드 경로
+
+현재 frontend source의 NEXT_PUBLIC 입력은 NEXT_PUBLIC_API_BASE_URL과 NEXT_PUBLIC_VWORLD_SERVICE_KEY 두 개다. Docker builder에 이 둘만 ARG/ENV로 전달하고 own Compose의 frontend build.args에 동일한 두 공개 변수만 연결한다. .env/.env.*는 계속 build context에서 제외하며 BACKEND_API_KEY, 관리자 password hash/session/proxy secret 등 server-only 값은 build ARG에 넣지 않는다.
+
+Next의 client 공개 값은 production build에 고정된다. 이미 생성된 .next를 next start할 때 runtime ENV만 바꿔도 client 번들은 바뀌지 않는다. own Compose에서 공개 값을 변경하면 해당 공개 build 입력으로 이미지를 다시 빌드해야 한다. APP_ENV_FILE로 별도 파일을 쓰는 개발 경로는 기존 안내대로 --env-file의 보간 소스도 같은 파일로 맞춰야 한다. 기존 runtime env_file·server 인증값은 유지한다.
+
+Manager 정본은 이미 빌드된 이미지를 --no-build로 공식 재생성한 뒤, 컨테이너의 기존 command에서 npm run build→npm run start를 실행한다. 이때 기존 두 공개 runtime ENV가 client 재컴파일 입력이 된다. 이 정상 cold rebuild에 필요한 tokens.css는 globals.css의 상대 import 그대로 runner에 포함한다. full Next/node_modules·src·설정과 USER node 및 이미지 안 writable cache/생성 파일이라는 결정도 유지한다. 새 SDK API나 옵션을 발명하거나 start-only로 바꿔 누락을 숨기지 않는다.
+
+원 A의 tokens.css 누락과 원 B의 runtime-only 공개 입력은 최소 CSS resolver/Next static mapping 진단으로 old RED/new GREEN을 확인했다. 이 작은 진단은 기존 설치 모듈·로컬 Node22.22.2를 읽기 전용으로 사용했으며 canonical runtime/full bundle/image 수용을 뜻하지 않는다. 새 exact source의 원2 closure·정확 CI와 실제 nonroot image의 cold build→start/서로 다른 공개 build 값/client map 분기/server secret 비노출 검증은 남아 있다. 기존31997 cloud396/checkout10 및 별도 fresh archive10 원문은 그대로다.

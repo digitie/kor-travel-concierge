@@ -1,3 +1,10 @@
+## 2026-11-13 — 원 A/B source1 P1 수정·Common PR51 정본 연결 후보
+
+- 원 A의 runner tokens.css 누락과 원 B의 공개 VWorld build 입력 누락을 분리해 수정했다. 기존 토큰 파일 bytes와 globals.css import를 그대로 두고 runner COPY를 보완했다. 실제 공개 입력 두 이름(API_BASE_URL/SERVICE_KEY)을 builder ARG/ENV와 own Compose build.args로 연결하고 server-only 값은 제외했다.
+- 작은 진단에서 old CSS import exit1/new exit0, 합성 공개 입력 둘의 정적 매핑·서로 다른 build 값·runtime-only 변경의 구분·missing ARG 음성 대조를 확인했다. 기존 설치 모듈을 읽기 전용으로 사용한 진단이며 실제 image/bundle gate는 아니다.
+- 실제 merged Common36e4d285를 uses/common-ref와 tests/Docker JSON 입력에 고정했다. 중앙 policy 파일 변경도 기능 CI를 실행하도록 PR/push path에 추가했다. 기존 step 순서·정확 라이브러리 graph·앱/인증·Manager 공식 build→start와 SDK는 그대로다.
+- 이전31997 cloud396/checkout10과 fresh archive 첫10PASS는 고정 원문으로 보존한다. 새 source 원2 closure·정확 CI·실제 nonroot image의 cold build→start/public map/server secret 경계·공식 운영 수용은 아직 남아 있다.
+
 ## 2026-11-13 — 후보3 비root Docker profile·Archive 하니스 준비(이미지 수용 대기)
 
 - 기존 build→start command를 보존하는 다단계 runner와 USER node, 이미지 안 Next cache/생성 설정의 소유권을 준비했다. full Next/node_modules·소스/설정은 유지하며 standalone·호스트 권한·Root ENV·backend/DB 동작은 바꾸지 않는다.

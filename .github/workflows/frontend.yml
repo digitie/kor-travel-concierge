@@ -1,10 +1,10 @@
 name: frontend
 on:
   pull_request:
-    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc"]
+    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
   push:
     branches: [main]
-    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc"]
+    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
 jobs:
   check:
     runs-on: ubuntu-latest
