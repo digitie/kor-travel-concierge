@@ -1,3 +1,13 @@
+## 2026-11-13 — Docker profile·Archive fixture 수용
+
+- [ ] 후보3 helper를 수동 준비 없는 fresh archive에서 원10개로 검증한다. 앱·라이브러리 불변 native gate bridge를 기록한다.
+- [ ] 다단계 nonroot 이미지의 UID/cache/파일 읽기·native ABI·기존 build/start·auth/proxy/worker 수용을 부모 image 슬롯에서 완료한다. 운영 적용은 기존 리뷰/정확CI/merged source 뒤 별도다.
+
+## 2026-11-13 — 프론트엔드·tests 도구 선택 정합성
+
+- [ ] exact private runtime의 strict ci/lint/type/unit/Doctor/build/common UI10·Docker build와 원2검토/정확CI를 완료한다. Common 새 toolchain guard는 부모 확정 ref 뒤 연결한다. [계약](frontend-toolchain.md).
+- [ ] 새 이미지 실제 운영 수용은 기존 공식 경로와 별도 승인 슬롯에서 진행한다. global Node/공용 DB/RustFS lifecycle은 변경하지 않는다.
+
 # TASKS — 백로그
 
 ## 2026-10-19 변경 token 격리 수용 현황

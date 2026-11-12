@@ -1,3 +1,15 @@
+## 2026-11-13 — 후보3 비root Docker profile·Archive 하니스 준비(이미지 수용 대기)
+
+- 기존 build→start command를 보존하는 다단계 runner와 USER node, 이미지 안 Next cache/생성 설정의 소유권을 준비했다. full Next/node_modules·소스/설정은 유지하며 standalone·호스트 권한·Root ENV·backend/DB 동작은 바꾸지 않는다.
+- 공통 UI helper가 archive에 없는 .git 부모를 스스로 준비하게 했다. tests/.tmp/fresh CI 일반 결함이라는 앞선 해석은 철회했다. 실제 경로·기존 실패 및 후보2 수용은 별도 고정 기록이다.
+- 앱/의존성 bytes 불변 native396/Doctor0/build bridge와 새 helper fresh10·실제 이미지 UID/cache/auth/proxy/worker 검증을 구분한다. 후자는 아직 대기다.
+
+## 2026-11-13 — 선택 Node/npm 도구 계약 후보(실제 gate·배포 대기)
+
+- f2db main 새 branch에서 frontend/tests private anchor와 repo selector를 Node22.23.1/npm12.0.1 strict로 맞췄다. 두 lock의 root engines 외 graph와 C11 bytes를 보존했다.
+- CI step 순서/기존 peer·lifecycle flag는 유지하고 실제 npm12 선택·strict ci/local lint warning0을 연결했다. Docker는 같은 Debian slim 계열의 exact patch·검증 index를 사용한다.
+- 현재 Node20+/직접 WMTS 안내를 실제 GitHub wrapper 구현과 맞추고 과거 기록은 보존했다. [계약](frontend-toolchain.md). 설치/전체 app gate/운영은 미실행이며 새 중앙 guard ref도 대기다.
+
 # 2026-11-12 — 공통 후보8 단일 산출물 채택
 
 integration-8-review의 UI0.2.0/tokens0.1.1·Lightning CSS1.33.0+nativecss.fix.4를 같은 정본 파일로 설치했다. 지도 사용 앱은 기존 core1.0.1/web1.0.3의 같은 bytes를 유지한다. 설치된 모든 pack 파일의 원문 일치, 로컬·최신 외부 정책 검사, 단위·lint·타입·Doctor0을 확인했다. 중앙 CI 실행 코드는 common670a753으로 고정했다. 최종 브라우저·원격 CI·독립2리뷰·PR머지·운영 배포는 별도 gate다.

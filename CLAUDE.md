@@ -161,7 +161,7 @@ F:\dev\kor-travel-concierge\
 ├── frontend/             # Next.js App Router 프론트엔드 (Compose host Port: 12605 → 컨테이너 3000)
 │   ├── src/
 │   │   ├── app/          # 페이지 컴포넌트 (설정, 리스트, 지도뷰 등)
-│   │   ├── components/   # 재사용 UI (maplibre-gl + VWorld WMTS 지도 포함)
+│   │   ├── components/   # 재사용 UI (GitHub 고정 vworld-map-web/core 지도 포함)
 │   │   └── utils/
 │   ├── package.json
 │   └── tsconfig.json
@@ -226,7 +226,8 @@ DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge 
 ### 프론트엔드 (Next.js)
 ```bash
 cd frontend
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npm run dev     # 3000 포트 구동
 ```
 
@@ -238,7 +239,8 @@ npm run dev     # 3000 포트 구동
 ### E2E 테스트 (Playwright, **n150 live/Linux 우선** — ADR-33)
 ```bash
 cd tests
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npx playwright install
 npx playwright test
 ```

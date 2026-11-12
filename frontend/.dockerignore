@@ -9,3 +9,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# 로컬 진단·검증 및 비공개 문서는 build context에 포함하지 않는다.
+.react-doctor/
+coverage/
+test-results/
+playwright-report/
+**/*.local.md

@@ -59,7 +59,7 @@ source 정규화 테이블이 T-062까지 반영되었다.
                   │  - React Hook Form / Zod               │
                   │  - shadcn/ui / Tailwind                │
                   │  - TanStack Query 상태 조회·폴링        │
-                  │  - maplibre-gl + VWorld WMTS 지도 뷰     │
+                  │  - vworld-map-web/core 지도 뷰          │
                   └───────────────────┬────────────────────┘
                                       │
                               Web REST API
@@ -162,7 +162,7 @@ scope만 저장하며, 활성 `key_hash → scope` mapping을 짧은 TTL로 메�
 - TanStack Query `refetchInterval`로 `GET /api/v1/harvest/{job_id}`를 폴링한다.
 - 작업 상태 영역은 단순 진행률뿐 아니라 `current_message`와 `status_logs`를 표시해 Gemini 검색어 보정, YouTube 검색, 영상 상세 조회, DB 적재, 실패·재시도 같은 중간 단계를 사용자가 확인할 수 있게 한다.
 - 전역 작업 상태는 `GET /api/v1/runs/queue` 한 번으로 사용자 `running`/`pending` 큐와 정확한 상태별 수·open attention 수를 읽는다. 응답 항목은 100건으로 제한하고 shell observer 하나만 10초 polling하며 수집·상태 화면은 같은 TanStack Query cache를 공유한다. 종료 이력은 `/runs?terminal=true&user_jobs_only=true` cursor 조회로 분리한다.
-- 완료된 장소는 리스트와 `maplibre-gl` 기반 VWorld WMTS 지도에 함께 표시한다.
+- 완료된 장소는 리스트와 GitHub 고정 `vworld-map-web/core` wrapper의 VWorld 지도에 함께 표시한다.
 - 장소 목록은 확정 장소가 어느 YouTube 영상과 어느 유튜버에서 언급되었는지 보여주고, 영상-장소 매핑 행 수 기준 `mention_count`로 정렬할 수 있다.
 - 사용자는 선택한 장소 또는 전체 장소를 `xlsx`, `gpx`, `kml`로 내보낼 수 있다. `xlsx`는 장소-언급 행 단위로 영상 제목·유튜버·타임스탬프를 보존하고, `gpx`/`kml`은 좌표와 소스 요약을 장소 설명에 포함한다.
 - 지오코딩 결과가 없거나 모호한 장소는 "매칭 검수" 큐에 표시한다.
@@ -727,7 +727,7 @@ item은 함께 cascade한다.
 | 검증 | Zod | 폼·API 응답 스키마 검증 |
 | UI | common shadcn/ui(Radix) + Tailwind CSS 4.3.5 | 공통 프리미티브·VirtualTable·의미 토큰 |
 | 서버 상태 | TanStack Query | 조회 캐싱, 작업 상태 폴링, mutation |
-| 지도 | `maplibre-gl + VWorld WMTS` | VWorld 지도 표시 |
+| 지도 | GitHub 고정 `vworld-map-web/core` wrapper | MapLibre GL JS/VWorld 지도 표시 |
 
 클라이언트 상태는 화면 인스턴스별 Zustand store로 관리한다(로그인 오류·영상 자막 확장·지도 카메라). 서버 데이터는 TanStack Query, 입력 검증은 React Hook Form과 Zod 4가 소유한다. 지도 줌은 store에 기록하되 카메라 목표 구독값이 바뀔 때만 화면을 다시 그린다. 글꼴은 @kor-travel/tokens/font.css의 Pretendard Variable이다. 지도는 최신 GitHub 소스로 고정한 vworld-map-web/core wrapper를 소비한다. 배포물·버전 검사와 후보 검증 상태는 ADR-52와 [이관 보고서](reports/common-unification-20261111.md)를 따른다.
 
