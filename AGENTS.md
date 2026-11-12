@@ -76,7 +76,7 @@
 | 프론트엔드 프레임워크 | Next.js (React 기반) |
 | 백엔드 프레임워크 | FastAPI (Python 기반) |
 | ORM / 데이터베이스 | SQLAlchemy 2.0 / PostgreSQL + PostGIS (`asyncpg`, Alembic) |
-| 지도 뷰 라이브러리 | `maplibre-gl + VWorld WMTS` |
+| 지도 뷰 라이브러리 | `vworld-map-web/core (GitHub 고정 wrapper)` |
 | E2E 테스트 도구 | Playwright — **n150 live/Linux 환경에서 우선 실행**, 불가할 때만 Windows 호스트 fallback(앱 런타임/배포와 개발 명령은 Linux Docker/WSL 전용, ADR-33) |
 | REST API 경계 | 모든 엔드포인트는 `/api/v1` 프리픽스 아래(`/health`·`/`는 버전 없음). 브라우저는 same-origin Next BFF 경유로 호출하고 BFF가 서버 전용 admin `BACKEND_API_KEY`를 주입(키 비노출), 외부 소비자는 DB `read` 키로 명시된 공급 GET만 호출, 로컬(`APP_ENV=local/test/e2e`)은 무인증 우회 (ADR-24/36) |
 | LLM API | Gemini API (1.5 / 2.0 / Flash 등 설정 가능) |
@@ -94,8 +94,8 @@
 - **기본 실행**: 단일 호스트 Docker Compose(ADR-18). `docker compose up --build`로 backend(8000), frontend(3000), rustfs, mcp를 함께 띄운다. Windows 사용자는 WSL2 + Docker Engine(또는 Docker Desktop WSL backend) 안에서 같은 명령을 bash로 실행한다.
 - **REST API 경계**: REST 엔드포인트는 `/api/v1` 프리픽스 아래에 있다(`/health`·`/`만 버전 없음). 브라우저는 키를 직접 다루지 않고 same-origin Next BFF(`/api/v1/*` Route Handler)로 호출하며, BFF가 서버 사이드에서 백엔드로 프록시하면서 서버 전용 admin `BACKEND_API_KEY`로 `X-API-Key`를 주입한다(키는 브라우저에 노출되지 않음). 외부 소비자는 DB `read` 키를 header로 보내며 명시된 공급 GET만 호출한다. DB/static `admin` 키는 일반 운영 API용 header에서만 허용하고 `/admin/*`는 BFF proxy 전용이다. 로컬 실행(`APP_ENV=local/test/e2e`)은 인증 코드 없이 우회한다. 외부 노출 배포는 `APP_ENV=production`과 BFF/operator용 `API_KEYS`를 설정한다(ADR-24/36).
 - **Python 환경**: 컨테이너 밖 로컬 개발은 Linux/WSL에서 `python3 -m venv .venv && . .venv/bin/activate`로 Python 3.10+ 가상환경을 만들어 FastAPI, SQLAlchemy, ETL 스크립트를 구동한다. DB 연결은 PostgreSQL/PostGIS 기준이다.
-- **Node.js 환경**: Node.js 20+ 버전을 사용하며, frontend 폴더 내에서 Next.js를 구동한다.
-- **Playwright 구동(n150 우선)**: E2E 테스트 하니스는 **n150 live/Linux 환경에서 우선 실행**한다 — `cd tests; npm install; npx playwright install; npx playwright test`. n150 접근, 브라우저 설치, 네트워크, DB, 계정 상태 때문에 해당 검증이 불가능할 때만 Windows 호스트에서 같은 명령을 fallback으로 실행한다. 이 fallback은 테스트 하니스에 한정되며 Windows 네이티브 앱 실행 경로나 앱 런타임 코드의 `win32` 분기를 되살리지 않는다. E2E 런처 스크립트 `tests/scripts/*.mjs`의 Windows 처리도 fallback 하니스 호환성 범위에서만 유지한다.
+- **Node.js 환경**: 저장소 .nvmrc의 Node22.23.1/npm12.0.1을 사용한다. frontend와 tests private anchor 모두 exact engines/packageManager와 engine-strict를 따른다.
+- **Playwright 구동(n150 우선)**: E2E 테스트 하니스는 **n150 live/Linux 환경에서 우선 실행**한다 — `cd tests; npm install --global npm@12.0.1; npm ci --engine-strict; npx playwright install; npx playwright test`. n150 접근, 브라우저 설치, 네트워크, DB, 계정 상태 때문에 해당 검증이 불가능할 때만 Windows 호스트에서 같은 명령을 fallback으로 실행한다. 이 fallback은 테스트 하니스에 한정되며 Windows 네이티브 앱 실행 경로나 앱 런타임 코드의 `win32` 분기를 되살리지 않는다. E2E 런처 스크립트 `tests/scripts/*.mjs`의 Windows 처리도 fallback 하니스 호환성 범위에서만 유지한다.
 - **FFmpeg**: 컨테이너 이미지(`Dockerfile.python`)가 apt로 `/usr/bin/ffmpeg`를 제공한다. 호스트 자동 다운로드·경로 분기는 두지 않는다.
 - **RustFS 환경**: 원본 동영상, 자막, 전사 결과, 대표 프레임은 별도 로컬 Docker RustFS 서비스에 저장하고 자동 만료 정책을 두지 않는다.
 - **API 키 관리**: VWorld, Gemini, YouTube, Kakao, Naver, RustFS 등 외부 API 키와 접근 키는 절대 코드에 하드코딩하지 않고 `.env` 파일로 주입하며 로그 출력 시 마스킹 처리한다.
@@ -186,7 +186,8 @@ npm run build
 ```bash
 # --- n150 live/Linux 환경 (E2E Playwright 우선 경로) ---
 cd tests
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npx playwright install
 npx playwright test
 ```
@@ -194,7 +195,8 @@ npx playwright test
 ```powershell
 # --- Windows 호스트 fallback (n150에서 실행 불가할 때만) ---
 cd tests
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npx playwright install
 npx playwright test
 ```

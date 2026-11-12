@@ -7,7 +7,7 @@
 ## 1. 정체성
 
 이 저장소(GitHub 저장소 이름 `kor-travel-concierge`)는 유튜브 여행 컨텐츠에서 장소 정보를 추출하고 정리하여 여행 지도 서비스를 제공하는 **AI 기반 여행 큐레이션 애플리케이션**이다.
-- **프론트엔드**: Next.js (App Router) + React. `maplibre-gl`에 VWorld WMTS raster tile URL을 직접 연결하여 지도 시각화를 구현한다.
+- **프론트엔드**: Next.js (App Router) + React. GitHub 소스로 고정한 `vworld-map-web/core` wrapper로 MapLibre GL JS/VWorld 지도를 표시한다.
 - **MCP 서버**: AI 에이전트가 여행지, 키워드, 유튜버, 작업 상태를 조회하고 CRUD, 보정, 병합, 실행 트리거를 수행하는 읽기/쓰기 도구 UX를 제공한다.
 - **백엔드**: FastAPI + SQLAlchemy 2.0. DB는 PostgreSQL + PostGIS이며, `asyncpg`와 Alembic으로 schema를 관리한다.
 - **ETL 모듈**: 공식 YouTube Data API v3 검색(Gemini 보정) → 자막/전사/POI 추출(Gemini API) → 대표 프레임 추출(`yt-dlp`/FFmpeg) → 원본 동영상·자막·전사 결과·대표 프레임 RustFS 저장 → 외부 REST API를 통한 Geocoding/Reverse Geocoding을 수행한다.
@@ -18,7 +18,7 @@
 
 - **앱 런타임/배포**: Linux Docker 전용(ADR-23). Windows 호스트는 WSL2(Ubuntu) + Docker 안에서 동일하게 구동한다.
 - **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용(Linux/WSL).
-- **Node.js**: Node.js 20+ LTS 사용.
+- **Node.js**: 저장소 .nvmrc의 Node22.23.1/npm12.0.1 사용. frontend/tests private anchor의 engine-strict를 유지한다.
 - **E2E 테스트**: Playwright를 **n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행한다(ADR-33).
 - **Codex 실행 위치**: 에이전트/Codex가 실행하는 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 수행한다. PowerShell/cmd는 n150 Playwright가 불가능한 경우의 Windows E2E fallback에만 사용한다.
 
@@ -49,14 +49,16 @@ DATABASE_URL=postgresql+asyncpg://addr:addr@localhost:5432/kor_travel_concierge 
 ### 프론트엔드 단독 실행
 ```bash
 cd frontend
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npm run dev                     # Web 3000
 ```
 
 ### Playwright 테스트 실행 (n150 live/Linux 우선)
 ```bash
 cd tests
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npx playwright install
 npx playwright test
 ```
@@ -131,7 +133,7 @@ n150에서 실행할 수 없을 때만 Windows 호스트에서 같은 명령을 
 |------|------|
 | **Deep Research** | 사용자가 선택한 특정 여행지에 대해 Gemini API를 활용하여 보다 정밀하고 광범위한 세부 조사를 수행하고 데이터베이스를 업데이트하는 기능. |
 | **YouTube Curation** | 키워드 CRUD 및 유튜버 CRUD를 통해 등록된 탐색 소스를 바탕으로, 효율적으로 신규 업데이트를 수집하고 여행 관련성 정보를 발라내는 로직. |
-| **maplibre-gl + VWorld WMTS** | 공개 npm 래퍼 의존 없이 VWorld 베이스맵 타일을 MapLibre GL JS raster source로 직접 연결하는 지도 구성. |
+| **vworld-map-web/core** | GitHub 소스·라이선스·bytes를 고정한 wrapper. MapLibre GL JS와 VWorld 지도를 공통 API로 소비한다. |
 | **MCP 서버 UX** | AI 에이전트가 브라우저 없이도 여행 데이터베이스를 읽고 쓰는 도구 기반 사용자 경험. |
 | **Geocoding API** | YouTube 영상 설명 속 불완전한 텍스트 장소명을 VWorld 우선, Kakao Local 키워드 장소 검색 fallback, Naver 보조 검증으로 표준 주소 및 위경도에 매핑하는 외부 API 경로. |
 | **Reverse Geocoding API** | 위경도 좌표를 `python-vworld-api`의 `AsyncVworldClient`로 행정 주소, 도로명 주소, 지번 주소에 매핑하는 외부 API 경로. |

@@ -31,7 +31,7 @@
 - **설명 원문과 Gemini 보정 분리**: YouTube 영상 설명 원문, Gemini 오탈자 보정 설명, Gemini 장소 보강 설명을 별도 필드로 저장합니다.
 - **Web REST + MCP 분리**: 사람은 세분 REST API와 웹 UI를 사용하고, AI 에이전트는 MCP의 굵은 단위 읽기/쓰기 도구를 사용합니다.
 - **전면 비동기 실행**: `httpx.AsyncClient`, SQLAlchemy async session, `asyncio.Semaphore`를 기본으로 사용하고, `yt-dlp`, FFmpeg, `faster-whisper` 같은 블로킹 작업은 executor로 격리합니다.
-- **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, `maplibre-gl` + VWorld WMTS를 기준으로 합니다.
+- **프론트엔드 운영 UX**: React Hook Form, Zod, shadcn/ui, Tailwind CSS, TanStack Query, GitHub 고정 `vworld-map-web/core` wrapper(MapLibre GL JS/VWorld)를 기준으로 합니다.
 
 ## 시스템 구성도
 
@@ -186,7 +186,8 @@ E2E Playwright 하니스는 **n150 live/Linux 환경에서 우선 실행**합니
 
 ```bash
 cd ../tests
-npm install
+npm install --global "$(node -p 'require("./package.json").packageManager')"
+npm ci --engine-strict
 npx playwright install
 npx playwright test
 ```
@@ -208,3 +209,5 @@ Windows fallback이 필요한 경우에는 Windows 호스트의 `tests` 디렉�
 MIT License. 자세한 내용은 [`LICENSE`](./LICENSE)를 참고합니다.
 
 공용 Dagster 이관 설계와 drain/복구/rollback 절차: [적용 가이드](docs/dagster-adoption.md).
+
+선택 Node/npm, 두 private anchor와 현재 C11 수용 경계는 [도구 계약](docs/frontend-toolchain.md)을 따른다.

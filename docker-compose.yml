@@ -166,6 +166,10 @@ services:
   frontend:
     build:
       context: ./frontend
+      # 공개 client 입력만 build에 전달한다. server-only 값은 runtime env에 둔다.
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+        NEXT_PUBLIC_VWORLD_SERVICE_KEY: ${NEXT_PUBLIC_VWORLD_SERVICE_KEY:-}
     env_file: *app-env-file
     environment:
       # 브라우저는 same-origin BFF(`/api/v1/*` Route Handler)로 호출한다(상대 경로).

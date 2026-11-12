@@ -1,10 +1,10 @@
 name: frontend
 on:
   pull_request:
-    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml"]
+    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
   push:
     branches: [main]
-    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml"]
+    paths: ["frontend/**", "tests/**", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,16 +16,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci --strict-peer-deps --no-audit --no-fund
+      - run: |
+          npm install --global "$(node -p 'require("./package.json").packageManager')"
+          npm ci --engine-strict --strict-peer-deps --no-audit --no-fund
       - run: npm run check:dependencies
-      - run: npm run lint -- --max-warnings 0
+      - run: npm run lint
       - run: npm run doctor
       - run: npm run type-check
       - run: npm test
       - run: npm run build
-      - run: npm ci --prefix ../tests --strict-peer-deps --no-audit --no-fund
+      - run: npm ci --prefix ../tests --engine-strict --strict-peer-deps --no-audit --no-fund
       - run: npx --prefix ../tests playwright install --with-deps chromium
       - run: npm --prefix ../tests run test:common-ui
