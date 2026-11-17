@@ -1,3 +1,9 @@
+## 2026-11-17 — 공통 후보12 재vendor(ui 0.2.1·tokens 0.1.2·vworld-map-web 1.0.4)
+
+- common main(#57 `938d1db`, #58 `97f8ed98`)이 정본을 올려, common main의 `versions.json`·`frontend-dependencies.json`·`frontend-artifacts.json`을 읽는 소비자 guard가 "산출물 원장 버전 불일치"로 실패하던 상태를 푼다. 배포물 영향 없음.
+- vendor tgz 3개 교체(sha512를 common `frontend-artifacts.json`과 대조), `frontend/common-artifacts.json`의 candidate·sources·네 항목(ui·tokens·rn·web)을 정본으로, `package.json` file spec, lock은 npm 12.0.1 `--package-lock-only`로 재생성(세 패키지 항목만 변경), guard `uses`/`common-ref` → `97f8ed98`. provenance 표 갱신.
+- 로컬에서 중앙 checker(`--policy`/`--canonical` = common main)·toolchain 검사·ui 0.2.1 내장 `check-dependencies` PASS. 앱 소스 변경 0 — `fitBounds` padding·`VWorldMapHandle` 미사용. n150 작업·배포 없음.
+
 ## 2026-11-13 — 원 A/B source1 P1 수정·Common PR51 정본 연결 후보
 
 - 원 A의 runner tokens.css 누락과 원 B의 공개 VWorld build 입력 누락을 분리해 수정했다. 기존 토큰 파일 bytes와 globals.css import를 그대로 두고 runner COPY를 보완했다. 실제 공개 입력 두 이름(API_BASE_URL/SERVICE_KEY)을 builder ARG/ENV와 own Compose build.args로 연결하고 server-only 값은 제외했다.
