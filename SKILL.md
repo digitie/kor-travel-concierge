@@ -18,7 +18,7 @@
 
 - **앱 런타임/배포**: Linux Docker 전용(ADR-23). Windows 호스트는 WSL2(Ubuntu) + Docker 안에서 동일하게 구동한다.
 - **Python**: Python 3.10+ 기반 가상환경(`.venv`) 사용(Linux/WSL).
-- **Node.js**: 저장소 .nvmrc의 Node22.23.1/npm12.0.1 사용. frontend/tests private anchor의 engine-strict를 유지한다.
+- **Node.js**: 저장소 .nvmrc의 Node26.13.1/npm12.0.1 사용. frontend/tests private anchor의 engine-strict를 유지한다.
 - **E2E 테스트**: Playwright를 **n150 live/Linux 환경에서 우선 실행**하고, n150 접근·브라우저·환경 제약으로 불가할 때만 Windows 호스트에서 fallback 실행한다(ADR-33).
 - **Codex 실행 위치**: 에이전트/Codex가 실행하는 명령은 `git`, `gh`, codegraph 계열 분석 명령까지 포함해 모두 WSL2(Ubuntu)를 포함한 Linux bash에서 수행한다. PowerShell/cmd는 n150 Playwright가 불가능한 경우의 Windows E2E fallback에만 사용한다.
 
