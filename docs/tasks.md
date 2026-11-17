@@ -1,3 +1,7 @@
+## 2026-11-18 — Node 26.13.1 전환
+
+- [x] common T-029 채택: `.nvmrc`·engines·lock root·frontend Dockerfile base·guard ref(`0dec9543`)를 Node 26.13.1/npm 12.0.1로 정렬. 운영 이미지 재빌드는 다음 정식 배포에서.
+
 ## 2026-11-13 — Docker profile·Archive fixture 수용
 
 - [x] source31997 후보3 helper를 수동 준비 없는 fresh archive에서 첫 실행 원10개 PASS(52.1초)로 확인했다. UID1000/state0700/nonce0600·소스577 불변·cleanup을 기록했다. 새 Docker profile 수용은 별도다.

@@ -1,3 +1,9 @@
+## 2026-11-18 — Node 26.13.1(LTS) 전환(common T-029 채택)
+
+- 소유자 결정(2026-11-17)에 따라 Node 축을 22.23.1 → 26.13.1로 올렸다. npm은 12.0.1 유지. common T-029 채택 커밋 `0dec9543`(common PR #65)에 guard `uses`/`common-ref`를 함께 고정했다.
+- `.nvmrc`, `frontend`/`tests` `package.json`의 `engines.node`, 두 lock의 root engines(npm 12.0.1 + node 26.13.1 `--package-lock-only`로 재확인, 의존성 graph 변경 0), `frontend/Dockerfile` base를 `node:26.13.1-bookworm-slim` multiarch index digest로 교체. Node 26 내장 npm은 11.20.0이므로 base stage의 npm 12.0.1 설치는 그대로 둔다. CI `setup-node`는 `.nvmrc`를 읽는다.
+- `@types/node`는 common 의존성 정책(22.20.5)을 따라 그대로 둔다. AGENTS/SKILL/frontend-toolchain 문서의 현재 기준값만 갱신. 배포 없음 — 다음 배포 때 frontend 이미지가 새 base로 재빌드된다.
+
 ## 2026-11-17 — 공통 후보12 재vendor(ui 0.2.1·tokens 0.1.2·vworld-map-web 1.0.4)
 
 - common main(#57 `938d1db`, #58 `97f8ed98`)이 정본을 올려, common main의 `versions.json`·`frontend-dependencies.json`·`frontend-artifacts.json`을 읽는 소비자 guard가 "산출물 원장 버전 불일치"로 실패하던 상태를 푼다. 배포물 영향 없음.

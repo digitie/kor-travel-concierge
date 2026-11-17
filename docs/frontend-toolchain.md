@@ -1,15 +1,15 @@
 # 프론트엔드·브라우저 하니스 도구 계약
 
-저장소 .nvmrc는 Node22.23.1을 선택한다. frontend와 tests는 각각 private package anchor이며 packageManager=npm@12.0.1, engines.node=22.23.1/npm=12.0.1, anchor .npmrc=engine-strict=true로 맞춘다. 두 lock은 root 엔진 metadata만 변경하며 의존성 graph·C11 vendor/원장·공개 라이브러리 버전은 그대로다.
+저장소 .nvmrc는 Node26.13.1을 선택한다. frontend와 tests는 각각 private package anchor이며 packageManager=npm@12.0.1, engines.node=26.13.1/npm=12.0.1, anchor .npmrc=engine-strict=true로 맞춘다. 두 lock은 root 엔진 metadata만 변경하며 의존성 graph·C11 vendor/원장·공개 라이브러리 버전은 그대로다.
 
 CI는 기존 검사 step 상대순서를 유지한다. 기존 첫 설치 step 안에서 frontend packageManager의 실제 npm12를 global 선택하고 npm ci --engine-strict를 실행한다. 기존 strict-peer-deps/no-audit/no-fund를 그대로 유지하며 후반 tests anchor 설치도 동일한 선택 npm과 engine-strict를 사용한다. local lint와 CI 모두 warning0이다. Doctor의 기존 full/blocking warning과 doctor:audit 옵션은 그대로다. .nvmrc만 수정해도 기존 frontend workflow를 실행하도록 path에 selector를 포함했다.
 
-frontend Dockerfile은 기존 Debian slim 계열을 Node22.23.1-bookworm-slim 및 검증된 multiarch index digest로 고정한다. 기존 22-slim alias의 관측된 bookworm 관계와 exact patch index의 SHA256을 공식 registry metadata로 확인했다. 이는 live 이미지 재관측이나 layer pull/build 증거가 아니다. anchor .npmrc를 설치 전에 COPY하고 실제 npm12 선택 뒤 strict ci한다. 다단계 builder가 webpack 산출물을 만들고 최종 runner는 USER node로 실행한다. 이전 Dockerfile의 dev CMD는 production start로 정리하되 Manager의 기존 build→start override·포트·앱 코드·backend/DB/RustFS lifecycle은 유지한다. full Next/node_modules·소스·설정·vendor를 보존하므로 standalone 전환이나 runtime pruning은 하지 않는다. .next와 Next 생성 설정의 소유권만 이미지 안에서 맞추며 호스트 chmod·Root ENV 변경은 하지 않는다. 실제 이미지 UID/읽기·쓰기/native ABI/normal start/auth/proxy/worker 수용 전에는 Docker profile을 검증 완료로 부르지 않는다.
+frontend Dockerfile은 기존 Debian slim 계열을 Node26.13.1-bookworm-slim 및 검증된 multiarch index digest로 고정한다. 2026-11-18 Node 26.13.1(LTS) 전환에서 common T-029가 공식 registry metadata로 확인한 exact patch multiarch index SHA256을 그대로 쓴다. Node 26은 npm 11.20.0을 내장하므로 base stage에서 npm 12.0.1을 계속 설치한다. 이는 live 이미지 재관측이나 layer pull/build 증거가 아니다. anchor .npmrc를 설치 전에 COPY하고 실제 npm12 선택 뒤 strict ci한다. 다단계 builder가 webpack 산출물을 만들고 최종 runner는 USER node로 실행한다. 이전 Dockerfile의 dev CMD는 production start로 정리하되 Manager의 기존 build→start override·포트·앱 코드·backend/DB/RustFS lifecycle은 유지한다. full Next/node_modules·소스·설정·vendor를 보존하므로 standalone 전환이나 runtime pruning은 하지 않는다. .next와 Next 생성 설정의 소유권만 이미지 안에서 맞추며 호스트 chmod·Root ENV 변경은 하지 않는다. 실제 이미지 UID/읽기·쓰기/native ABI/normal start/auth/proxy/worker 수용 전에는 Docker profile을 검증 완료로 부르지 않는다.
 
 개발용으로 선택 Node runtime을 준비한 뒤 각 anchor에서 다음을 사용한다.
 
 ~~~bash
-# frontend 또는 tests 디렉터리에서; 선택 Node22.23.1 shell
+# frontend 또는 tests 디렉터리에서; 선택 Node26.13.1 shell
 npm install --global "$(node -p 'require("./package.json").packageManager')"
 npm ci --engine-strict
 ~~~
@@ -26,7 +26,7 @@ f2db107cc4bfb58115b890ea6198a2fe0c321e17 배포·로그인/공통 표·Pretendar
 
 지금은 두 lock의 root 엔진 외 전체 graph/버전/override·vendor/원장·앱 소스·역사 보존, CI step 상대순서와 기존 flag 보존, Docker base index SHA/아키텍처 metadata, JSON·diff를 가볍게 확인한다. WSL 의존성 설치와 전체 빌드는 하지 않는다.
 
-정확한 private Node22.23.1/npm12.0.1과 부모 슬롯에서 fresh strict ci/공통 guard/lint/type/unit/Doctor/build/기존 common UI 브라우저10을 source-bound stage로 검증해야 한다. Docker 실제 build도 별도 슬롯에서 진행한다. 기존 결과를 이번 source의 PASS로 재사용하지 않는다. CI order/needs/fail-fast 감사/최적화는 계속 마지막 단계이며 이번에 다루지 않는다.
+정확한 private Node26.13.1/npm12.0.1과 부모 슬롯에서 fresh strict ci/공통 guard/lint/type/unit/Doctor/build/기존 common UI 브라우저10을 source-bound stage로 검증해야 한다. Docker 실제 build도 별도 슬롯에서 진행한다. 기존 결과를 이번 source의 PASS로 재사용하지 않는다. CI order/needs/fail-fast 감사/최적화는 계속 마지막 단계이며 이번에 다루지 않는다.
 
 ## Archive 테스트 하니스와 후보2 증거
 
