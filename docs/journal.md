@@ -1,3 +1,9 @@
+## 2026-11-18 — 공통 표 수정 산출물과 고정 catalog C 채택 준비
+
+- 실제 main pack R(`706aaa7821588dfca72f660c9161f56be2d0445f`)의 UI0.2.2·tokens0.1.3를 소비한다. VirtualTable의 좁은 grid 가로 접근 수정은 공통 라이브러리에서 받는다.
+- 원장·vendor·lock·출처와 정책 `uses/common-ref`를 실제 고정 catalog C(`5c1b3857e9af060d30ec776157760fb9e9c13ded`)에 맞춘다. C의 main 포함 관계와 실제 R/P pack bytes 동일성이 확인됐다. 이 변경은 소스·CI 준비이며 운영 적용은 별도다.
+- 현재 미사용 toast는 도입하지 않는다. Node26.13.1/npm12.0.1 lock-only·정본 dependency/artifact guard 결과와 미실행 build/runtime 범위는 이 PR에 기록한다.
+
 ## 2026-11-18 — Node 26.13.1(LTS) 전환(common T-029 채택)
 
 - 소유자 결정(2026-11-17)에 따라 Node 축을 22.23.1 → 26.13.1로 올렸다. npm은 12.0.1 유지. common T-029 채택 커밋 `0dec9543`(common PR #65)에 guard `uses`/`common-ref`를 함께 고정했다.
