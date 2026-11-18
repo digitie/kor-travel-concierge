@@ -49,10 +49,8 @@ metadata UNKNOWN에서는 owner를 보존하며 cursor는 다음 행으로 진�
      (`KOR_TRAVEL_CONCIERGE_{API,MCP,DAGSTER,UI}_IMAGE`, MCP는 API 이미지)만 이전 태그로 바꾼다.
   3. root로 `ktdctl compose-boundary activate-concierge --confirm`을 실행한다. Concierge 네 runtime만 재생성하고
      공용 PostgreSQL·공용 Dagster plane은 건드리지 않는다.
-  4. 현재 배포(T-207)의 이 절차는 운영 호스트(n150)의 운영자 홈 `cccommon-gate/bin/cccommon_rollback.sh`에
-     스크립트로 있다. root 전용이며 `systemd-run`으로 실행하고 결과는 `journalctl -u <unit>`으로 본다. 스크립트는
-     이미지 존재를 먼저 확인하고(없으면 아무것도 바꾸지 않고 종료) 위 2·3을 수행한다. 이미지 태그는 스크립트에
-     고정돼 있고 비밀값은 담지 않는다.
+  4. 전용 rollback 스크립트는 두지 않는다(T-207 때의 스크립트는 더 이상 없다). rollback은 위 1~3 — 이전 이미지
+     태그로 되돌린 뒤 `activate-concierge` — 그대로다. 이미지 하나만 바뀐 배포(예: UI만)는 그 변수 하나만 되돌린다.
   5. 사후 확인은 배포와 같다: API `/health`, code server health, 공용 webserver의 `ktc.dagster.definitions` LOADED,
      공개 로그인→로그아웃.
   - 이전 이미지는 현재 DB migration head에서 동작해야 한다. migration을 포함한 배포의 rollback은 이미지 교체
