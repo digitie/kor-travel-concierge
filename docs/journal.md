@@ -1,3 +1,13 @@
+## 2026-11-18 — n150 운영 UI 재배포(Node 26.13.1, `1bcee8b5`)
+
+- 운영(n150) UI를 `1bcee8b5` 기준 Node 26.13.1 이미지로 다시 냈다. 바뀐 것은 UI 이미지 하나다 — `16c8461` 이후 Python
+  변경이 없어 api·mcp·code server 이미지는 그대로 두었다.
+- 경로는 Manager 공식 `ktdctl compose-boundary activate-concierge`. UI 중단은 약 142초.
+- 확인: API health 200, UI·공개 로그인 페이지 200, 인증 없는 API 요청 401, code server healthy. 브라우저 수동
+  로그인 확인은 소유자 몫으로 남긴다.
+- rollback: 직전 UI 이미지 태그로 되돌리고 같은 `activate-concierge`를 실행한다([dagster-adoption](dagster-adoption.md)
+  "장애와 rollback"). 그 절이 가리키던 T-207 rollback 스크립트 위치는 더 이상 없어 그 문장을 이 절차로 고쳤다.
+
 ## 2026-11-18 — Node 26.13.1(LTS) 전환(common T-029 채택)
 
 - 소유자 결정(2026-11-17)에 따라 Node 축을 22.23.1 → 26.13.1로 올렸다. npm은 12.0.1 유지. common T-029 채택 커밋 `0dec9543`(common PR #65)에 guard `uses`/`common-ref`를 함께 고정했다.
