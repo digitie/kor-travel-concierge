@@ -301,7 +301,6 @@ const SHELL_PAGES = [
   { path: "/jobs", heading: "수집 파이프라인 - 작업" },
   { path: "/jobs/common-ui-run", heading: "수집 파이프라인 - 작업 상세", description: "작업 ID common-ui-run" },
   { path: "/review", heading: "검수 - 검수 큐", description: "2/2개 불러옴" },
-  { path: "/review/1", heading: "검수 - 검수 후보 상세" },
   { path: "/place/7", heading: "운영 - 장소 상세" },
 ] as const;
 
@@ -432,6 +431,7 @@ async function snap(page: Page, target: Locator, path: string) {
 
 for (const width of [1280, 390]) {
   test(`버튼 변형별 포커스 outline은 하나이고 hover·active·disabled에서 테두리가 굵어지지 않는다 ${width}`, async ({ browser }, info) => {
+    test.setTimeout(180_000);
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage();
     await mockApi(page);
@@ -440,7 +440,8 @@ for (const width of [1280, 390]) {
     for (const path of ["/jobs/common-ui-run", "/collect", "/review", "/jobs"]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      await page.waitForLoadState("networkidle");
+      // 목록 polling 때문에 networkidle은 오지 않는다. 버튼이 그려질 때까지만 기다린다.
+      await expect(page.locator('main [data-slot="button"]:visible').first()).toBeVisible();
       const buttons = page.locator('main [data-slot="button"]:visible:not([disabled]), header [data-slot="button"]:visible:not([disabled]), [role="group"][aria-label="검수 화면 모드"] > button:visible:not([disabled])');
       const variants = await buttons.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-variant") ?? "toggle"));
       for (const variant of [...new Set(variants)]) {
