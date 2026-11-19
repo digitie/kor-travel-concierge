@@ -2,7 +2,7 @@
 
 공식 공급자 API만 사용하며 `kraddr-geo`는 연계하지 않는다(ADR-8).
 
-- VWorld API: `python-vworld-api`의 `AsyncVworldClient` 직접 호출
+- VWorld API: `python-vworld-api`의 `VworldClient` 직접 호출
 - Kakao Local API: VWorld 미매칭 시 주소 검색 후 키워드 장소 검색 보조
 - Naver API: 모호한 결과 보조 검증
 - 좌표는 `pyproj` `always_xy=True`로 WGS84(EPSG:4326) 경도/위도 순서 정규화
@@ -30,7 +30,7 @@ from typing import Any
 import httpx
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from vworld import AsyncVworldClient, VworldError, VworldNoDataError
+from vworld import VworldClient, VworldError, VworldNoDataError
 
 from ktc.models.geocode_cache import GeocodeCache
 
@@ -702,10 +702,10 @@ class NaverGeocoder:
 
 
 async def geocode_with_vworld(
-    client: AsyncVworldClient,
+    client: VworldClient,
     address: str,
 ) -> list[GeocodeCandidate]:
-    """`AsyncVworldClient`를 직접 호출해 VWorld 좌표 후보를 만든다."""
+    """`VworldClient`를 직접 호출해 VWorld 좌표 후보를 만든다."""
 
     out: list[GeocodeCandidate] = []
     by_coord: dict[tuple[float, float], GeocodeCandidate] = {}
@@ -741,11 +741,11 @@ async def geocode_with_vworld(
 
 
 async def reverse_with_vworld(
-    client: AsyncVworldClient,
+    client: VworldClient,
     lat: float,
     lng: float,
 ) -> dict[str, str | None]:
-    """`AsyncVworldClient`를 직접 호출해 좌표의 도로명/지번 주소를 조회한다."""
+    """`VworldClient`를 직접 호출해 좌표의 도로명/지번 주소를 조회한다."""
 
     return {
         "road_address": await _reverse_vworld_text(client, lat, lng, "road"),
@@ -782,7 +782,7 @@ def _candidate_from_vworld_get_coord(
 
 
 async def _reverse_vworld_text(
-    client: AsyncVworldClient,
+    client: VworldClient,
     lat: float,
     lng: float,
     addr_type: str,

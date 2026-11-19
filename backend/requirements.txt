@@ -23,7 +23,7 @@ faster-whisper>=1.0.0
 pyproj>=3.6.0
 pytest>=8.1.1
 pytest-asyncio>=0.23.5
-python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/a1fea840531f0b4d8e1b6a0db85e15063532602d.zip
+python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/3b174abea1a1e734c60a9c2522b2844474a1ec71.zip
 
 # 공용 HTTP만 설치해 API/MCP에 Dagster를 적재하지 않는다.
-kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@c289b4624c8640eb918cc915803e72ae754e58fb#subdirectory=packages/py/kor-travel-common
+kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@67efe2e546ecef41e54a866bf4862d608ace343d#subdirectory=packages/py/kor-travel-common

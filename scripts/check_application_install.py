@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import importlib.metadata as metadata
 import json
+import platform
 from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
+# 기존 API/MCP 필수 축은 누락 실패를 유지한다. 전이/CS/dev catalog는 설치된 교집합만 대조한다.
+REQUIRED = frozenset({
+    "sqlalchemy", "asyncpg", "fastapi", "pydantic", "pydantic-core", "pydantic-settings",
+    "alembic", "httpx", "uvicorn", "psycopg", "psycopg-binary",
+})
 
 
 def checked_install() -> dict:
@@ -21,7 +27,7 @@ def checked_install() -> dict:
         try:
             value = metadata.version(name)
         except metadata.PackageNotFoundError:
-            if name == "psycopg2-binary":  # 기본 API/MCP에는 없고 Dagster의 pip check가 CS 존재를 보장한다.
+            if name not in REQUIRED:  # CS dependency 존재는 해당 stage의 pip check/native가 별도 확인한다.
                 continue
             raise
         if value != wanted:
@@ -32,7 +38,7 @@ def checked_install() -> dict:
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise RuntimeError("실제 Common Python immutable Git metadata 없음")
     # 실제 해석 commit만 출력한다. canonical tree 동등성은 source guard/normal 증거와 함께 확인한다.
-    return {"versions": actual, "commonCommit": commit}
+    return {"versions": actual, "packages": actual, "python": platform.python_version(), "commonCommit": commit}
 
 
 if __name__ == "__main__":

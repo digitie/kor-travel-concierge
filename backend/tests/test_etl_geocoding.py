@@ -276,3 +276,46 @@ def test_evaluate_disambiguated_by_naver():
     assert d.status == "matched"
     assert d.reason == "disambiguated_by_naver"
     assert d.confidence == 0.7
+
+
+@pytest.mark.parametrize("mode", ["ok", "nodata", "http_error"])
+async def test_canonical_vworld_real_async_client_keeps_consumer_contract(mode):
+    """고정 SDK의 실제 HTTP 변환과 소비자 파싱/오류 경계를 네트워크 없이 검증한다."""
+    from vworld import VworldClient
+
+    calls = []
+
+    def respond(request):
+        params = request.url.params
+        calls.append((params["request"].lower(), params["type"]))
+        assert params["crs"] == "EPSG:4326"
+        if mode == "http_error":
+            return httpx.Response(403, json={"error": "test-only"})
+        if mode == "nodata":
+            return httpx.Response(200, json={"response": {"status": "NOT_FOUND"}})
+        if params["request"].lower() == "getcoord":
+            result = {"point": {"x": "127.101313354", "y": "37.402352535"},
+                      "refined": {"text": params["type"] + " address"}}
+        else:
+            assert params["point"] == "127.101313354,37.402352535"
+            result = [{"text": params["type"] + " address"}]
+        return httpx.Response(200, json={"response": {"status": "OK", "result": result}})
+
+    async with (
+        httpx.AsyncClient(transport=httpx.MockTransport(respond)) as session,
+        VworldClient(api_key="test-only", session=session, max_retries=0, max_rps=1000) as client,
+    ):
+        candidates = await geocode_with_vworld(client, "test address")
+        reverse = await reverse_with_vworld(client, 37.402352535, 127.101313354)
+    assert calls == [("getcoord", "road"), ("getcoord", "parcel"),
+                     ("getaddress", "road"), ("getaddress", "parcel")]
+    if mode == "ok":
+        assert len(candidates) == 1
+        assert candidates[0].latitude == 37.402352535
+        assert candidates[0].longitude == 127.101313354
+        assert candidates[0].road_address == "road address"
+        assert candidates[0].official_address == "parcel address"
+        assert reverse == {"road_address": "road address", "parcel_address": "parcel address"}
+    else:
+        assert candidates == []
+        assert reverse == {"road_address": None, "parcel_address": None}

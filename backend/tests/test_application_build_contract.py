@@ -112,7 +112,8 @@ class InstalledReadbackTests(unittest.TestCase):
             return self.helper.checked_install()
 
     def test_api_without_unused_psycopg2(self):
-        versions = {name: value for name, value in self.versions.items() if name != "psycopg2-binary"}
+        versions = {name: self.versions[name] for name in self.helper.REQUIRED}
+        versions.update({name: self.versions[name] for name in ("anyio", "starlette", "pyproj")})
         self.assertEqual(self.readback(versions)["versions"], versions)
 
     def test_cs_with_existing_storage_driver(self):
@@ -125,6 +126,21 @@ class InstalledReadbackTests(unittest.TestCase):
         for name in ("sqlalchemy", "pydantic-core", "psycopg", "asyncpg"):
             with self.subTest(missing=name), self.assertRaises(self.helper.metadata.PackageNotFoundError):
                 self.readback({key: value for key, value in self.versions.items() if key != name})
+
+    def test_old_shared_transitives_rejected_without_installing_unused_members(self):
+        for name in ("anyio", "starlette", "filelock", "protobuf", "pyproj"):
+            with self.subTest(package=name), self.assertRaises(RuntimeError):
+                self.readback({**self.versions, name: "0.0.1"})
+
+    def test_readback_has_actual_python_and_installed_intersection_cli_shape(self):
+        versions = {name: self.versions[name] for name in self.helper.REQUIRED}
+        with patch.object(self.helper.platform, "python_version", return_value="3.11.18"):
+            result = self.readback(versions)
+        self.assertEqual(result["python"], "3.11.18")
+        self.assertEqual(result["packages"], versions)
+        self.assertEqual(result["versions"], versions)
+        self.assertNotIn("dagster", result["packages"])
+        self.assertNotIn("ruff", result["packages"])
 
     def test_common_immutable_provenance_required(self):
         for value in ("", "main", "c289b462", None):
