@@ -231,17 +231,18 @@ test("장소 deep link는 데스크톱 모달과 모바일 상세 경로를 구�
   await context.close();
 });
 
-test("기존 사이드바 저장값을 boolean으로 복원하고 토글·재로드를 구독한다", async ({ page }) => {
+test("기존 사이드바 숫자 저장값을 복원하고 토글·재로드를 구독한다", async ({ page }) => {
   await mockApi(page);
   await login(page, "/jobs");
   await page.evaluate(() => localStorage.setItem("kor-travel-concierge:sidebar-collapsed", "1"));
   await page.reload();
-  const rail = page.locator("[data-sidebar-collapsed]");
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "true");
+  const toggle = page.getByRole("button", { name: /좌측 메뉴 (펼치기|접기)/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "좌측 메뉴 펼치기" }).click();
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("kor-travel-concierge:sidebar-collapsed"))).toBe("0");
   await page.reload();
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
 });
 
 test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업을 연결한다", async ({ page }) => {
