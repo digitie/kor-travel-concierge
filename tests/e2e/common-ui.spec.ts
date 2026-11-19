@@ -309,13 +309,15 @@ for (const width of [1280, 390]) {
   test(`상단 바는 한 줄 "영역 - 페이지" 제목과 작은 설명만 둔다 ${width}`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
     const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
     await mockApi(page);
     await login(page, "/jobs");
     for (const entry of SHELL_PAGES) {
       await page.goto(entry.path);
       const header = page.locator('[data-slot="admin-shell-header"]');
       const h1 = page.getByRole("heading", { level: 1 });
-      await expect(h1).toHaveCount(1);
+      await expect(h1, `${entry.path} h1 (pageerror: ${errors.join(" / ")})`).toHaveCount(1);
       await expect(h1).toHaveAccessibleName(entry.heading);
       await expect(h1).toHaveAttribute("title", entry.heading);
       // 앱 설명 문구(예: Admin UI)와 별도 영역 줄을 두지 않는다.
@@ -367,7 +369,8 @@ test("모바일 메뉴는 좌측 drawer로 열리고 Esc·이동으로 닫히며
   await drawer.getByRole("link", { name: "수집", exact: true }).click();
   await expect(page).toHaveURL(/\/collect$/);
   await expect(drawer).toHaveCount(0);
-  await expect(page.locator("#main-content")).toBeFocused();
+  // 셸이 페이지마다 다시 마운트되므로(#276) 포커스가 닫힌 drawer 안에 남지 않는 것만 확인한다.
+  expect(await page.evaluate(() => document.activeElement?.closest("[role=dialog]") ?? null)).toBeNull();
   await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("수집 파이프라인 - 수집");
   // 이전 경로로 돌아와도 drawer가 다시 열리지 않는다.
   await page.goBack();
@@ -438,14 +441,14 @@ for (const width of [1280, 390]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       await page.waitForLoadState("networkidle");
-      const buttons = page.locator('main [data-slot="button"]:visible:not([disabled]), header [data-slot="button"]:visible:not([disabled]), [role="group"] > button:visible:not([disabled])');
+      const buttons = page.locator('main [data-slot="button"]:visible:not([disabled]), header [data-slot="button"]:visible:not([disabled]), [role="group"][aria-label="검수 화면 모드"] > button:visible:not([disabled])');
       const variants = await buttons.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-variant") ?? "toggle"));
       for (const variant of [...new Set(variants)]) {
         if (seen.has(variant)) continue;
         seen.add(variant);
         const name = `${width}-${variant}`;
         // disabled로 바꿔도 같은 요소를 가리키도록 표식으로 고정한다.
-        await buttons.and(page.locator(variant === "toggle" ? "[role=group] > button" : `[data-variant="${variant}"]`)).first().evaluate((el, id) => el.setAttribute("data-e2e-probe", id), name);
+        await buttons.and(page.locator(variant === "toggle" ? '[role="group"][aria-label="검수 화면 모드"] > button' : `[data-variant="${variant}"]`)).first().evaluate((el, id) => el.setAttribute("data-e2e-probe", id), name);
         const target = page.locator(`[data-e2e-probe="${name}"]`);
         await target.scrollIntoViewIfNeeded();
         await page.mouse.move(0, 0);
