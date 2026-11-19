@@ -1,3 +1,9 @@
+## 2026-11-19 — Common 관리자 셸0.2.3 정본 채택
+
+- UI0.2.3/tokens0.1.4는 Common producer `0e2a3f5aa16323df0d009360802661c9bc496dc6`의 실제 GitHub artifact14500111373 bytes를 사용한다. catalog/guard는 `d644632ea9eaf2f6b6baa49305d65fae5bbc0bd4`로 고정한다.
+- AppShell은 공통 AdminShell의 단일 상단 바·모바일 왼쪽 drawer·접힘 저장/초점 처리를 재사용한다. 기존8개 경로·활성 판정·보라색 rail·로그아웃·작업 큐 observer 하나·페이지 본문 계약을 유지한다.
+- Node26.13.1/npm12.0.1 lock에는 UI/tokens 두 패키지 외 변경이 없다. 실제 canonical 파일은 UI96+tokens25=121이며 미사용 Toast는 추가하지 않는다. 검증·정확 CI·독립2검토를 별도로 기록하며 운영 적용은 부모의 Weather/Transport 성능 quiet window 뒤에만 진행한다. Python/GDAL 입력은 바꾸지 않는다.
+
 ## 2026-11-18 — 공통 표 수정 산출물과 고정 catalog C 채택 준비
 
 - 실제 main pack R(`706aaa7821588dfca72f660c9161f56be2d0445f`)의 UI0.2.2·tokens0.1.3를 소비한다. VirtualTable의 좁은 grid 가로 접근 수정은 공통 라이브러리에서 받는다.

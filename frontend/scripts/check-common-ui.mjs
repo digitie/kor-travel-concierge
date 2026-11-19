@@ -11,7 +11,7 @@ for (const [path, source] of sources) {
   if (/from\s*["\x27]@tanstack\/react-(?:table|virtual)/.test(source)) errors.push(path + ": 공통 table 계약 사용 필요");
 }
 const combined = sources.map(([, source]) => source).join("\n");
-for (const pattern of [/useForm/, /zustand/, /@kor-travel\/ui(?:\/login-form)?["\x27]/, /@kor-travel\/ui\/virtual-table/]) {
+for (const pattern of [/useForm/, /zustand/, /@kor-travel\/ui(?:\/login-form)?["\x27]/, /@kor-travel\/ui\/virtual-table/, /@kor-travel\/ui\/admin-shell/]) {
   if (!pattern.test(combined)) errors.push("필수 공통 소비 또는 폼/상태 사용 누락: " + pattern);
 }
 const fontSource = readFileSync("src/app/layout.tsx", "utf8");

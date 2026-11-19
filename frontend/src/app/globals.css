@@ -203,20 +203,6 @@
   }
 }
 
-@layer components {
-  @media (min-width: 1024px) {
-    .ktc-viewport-locked {
-      height: 100vh;
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .ktc-viewport-locked-content {
-      overflow: hidden;
-    }
-  }
-}
-
 /* DESIGN-RULES 9: prefers-reduced-motion에서 animation/transition을 사실상 비활성화한다. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -374,11 +360,6 @@
 /* 공용 메뉴의 IA/aria를 재사용하며 기존 rail과 접힘 동작을 유지한다. */
 .concierge-common-menu [data-slot="app-menu-group-label"] { color: var(--shell-rail-muted); }
 .concierge-common-menu [data-slot="app-menu-link"] { min-height: 2.5rem; }
-@media (min-width: 1024px) {
-  .concierge-common-menu[data-sidebar-collapsed="true"] [data-slot="app-menu-group-label"],
-  .concierge-common-menu[data-sidebar-collapsed="true"] [data-slot="app-menu-link"] > span:not([aria-hidden]) { display: none; }
-  .concierge-common-menu[data-sidebar-collapsed="true"] [data-slot="app-menu-link"] { justify-content: center; gap: 0; padding-inline: 0; }
-}
 
 /* 선택 전에는 실행 목록이 가용 폭을 모두 사용한다. */
 [data-testid="concierge-common-dagster"] .dagster-run-layout:not(:has([data-testid="concierge-selected-run"])) {
@@ -386,4 +367,25 @@
 }
 [data-testid="concierge-common-dagster"] [data-slot="dagster-operations-run-detail"]:not(:has([data-testid="concierge-selected-run"])) {
   display: none;
+}
+
+/* Common 셸의 구조/상호작용을 재사용하고 기존 Concierge 색상 토큰만 연결한다. */
+.concierge-admin-shell {
+  --kt-surface-page: var(--ktc-surface-page);
+  --kt-surface-card: var(--ktc-surface-card);
+  --kt-text-primary: var(--ktc-text-primary);
+  --kt-text-secondary: var(--ktc-text-secondary);
+  --kt-icon: var(--ktc-icon-default);
+  --kt-border: var(--ktc-line);
+  --kt-focus: var(--ktc-focus);
+}
+.concierge-common-rail,
+.concierge-common-drawer {
+  --kt-surface-card: var(--shell-rail);
+  --kt-surface-subtle: var(--shell-rail-soft);
+  --kt-text-primary: var(--shell-rail-text);
+  --kt-text-secondary: var(--shell-rail-muted);
+  --kt-icon: var(--shell-rail-muted);
+  --kt-border: color-mix(in srgb, var(--shell-rail-text) 16%, transparent);
+  --kt-focus: white;
 }
