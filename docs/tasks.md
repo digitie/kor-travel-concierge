@@ -1,3 +1,10 @@
+## 2026-11-20 — 실제 사용 Python application profile 채택
+
+- [x] Common74 merged 검증 head b566로 기존 필수 source policy job 확장; frontend guard/packs 유지.
+- [x] API/MCP 및 CS 정상 pip 설치에 실제 constraints 소비, pip check와 설치 버전 readback 연결.
+- [x] 순수 계약 시험6건·binding 음성 대조·실제 형제 checkout CLI positive/old pin negative·기존039c native 선택 버전 차이0 확인.
+- [ ] 정확 consumer HEAD CI/독립 검토 후 merge. 새 이미지의 정상 cached build/native/공식 적용은 merge 뒤 별도 수용하며 현재 운영 변경은 없다.
+
 ## 2026-11-20 — legacy Scheduler DB driver 유지보수
 
 - [x] 기존 `psycopg[binary]` 선언만3.3.9 고정; standalone scheduler 미사용/현재 Dagster 관리 경계 확인.

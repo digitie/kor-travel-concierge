@@ -1,3 +1,13 @@
+## 2026-11-20 — 실제 공용 Python 이미지의 application profile 고정
+
+- 기존 필수 `Psycopg source policy` job을 Common74의 검증된 immutable head `b566840cb111fa8b1184498aa892b0fd5ce7e5c6`와 `--strict-python-application --constraints backend/application-constraints.txt`로 확장한다. Common74는 `7ae189567c4602630a3e15df51d8dcb0e9af1306`로 병합됐으며 tested head의 main 조상 관계와 tree 동등성을 확인했다.
+- 선택한 실제 사용 축만 고정한다: SQLAlchemy2.1.9, asyncpg0.32.0, FastAPI0.165.0, Pydantic2.14.4/core2.50.5/settings2.16.3, Alembic1.20.1, httpx0.28.1, uvicorn0.54.0, 기존 Psycopg3/binary3.3.9. Dagster storage의 Psycopg2-binary2.9.13은 유지한다. 앱 SQLAlchemy와 외부 공용 daemon-pool profile은 별도다.
+- `Dockerfile.python`의 실제 runtime(API/MCP) 및 파생 CS pip 설치가 같은 절대 경로 constraints를 `-c`로 소비한다. constraints는 미사용 패키지를 설치하지 않는다. 각 설치 직후 `pip check`와 선택 distribution 버전/Common immutable commit readback이 실패 시 build를 중단한다. API에는 Psycopg2를 추가하지 않는다.
+- Common Python의 기존 `c289b4624c8640eb918cc915803e72ae754e58fb`는 canonical 전체 package tree와 같으므로 유지한다. sibling Common checkout의 Git object로 동등성을 검증하며 source guard가 설치 bytes를 증명한다고 주장하지 않는다.
+- 순수 표준 라이브러리 계약 시험6건은 실제 Docker RUN/stage/절대 경로·사전 COPY·pip check·readback과 누락/오용 음성 대조, 설치 버전 누락·이전 버전·Common metadata 누락 거부를 확인한다. fresh consumer/Common 형제 checkout CLI는 exit0, SQLAlchemy 이전 constraint는 exit1, 이전 실제 Dockerfile은 binding 시험에서 거부된다.
+- 이미 수용한039c normal/native 영수증을 오프라인 대조한 선택 버전 차이는 API/MCP11개·CS12개 모두0이다. 이는 이전 이미지의 증거다. 이번 새 source 이미지는 아직 build/native/apply하지 않았으며 merge 뒤 정상 cached build·설치본/native 확인을 별도로 수행한다.
+- frontend/catalog `d644`·canonical producer `0e2a` pack bytes·Node·UI·앱 코드·DB schema·Dagster family·기존 command/target은 변경하지 않는다. 미사용 standalone scheduler를 시작하지 않는다.
+
 ## 2026-11-20 — 공용 Python 이미지의 Psycopg3 입력 고정
 
 - 유지보수 중인 `scheduler/requirements.txt`의 기존 Psycopg3 binary extra만 `3.3.9`로 고정한다. API/ETL/Dagster 의존성과 런타임 코드는 바꾸지 않는다.
