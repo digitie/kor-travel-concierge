@@ -2,8 +2,8 @@
 
 - #276(공통 셸 정본) 위에 남은 것만 더한다. 셸·rail·drawer 구현은 #276이 정본이다.
 - 버튼 테두리 굵어짐 원인: 0.2.2 Button의 `outline-none`+`focus-visible:border-ring`+`ring-3 ring-ring/50`+`transition-all`가 포커스 때 테두리 색 변경과 3px 반투명 ring을 겹쳐 그렸다. 0.2.3이 outline 2px 하나로 고쳤고, 앱에 남은 같은 패턴을 정리했다. 검수 표 행 `outline-none ring-2` → outline, 검수 모드 토글은 overflow-hidden 그룹에 잘리던 outline을 안쪽(-2px)으로 그리고, `@layer base`의 링크 hover는 `@layer components`로 옮겼다(FS-7.8).
-- 한 줄 제목: 상단 바에는 h1 "영역 - 페이지" 하나만 둔다. `/collect`의 두 번째 h1(수집 작업)을 h2로 내렸다. 두 번째 h1을 h2로 내린다(오류 패널은 #276 구조에서 셸 밖이라 h1 유지). 검수의 "N/M개 불러옴" 배지는 상단 바 작은 설명으로, 단축키 버튼은 md 이상에만 둔다. 작업 상세의 실행 동작(문구 포함)은 본문 첫 줄로, 상단 바에는 새로고침·뒤로 아이콘 버튼만 둔다.
-- e2e(common-ui): 제목 바 1280/390(h1 하나·"영역 - 페이지"·작은 설명·높이 ≤56·가로 넘침 없음·로그인 셸 없음), 모바일 좌측 drawer(x=0·Esc 포커스 복귀·이동 시 닫힘과 본문 포커스·뒤로 가기 재열림 없음), 데스크톱 rail, 버튼 변형별 Tab 포커스·hover·active·disabled(outline 2px/offset 2px/`--kt-focus` 하나, 테두리·ring 불변, 이동 ≤1px, 상태별 스크린샷). live·ktc 스펙의 h1 이름과 모바일 메뉴 셀렉터도 drawer 기준으로 고쳤다.
+- 한 줄 제목: 상단 바에는 h1 "영역 - 페이지" 하나만 둔다. `/collect`의 두 번째 h1(수집 작업)을 h2로 내렸다(오류 패널은 #276 구조에서 셸 밖이라 h1 유지). 검수의 "N/M개 불러옴" 배지는 상단 바 작은 설명으로, 단축키 버튼은 md 이상에만 둔다. 작업 상세의 실행 동작(문구 포함)은 본문 첫 줄로, 상단 바에는 새로고침·뒤로 아이콘 버튼만 둔다.
+- e2e(common-ui): 제목 바 1280/390(h1 하나·"영역 - 페이지"·작은 설명·높이 ≤56·가로 넘침 없음·로그인 셸 없음), 모바일 좌측 drawer(x=0·Esc 포커스 복귀·이동 시 닫힘·뒤로 가기 재열림 없음), 데스크톱 rail, 버튼 변형별 Tab 포커스·hover·active·disabled(outline 2px/offset 2px/`--kt-focus` 하나, 테두리·ring 불변, 이동 ≤1px, 상태별 스크린샷). live·ktc 스펙의 h1 이름과 모바일 메뉴 셀렉터도 drawer 기준으로 고쳤다.
 - 배포하지 않았다.
 
 ## 2026-11-19 — Common 관리자 셸0.2.3 정본 채택
