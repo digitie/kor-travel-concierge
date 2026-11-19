@@ -469,8 +469,7 @@ for (const width of [1280, 390]) {
         expect(focus.focusVisible, `${name} :focus-visible`).toBe(true);
         expect(focus.outlineStyle, `${name} focus outline style`).toBe("solid");
         expect(focus.outlineWidth, `${name} focus outline width`).toBe("2px");
-        // 모드 토글은 overflow-hidden 그룹 안이라 안쪽(-2px)에 그린다.
-        expect(focus.outlineOffset, `${name} focus outline offset`).toBe(variant === "toggle" ? "-2px" : "2px");
+        expect(focus.outlineOffset, `${name} focus outline offset`).toBe("2px");
         expect(focus.outlineColor, `${name} focus outline color`).toBe(focus.focusColor);
         expect(focus.border, `${name} focus border`).toBe(rest.border);
         expect(focus.shadow, `${name} focus ring`).toBe(rest.shadow);

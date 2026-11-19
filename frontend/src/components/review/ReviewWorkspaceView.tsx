@@ -45,7 +45,7 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
     <div
       role="group"
       aria-label="검수 화면 모드"
-      className="inline-flex overflow-hidden rounded-control border border-border"
+      className="inline-flex rounded-control border border-border"
     >
       {(["triage", "table"] as const).map((mode) => (
         <button
@@ -53,8 +53,8 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
           type="button"
           aria-pressed={reviewMode === mode}
           onClick={() => setReviewMode(mode)}
-          // 부모의 overflow-hidden이 바깥 outline을 자르므로 포커스 outline을 안쪽에 그린다.
-          className="h-control-sm px-2.5 text-xs font-medium transition-[color,background-color] duration-fast focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-kt-focus aria-pressed:bg-brand aria-pressed:text-brand-foreground"
+          // 그룹에 overflow-hidden을 두면 바깥 outline이 잘리므로 끝 버튼이 직접 모서리를 둥글린다.
+          className="h-control-sm px-2.5 text-xs font-medium transition-[color,background-color] duration-fast first:rounded-l-[calc(var(--radius-control)-1px)] last:rounded-r-[calc(var(--radius-control)-1px)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kt-focus aria-pressed:bg-brand aria-pressed:text-brand-foreground"
         >
           {mode === "triage" ? "처리 모드" : "목록/관리"}
         </button>
