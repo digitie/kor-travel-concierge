@@ -444,7 +444,8 @@ for (const width of [1280, 390]) {
       await expect(page.locator('main [data-slot="button"]:visible').first()).toBeVisible();
       // 작업 상세는 실행 데이터가 온 뒤 본문 첫 줄에 재실행·삭제(destructive)가 그려진다.
       if (path === "/jobs/common-ui-run") await expect(page.locator('main [data-variant="destructive"]:visible').first()).toBeVisible();
-      const buttons = page.locator('main [data-slot="button"]:visible:not([disabled]), header [data-slot="button"]:visible:not([disabled]), [role="group"][aria-label="검수 화면 모드"] > button:visible:not([disabled])');
+      // 확인 대화상자 트리거(asChild)는 data-slot이 바뀌므로 data-variant로 고른다.
+      const buttons = page.locator('main button[data-variant]:visible:not([disabled]), header button[data-variant]:visible:not([disabled]), [role="group"][aria-label="검수 화면 모드"] > button:visible:not([disabled])');
       const variants = await buttons.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-variant") ?? "toggle"));
       for (const variant of [...new Set(variants)]) {
         if (seen.has(variant)) continue;
