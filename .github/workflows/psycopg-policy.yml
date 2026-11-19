@@ -1,0 +1,48 @@
+name: Psycopg source policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  psycopg-policy:
+    name: Psycopg source policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: consumer
+          persist-credentials: false
+
+      - name: Checkout immutable Common policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: digitie/kor-travel-common
+          ref: e2899128f78c9622ec3ef79674cff8d1c3aec6f9
+          path: common
+          persist-credentials: false
+
+      - name: Set up policy Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Enforce existing Psycopg declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = e2899128f78c9622ec3ef79674cff8d1c3aec6f9
+          python -B "$GITHUB_WORKSPACE/common/tools/check_versions.py" \
+            "$GITHUB_WORKSPACE/consumer" \
+            --repo kor-travel-concierge \
+            --strict-psycopg \
+            --json "$RUNNER_TEMP/concierge-psycopg-policy.json"
+
