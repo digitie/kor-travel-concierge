@@ -1,5 +1,9 @@
 ## 2026-11-20 — 실제 공용 Python 이미지의 application profile 고정
 
+## 2026-11-20 — 실제 공유 Python 의존성 전체 정책
+
+기존 이미지가 소비하는 constraints를 Common full-shared catalog로 확장하고 canonical Common/VWorld source를 고정했다. 실제 Python 3.11·Google/Dagster 교집합, 미사용 패키지 비설치, 필수 API 축 누락 실패를 유지한다. VWorld 비동기 공개 이름 변경을 기존 3개 ETL import·타입에 반영했다. [계약과 증거 경계](python-application-profile.md)를 따른다. 운영 배포는 이 소스 변경의 결과로 주장하지 않는다.
+
 - 기존 필수 `Psycopg source policy` job을 Common74의 검증된 immutable head `b566840cb111fa8b1184498aa892b0fd5ce7e5c6`와 `--strict-python-application --constraints backend/application-constraints.txt`로 확장한다. Common74는 `7ae189567c4602630a3e15df51d8dcb0e9af1306`로 병합됐으며 tested head의 main 조상 관계와 tree 동등성을 확인했다.
 - 선택한 실제 사용 축만 고정한다: SQLAlchemy2.1.9, asyncpg0.32.0, FastAPI0.165.0, Pydantic2.14.4/core2.50.5/settings2.16.3, Alembic1.20.1, httpx0.28.1, uvicorn0.54.0, 기존 Psycopg3/binary3.3.9. Dagster storage의 Psycopg2-binary2.9.13은 유지한다. 앱 SQLAlchemy와 외부 공용 daemon-pool profile은 별도다.
 - `Dockerfile.python`의 실제 runtime(API/MCP) 및 파생 CS pip 설치가 같은 절대 경로 constraints를 `-c`로 소비한다. constraints는 미사용 패키지를 설치하지 않는다. 각 설치 직후 `pip check`와 선택 distribution 버전/Common immutable commit readback이 실패 시 build를 중단한다. API에는 Psycopg2를 추가하지 않는다.

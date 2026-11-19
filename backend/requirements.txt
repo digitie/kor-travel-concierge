@@ -1,9 +1,7 @@
 fastapi>=0.110.0
 uvicorn>=0.28.0
-# mcp 2.x는 FastMCP -> MCPServer로 API가 바뀌어 ktc/mcp_server/server.py의 v1 API
-# 사용과 호환되지 않는다(mcp<2로 고정, 이전까지는 google-generativeai 등의 전이
-# 의존성으로만 들어와 상한이 없어 2026-09-04 배포에서 mcp 2.1.1로 올라가며 깨졌다).
-mcp<2
+# 실제 MCPServer 공개 API 이관. 정확 버전은 소비 constraints가 소유한다.
+mcp>=2.3,<3
 sqlalchemy[asyncio]>=2.0.28
 asyncpg>=0.29.0
 geoalchemy2>=0.14.7
@@ -11,7 +9,7 @@ alembic>=1.13.1
 APScheduler>=3.11.0
 pydantic>=2.6.4
 pydantic-settings>=2.2.1
-google-generativeai>=0.4.1
+# Gemini는 기존 REST 게이트웨이를 사용한다. 미사용 provider SDK를 설치하지 않는다.
 requests>=2.31.0
 httpx>=0.27.0
 prometheus-client>=0.20.0
@@ -23,7 +21,7 @@ faster-whisper>=1.0.0
 pyproj>=3.6.0
 pytest>=8.1.1
 pytest-asyncio>=0.23.5
-python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/a1fea840531f0b4d8e1b6a0db85e15063532602d.zip
+python-vworld-api @ https://github.com/digitie/python-vworld-api/archive/3b174abea1a1e734c60a9c2522b2844474a1ec71.zip
 
 # 공용 HTTP만 설치해 API/MCP에 Dagster를 적재하지 않는다.
-kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@c289b4624c8640eb918cc915803e72ae754e58fb#subdirectory=packages/py/kor-travel-common
+kor-travel-common[http] @ git+https://github.com/digitie/kor-travel-common.git@67efe2e546ecef41e54a866bf4862d608ace343d#subdirectory=packages/py/kor-travel-common

@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from vworld import AsyncVworldClient
+from vworld import VworldClient
 
 from ktc.core.config import Settings, get_settings
 from ktc.etl import geocode_service, media_store, poi_extraction, summarize_service
@@ -497,7 +497,7 @@ async def _make_geocode_context(
     vworld_secret = vworld_key if vworld_key is not None else settings.VWORLD_SERVICE_KEY
     kakao_secret = kakao_key if kakao_key is not None else settings.KAKAO_REST_API_KEY
     vworld_client = (
-        AsyncVworldClient(api_key=vworld_secret)
+        VworldClient(api_key=vworld_secret)
         if _configured_secret(vworld_secret)
         else None
     )
@@ -532,7 +532,7 @@ async def _make_geocode_context(
     )
 
 
-def _default_geocode_applier(vworld_client: AsyncVworldClient | None) -> GeocodeApplier:
+def _default_geocode_applier(vworld_client: VworldClient | None) -> GeocodeApplier:
     async def apply(
         session: AsyncSession,
         candidate: ExtractedPlaceCandidate,

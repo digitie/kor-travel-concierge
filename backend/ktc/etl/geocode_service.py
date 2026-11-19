@@ -15,7 +15,7 @@ from sqlalchemy import BigInteger, literal_column, select
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.exc import ObjectDeletedError
-from vworld import AsyncVworldClient
+from vworld import VworldClient
 
 from ktc.core.config import get_settings
 from ktc.core.spatial import sync_place_geometry
@@ -263,7 +263,7 @@ async def _prepare_reverse_vworld(
     session: AsyncSession,
     candidate: ExtractedPlaceCandidate,
     decision: GeocodeDecision,
-    vworld: AsyncVworldClient | None,
+    vworld: VworldClient | None,
 ) -> tuple[bool, tuple[float, float] | None, dict[str, str | None] | None]:
     """row lock 전에 필요한 VWorld 역지오코딩을 준비한다.
 
@@ -303,7 +303,7 @@ async def _prepare_reverse_vworld(
 async def _enrich_missing_addresses_isolated(
     session_factory: async_sessionmaker[AsyncSession],
     place_id: int,
-    vworld: AsyncVworldClient,
+    vworld: VworldClient,
 ) -> dict[str, str | None] | None:
     """DB transaction 밖에서 reverse 후 실제 적용한 주소 payload를 반환한다."""
     try:
@@ -373,7 +373,7 @@ async def _enrich_missing_addresses_isolated(
 async def geocode_query(
     query: str,
     *,
-    vworld: AsyncVworldClient | None = None,
+    vworld: VworldClient | None = None,
     kakao: KakaoGeocoder | None = None,
     naver: NaverGeocoder | None = None,
 ) -> GeocodeDecision:
@@ -426,7 +426,7 @@ async def apply_geocode_to_candidate(
     decision: GeocodeDecision,
     *,
     expected_candidate_version: int,
-    vworld: AsyncVworldClient | None = None,
+    vworld: VworldClient | None = None,
     reviewer: str = "system",
 ) -> TravelPlace | None:
     """평가 결과를 후보에 적용한다.
@@ -709,7 +709,7 @@ async def apply_geocode_to_current_candidate(
     candidate: ExtractedPlaceCandidate,
     decision: GeocodeDecision,
     *,
-    vworld: AsyncVworldClient | None = None,
+    vworld: VworldClient | None = None,
     reviewer: str = "system",
 ) -> TravelPlace | None:
     """외부 대기가 없는 direct 호출용으로 현재 xmin을 명시적으로 snapshot해 적용한다.

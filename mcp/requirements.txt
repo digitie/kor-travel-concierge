@@ -3,4 +3,4 @@
 -r ../backend/requirements.txt
 
 # MCP 서버 SDK
-mcp>=1.2.0
+mcp>=2.3,<3
