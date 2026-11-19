@@ -4,7 +4,8 @@
 - 현재 Manager는 별도 APScheduler 서비스 대신 Dagster code location을 관리한다. Dagster 실행 경로가 재사용하는 worker 함수와 legacy persistent job store는 구분하며, 이 변경으로 scheduler를 시작하거나 기존 Psycopg2 profile을 교체하지 않는다.
 - 공식 PyPI의 non-yanked3.3.9와 CPython3.13 ARM binary wheel을 확인했다. 배포된 code-server의 읽기 전용 distribution metadata는 Psycopg3.3.6/Psycopg2-binary2.9.13이었다. 설치 여부는 활성 DB driver 사용 증명이 아니다.
 - 기존 scheduler job-store URL 시험2건이 통과했다. 새 binary의 native 실행이나 성능 개선을 측정한 결과는 아니다.
-- Common 후보 CLI의 `--strict-psycopg`와 scheduler manifest 선택에서 정확 선언은 exit0, 이전 floating 선언의 별도 negative fixture는 exit1이었다. 최종 immutable Common ref 결합은 소유자의 freeze 뒤에 확정한다. 설치본 검증과 source guard를 혼동하지 않는다.
+- 전용 `Psycopg source policy` CI job은 검증된 Common73 head `e2899128f78c9622ec3ef79674cff8d1c3aec6f9`를 고정하고 `--strict-psycopg`를 fail-closed로 실행한다. consumer/Common은 형제 checkout으로 두고 소비자 root 전체를 발견하므로 Common 자체 파일이 검사 범위를 오염시키지 않는다. 기존 requirements include graph를 검사하며 별도 constraints는 없다. frontend catalog/guard `d644`와 producer/packs는 유지한다.
+- 실제 CI checkout 배치와 같은 CLI로 정확 선언 exit0, 이전 floating 선언 negative exit1을 확인했다. source/lock/constraints guard이며 설치본 검증과 혼동하지 않는다. 소비자 merge 전에는 Common73 실제 merge와 고정 head의 main 조상 관계를 확인한다.
 - 현재 API/MCP/CS의 앱 DB URL은 모두 `postgresql+asyncpg`이며, Psycopg3 직접 연결 경로는 legacy job store에서만 확인했다. 그러나 세 active Python 컨테이너 모두 공용 이미지에 Psycopg3.3.6을 포함한다. 설치 여부와 활성 호출 여부를 구분한다.
 - 이 PR은 source-only 준비이고 현재 운영 이미지 변경은 없다. 공용 Python Dockerfile이 scheduler manifest를 소비하므로 설치본까지3.3.9로 정렬하려면 merge 뒤 정상 cached API/MCP 공용 Python 이미지와 파생 Dagster CS 이미지 build 및 기존 공식4역할 SDK 적용이 필요하다. 미사용 scheduler를 시작하지 않고 asyncpg/Psycopg2 선택은 유지한다.
 - 기존16c846 기반 이미지·GDAL·cache를 재사용한다. 현재 Dockerfile은 네 requirements를 하나의 pip RUN으로 설치하므로 Psycopg만의 분리 layer가 있다고 주장하지 않는다. 다른 의존성 bytes 불변은 이후 실제 build에서 증명해야 한다. UI source/tree 계약이 같으면 기존 이미지를 유지한다.

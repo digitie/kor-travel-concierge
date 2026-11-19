@@ -2,8 +2,8 @@
 
 - [x] 기존 `psycopg[binary]` 선언만3.3.9 고정; standalone scheduler 미사용/현재 Dagster 관리 경계 확인.
 - [x] 기존 job-store URL 시험2건 통과.
-- [x] Common 후보 selected-driver CLI: 정확 pin exit0·이전 floating negative exit1. 최종 Common ref는 아직 미결합이다.
-- [ ] 정확 PR CI 확인. Common selected-driver guard는 소유자의 구체적 계약이 준비되면 해당 선언 범위에만 채택한다.
+- [x] Common73 immutable head e289 고정 전용 필수 policy job. 형제 checkout·consumer root discovery에서 정확 pin exit0, 이전 floating negative exit1.
+- [ ] 정확 PR CI와 Common73 실제 merge/e289 main 조상 관계 확인 후 부모가 소비자를 merge한다.
 - [ ] merge 뒤 설치본 정렬은 정상 cached API/MCP·CS 이미지와 공식4역할 SDK 적용으로 별도 수용한다. 현재 운영 변경은 없고, 미사용 scheduler 기동이나 API/ETL 드라이버 교체는 하지 않는다.
 
 ## 2026-11-19 — 공통 셸 잔여(버튼 테두리·한 줄 제목·e2e)
