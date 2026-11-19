@@ -28,7 +28,7 @@ test.describe('n150 live UI 셸 검증', () => {
     await expect(
       page.getByRole('link', { name: 'Travel Concierge Admin UI' }),
     ).toBeVisible();
-    await expect(page.getByRole('heading', { name: '결과', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '개요 - 결과', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: /결과/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /수집/ }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: /검수/ }).first()).toBeVisible();
@@ -42,7 +42,7 @@ test.describe('n150 live UI 셸 검증', () => {
     await statusLink.click();
     await page.waitForURL(/\/jobs(\?|$)/);
     await expect(
-      page.getByRole('heading', { name: '작업', exact: true }),
+      page.getByRole('heading', { name: '수집 파이프라인 - 작업', exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole('heading', { name: '진행 중 · 대기' }),
@@ -82,7 +82,7 @@ test.describe('n150 live UI 셸 검증', () => {
     let deletedByUI = false;
     try {
       await page.goto(`/jobs/${disposableJobId}`);
-      await expect(page.getByRole('heading', { name: '작업 상세', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '수집 파이프라인 - 작업 상세', exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '뒤로' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '로그와 결과' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '영상 처리' })).toBeVisible();
@@ -124,12 +124,12 @@ test.describe('n150 live UI 셸 검증', () => {
     // /status는 시스템 메트릭·저장소·감사 로그 전용으로 축소됐다.
     await page.getByRole('link', { name: '상태', exact: true }).first().click();
     await page.waitForURL('**/status');
-    await expect(page.getByRole('heading', { name: '상태', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '시스템 - 상태', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '저장소 상세' })).toBeVisible();
 
     await page.getByRole('link', { name: /설정/ }).first().click();
     await page.waitForURL('**/settings');
-    await expect(page.getByRole('heading', { name: '설정', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '시스템 - 설정', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'AI 엔진', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'API 키', exact: true })).toBeVisible();
     await expect(
@@ -139,16 +139,16 @@ test.describe('n150 live UI 셸 검증', () => {
 
     await page.getByRole('link', { name: /검수/ }).first().click();
     await page.waitForURL('**/review');
-    await expect(page.getByRole('heading', { name: '검수 큐', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '검수 - 검수 큐', exact: true })).toBeVisible();
 
     await page.getByRole('link', { name: /수집/ }).first().click();
     await page.waitForURL('**/collect');
-    await expect(page.getByRole('heading', { name: '수집', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '수집 파이프라인 - 수집', exact: true })).toBeVisible();
 
     // 외부 공급 API 테스트 페이지: 엔드포인트 선택 → 실행 → 응답 상태 표시.
     await page.getByRole('link', { name: /^API/ }).first().click();
     await page.waitForURL('**/api-test');
-    await expect(page.getByRole('heading', { name: 'API 테스트', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '시스템 - API 테스트', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '요청', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByText(/^HTTP 200$/)).toBeVisible();
@@ -160,7 +160,7 @@ test.describe('n150 live UI 셸 검증', () => {
     const errors = collectConsoleErrors(page);
     await loginAsAdmin(page, '/collect');
 
-    await expect(page.getByRole('heading', { name: '수집', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '수집 파이프라인 - 수집', exact: true })).toBeVisible();
     const queueRegion = page.getByRole('region', { name: '진행 중 작업' });
     await expect(queueRegion).toBeVisible();
     await expect(queueRegion.getByText('진행 중 작업')).toBeVisible();
@@ -214,7 +214,7 @@ test.describe('n150 live UI 셸 검증', () => {
     const errors = collectConsoleErrors(page);
     await loginAsAdmin(page, '/review');
 
-    await expect(page.getByRole('heading', { name: '검수 큐', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '검수 - 검수 큐', exact: true })).toBeVisible();
     const modeGroup = page.getByRole('group', { name: '검수 화면 모드' });
     await modeGroup.getByRole('button', { name: '목록/관리' }).click();
     await expect(
@@ -302,7 +302,7 @@ test.describe('n150 live UI 셸 검증', () => {
     const errors = collectConsoleErrors(page);
     await loginAsAdmin(page, '/');
 
-    await expect(page.getByRole('heading', { name: '결과', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '개요 - 결과', exact: true })).toBeVisible();
     await expect(page.getByLabel('장소 글자 검색')).toBeVisible();
     await expect(page.getByLabel('카테고리 필터')).toBeVisible();
     await expect(page.getByLabel('시군구 필터')).toBeVisible();

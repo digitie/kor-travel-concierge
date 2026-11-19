@@ -1,3 +1,7 @@
+## 2026-11-19 — 공통 셸 잔여(버튼 테두리·한 줄 제목·e2e)
+
+- [x] 앱 쪽 포커스 ring·잘린 outline·base 상태 스타일 정리, 상단 바 h1 단일화·설명 이동, 제목·drawer·버튼 상태 e2e. 운영 반영은 다음 UI 이미지 배포.
+
 ## 2026-11-19 — Common 관리자 셸0.2.3 정본 채택
 
 - UI0.2.3/tokens0.1.4는 Common producer `0e2a3f5aa16323df0d009360802661c9bc496dc6`의 실제 GitHub artifact14500111373 bytes를 사용한다. catalog/guard는 `d644632ea9eaf2f6b6baa49305d65fae5bbc0bd4`로 고정한다.

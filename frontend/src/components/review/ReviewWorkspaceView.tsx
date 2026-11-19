@@ -10,7 +10,6 @@ import { triageProgressPanelProps,
 
 import { AppShell } from "@/components/AppShell";
 import { ReviewUndoSnackbar } from "@/components/ReviewUndoSnackbar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { dismissReviewUndo } from "@/lib/review-undo";
 import { KeyboardIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
@@ -46,7 +45,7 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
     <div
       role="group"
       aria-label="검수 화면 모드"
-      className="inline-flex overflow-hidden rounded-control border border-border"
+      className="inline-flex rounded-control border border-border"
     >
       {(["triage", "table"] as const).map((mode) => (
         <button
@@ -54,7 +53,8 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
           type="button"
           aria-pressed={reviewMode === mode}
           onClick={() => setReviewMode(mode)}
-          className="h-control-sm px-2.5 text-xs font-medium transition-[color,background-color] duration-fast aria-pressed:bg-brand aria-pressed:text-brand-foreground"
+          // 그룹에 overflow-hidden을 두면 바깥 outline이 잘리므로 끝 버튼이 직접 모서리를 둥글린다.
+          className="h-control-sm px-2.5 text-xs font-medium transition-[color,background-color] duration-fast first:rounded-l-[calc(var(--radius-control)-1px)] last:rounded-r-[calc(var(--radius-control)-1px)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kt-focus aria-pressed:bg-brand aria-pressed:text-brand-foreground"
         >
           {mode === "triage" ? "처리 모드" : "목록/관리"}
         </button>
@@ -64,22 +64,22 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
   return (
     <AppShell
       title="검수 큐"
+      description={`${candidates.length}/${candidateTotal}개 불러옴`}
       actions={
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {modeToggle}
+          {/* 단축키는 키보드 환경 전용이라 좁은 화면 상단 바에는 두지 않는다. */}
           <Button
             type="button"
-            size="icon-xs"
+            size="icon-sm"
             variant="ghost"
+            className="hidden md:inline-flex"
             aria-label="검수 단축키 도움말"
             title="단축키 도움말 (?)"
             onClick={() => setShortcutHelpOpen(true)}
           >
             <KeyboardIcon />
           </Button>
-          <Badge variant="secondary">
-            {candidates.length}/{candidateTotal}개 불러옴
-          </Badge>
         </div>
       }
       contentClassName="flex min-h-0 flex-1 flex-col p-0"

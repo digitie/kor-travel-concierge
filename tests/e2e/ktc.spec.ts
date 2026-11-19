@@ -554,7 +554,7 @@ test.describe('Travel Concierge Admin UI E2E 검증', () => {
     await expect(failedRow).toBeVisible();
     await failedRow.getByRole('link', { name: '상세', exact: true }).click();
     await expect(page).toHaveURL(/\/jobs\/\d+$/);
-    await expect(page.getByRole('heading', { name: '작업 상세', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '수집 파이프라인 - 작업 상세', exact: true })).toBeVisible();
     await expect(page.getByLabel('오류 상세')).toContainText(
       'reason=quotaExceeded',
     );
@@ -1058,7 +1058,7 @@ test.describe('검수 큐 자동 진행 E2E 검증', () => {
     await loginAsAdmin(page, '/review');
 
     // 기본은 처리 모드: 진행 레일이 보이고 큰 후보 테이블 헤더는 없다.
-    await expect(page.getByRole('heading', { name: '검수 큐' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '검수 - 검수 큐', exact: true })).toBeVisible();
     await expect(page.getByText('처리 진행')).toBeVisible();
     const modeGroup = page.getByRole('group', { name: '검수 화면 모드' });
     await expect(
