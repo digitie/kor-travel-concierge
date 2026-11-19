@@ -1,0 +1,14 @@
+# Common application 선택 축; 미사용 패키지를 설치하지 않는 pip constraints.
+sqlalchemy==2.1.9
+asyncpg==0.32.0
+fastapi==0.165.0
+pydantic==2.14.4
+pydantic-core==2.50.5
+pydantic-settings==2.16.3
+alembic==1.20.1
+httpx==0.28.1
+uvicorn==0.54.0
+psycopg==3.3.9
+psycopg-binary==3.3.9
+# 기존 Dagster storage 전용; API/MCP에는 이 줄로 설치되지 않는다.
+psycopg2-binary==2.9.13

@@ -13,15 +13,19 @@ RUN apt-get update \
 WORKDIR /app
 
 # 의존성 레이어 캐싱: 매니페스트 먼저 복사
+COPY backend/application-constraints.txt /app/backend/application-constraints.txt
+COPY scripts/check_application_install.py /app/scripts/check_application_install.py
 COPY backend/requirements.txt backend/requirements.txt
 COPY etl/requirements.txt etl/requirements.txt
 COPY scheduler/requirements.txt scheduler/requirements.txt
 COPY mcp/requirements.txt mcp/requirements.txt
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir -c /app/backend/application-constraints.txt \
     -r backend/requirements.txt \
     -r etl/requirements.txt \
     -r scheduler/requirements.txt \
-    -r mcp/requirements.txt
+    -r mcp/requirements.txt \
+    && python -m pip check \
+    && python /app/scripts/check_application_install.py
 
 # 애플리케이션 소스
 COPY alembic.ini alembic.ini
@@ -45,7 +49,9 @@ CMD ["python", "-m", "ktc.cli", "api"]
 # Dagster는 이 target에만 설치한다. 기본 최종 api target에는 family가 없다.
 FROM runtime AS dagster
 COPY dagster/requirements.txt /app/dagster/requirements.txt
-RUN pip install --no-cache-dir -r /app/dagster/requirements.txt \
+RUN pip install --no-cache-dir -c /app/backend/application-constraints.txt -r /app/dagster/requirements.txt \
+    && python -m pip check \
+    && python /app/scripts/check_application_install.py \
     && useradd --uid 10001 --create-home concierge \
     && mkdir -p /opt/dagster/dagster_home /opt/dagster/state/artifacts /opt/dagster/state/compute_logs \
     && chown -R concierge:concierge /opt/dagster

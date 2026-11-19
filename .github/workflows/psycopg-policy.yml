@@ -26,8 +26,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: digitie/kor-travel-common
-          ref: e2899128f78c9622ec3ef79674cff8d1c3aec6f9
+          ref: b566840cb111fa8b1184498aa892b0fd5ce7e5c6
           path: common
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up policy Python
@@ -35,14 +36,21 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Enforce existing Psycopg declarations
+      - name: Enforce selected application declarations
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = e2899128f78c9622ec3ef79674cff8d1c3aec6f9
+          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = b566840cb111fa8b1184498aa892b0fd5ce7e5c6
           python -B "$GITHUB_WORKSPACE/common/tools/check_versions.py" \
             "$GITHUB_WORKSPACE/consumer" \
             --repo kor-travel-concierge \
-            --strict-psycopg \
-            --json "$RUNNER_TEMP/concierge-psycopg-policy.json"
+            --strict-python-application \
+            --constraints backend/application-constraints.txt \
+            --json "$RUNNER_TEMP/concierge-application-policy.json"
 
+
+      - name: Verify actual normal install bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B -m unittest discover -s "$GITHUB_WORKSPACE/consumer/backend/tests" -p test_application_build_contract.py
