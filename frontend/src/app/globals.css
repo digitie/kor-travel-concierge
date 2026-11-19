@@ -389,3 +389,18 @@
   --kt-border: color-mix(in srgb, var(--shell-rail-text) 16%, transparent);
   --kt-focus: white;
 }
+
+/* 기존 문서 스크롤은 모바일에 유지하고 lg 이상에서만 본문 높이를 고정한다. */
+@media (min-width: 1024px) {
+  .concierge-viewport-locked {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .concierge-viewport-locked > [data-slot="admin-shell-body"] {
+    min-height: 0;
+  }
+  .concierge-viewport-locked [data-slot="admin-shell-main"] {
+    min-height: 0;
+    overflow: hidden;
+  }
+}

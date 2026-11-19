@@ -145,13 +145,12 @@ export function AppShell({ title, description, actions, children, contentClassNa
       railFooter={(slot) => <ShellFooter {...slot} logout={logout} />}
       navigationKey={pathname}
       collapsedStorageKey={SIDEBAR_COLLAPSED_KEY}
-      fillViewport={viewportLocked}
       mainId={MAIN_CONTENT_ID}
       labels={{ collapseRail: "좌측 메뉴 접기", expandRail: "좌측 메뉴 펼치기", menu: "주요 메뉴" }}
-      className="concierge-admin-shell"
+      className={cn("concierge-admin-shell", viewportLocked && "concierge-viewport-locked")}
       railClassName="concierge-common-rail"
       drawerClassName="concierge-common-drawer"
-      mainClassName={cn("px-4 py-5 lg:px-6 lg:py-6", viewportLocked && "lg:overflow-hidden", contentClassName)}
+      mainClassName={cn("px-4 py-5 lg:px-6 lg:py-6", contentClassName)}
       menu={
         <div className="concierge-common-menu">
           <AppMenu
