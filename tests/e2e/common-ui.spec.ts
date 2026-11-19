@@ -231,17 +231,68 @@ test("장소 deep link는 데스크톱 모달과 모바일 상세 경로를 구�
   await context.close();
 });
 
-test("기존 사이드바 저장값을 boolean으로 복원하고 토글·재로드를 구독한다", async ({ page }) => {
+test("기존 사이드바 숫자 저장값을 복원하고 토글·재로드를 구독한다", async ({ page }) => {
   await mockApi(page);
   await login(page, "/jobs");
   await page.evaluate(() => localStorage.setItem("kor-travel-concierge:sidebar-collapsed", "1"));
   await page.reload();
-  const rail = page.locator("[data-sidebar-collapsed]");
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "true");
+  const toggle = page.getByRole("button", { name: /좌측 메뉴 (펼치기|접기)/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "좌측 메뉴 펼치기" }).click();
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("kor-travel-concierge:sidebar-collapsed"))).toBe("0");
   await page.reload();
-  await expect(rail).toHaveAttribute("data-sidebar-collapsed", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+});
+
+test("viewport 고정은 lg 이상에만 적용하고 모바일 하단 입력은 문서 스크롤로 도달한다", async ({ browser }) => {
+  for (const width of [375, 768, 1023, 1024]) {
+    const context = await browser.newContext({ viewport: { width, height: 600 } });
+    try {
+      const page = await context.newPage();
+      await mockApi(page);
+      await login(page, "/");
+      const main = page.locator("#main-content");
+      // 실제 셸/CSS에서 지도·목록의 두 22rem 모바일 스택과 하단 입력 높이를 재현한다.
+      await main.evaluate(element => {
+        const fixture = document.createElement("div");
+        for (const label of ["지도 높이", "목록 높이"]) {
+          const section = document.createElement("section");
+          section.style.minHeight = "22rem";
+          section.textContent = label;
+          fixture.append(section);
+        }
+        const input = document.createElement("input");
+        input.setAttribute("aria-label", "하단 회귀 입력");
+        fixture.append(input);
+        element.replaceChildren(fixture);
+      });
+      const geometry = await main.evaluate(element => ({
+        documentHeight: document.scrollingElement!.scrollHeight,
+        viewportHeight: window.innerHeight,
+        mainOverflow: getComputedStyle(element).overflowY,
+        shellHeight: element.closest('[data-slot="admin-shell"]')!.getBoundingClientRect().height,
+      }));
+      if (width < 1024) {
+        expect(geometry.documentHeight).toBeGreaterThan(geometry.viewportHeight);
+        expect(geometry.mainOverflow).toBe("visible");
+        const input = page.getByRole("textbox", { name: "하단 회귀 입력" });
+        await input.scrollIntoViewIfNeeded();
+        await expect(input).toBeInViewport();
+        await input.click();
+        await input.fill("하단 입력 가능");
+        await expect(input).toBeFocused();
+        await expect(input).toHaveValue("하단 입력 가능");
+        expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      } else {
+        expect(geometry.shellHeight).toBe(geometry.viewportHeight);
+        expect(geometry.documentHeight).toBeLessThanOrEqual(geometry.viewportHeight);
+        expect(geometry.mainOverflow).toBe("hidden");
+      }
+    } finally {
+      await context.close();
+    }
+  }
 });
 
 test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업을 연결한다", async ({ page }) => {

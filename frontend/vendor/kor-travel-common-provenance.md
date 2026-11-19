@@ -1,3 +1,14 @@
+# 현재 Common 관리자 셸 정본
+
+UI0.2.3와 tokens0.1.4는 [Common producer0e2a3f5](https://github.com/digitie/kor-travel-common/commit/0e2a3f5aa16323df0d009360802661c9bc496dc6)의 main CI artifact14500111373 원본이다. 로컬 pack 재생성은 하지 않았다. [catalogd644](https://github.com/digitie/kor-travel-common/blob/d644632ea9eaf2f6b6baa49305d65fae5bbc0bd4/frontend-artifacts.json)의 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
+
+- ZIP SHA256: `19881f2c3ed598ed7ec213c559be21ece2be77068bddee6de5bd249b6f8019e1`
+- UI SHA256: `aa19793165ae37b2214d210692e23235545e1464c4e0059f99d943411fa753d9`
+- tokens SHA256: `33d08d7b37c60d3e319da19608ce05137f6bf587dc8d42e3ce0dfb4b597a61fc`
+- tar의 regular file에서 유도한 실제 사용 파일: UI96+tokens25=121. 미사용 Toast는 설치하지 않는다. 기존 VWorld·Radix/LightningCSS 패치 bytes와 출처는 유지한다.
+
+다음은 이전 릴리스의 출처 이력이다. 현재 버전은 위 원장과 lock을 따른다.
+
 # 공통 산출물 채택 출처
 
 고정 catalog/policy C는 main 병합 P(2b0c02a2018c2c8c791bc6d6c7b5a2290579e09e)의 선행 commit이다. 실제 R/P pack bytes 동일성이 확인됐다. 운영 적용은 별도다.
