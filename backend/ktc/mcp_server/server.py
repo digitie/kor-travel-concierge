@@ -11,19 +11,16 @@ from ktc.mcp_server.tools import ToolRuntime, register_mcp_tools, tool_metadata
 
 
 def build_server(*, session_factory: Any = async_session_factory):
-    """FastMCP 서버 인스턴스를 구성하고 도구를 등록한다."""
-    from mcp.server.fastmcp import FastMCP
+    """MCPServer 서버 인스턴스를 구성하고 도구를 등록한다."""
+    from mcp.server import MCPServer
 
     settings = get_settings()
-    server = FastMCP(
+    server = MCPServer(
         "kor-travel-concierge",
         instructions=(
             "Kor Travel Concierge 여행 데이터베이스를 조회하고 수집, 보정, 병합, "
             "매칭 검수 작업을 수행하는 MCP 서버입니다."
         ),
-        host=settings.MCP_HOST,
-        port=settings.MCP_PORT,
-        streamable_http_path=settings.MCP_STREAMABLE_HTTP_PATH,
     )
     runtime = ToolRuntime(
         session_factory=session_factory,
@@ -44,7 +41,12 @@ def main() -> None:
     settings = get_settings()
     asyncio.run(init_db())
     server = build_server()
-    server.run(transport=settings.MCP_TRANSPORT)
+    options = {}
+    if settings.MCP_TRANSPORT != "stdio":
+        options.update(host=settings.MCP_HOST, port=settings.MCP_PORT)
+    if settings.MCP_TRANSPORT == "streamable-http":
+        options["streamable_http_path"] = settings.MCP_STREAMABLE_HTTP_PATH
+    server.run(transport=settings.MCP_TRANSPORT, **options)
 
 
 if __name__ == "__main__":

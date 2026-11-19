@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import importlib.metadata as metadata
 import json
 import platform
-from pathlib import Path
 import re
+import subprocess
+import sys
+from importlib import metadata
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 # 기존 API/MCP 필수 축은 누락 실패를 유지한다. 전이/CS/dev catalog는 설치된 교집합만 대조한다.
@@ -14,6 +16,21 @@ REQUIRED = frozenset({
     "sqlalchemy", "asyncpg", "fastapi", "pydantic", "pydantic-core", "pydantic-settings",
     "alembic", "httpx", "uvicorn", "psycopg", "psycopg-binary",
 })
+
+
+def upgrade_existing_build_tools() -> None:
+    """이미 설치된 두 build 도구만 정렬한다. 없는 도구는 새 설치 대상으로 만들지 않는다."""
+    tools = []
+    for name in ("setuptools", "wheel"):
+        try:
+            metadata.version(name)
+        except metadata.PackageNotFoundError:
+            continue
+        tools.append(name)
+    if tools:
+        constraints = str(ROOT / "backend/application-constraints.txt")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--upgrade",
+                        "-c", constraints, "--build-constraint", constraints, *tools], check=True)
 
 
 def checked_install() -> dict:
@@ -42,4 +59,9 @@ def checked_install() -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(checked_install(), sort_keys=True))
+    if sys.argv[1:] == ["--upgrade-existing-build-tools"]:
+        upgrade_existing_build_tools()
+    elif sys.argv[1:]:
+        raise SystemExit(2)
+    else:
+        print(json.dumps(checked_install(), sort_keys=True))

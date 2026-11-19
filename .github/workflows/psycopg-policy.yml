@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: digitie/kor-travel-common
-          ref: 8a0ec23c206648ae5d81f365748f66d5ca6047f1
+          ref: 694b814ce625778d31b6aa57b8ae2c8c4f22a752
           path: common
           fetch-depth: 0
           persist-credentials: false
@@ -40,12 +40,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = 8a0ec23c206648ae5d81f365748f66d5ca6047f1
+          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = 694b814ce625778d31b6aa57b8ae2c8c4f22a752
           python -B "$GITHUB_WORKSPACE/common/tools/check_versions.py" \
             "$GITHUB_WORKSPACE/consumer" \
             --repo kor-travel-concierge \
             --strict-python-application \
-            --python-version 3.11 \
+            --python-version 3.12 \
+            --python-build-tools \
             --constraints backend/application-constraints.txt \
             --json "$RUNNER_TEMP/concierge-application-policy.json"
 
