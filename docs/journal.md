@@ -1,3 +1,11 @@
+## 2026-11-20 — legacy APScheduler Psycopg3 선언 고정
+
+- 유지보수 중인 `scheduler/requirements.txt`의 기존 Psycopg3 binary extra만 `3.3.9`로 고정한다. API/ETL/Dagster 의존성과 런타임 코드는 바꾸지 않는다.
+- 현재 Manager는 별도 APScheduler 서비스 대신 Dagster code location을 관리한다. Dagster 실행 경로가 재사용하는 worker 함수와 legacy persistent job store는 구분하며, 이 변경으로 scheduler를 시작하거나 기존 Psycopg2 profile을 교체하지 않는다.
+- 공식 PyPI의 non-yanked3.3.9와 CPython3.13 ARM binary wheel을 확인했다. 배포된 code-server의 읽기 전용 distribution metadata는 Psycopg3.3.6/Psycopg2-binary2.9.13이었다. 설치 여부는 활성 DB driver 사용 증명이 아니다.
+- 기존 scheduler job-store URL 시험2건이 통과했다. 새 binary의 native 실행이나 성능 개선을 측정한 결과는 아니다.
+- source-only 정리다. 현재 운영 이미지·설치 드라이버는 그대로이며, 이 사유로 이미지 build/배포하지 않는다. 공용 Python Dockerfile은 legacy requirements도 소비하므로 향후 전체 build 입력에는 새 pin이 반영될 수 있다. API/GDAL 기반 이미지를 재생성하지 않았다.
+
 ## 2026-11-19 — 공통 셸 위 잔여: 버튼 테두리·한 줄 제목·e2e
 
 - #276(공통 셸 정본) 위에 남은 것만 더한다. 셸·rail·drawer 구현은 #276이 정본이다.

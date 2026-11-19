@@ -1,3 +1,9 @@
+## 2026-11-20 — legacy Scheduler DB driver 유지보수
+
+- [x] 기존 `psycopg[binary]` 선언만3.3.9 고정; standalone scheduler 미사용/현재 Dagster 관리 경계 확인.
+- [x] 기존 job-store URL 시험2건 통과.
+- [ ] 정확 PR CI 확인. Common selected-driver guard는 소유자의 구체적 계약이 준비되면 해당 선언 범위에만 채택한다. 현재 운영 이미지 build/배포는 이 작업에 포함하지 않는다.
+
 ## 2026-11-19 — 공통 셸 잔여(버튼 테두리·한 줄 제목·e2e)
 
 - [x] 앱 쪽 포커스 ring·잘린 outline·base 상태 스타일 정리, 상단 바 h1 단일화·설명 이동, 제목·drawer·버튼 상태 e2e. 운영 반영은 다음 UI 이미지 배포.
