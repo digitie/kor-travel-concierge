@@ -187,9 +187,10 @@
     font-feature-settings: "kern" 1, "tnum" 1;
     letter-spacing: -0.012em;
   }
+  /* FS-7.8: 요소 기본값만 둔다. 링크 hover 같은 상태 스타일은 @layer components에 둔다. */
   a:not([class]),
   .prose a {
-    @apply text-brand underline-offset-4 hover:underline;
+    @apply text-brand underline-offset-4;
   }
   button,
   input,
@@ -349,6 +350,11 @@
     letter-spacing: 0.04em;
     line-height: 1.25;
     text-transform: uppercase;
+  }
+
+  a:not([class]):hover,
+  .prose a:hover {
+    text-decoration-line: underline;
   }
 
   .ktc-scroll-cue {

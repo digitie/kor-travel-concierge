@@ -57,8 +57,37 @@ export default function JobDetailPage() {
       title="작업 상세"
       description={`작업 ID ${jobId}`}
       actions={
+        // 한 줄 상단 바에는 아이콘 버튼 둘만 둔다. 실행 동작과 그 결과 문구는 본문 첫 줄에 둔다.
         <>
-          {run ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="새로고침"
+            title="새로고침"
+            onClick={() => {
+              void runQuery.refetch();
+              void statsQuery.refetch();
+            }}
+          >
+            <RefreshCwIcon />
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="뒤로"
+            title="뒤로"
+            onClick={() => router.back()}
+          >
+            <ArrowLeftIcon />
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-5">
+        {run ? (
+          <div className="flex justify-end empty:hidden">
             <RunActionButtons
               run={run}
               size="sm"
@@ -67,32 +96,8 @@ export default function JobDetailPage() {
                 router.push(`/jobs?deleted=${encodeURIComponent(deletedJobId)}`)
               }
             />
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              void runQuery.refetch();
-              void statsQuery.refetch();
-            }}
-          >
-            <RefreshCwIcon data-icon="inline-start" />
-            새로고침
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => router.back()}
-          >
-            <ArrowLeftIcon data-icon="inline-start" />
-            뒤로
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-5">
+          </div>
+        ) : null}
         {runQuery.isLoading ? (
           <Panel title="작업">
             <EmptyState>불러오는 중...</EmptyState>

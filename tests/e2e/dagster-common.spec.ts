@@ -83,5 +83,7 @@ test('모바일 실행 선택과 기존 작업 화면 이동', async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath('dagster-mobile.png'), fullPage: true });
   await page.getByTestId('concierge-selected-run').getByRole('link', { name: /수집 작업/ }).click();
   await expect(page).toHaveURL(/\/jobs\/\d+/);
-  await expect(page.getByRole('link', { name: '작업', exact: true })).toHaveAttribute('aria-current', 'page');
+  // 모바일 메뉴는 좌측 drawer다.
+  await page.getByRole('button', { name: '메뉴 열기', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '주요 메뉴' }).getByRole('link', { name: '작업', exact: true })).toHaveAttribute('aria-current', 'page');
 });

@@ -9,16 +9,18 @@ import {
   errorReloadStorageKey,
   isLikelyRecoverableNextRuntimeError,
 } from "@/lib/error-recovery";
+import { cn } from "@/lib/utils";
 
 type AppErrorPanelProps = {
   error: Error & { digest?: string };
   reset?: () => void;
-  // standalone: global-error에서 bare html/body 안에 렌더될 때 전달한다. 패널은
-  // 항상 스스로 중앙 정렬하므로 분기 렌더는 없지만, 공용 API로 prop을 유지한다.
+  // standalone: global-error에서 bare html/body 안에 렌더될 때 전달한다. 그때만 화면
+  // 높이를 채우고 h1을 만든다. 그 밖(error.tsx)은 공통 셸 본문 안이라 셸 상단 바가 h1이다.
   standalone?: boolean;
 };
 
-export function AppErrorPanel({ error, reset }: AppErrorPanelProps) {
+export function AppErrorPanel({ error, reset, standalone }: AppErrorPanelProps) {
+  const Heading = standalone ? "h1" : "h2";
   const recoverable = isLikelyRecoverableNextRuntimeError(error);
   const details = errorRecoveryMessage(error);
 
@@ -77,12 +79,17 @@ export function AppErrorPanel({ error, reset }: AppErrorPanelProps) {
   };
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-surface-page p-6">
+    <div
+      className={cn(
+        "flex w-full flex-1 items-center justify-center bg-surface-page p-6",
+        standalone && "min-h-screen",
+      )}
+    >
       <div className="w-full max-w-md rounded-panel border border-border bg-card p-6">
         <p className="ktc-eyebrow">UI Runtime Error</p>
-        <h1 className="mt-2 text-[22px] font-extrabold tracking-[-0.03em] text-text-strong">
+        <Heading className="mt-2 text-[22px] font-extrabold tracking-[-0.03em] text-text-strong">
           페이지를 다시 불러오지 못했습니다
-        </h1>
+        </Heading>
         <p className="mt-2 text-sm text-text-secondary">
           {recoverable
             ? "현재 탭의 화면 런타임 상태가 서버와 맞지 않아 새로고침이 필요합니다."

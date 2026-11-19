@@ -197,7 +197,7 @@ export function HarvestConsole() {
   return (
     <div className="flex h-full flex-col gap-6 bg-background p-5">
       <header className="flex flex-col gap-1">
-        <h1 className="text-base font-semibold tracking-normal">수집 작업</h1>
+        <h2 className="text-base font-semibold tracking-normal">수집 작업</h2>
       </header>
 
       <form

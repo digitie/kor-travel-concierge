@@ -123,16 +123,30 @@ for (const width of [320, 390, 768, 1440]) {
       await page.goto(path, { waitUntil: 'domcontentloaded' });
       expect((await response).status()).toBe(200);
       await expect(page.locator('#main-content')).toBeVisible();
-      await expect(page.locator(`a[href="${path}"][aria-current="page"]:visible`).first()).toBeInViewport();
+      if (width >= 1024) {
+        await expect(page.locator(`a[href="${path}"][aria-current="page"]:visible`).first()).toBeInViewport();
+      } else {
+        // lg 미만은 좌측 drawer다. 열린 동안 메뉴 버튼은 aria-hidden 바깥이라 data-slot으로 잡는다.
+        await page.locator('[data-slot="admin-shell-menu-button"]').click();
+        const drawer = page.getByRole('dialog', { name: '주요 메뉴' });
+        await expect(drawer.locator(`a[href="${path}"][aria-current="page"]`)).toBeInViewport();
+        await page.keyboard.press('Escape');
+        await expect(drawer).toHaveCount(0);
+      }
       await noOverflow(page);
     });
     await page.screenshot({ path: info.outputPath(`menu-${width}.png`), fullPage: true });
   });
 }
 
-test('모바일 메뉴를 가로 스크롤해 링크를 활성화하고 현재 항목으로 이동한다', async({page})=>{
+test('모바일 좌측 drawer에서 링크를 활성화하면 닫히고 본문으로 포커스가 간다', async({page})=>{
   await page.setViewportSize({width:390,height:844});await login(page,'/jobs');
-  const link=page.getByTestId('concierge-common-menu').getByRole('link',{name:'API 테스트',exact:true});
-  await link.scrollIntoViewIfNeeded();await link.focus();await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/\/api-test$/);await expect(link).toHaveAttribute('aria-current','page');await expect(link).toBeInViewport();
+  await page.getByRole('button',{name:'메뉴 열기',exact:true}).click();
+  const drawer=page.getByRole('dialog',{name:'주요 메뉴'});
+  const link=drawer.getByRole('link',{name:'API 테스트',exact:true});
+  await link.focus();await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/api-test$/);await expect(drawer).toHaveCount(0);
+  await expect(page.locator('#main-content')).toBeFocused();
+  await page.getByRole('button',{name:'메뉴 열기',exact:true}).click();
+  await expect(drawer.getByRole('link',{name:'API 테스트',exact:true})).toHaveAttribute('aria-current','page');
 });

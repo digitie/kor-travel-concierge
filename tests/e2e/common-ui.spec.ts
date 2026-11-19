@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { CrawlRunSummary, DestinationSummary, UnmatchedCandidate } from "../../frontend/src/lib/api";
 
 const run: CrawlRunSummary = {
@@ -294,6 +294,204 @@ test("viewport 고정은 lg 이상에만 적용하고 모바일 하단 입력은
     }
   }
 });
+
+const SHELL_PAGES = [
+  { path: "/", heading: "개요 - 결과" },
+  { path: "/collect", heading: "수집 파이프라인 - 수집" },
+  { path: "/jobs", heading: "수집 파이프라인 - 작업" },
+  { path: "/jobs/common-ui-run", heading: "수집 파이프라인 - 작업 상세", description: "작업 ID common-ui-run" },
+  { path: "/review", heading: "검수 - 검수 큐", description: "2/2개 불러옴" },
+  { path: "/review/1", heading: "검수 - 검수 후보 상세" },
+  { path: "/place/7", heading: "운영 - 장소 상세" },
+] as const;
+
+for (const width of [1280, 390]) {
+  test(`상단 바는 한 줄 "영역 - 페이지" 제목과 작은 설명만 둔다 ${width}`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width, height: 844 } });
+    const page = await context.newPage();
+    await mockApi(page);
+    await login(page, "/jobs");
+    for (const entry of SHELL_PAGES) {
+      await page.goto(entry.path);
+      const header = page.locator('[data-slot="admin-shell-header"]');
+      const h1 = page.getByRole("heading", { level: 1 });
+      await expect(h1).toHaveCount(1);
+      await expect(h1).toHaveAccessibleName(entry.heading);
+      await expect(h1).toHaveAttribute("title", entry.heading);
+      // 앱 설명 문구(예: Admin UI)와 별도 영역 줄을 두지 않는다.
+      await expect(header).not.toContainText("Admin UI");
+      await expect(header).not.toContainText("Travel Concierge");
+      await expect(header).not.toContainText("tca");
+      if ("description" in entry) {
+        const description = header.locator('[data-slot="admin-shell-description"]');
+        await expect(description).toHaveText(entry.description);
+        if (width >= 1024) expect(await description.evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(80);
+        expect(await description.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeLessThan(
+          await h1.evaluate(el => parseFloat(getComputedStyle(el).fontSize)),
+        );
+      }
+      const box = await header.boundingBox();
+      expect(box?.y).toBe(0);
+      expect(box?.height).toBeLessThanOrEqual(56);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    }
+    // 로그인 화면에는 셸이 없다.
+    await page.goto("/login");
+    await expect(page.locator('[data-slot="admin-shell"]')).toHaveCount(0);
+    await context.close();
+  });
+}
+
+test("모바일 메뉴는 좌측 drawer로 열리고 Esc·이동으로 닫히며 포커스를 돌려준다", async ({ browser }) => {
+  // 슬라이드 애니메이션 중간 좌표를 재지 않도록 움직임을 줄인다.
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  const page = await context.newPage();
+  await mockApi(page);
+  await login(page, "/jobs");
+  await expect(page.locator('[data-slot="admin-shell-rail"]')).toBeHidden();
+  const menuButton = page.locator('[data-slot="admin-shell-menu-button"]');
+  await expect(page.getByRole("button", { name: "메뉴 열기", exact: true })).toBeVisible();
+  await expect(menuButton).toHaveAttribute("aria-expanded", "false");
+  await menuButton.click();
+  const drawer = page.getByRole("dialog", { name: "주요 메뉴" });
+  await expect(drawer).toBeVisible();
+  await expect(menuButton).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+  expect((await drawer.boundingBox())?.width).toBeLessThanOrEqual(280);
+  await expect(drawer.getByRole("link", { name: "작업", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(drawer.getByRole("button", { name: "로그아웃", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+  await expect(menuButton).toBeFocused();
+  await menuButton.click();
+  await drawer.getByRole("link", { name: "수집", exact: true }).click();
+  await expect(page).toHaveURL(/\/collect$/);
+  await expect(drawer).toHaveCount(0);
+  await expect(page.locator("#main-content")).toBeFocused();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("수집 파이프라인 - 수집");
+  // 이전 경로로 돌아와도 drawer가 다시 열리지 않는다.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/jobs$/);
+  await expect(drawer).toHaveCount(0);
+  await context.close();
+});
+
+test("데스크톱은 drawer 없이 좌측 rail을 쓴다", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await mockApi(page);
+  await login(page, "/jobs");
+  await expect(page.locator('[data-slot="admin-shell-menu-button"]')).toBeHidden();
+  const rail = page.locator('[data-slot="admin-shell-rail"]');
+  await expect(rail).toBeVisible();
+  expect((await rail.boundingBox())?.x).toBe(0);
+  await expect(rail.getByRole("button", { name: "로그아웃", exact: true })).toBeVisible();
+  await context.close();
+});
+
+type ButtonStyle = {
+  border: string; shadow: string; outlineStyle: string; outlineWidth: string;
+  outlineOffset: string; outlineColor: string; focusColor: string; focusVisible: boolean;
+};
+async function buttonStyle(target: Locator): Promise<ButtonStyle> {
+  return target.evaluate(el => {
+    const style = getComputedStyle(el);
+    const probe = document.createElement("span");
+    probe.style.color = "var(--kt-focus)";
+    // 셸 안의 --kt-focus 재정의를 그대로 받도록 대상 옆에서 잰다.
+    (el.parentElement ?? document.body).append(probe);
+    const focusColor = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      border: ["Top", "Right", "Bottom", "Left"].map(side => style.getPropertyValue(`border-${side.toLowerCase()}-width`)).join(" "),
+      shadow: style.boxShadow, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset, outlineColor: style.outlineColor, focusColor,
+      focusVisible: el.matches(":focus-visible"),
+    };
+  });
+}
+async function tabTo(page: Page, target: Locator) {
+  const handle = await target.elementHandle();
+  // 매번 문서 처음(skip link)부터 Tab을 시작한다.
+  await page.locator('[data-slot="admin-shell-skip-link"]').focus();
+  for (let index = 0; index < 150; index += 1) {
+    await page.keyboard.press("Tab");
+    if (await handle!.evaluate(el => document.activeElement === el)) return;
+  }
+  throw new Error("Tab으로 대상 버튼에 도달하지 못했습니다.");
+}
+async function snap(page: Page, target: Locator, path: string) {
+  const box = await target.boundingBox();
+  if (!box) return;
+  const pad = 8;
+  await page.screenshot({ path, clip: { x: Math.max(0, box.x - pad), y: Math.max(0, box.y - pad), width: box.width + pad * 2, height: box.height + pad * 2 } });
+}
+
+for (const width of [1280, 390]) {
+  test(`버튼 변형별 포커스 outline은 하나이고 hover·active·disabled에서 테두리가 굵어지지 않는다 ${width}`, async ({ browser }, info) => {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await context.newPage();
+    await mockApi(page);
+    await login(page, "/jobs");
+    const seen = new Set<string>();
+    for (const path of ["/jobs/common-ui-run", "/collect", "/review", "/jobs"]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      const buttons = page.locator('main [data-slot="button"]:visible:not([disabled]), header [data-slot="button"]:visible:not([disabled]), [role="group"] > button:visible:not([disabled])');
+      const variants = await buttons.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-variant") ?? "toggle"));
+      for (const variant of [...new Set(variants)]) {
+        if (seen.has(variant)) continue;
+        seen.add(variant);
+        const name = `${width}-${variant}`;
+        // disabled로 바꿔도 같은 요소를 가리키도록 표식으로 고정한다.
+        await buttons.and(page.locator(variant === "toggle" ? "[role=group] > button" : `[data-variant="${variant}"]`)).first().evaluate((el, id) => el.setAttribute("data-e2e-probe", id), name);
+        const target = page.locator(`[data-e2e-probe="${name}"]`);
+        await target.scrollIntoViewIfNeeded();
+        await page.mouse.move(0, 0);
+        const rest = await buttonStyle(target);
+        await snap(page, target, info.outputPath(`${name}-1-rest.png`));
+        await target.hover();
+        const hover = await buttonStyle(target);
+        expect(hover.border, `${name} hover border`).toBe(rest.border);
+        expect(hover.outlineStyle, `${name} hover outline`).toBe("none");
+        await snap(page, target, info.outputPath(`${name}-2-hover.png`));
+        await page.mouse.move(0, 0);
+        await tabTo(page, target);
+        const focus = await buttonStyle(target);
+        expect(focus.focusVisible, `${name} :focus-visible`).toBe(true);
+        expect(focus.outlineStyle, `${name} focus outline style`).toBe("solid");
+        expect(focus.outlineWidth, `${name} focus outline width`).toBe("2px");
+        // 모드 토글은 overflow-hidden 그룹 안이라 안쪽(-2px)에 그린다.
+        expect(focus.outlineOffset, `${name} focus outline offset`).toBe(variant === "toggle" ? "-2px" : "2px");
+        expect(focus.outlineColor, `${name} focus outline color`).toBe(focus.focusColor);
+        expect(focus.border, `${name} focus border`).toBe(rest.border);
+        expect(focus.shadow, `${name} focus ring`).toBe(rest.shadow);
+        await snap(page, target, info.outputPath(`${name}-3-focus.png`));
+        const before = await target.boundingBox();
+        await target.hover();
+        await page.mouse.down();
+        const active = await buttonStyle(target);
+        const pressed = await target.boundingBox();
+        await snap(page, target, info.outputPath(`${name}-4-active.png`));
+        // 클릭을 일으키지 않도록 대상 밖에서 버튼을 뗀다.
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+        expect(active.border, `${name} active border`).toBe(rest.border);
+        expect(active.shadow, `${name} active ring`).toBe(rest.shadow);
+        expect(Math.abs((pressed?.y ?? 0) - (before?.y ?? 0)), `${name} active 이동`).toBeLessThanOrEqual(1);
+        await target.evaluate(el => { (el as HTMLButtonElement).disabled = true; });
+        const disabled = await buttonStyle(target);
+        expect(disabled.border, `${name} disabled border`).toBe(rest.border);
+        expect(disabled.shadow, `${name} disabled ring`).toBe(rest.shadow);
+        await snap(page, target, info.outputPath(`${name}-5-disabled.png`));
+        await target.evaluate(el => { (el as HTMLButtonElement).disabled = false; });
+      }
+    }
+    for (const variant of ["default", "outline", "ghost", "destructive"]) expect([...seen], `${width} 확인한 변형`).toContain(variant);
+    await context.close();
+  });
+}
 
 test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업을 연결한다", async ({ page }) => {
   await mockApi(page);

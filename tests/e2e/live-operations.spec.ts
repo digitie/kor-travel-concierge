@@ -122,7 +122,7 @@ test('화면 이탈 때 Dagster 요청 signal을 취소하고 선택 영역을 �
     // 특정 보류 요청의 cleanup AbortError를 2초 안에 관측한다.
     // 완료된 다른 요청이나 15초 TimeoutError는 이 계약을 통과시킬 수 없다.
     await expect.poll(() => page.evaluate(id => (window as typeof window & { dagsterSignals: { id: number; reason: string | null }[] }).dagsterSignals.find(s => s.id === id)?.reason, held.id), { timeout: 2000 }).toBe('AbortError');
-    await expect(page.getByRole('heading', { name: '작업', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '수집 파이프라인 - 작업', exact: true })).toBeVisible();
     await expect(panel(page)).toHaveCount(0); await expect(page.getByTestId('concierge-selected-run')).toHaveCount(0);
   } finally { await pending?.abort().catch(() => undefined); }
 });

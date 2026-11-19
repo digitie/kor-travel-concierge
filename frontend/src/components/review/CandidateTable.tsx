@@ -161,7 +161,7 @@ export function CandidateTable({
         "aria-selected": candidate.id === currentCandidateId,
         tabIndex: 0,
         className:
-          "group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+          "group cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
         onClick: (event) => {
           if (
             !(
