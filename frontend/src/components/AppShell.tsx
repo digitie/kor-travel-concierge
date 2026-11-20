@@ -13,7 +13,7 @@ import type { ReactNode } from "react";
 
 import { JobStatusLink } from "@/components/JobStatusLink";
 import { Button } from "@/components/ui/button";
-import { pickActiveNavHref } from "@/lib/nav";
+import { adminRouteLayout, pickActiveNavHref } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -114,19 +114,18 @@ function ShellFooter({ collapsed, inDrawer, logout }: AdminShellSlotState & { lo
   );
 }
 
-export function AppShell({ title, description, actions, children, contentClassName, viewportLocked }: {
-  title: string;
-  description?: string;
-  actions?: ReactNode;
-  children: ReactNode;
-  contentClassName?: string;
-  viewportLocked?: boolean;
-}) {
+/**
+ * 관리자 화면 공통 셸. `app/(admin)/layout.tsx`에서 한 번만 그려 경로 이동에도 유지한다.
+ * 셸이 페이지마다 다시 마운트되면 drawer 이동 뒤 본문 포커스(navigationKey)와 rail 상태가 끊긴다.
+ * 제목·본문 배치는 경로(adminRouteLayout)에서, 설명·동작은 페이지의 AdminPageTitle에서 받는다.
+ */
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
   const activeHref = pickActiveNavHref(pathname, navItems.map((item) => item.href));
   const activeGroup = navGroups.find((group) => group.items.some((item) => item.href === activeHref));
+  const route = adminRouteLayout(pathname);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
@@ -138,19 +137,17 @@ export function AppShell({ title, description, actions, children, contentClassNa
   return (
     <AdminShell
       area={activeGroup?.label ?? "운영"}
-      title={title}
-      description={description}
-      actions={actions}
+      title={route.title}
       brand={(slot) => <ShellBrand {...slot} />}
       railFooter={(slot) => <ShellFooter {...slot} logout={logout} />}
       navigationKey={pathname}
       collapsedStorageKey={SIDEBAR_COLLAPSED_KEY}
       mainId={MAIN_CONTENT_ID}
       labels={{ collapseRail: "좌측 메뉴 접기", expandRail: "좌측 메뉴 펼치기", menu: "주요 메뉴" }}
-      className={cn("concierge-admin-shell", viewportLocked && "concierge-viewport-locked")}
+      className={cn("concierge-admin-shell", route.viewportLocked && "concierge-viewport-locked")}
       railClassName="concierge-common-rail"
       drawerClassName="concierge-common-drawer"
-      mainClassName={cn("px-4 py-5 lg:px-6 lg:py-6", contentClassName)}
+      mainClassName={route.viewportLocked ? "flex min-h-0 flex-1 flex-col p-0" : "px-4 py-5 lg:px-6 lg:py-6"}
       menu={
         <div className="concierge-common-menu">
           <AppMenu

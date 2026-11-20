@@ -364,13 +364,27 @@ test("모바일 메뉴는 좌측 drawer로 열리고 Esc·이동으로 닫히며
   await page.keyboard.press("Escape");
   await expect(drawer).toHaveCount(0);
   await expect(menuButton).toBeFocused();
+  // 셸은 레이아웃에서 한 번만 그린다. 이동 뒤에도 같은 DOM 노드인지 표식으로 확인한다.
+  await page.locator('[data-slot="admin-shell"]').evaluate(el => { (el as HTMLElement & { __shellMarker?: string }).__shellMarker = "persist"; });
+  await page.locator("#main-content").evaluate(el => { (el as HTMLElement & { __mainMarker?: string }).__mainMarker = "persist"; });
   await menuButton.click();
   await drawer.getByRole("link", { name: "수집", exact: true }).click();
   await expect(page).toHaveURL(/\/collect$/);
   await expect(drawer).toHaveCount(0);
-  // 셸이 페이지마다 다시 마운트되므로(#276) 포커스가 닫힌 drawer 안에 남지 않는 것만 확인한다.
-  expect(await page.evaluate(() => document.activeElement?.closest("[role=dialog]") ?? null)).toBeNull();
   await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("수집 파이프라인 - 수집");
+  await expect(page.locator("#main-content")).toBeFocused();
+  expect(await page.locator('[data-slot="admin-shell"]').evaluate(el => (el as HTMLElement & { __shellMarker?: string }).__shellMarker)).toBe("persist");
+  expect(await page.locator("#main-content").evaluate(el => (el as HTMLElement & { __mainMarker?: string }).__mainMarker)).toBe("persist");
+  // 다음 drawer 이동에서도 같은 셸이 본문으로 포커스를 보낸다.
+  await menuButton.click();
+  await drawer.getByRole("link", { name: "설정", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(drawer).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("시스템 - 설정");
+  await expect(page.locator("#main-content")).toBeFocused();
+  expect(await page.locator('[data-slot="admin-shell"]').evaluate(el => (el as HTMLElement & { __shellMarker?: string }).__shellMarker)).toBe("persist");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/collect$/);
   // 이전 경로로 돌아와도 drawer가 다시 열리지 않는다.
   await page.goBack();
   await expect(page).toHaveURL(/\/jobs$/);
@@ -388,6 +402,15 @@ test("데스크톱은 drawer 없이 좌측 rail을 쓴다", async ({ browser }) 
   await expect(rail).toBeVisible();
   expect((await rail.boundingBox())?.x).toBe(0);
   await expect(rail.getByRole("button", { name: "로그아웃", exact: true })).toBeVisible();
+  // rail을 접은 채 이동해도 셸이 다시 마운트되지 않고 접힘·표식이 유지된다.
+  await rail.getByRole("button", { name: "좌측 메뉴 접기" }).click();
+  await expect(rail).toHaveAttribute("data-collapsed", "true");
+  await rail.evaluate(el => { (el as HTMLElement & { __railMarker?: string }).__railMarker = "persist"; });
+  await rail.getByRole("link", { name: "설정" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("시스템 - 설정");
+  await expect(rail).toHaveAttribute("data-collapsed", "true");
+  expect(await rail.evaluate(el => (el as HTMLElement & { __railMarker?: string }).__railMarker)).toBe("persist");
   await context.close();
 });
 

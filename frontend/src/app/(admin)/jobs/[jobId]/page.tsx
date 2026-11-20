@@ -1,5 +1,6 @@
 "use client";
 
+import { AdminPageTitle } from "@kor-travel/ui/admin-shell";
 import { VirtualTable } from "@kor-travel/ui/virtual-table";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -23,7 +24,6 @@ import {
   RUN_QUEUE_QUERY_KEY,
   type RunVideoStat,
 } from "@/lib/api";
-import { AppShell } from "@/components/AppShell";
 import { ConfirmActionButton } from "@/components/ConfirmActionButton";
 import { DataLoadError, JobDetailView } from "@/components/JobDetailView";
 import { JobLogView } from "@/components/JobLogDialog";
@@ -53,38 +53,38 @@ export default function JobDetailPage() {
   const stats = statsQuery.data ?? [];
 
   return (
-    <AppShell
-      title="작업 상세"
-      description={`작업 ID ${jobId}`}
-      actions={
-        // 한 줄 상단 바에는 아이콘 버튼 둘만 둔다. 실행 동작과 그 결과 문구는 본문 첫 줄에 둔다.
-        <>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="새로고침"
-            title="새로고침"
-            onClick={() => {
-              void runQuery.refetch();
-              void statsQuery.refetch();
-            }}
-          >
-            <RefreshCwIcon />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="뒤로"
-            title="뒤로"
-            onClick={() => router.back()}
-          >
-            <ArrowLeftIcon />
-          </Button>
-        </>
-      }
-    >
+    <>
+      <AdminPageTitle
+        description={`작업 ID ${jobId}`}
+        actions={
+          // 한 줄 상단 바에는 아이콘 버튼 둘만 둔다. 실행 동작과 그 결과 문구는 본문 첫 줄에 둔다.
+          <>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="새로고침"
+              title="새로고침"
+              onClick={() => {
+                void runQuery.refetch();
+                void statsQuery.refetch();
+              }}
+            >
+              <RefreshCwIcon />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="뒤로"
+              title="뒤로"
+              onClick={() => router.back()}
+            >
+              <ArrowLeftIcon />
+            </Button>
+          </>
+        }
+      />
       <div className="flex flex-col gap-5">
         {run ? (
           <div className="flex justify-end empty:hidden">
@@ -144,7 +144,7 @@ export default function JobDetailPage() {
           </Section>
         ) : null}
       </div>
-    </AppShell>
+    </>
   );
 }
 

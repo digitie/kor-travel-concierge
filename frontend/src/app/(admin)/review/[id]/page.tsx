@@ -6,7 +6,6 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftIcon } from "lucide-react";
 
-import { AppShell } from "@/components/AppShell";
 import { CandidateDetailView } from "@/components/CandidateDetailView";
 import {
   ApiRequestError,
@@ -110,7 +109,7 @@ export default function CandidateDetailPage() {
   });
 
   return (
-    <AppShell title="검수 후보 상세">
+    <>
       <div className="ktc-workspace w-full max-w-3xl">
         <Link
           href="/review"
@@ -183,6 +182,6 @@ export default function CandidateDetailPage() {
           ) : null}
         </div>
       </div>
-    </AppShell>
+    </>
   );
 }

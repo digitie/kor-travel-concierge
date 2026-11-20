@@ -1,3 +1,12 @@
+## 2026-11-20 — 관리자 셸을 레이아웃으로 올림(drawer 이동 뒤 본문 포커스)
+
+- 문제: #276은 `AppShell`(공통 `AdminShell`)을 페이지마다 그렸다. 경로를 바꾸면 셸이 통째로 다시 마운트되어, 모바일 drawer에서 메뉴로 이동한 뒤 `navigationKey`가 옮겨 주어야 할 `#main-content` 포커스가 사라졌다(셸이 유지된다는 전제의 로직).
+- 수정: 관리자 경로를 route group `src/app/(admin)/`로 옮기고 `(admin)/layout.tsx`에서 셸을 한 번만 그린다. 로그인·`/api` route는 group 밖이라 셸이 없다(URL 불변).
+- 제목·본문 배치의 단일 출처는 `lib/nav.ts`의 `adminRouteLayout(pathname)`이다(서버 렌더 첫 화면부터 "영역 - 페이지", `/`·`/collect`·`/review`만 lg 이상 viewport 고정·`p-0`). 페이지 데이터에 매인 설명·동작(작업 상세·검수 큐·Dagster)은 페이지의 `AdminPageTitle`로 덮어쓰고, 페이지를 벗어나면 자동으로 지워진다.
+- 유지: "영역 - 페이지" 제목, 상단 바 작은 설명, 페이지별 동작, 접힘 키 `kor-travel-concierge:sidebar-collapsed`와 "1"/"0" 값, `check-common-ui.mjs`, FS-7.8 버튼 포커스(CSS 무변경).
+- 시험: 단위(같은 셸 노드 유지·drawer 이동 뒤 `#main-content` 포커스·경로별 viewport 고정/설명 해제·`adminRouteLayout`), e2e common-ui(390px drawer 이동 2회 뒤 drawer 닫힘·`#main-content` 포커스·셸/본문 DOM 표식 유지, 1280px rail 접은 채 이동해도 접힘·표식 유지).
+- 배포하지 않았다(다음 UI 이미지 회전에서 반영).
+
 ## 2026-11-20 — 실제 공용 Python 이미지의 application profile 고정
 
 ## 2026-11-20 — 실제 공유 Python 의존성 전체 정책

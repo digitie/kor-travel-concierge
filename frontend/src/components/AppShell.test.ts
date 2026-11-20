@@ -22,6 +22,8 @@ vi.mock("@/components/JobStatusLink", () => ({
   JobStatusLink: () => createElement("a", { href: "/jobs", "data-testid": "job-observer" }, "작업 상태"),
 }));
 
+import { AdminPageTitle } from "@kor-travel/ui/admin-shell";
+
 import { AppShell } from "./AppShell";
 
 let root: Root;
@@ -29,12 +31,15 @@ let host: HTMLDivElement;
 let desktop = true;
 const storageKey = "kor-travel-concierge:sidebar-collapsed";
 
-async function render(title = "작업") {
-  await act(async () => root.render(createElement(AppShell, {
-    title, description: "진행 중인 수집", viewportLocked: true,
-    actions: createElement("button", { type: "button" }, "새로고침"),
-    children: createElement("p", null, "기존 본문"),
-  })));
+// 레이아웃처럼 같은 AppShell을 유지하고 children(페이지)만 바꿔 다시 그린다.
+async function render(body = "기존 본문") {
+  await act(async () => root.render(createElement(AppShell, null,
+    createElement(AdminPageTitle, {
+      description: "진행 중인 수집",
+      actions: createElement("button", { type: "button" }, "새로고침"),
+    }),
+    createElement("p", null, body),
+  )));
 }
 
 async function click(button: Element | null) {
@@ -73,7 +78,8 @@ afterEach(async () => {
 describe("Common AdminShell 이관", () => {
   it("단일 제목/본문/동작과 기존8개 경로·중첩 작업 활성 판정을 유지한다", async () => {
     await render();
-    expect([...document.querySelectorAll("h1")].map((node) => node.textContent)).toEqual(["수집 파이프라인 - 작업"]);
+    expect([...document.querySelectorAll("h1")].map((node) => node.textContent)).toEqual(["수집 파이프라인 - 작업 상세"]);
+    expect(document.querySelector('[data-slot="admin-shell-description"]')?.textContent).toBe("진행 중인 수집");
     expect(document.querySelectorAll('[data-slot="admin-shell-header"]')).toHaveLength(1);
     expect(document.getElementById("main-content")?.textContent).toBe("기존 본문");
     expect(document.getElementById("main-content")?.tabIndex).toBe(-1);
@@ -103,8 +109,42 @@ describe("Common AdminShell 이관", () => {
     expect(document.querySelectorAll('[data-testid="job-observer"]')).toHaveLength(1);
     expect(dialog?.querySelector('a[href="/review"]')).not.toBeNull();
     state.pathname = "/settings";
-    await render("설정");
+    await render("설정 본문");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("레이아웃 셸은 이동 사이에 유지되고 drawer 이동 뒤 본문으로 포커스를 보낸다", async () => {
+    desktop = false;
+    await render();
+    const shell = document.querySelector('[data-slot="admin-shell"]');
+    const main = document.getElementById("main-content");
+    // jsdom은 링크 이동을 구현하지 않으므로 기본 동작만 막는다(next/link도 기본 동작을 막는다).
+    document.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    await click(document.querySelector('button[aria-label="메뉴 열기"]'));
+    await click(document.querySelector('[role="dialog"] a[href="/settings"]'));
+    state.pathname = "/settings";
+    await render("설정 본문");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[data-slot="admin-shell"]')).toBe(shell);
+    expect(document.getElementById("main-content")).toBe(main);
+    expect(document.activeElement).toBe(main);
+    expect(main?.textContent).toBe("설정 본문");
+    expect(document.querySelector("h1")?.textContent).toBe("시스템 - 설정");
+  });
+
+  it("경로가 정한 viewport 고정·본문 배치를 바꾸고 페이지 설명은 이동 시 지운다", async () => {
+    state.pathname = "/review";
+    await render();
+    const shell = document.querySelector('[data-slot="admin-shell"]');
+    expect(shell?.classList.contains("concierge-viewport-locked")).toBe(true);
+    expect(document.getElementById("main-content")?.className).toContain("p-0");
+    state.pathname = "/settings";
+    await act(async () => root.render(createElement(AppShell, null, createElement("p", null, "설정 본문"))));
+    expect(shell?.classList.contains("concierge-viewport-locked")).toBe(false);
+    expect(document.getElementById("main-content")?.className).not.toContain("p-0");
+    expect(document.querySelector('[data-slot="admin-shell-description"]')).toBeNull();
+    expect(document.querySelector("h1")?.textContent).toBe("시스템 - 설정");
   });
 
   it("drawer 로그아웃도 기존POST·query정리·로그인 이동/refresh를 실행한다", async () => {
