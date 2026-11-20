@@ -1,3 +1,7 @@
+## 2026-11-20 — 관리자 셸 레이아웃 hoist
+
+- [x] `(admin)` route group 레이아웃 셸, 경로 기반 제목/viewport 고정, 페이지 `AdminPageTitle`, drawer 이동 뒤 본문 포커스·셸 유지 단위/e2e. 운영 반영은 다음 UI 이미지 회전.
+
 ## 2026-11-20 — 실제 사용 Python application profile 채택
 
 - [x] Common74 merged 검증 head b566로 기존 필수 source policy job 확장; frontend guard/packs 유지.

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeftIcon } from "lucide-react";
 
-import { AppShell } from "@/components/AppShell";
 import { PlaceDetailView } from "@/components/PlaceDetailView";
 
 export default function PlaceDetailPage() {
@@ -13,7 +12,7 @@ export default function PlaceDetailPage() {
   const id = Number(params.id);
 
   return (
-    <AppShell title="장소 상세">
+    <>
       <div className="ktc-workspace w-full max-w-3xl">
         <Link
           href="/"
@@ -30,6 +29,6 @@ export default function PlaceDetailPage() {
           )}
         </div>
       </div>
-    </AppShell>
+    </>
   );
 }

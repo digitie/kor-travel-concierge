@@ -8,7 +8,8 @@ import { triageProgressPanelProps,
   reviewQueueSidebarProps,
   reviewShortcutDialogProps } from "./review-view-props";
 
-import { AppShell } from "@/components/AppShell";
+import { AdminPageTitle } from "@kor-travel/ui/admin-shell";
+
 import { ReviewUndoSnackbar } from "@/components/ReviewUndoSnackbar";
 import { Button } from "@/components/ui/button";
 import { dismissReviewUndo } from "@/lib/review-undo";
@@ -62,29 +63,27 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
     </div>
   );
   return (
-    <AppShell
-      title="검수 큐"
-      description={`${candidates.length}/${candidateTotal}개 불러옴`}
-      actions={
-        <div className="flex items-center gap-1">
-          {modeToggle}
-          {/* 단축키는 키보드 환경 전용이라 좁은 화면 상단 바에는 두지 않는다. */}
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="hidden md:inline-flex"
-            aria-label="검수 단축키 도움말"
-            title="단축키 도움말 (?)"
-            onClick={() => setShortcutHelpOpen(true)}
-          >
-            <KeyboardIcon />
-          </Button>
-        </div>
-      }
-      contentClassName="flex min-h-0 flex-1 flex-col p-0"
-      viewportLocked
-    >
+    <>
+      <AdminPageTitle
+        description={`${candidates.length}/${candidateTotal}개 불러옴`}
+        actions={
+          <div className="flex items-center gap-1">
+            {modeToggle}
+            {/* 단축키는 키보드 환경 전용이라 좁은 화면 상단 바에는 두지 않는다. */}
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="hidden md:inline-flex"
+              aria-label="검수 단축키 도움말"
+              title="단축키 도움말 (?)"
+              onClick={() => setShortcutHelpOpen(true)}
+            >
+              <KeyboardIcon />
+            </Button>
+          </div>
+        }
+      />
       <div
         className={
           isTriage
@@ -151,7 +150,7 @@ export function ReviewWorkspaceView(model: ReviewWorkspaceModel) {
       ) : null}
 
       <ReviewShortcutDialog {...reviewShortcutDialogProps(model)} />
-    </AppShell>
+    </>
   );
 }
 
