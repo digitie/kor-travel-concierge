@@ -31,5 +31,5 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm ci --prefix ../tests --engine-strict --strict-peer-deps --no-audit --no-fund
-      - run: npx --prefix ../tests playwright install --with-deps chromium
+      - run: npx --prefix ../tests playwright install --with-deps --only-shell chromium
       - run: npm --prefix ../tests run test:common-ui
