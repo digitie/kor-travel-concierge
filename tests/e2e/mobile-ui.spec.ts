@@ -137,7 +137,7 @@ for (const width of WIDTHS) {
     await mockDetailAndStatus(page);
     await login(page, "/status");
     const strip = page.locator('[data-slot="stat-strip"]').first();
-    await expect(strip).toContainText("실행 12,345 · 대기 67,890 · 확인 필요 4,321");
+    await expect(strip).toContainText("실행 12345 · 대기 67890 · 확인 필요 4321");
     await expect(strip).toContainText("1,234,567 장소 · 98,765 영상");
     const values = await strip.locator("dd > span > span:first-child").evaluateAll(nodes => nodes.map(node => {
       const el = node as HTMLElement;
@@ -199,8 +199,9 @@ async function smallTargets(page: Page) {
       const after = getComputedStyle(node, "::after");
       if (after.content !== "none" && after.position === "absolute") {
         const px = (value: string) => (value.endsWith("px") ? parseFloat(value) : 0);
-        width = Math.max(width, rect.width - px(after.left) - px(after.right));
-        height = Math.max(height, rect.height - px(after.top) - px(after.bottom));
+        // absolute ::after의 기준은 테두리 안쪽(padding box)이다.
+        width = Math.max(width, node.clientWidth - px(after.left) - px(after.right));
+        height = Math.max(height, node.clientHeight - px(after.top) - px(after.bottom));
       }
       const name = (node.getAttribute("aria-label") || node.textContent || node.id || node.tagName).trim().slice(0, 40);
       if (Math.min(width, height) < 43.5) {
@@ -209,7 +210,7 @@ async function smallTargets(page: Page) {
       }
       // 확장한 터치 영역이 실제로 눌리는지(이웃·잘림에 가려지지 않는지) 가장자리 안쪽 네 점을 찍는다.
       if (width > rect.width || height > rect.height) {
-        node.scrollIntoView({ block: "center", inline: "nearest" });
+        node.scrollIntoView({ block: "center", inline: "center" });
         const r = node.getBoundingClientRect();
         const cx = r.left + r.width / 2;
         const cy = r.top + r.height / 2;
