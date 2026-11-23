@@ -221,7 +221,8 @@ async function smallTargets(page: Page) {
           if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue;
           const hit = document.elementFromPoint(x, y);
           if (!hit || !(hit === node || node.contains(hit))) {
-            results.push(`${node.tagName.toLowerCase()}[${node.dataset.slot ?? node.getAttribute("role") ?? ""}] "${name}" 터치 영역 (${dx},${dy})이 ${hit?.tagName.toLowerCase()}에 가려짐`);
+            const hr = hit?.getBoundingClientRect();
+            results.push(`${node.tagName.toLowerCase()}[${node.dataset.slot ?? node.getAttribute("role") ?? ""}] "${name}" 터치 영역 (${dx},${dy})이 ${hit?.tagName.toLowerCase()}.${(hit?.getAttribute("class") ?? "").slice(0, 60)}에 가려짐 node=${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)} hit=${hr ? `${Math.round(hr.left)},${Math.round(hr.top)} ${Math.round(hr.width)}x${Math.round(hr.height)}` : "-"} vw=${window.innerWidth}`);
             break;
           }
         }
