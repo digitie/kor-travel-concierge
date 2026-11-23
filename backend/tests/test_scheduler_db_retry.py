@@ -16,7 +16,7 @@ def error(code=None):
     return OperationalError(None, None, original)
 
 
-@pytest.mark.parametrize("code", ["08006", "57P03", "40001", "40P01", None])
+@pytest.mark.parametrize("code", ["08006", "57P03", "40001", "40P01", "55P03", None])
 def test_transient_database_errors(code):
     assert is_transient_database_error(error(code))
 
@@ -24,6 +24,28 @@ def test_transient_database_errors(code):
 @pytest.mark.parametrize("code", ["28P01", "3D000", "42501", "23505", "42601"])
 def test_permanent_database_errors(code):
     assert not is_transient_database_error(error(code))
+
+
+def test_pending_rollback_is_classified_by_the_failed_flush():
+    from sqlalchemy.exc import PendingRollbackError
+
+    def reuse_after(code):
+        try:
+            try:
+                raise error(code)
+            except OperationalError:
+                # 실패한 flush 뒤 같은 세션을 다시 쓰면 원인을 가린 채 이 오류가 난다.
+                raise PendingRollbackError("rolled back due to a previous exception")
+        except PendingRollbackError as exc:
+            return exc
+
+    assert is_transient_database_error(reuse_after("55P03"))
+    assert not is_transient_database_error(reuse_after("42703"))
+    assert not is_transient_database_error(PendingRollbackError("no context"))
+    from scheduler.db_retry import transient_root
+
+    masked = reuse_after("55P03")
+    assert isinstance(transient_root(masked), OperationalError)
 
 
 def test_network_errors_but_not_unrelated_errors():

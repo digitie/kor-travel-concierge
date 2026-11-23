@@ -1,3 +1,11 @@
+## 2026-11-24 — Dagster claim 전 실패 backoff·일시 오류 유한 재시도 (T-209, ADR-53)
+
+- 출처: 2026-11-23 수집 실패 감사(Map `docs/reports/2026-11-23-collection-failure-audit.md` §1.2·§1.3 P2·§0 #2). n150 Dagster storage와 앱 DB를 읽기 전용으로 다시 분류했다.
+- 재분류(11-08~11-23, concierge 실패 1,134건): launch 실패(code-server fd 고갈, 시작 전 실패) 1,127건 — source_scan 934·feature_exports 93·admin_region_refresh 92·batch 8. 11-14 07:27~11-18 11:02에 몰렸고 Manager 쪽 수정 대상이다. concierge 코드가 원인인 것은 7건이다: feature_exports DB command timeout 2·statement timeout 1, admin_region_refresh geo 연결 실패 3, poi_batch 1(상태 갱신 lock timeout 뒤 세션 재사용 오류로 원인이 가려져 바로 실패). 그 밖에 웹 수집 2건(36488·36489)이 11-16 launch 장애 동안 claim 전 4회 예산을 약 1시간 만에 소진해 영구 실패했다 — 실패 뒤 4~7초 만에 곧바로 다시 띄웠기 때문이다.
+- 수정: dispatch sensor는 claim 전에 끝난 run 뒤 지수 backoff(60초 기준·상한 900초, 행·attempt hash 기반 equal jitter)를 지나야 다시 띄운다. 예산은 6회(대기 합 약 15~30분), 대기 중 행은 건너뛰고 다음 행을 본다. 소진 사유에 마지막 run ID·상태를 남긴다. claim의 결정적 오류(SQLSTATE 22·23·42·0A)는 그 run에서 바로 failed로 종결하고(남은 예산 낭비 없음), 일시 오류·메모리 high-water·분류 못 한 오류는 pending을 유지한다. 유지보수 job 3종은 일시 오류(연결·timeout·lock/statement timeout·geo 5xx/429)만 같은 run 안에서 최대 2회 `RetryRequested`. 도메인 공용 일시 분류에 lock timeout(55P03)을 추가하고 PendingRollbackError는 앞선 flush 실패로 분류하고 한도 초과 사유에도 그 원인 유형을 적는다.
+- 시험: 새 `test_dagster_dispatch_backoff.py`(backoff 범위·안정·분산, 실패 직후/직전/경과 재발화와 predecessor key, 예산 소진, 대기 행이 뒤 행을 막지 않음, 실제 ephemeral instance run record 조회, end_time 우선·naive 시각 UTC 해석, 결정적/일시/미분류(DNS) claim 오류, 유지보수 재시도 성공·상한·결정적 무재시도, geo 일시 오류 재시도), `test_scheduler_db_retry.py`(55P03·PendingRollbackError), 기존 발화 예산 시험을 6회·첫 실패 backoff로 갱신. 결과는 PR 본문에 적는다.
+- 배포하지 않았다(Dagster code-server 이미지 회전에서 반영).
+
 ## 2026-11-23 — 모바일 UI 결함 수정(포커스·터치 표적·상태 요약·지도 worker·상세 응답)
 
 - 출처: prod 이미지 0956fa6b 격리 점검(390/320/1440).

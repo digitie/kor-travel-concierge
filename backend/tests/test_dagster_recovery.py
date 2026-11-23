@@ -326,7 +326,12 @@ async def test_not_started_same_key_and_preclaim_budget(
             tags=tags,
             run_config=config,
         )
-        for _ in range(3):
+        # 첫 실패 직후에는 backoff 동안 다시 띄우지 않는다.
+        result = await asyncio.to_thread(evaluate)
+        assert not result.run_requests
+        await session.refresh(row)
+        assert row.state == RunState.PENDING
+        for _ in range(rt.MAX_DISPATCH_RUNS - 1):
             instance.create_run_for_job(
                 concierge_batch,
                 status=DagsterRunStatus.FAILURE,

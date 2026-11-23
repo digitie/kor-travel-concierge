@@ -42,9 +42,22 @@ class RefreshStats:
 class RefreshError(RuntimeError):
     """Dagster 경계에서 실패로 표시할 오류. URL·키·HTTP 본문은 포함하지 않는다."""
 
-    def __init__(self, message: str, stats: RefreshStats) -> None:
+    def __init__(
+        self, message: str, stats: RefreshStats, *, transient: bool = False
+    ) -> None:
         super().__init__(message)
         self.stats = stats
+        # 연결 실패·timeout·5xx/429처럼 잠시 뒤 다시 시도하면 나아질 수 있는 실패.
+        self.transient = transient
+
+
+def is_transient_http_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.TransportError):
+        return True
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        return status == 429 or status >= 500
+    return False
 
 
 def stale_condition(token: str):
@@ -190,7 +203,9 @@ async def _refresh(factory, settings, client, base_url, api_key, stats):
         token = await current_token(client, base_url, api_key)
     except Exception as error:  # noqa: BLE001 - 공개 I/O 실패를 키/URL 없이 op 실패로 전달
         raise RefreshError(
-            f"geo 버전 조회 실패 ({type(error).__name__})", stats
+            f"geo 버전 조회 실패 ({type(error).__name__})",
+            stats,
+            transient=is_transient_http_error(error),
         ) from None
     if token is None:
         stats.state = "data_token_unavailable"

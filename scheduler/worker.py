@@ -62,7 +62,12 @@ from ktc.services import (
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from scheduler.db_retry import is_transient_database_error, retry_database, retry_delay
+from scheduler.db_retry import (
+    is_transient_database_error,
+    retry_database,
+    retry_delay,
+    transient_root,
+)
 
 # 워커 레인별 interval job id(T-163). 각 레인 1 인스턴스(max_instances=1)로 등록한다.
 WORKER_JOB_IDS: dict[str, str] = {
@@ -1620,7 +1625,7 @@ async def _execute_run_locked(
                 await crawl_run_service.mark_failed(
                     session, run.id,
                     error=(
-                        f"DB 일시 오류 재시도 한도 초과({type(exc).__name__})"
+                        f"DB 일시 오류 재시도 한도 초과({type(transient_root(exc)).__name__})"
                         if is_transient_database_error(exc) else str(exc)
                     ),
                 )

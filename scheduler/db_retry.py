@@ -11,14 +11,25 @@ from sqlalchemy.exc import (
     DisconnectionError,
     InterfaceError,
     OperationalError,
+    PendingRollbackError,
 )
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+def transient_root(exc: BaseException) -> BaseException:
+    """PendingRollbackError면 그것이 가린 앞선 flush 실패를 돌려준다(기록·분류용)."""
+    if isinstance(exc, PendingRollbackError) and exc.__context__ is not None:
+        return exc.__context__
+    return exc
+
+
 def is_transient_database_error(exc: BaseException) -> bool:
     """인증·schema 오류를 제외하고 연결 장애·복구·트랜잭션 충돌만 재시도한다."""
+    if transient_root(exc) is not exc:
+        # 무효가 된 세션을 다시 쓴 오류다. 원인은 앞선 flush 실패(__context__)에 있다.
+        return is_transient_database_error(transient_root(exc))
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
@@ -31,6 +42,8 @@ def is_transient_database_error(exc: BaseException) -> bool:
                 "57P03",
                 "40001",
                 "40P01",
+                # lock_timeout: 같은 행을 잠깐 쥔 다른 세션과의 경합이다(IO 정체 때 늘어남).
+                "55P03",
             }
         current = getattr(current, "orig", None) or current.__cause__
     return (
