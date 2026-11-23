@@ -267,6 +267,9 @@ T-202a/T-203 source 검증: timeout 분리는 T-199 PR #250에서 이미 반영�
 
 ## 완료
 
+- [x] **T-209**: Dagster claim 전 실패 backoff·jitter·상한(예산 6회), claim 결정적 오류 즉시 종결, 유지보수 job 일시 오류
+  유한 재시도(2회), lock timeout·PendingRollbackError 일시 분류, 소진 사유에 마지막 run(ADR-53). 출처는 2026-11-23 수집 실패 감사 §1.3 P2.
+  배포는 code-server 이미지 회전 때.
 - [x] **T-207**: 공통 Python·UI 최신 정렬 — Common Python 핀 `efcd671`→`c289b46`, vendored UI `0.1.0-dev.6`→`0.1.0-dev.9`
   (정규 `npm pack` 재현 SHA256 일치), dev.9 의존에 맞춘 `@base-ui/react` 1.8.0과 root `lucide-react` 1.41.0. 사용 중인 Common
   API는 하위 호환이라 코드 변경이 없다. PR #262 병합(`16c8461`) 뒤 Manager 공식 경로(`compose-boundary activate-concierge`)로

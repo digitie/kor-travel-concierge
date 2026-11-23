@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, timedelta
 
+import httpx
 from kortravelcommon.dagster import PROJECT_TAG, RecoveryPolicy
 from kortravelcommon.deadline import call_with_deadline
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from dagster import DagsterRunStatus, Failure, RunsFilter
@@ -24,6 +27,7 @@ from ktc.models import (
 )
 from ktc.services import crawl_run_service
 from ktc.services.scheduler_control import admitted, read_control
+from scheduler.db_retry import is_transient_database_error
 
 PROJECT = "concierge"
 REPOSITORY = "__repository__"
@@ -36,7 +40,80 @@ PREDECESSOR_TAG = "concierge/dispatch_predecessor"
 DISPATCH_NAME = "concierge_dispatch"
 LANE_JOBS = {"interactive": "concierge_interactive", "batch": "concierge_batch"}
 PAGE_SIZE = 10
-MAX_DISPATCH_RUNS = 4
+# claim 전에 끝난 발화(launch 실패·claim 전 일시 오류)의 유한 재시도 예산.
+# 실패 n회 뒤 다음 발화는 base·2^(n-1)(상한 cap)의 [1/2, 1] 구간 jitter만큼 늦춘다.
+# 6회면 대기(60·120·240·480·900초)의 합이 약 15~30분이라 짧은 launch 장애는 넘기고,
+# 긴 장애는 유한하게 종결한다.
+MAX_DISPATCH_RUNS = 6
+DISPATCH_BACKOFF_BASE_SECONDS = 60
+DISPATCH_BACKOFF_MAX_SECONDS = 900
+# 도메인 공용 분류(연결 단절·복구 대기·직렬화 충돌·lock timeout)에 더해, 재실행해도
+# 부작용이 없는 claim 전·유지보수 경로에서는 statement timeout과 서버 자원 부족도 일시 오류다.
+TRANSIENT_SQLSTATES = frozenset({"57014"})
+
+
+def backoff_seconds(failures, *, key, base, cap):
+    """failures회 실패 뒤 대기 시간. key가 같으면 같은 값이라 sensor tick마다 흔들리지 않는다."""
+    delay = min(cap, base * 2 ** min(max(failures - 1, 0), 16))
+    digest = hashlib.sha256(f"{key}:{failures}".encode()).digest()
+    fraction = int.from_bytes(digest[:8], "big") / 2**64
+    # equal jitter: 같은 시각에 실패한 행들이 한꺼번에 다시 발화하지 않게 흩는다.
+    return delay / 2 + fraction * delay / 2
+
+
+def dispatch_delay(row, failures):
+    return backoff_seconds(
+        failures,
+        key=f"{row.id}:{row.retry}:{row.attempt}",
+        base=DISPATCH_BACKOFF_BASE_SECONDS,
+        cap=DISPATCH_BACKOFF_MAX_SECONDS,
+    )
+
+
+# 같은 입력이면 몇 번을 다시 해도 같은 결과인 DB 오류 class: 데이터(22)·제약(23)·
+# 문법/schema(42)·미지원(0A). 분류하지 못한 오류는 결정적이라 단정하지 않고 backoff 예산에 맡긴다.
+DETERMINISTIC_SQLSTATE_CLASSES = frozenset({"22", "23", "42", "0A"})
+
+
+def is_deterministic_error(exc):
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if code:
+            return str(code)[:2] in DETERMINISTIC_SQLSTATE_CLASSES
+        current = getattr(current, "orig", None) or current.__cause__
+    return False
+
+
+def finished_at(record):
+    """종료된 native 실행의 종료 시각(epoch 초). launch 실패도 종료 시각이 남는다."""
+    if record.end_time is not None:
+        return float(record.end_time)
+    updated = record.update_timestamp
+    if updated.tzinfo is None:
+        # Dagster storage의 naive 시각은 UTC다. 실행 환경 TZ로 해석하지 않는다.
+        updated = updated.replace(tzinfo=UTC)
+    return updated.timestamp()
+
+
+def is_transient_error(exc):
+    """다시 시도하면 나아질 수 있는 오류만 True. 그 밖은 결정적 오류로 반복하지 않는다."""
+    if isinstance(exc, (TimeoutError, httpx.TransportError, PoolTimeoutError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        # 53xxx(자원 부족: 연결 수·메모리·디스크)·58xxx(시스템 I/O)는 서버 상태라 지나간다.
+        if code and (code in TRANSIENT_SQLSTATES or str(code)[:2] in {"53", "58"}):
+            return True
+        current = getattr(current, "orig", None) or current.__cause__
+    return is_transient_database_error(exc)
 
 
 def location():
@@ -164,16 +241,19 @@ def history(instance, row, generation):
         DISPATCH_TAG: DISPATCH_NAME,
         CONTROL_TAG: str(generation),
     }
-    runs = call_with_deadline(
-        lambda: instance.get_runs(
+    # 최신순 run record. 종료 시각이 있어야 claim 전 실패 뒤 backoff를 계산한다.
+    records = call_with_deadline(
+        lambda: instance.get_run_records(
             filters=RunsFilter(job_name=LANE_JOBS[row.lane], tags=tags),
             limit=MAX_DISPATCH_RUNS,
         ),
         timeout_seconds=5,
     )
-    if any(not owned_native(run, LANE_JOBS[row.lane]) for run in runs):
+    if any(
+        not owned_native(record.dagster_run, LANE_JOBS[row.lane]) for record in records
+    ):
         raise RuntimeError("Dagster 실행 identity가 일치하지 않습니다")
-    return runs
+    return records
 
 
 def run_key(row, predecessor):
@@ -325,17 +405,31 @@ async def reconcile_one(factory, before, native):
         return True
 
 
-async def exhaust_dispatch(factory, before, generation):
+async def exhaust_dispatch(factory, before, generation, last=None):
+    # 원인은 Dagster run에 남는다. 운영자가 바로 찾도록 마지막 run을 함께 적는다.
+    detail = f", 마지막 run {last.run_id[:8]} {last.status.value}" if last else ""
+    return await fail_unclaimed(
+        factory,
+        before.id,
+        before.retry,
+        before.attempt,
+        generation,
+        f"claim 이전 Dagster 발화 실패 한도 초과({MAX_DISPATCH_RUNS}회{detail})",
+    )
+
+
+async def fail_unclaimed(factory, row_id, retry, attempt, generation, error):
+    """아직 claim되지 않은 같은 attempt만 실패로 종결한다(늦은 발화는 건드리지 않는다)."""
     async with factory() as s:
         if not await admitted(s, "dagster", generation):
             return False
         row = await s.scalar(
             select(CrawlRun)
             .where(
-                CrawlRun.id == before.id,
+                CrawlRun.id == row_id,
                 CrawlRun.state == RunState.PENDING,
-                CrawlRun.retry_count == before.retry,
-                CrawlRun.orchestrator_attempt == before.attempt,
+                CrawlRun.retry_count == retry,
+                CrawlRun.orchestrator_attempt == attempt,
                 CrawlRun.orchestrator_run_id.is_(None),
             )
             .with_for_update(skip_locked=True)
@@ -352,9 +446,7 @@ async def exhaust_dispatch(factory, before, generation):
             )
         ):
             return False
-        await crawl_run_service.mark_failed(
-            s, row.id, error="claim 이전 Dagster 발화 실패 한도 초과(4회)"
-        )
+        await crawl_run_service.mark_failed(s, row.id, error=error)
         return True
 
 
@@ -424,10 +516,39 @@ async def execute_claimed(
     from scheduler.worker import _worker_memory_mb, execute_run
 
     if _worker_memory_mb() >= get_settings().SCHEDULER_MEMORY_HIGH_WATER_MB:
+        # 일시 상태다. 행은 pending으로 남고 발화 sensor가 backoff 뒤 다시 발화한다.
         raise Failure(
             "메모리 high-water: 새 작업 claim을 보류했습니다", allow_retries=False
         )
-    row = await claim(factory, row_id, lane, retry, attempt, generation, native_id)
+    try:
+        row = await claim(factory, row_id, lane, retry, attempt, generation, native_id)
+    except Exception as exc:
+        kind = type(exc).__name__
+        if is_transient_error(exc) or not is_deterministic_error(exc):
+            raise Failure(
+                f"claim 전 오류({kind}): 발화 sensor가 backoff 뒤 다시 시도합니다",
+                allow_retries=False,
+            ) from exc
+        # 데이터·제약·schema 같은 결정적 오류는 남은 발화 예산을 쓰며 반복해도 같은 결과다. 즉시 종결한다.
+        # 종결 저장마저 실패하면 행은 pending으로 남고 sensor의 유한 예산이 처리한다.
+        try:
+            await fail_unclaimed(
+                factory,
+                row_id,
+                retry,
+                attempt,
+                generation,
+                f"claim 전 결정적 오류({kind}): 재시도하지 않습니다",
+            )
+        except Exception as mark_error:  # noqa: BLE001 - 원래 오류를 우선 전달한다
+            logging.getLogger(__name__).warning(
+                "claim 전 결정적 오류 종결 실패(row=%s, %s)",
+                row_id,
+                type(mark_error).__name__,
+            )
+        raise Failure(
+            f"claim 전 결정적 오류({kind}): 재시도하지 않습니다", allow_retries=False
+        ) from exc
     if row is None:
         return {"state": "skipped", "crawl_run_id": row_id}
     try:

@@ -96,19 +96,32 @@ skip 결과로 남긴다. ownership_lost는 성공으로 위장하지 않는다.
 
 pending sensor는 project `concierge`·location `ktc.dagster.definitions`·repository
 `__repository__`·job·crawl ID·retry generation·orchestrator attempt 태그를 사용한다.
-해당 태그의 최신 run을 최대 4건만 조회해 직전 실행 ID를 결정한다. QUEUED·
+해당 태그의 최신 run record를 최대 6건만 조회해 직전 실행 ID와 종료 시각을 결정한다. QUEUED·
 STARTING·STARTED·CANCELING은 새 요청을 막는다. NOT_STARTED는 영구 차단하지 않는다.
 dispatcher/sensor 태그와 원래 dagster/run_key·세대·row identity를 확인하고 동일 run_key의
 RunRequest를 반환해 기존 run을 재제출한다. Dagster 1.13.24의 sensor daemon은 기존
 NOT_STARTED run을 새로 생성하지 않고 submit_run으로 인계한다. UNKNOWN은 재제출하지 않는다.
-새 run 생성 예산 4개와 같은 run의 미제출 인계를 구분한다. 이 인계는 claim/외부 provider를
+새 run 생성 예산 6개와 같은 run의 미제출 인계를 구분한다. 이 인계는 claim/외부 provider를
 실행하지 않았으므로 과금 재실행으로 집계하지 않는다. backend 재기동 뒤 동일 key 재제출
 native 경로를 회귀한다. metadata 오류·잘못된 origin은 UNKNOWN이며
-key를 회전시키지 않는다. 같은 attempt의 claim 전 terminal 4건이면 pending row를
+key를 회전시키지 않는다. 같은 attempt의 claim 전 terminal 6건이면 pending row를
 generation/owner CAS와 advisory lock으로 failed+attention=open으로 종결한다. 자동 발화는
-최초 1회+재발화 3회다. 센서가 yield 전 죽으면 같은 key로 재평가하고, 제출 후 claim 전
+최초 1회+재발화 5회다. claim 전에 끝난 run(launch 실패·claim 전 일시 오류) 뒤의 재발화는
+곧바로 하지 않는다. 실패 n회 뒤에는 직전 run 종료 시각에서 `60·2^(n-1)`초(상한 900초)의
+[1/2, 1] 구간만큼 기다린다(ADR-53). jitter는 행·retry·attempt·횟수의 hash라 tick마다
+흔들리지 않으며, 같은 시각에 실패한 행들이 한꺼번에 다시 뜨지 않는다. 대기 합은 약 15~30분이다.
+대기 중인 행은 건너뛰고 같은 page의 다음 행을 본다. claim 자체의 결정적 오류(SQLSTATE class
+22 데이터·23 제약·42 문법/schema·0A 미지원)는 남은 예산을 쓰지 않고 그 run 안에서 바로 같은 CAS로
+종결한다. 메모리 high-water·연결 단절·lock/statement timeout·자원 부족과 분류하지 못한 오류는 행을
+pending으로 두고 backoff를 따른다. 예산 소진 사유에는 마지막 Dagster run ID와 상태를 남긴다.
+센서가 yield 전 죽으면 같은 key로 재평가하고, 제출 후 claim 전
 죽으면 metadata predecessor로 재구성한다. pending 조회도 lane별 ID keyset/cursor를
 진행하므로 첫 페이지의 unresolved 행이 뒤의 요청을 영구 차단하지 않는다.
+
+유지보수 job(`concierge_source_scan`·`concierge_feature_exports`·`concierge_admin_region_refresh`)은
+멱등이므로 같은 run 안에서 일시 오류(연결·timeout·lock/statement timeout·geo 5xx/429)만 최대 2회
+`RetryRequested`로 다시 시도한다(30초 기준 지수·jitter·상한 120초). 결정적 오류는 반복하지 않는다.
+과금·비멱등 구간이 있는 interactive/batch op에는 op 재시도를 두지 않는다.
 
 | 종료 의도/결과 | 도메인 상태 | 이전 native 연결과 예산 |
 | --- | --- | --- |

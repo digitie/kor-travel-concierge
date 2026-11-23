@@ -15,6 +15,7 @@ from dagster import (
     DefaultSensorStatus,
     Definitions,
     Failure,
+    RetryRequested,
     RunRequest,
     SensorResult,
     SkipReason,
@@ -137,14 +138,53 @@ async def maintenance(config, kind):
         return {"changed": await feature_export_service.sync_feature_exports(s)}
 
 
+# 유지보수 job은 멱등이라 같은 run 안에서 일시 오류를 짧게 다시 시도한다. 과금·비멱등
+# 구간이 있는 interactive/batch op에는 적용하지 않는다(그쪽은 도메인 재시도 예산).
+MAINTENANCE_RETRIES = 2
+MAINTENANCE_BACKOFF_BASE_SECONDS = 30
+MAINTENANCE_BACKOFF_MAX_SECONDS = 120
+
+
+def retry_transient(context, error, *, transient=None):
+    """일시 오류면 유한 재시도를 요청한다. 결정적 오류·예산 소진이면 돌아가 실패를 잇는다."""
+    if transient is None:
+        transient = rt.is_transient_error(error)
+    if not transient or context.retry_number >= MAINTENANCE_RETRIES:
+        return
+    wait = rt.backoff_seconds(
+        context.retry_number + 1,
+        key=context.run_id,
+        base=MAINTENANCE_BACKOFF_BASE_SECONDS,
+        cap=MAINTENANCE_BACKOFF_MAX_SECONDS,
+    )
+    context.log.warning(
+        "일시 오류(%s): %.0f초 뒤 재시도(%s/%s)",
+        type(error).__name__,
+        wait,
+        context.retry_number + 1,
+        MAINTENANCE_RETRIES,
+    )
+    raise RetryRequested(
+        max_retries=MAINTENANCE_RETRIES, seconds_to_wait=wait
+    ) from error
+
+
 @op
 def source_scan(context, config: MaintenanceConfig):
-    return cooperative(maintenance(config, "scan"))
+    try:
+        return cooperative(maintenance(config, "scan"))
+    except Exception as error:
+        retry_transient(context, error)
+        raise
 
 
 @op
 def feature_exports(context, config: MaintenanceConfig):
-    return cooperative(maintenance(config, "export"))
+    try:
+        return cooperative(maintenance(config, "export"))
+    except Exception as error:
+        retry_transient(context, error)
+        raise
 
 
 @job(executor_def=executor, tags=rt.job_tags("concierge_source_scan"))
@@ -178,9 +218,13 @@ def admin_region_refresh(context, config: MaintenanceConfig):
     try:
         result = cooperative(refresh_maintenance(config))
     except RefreshError as error:
+        retry_transient(context, error, transient=error.transient)
         raise Failure(
             str(error), metadata=error.stats.metadata(), allow_retries=False
         ) from None
+    except Exception as error:
+        retry_transient(context, error)
+        raise
     context.add_output_metadata(result)
     return result
 
@@ -223,9 +267,9 @@ async def pending_page(lane, after):
         return await rt.page(factory, lane=lane, after=after)
 
 
-async def exhaust(row, generation):
+async def exhaust(row, generation, last=None):
     async with rt.database() as factory:
-        return await rt.exhaust_dispatch(factory, row, generation)
+        return await rt.exhaust_dispatch(factory, row, generation, last)
 
 
 @sensor(
@@ -276,7 +320,8 @@ def concierge_dispatch(context):
                     "발화 metadata UNKNOWN(row=%s, %s)", row.id, type(exc).__name__
                 )
                 continue
-            latest = history[0] if history else None
+            record = history[0] if history else None
+            latest = record.dagster_run if record else None
             if latest and latest.status == DagsterRunStatus.CANCELED:
 
                 async def native_cancel(candidate=row):
@@ -298,7 +343,13 @@ def concierge_dispatch(context):
                 if latest and not latest.is_finished:
                     continue
                 if len(history) >= rt.MAX_DISPATCH_RUNS:
-                    asyncio.run(exhaust(row, control.generation))
+                    asyncio.run(exhaust(row, control.generation, latest))
+                    continue
+                # claim 전에 끝난 실행(launch 실패·일시 오류) 뒤에는 곧바로 다시 띄우지
+                # 않는다. 실패 횟수에 따른 backoff가 지날 때까지 이 행만 건너뛴다.
+                if record is not None and time.time() < rt.finished_at(
+                    record
+                ) + rt.dispatch_delay(row, len(history)):
                     continue
                 predecessor = latest.run_id if latest else "root"
                 key = rt.run_key(row, predecessor)

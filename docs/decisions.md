@@ -2082,3 +2082,28 @@ check:dependencies는 공통 배포물의 check-dependencies.mjs --artifacts com
 소비자 경계 검사를 실행한다. CI는 strict peer 설치·guard·lint·Doctor·타입·단위·build·격리 브라우저를
 필수 단계로 둔다. 실패나 미실행 gate를 성공으로 기록하지 않는다. 상세 실행 결과·남은 blocker·배포
 go 조건은 [이관 보고서](reports/common-unification-20261111.md)에 기록한다.
+
+## ADR-53: claim 전 실패는 backoff 뒤 유한 재발화하고, 결정적 오류는 반복하지 않는다
+
+- 상태: accepted
+- 날짜: 2026-11-24
+- 결정자: human(수집 실패 개선 지시), Claude
+
+배경: 2026-11-23 수집 실패 감사(Map 저장소 `docs/reports/2026-11-23-collection-failure-audit.md`
+§1.2·§1.3 P2)에서 concierge 14일 실패율이 16.1%였다. 1,134건 중 1,127건은 code-server fd 고갈로
+run이 시작조차 못 한 launch 실패(11-14~18, Manager 쪽 수정 대상)였고, concierge 코드가 원인인
+것은 다음이었다. (1) dispatch sensor가 claim 전에 끝난 run을 15초 tick마다 곧바로 다시 띄워,
+11-16 웹 수집 2건이 launch 장애 한 시간 안에 4회 예산을 소진하고 영구 실패했다. (2) 유지보수 job의
+DB command timeout·statement timeout·geo 연결 실패가 재시도 없이 실패로 끝났다. (3) 작업 상태 갱신의
+lock timeout(55P03)이 일시 오류로 분류되지 않았고, 실패한 flush 뒤 세션 재사용 오류(PendingRollbackError)가
+원인을 가려 poi_batch가 바로 실패로 종결됐다.
+
+결정:
+- claim 전 재발화는 실패 횟수에 따른 지수 backoff(기준 60초·상한 900초, equal jitter)를 지난 뒤에만 한다.
+  예산은 6회(대기 합 약 15~30분)이며 소진하면 기존처럼 failed+attention=open으로 종결하고 마지막 run을 사유에 남긴다.
+- claim의 결정적 오류(SQLSTATE class 22·23·42·0A)는 그 run 안에서 즉시 같은 CAS로 종결한다. 일시 오류·메모리 high-water·분류하지 못한 오류는 pending을 유지한다.
+- 유지보수 job은 일시 오류만 같은 run 안에서 최대 2회 다시 시도한다. 과금 구간이 있는 수집 op는 제외한다.
+- 도메인 공용 일시 분류에 lock timeout(55P03)을 추가하고, PendingRollbackError는 앞선 flush 실패로 분류한다.
+
+결과: launch 장애가 짧으면 사용자 작업이 살아남고, 길면 약 30분 안에 마지막 run과 함께 종결된다.
+일시 오류는 유한 재시도, 결정적 오류는 1회로 끝난다. launch 실패 자체(fd 고갈)는 Manager가 고친다.
