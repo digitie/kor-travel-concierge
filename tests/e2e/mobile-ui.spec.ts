@@ -46,6 +46,7 @@ const metrics = {
 async function mockDetailAndStatus(page: Page) {
   await page.route(/\/api\/v1\/destinations\/candidates\/1\/detail$/, route => route.fulfill({ json: candidateDetail }));
   await page.route(/\/api\/v1\/runs\/queue$/, route => route.fulfill({ json: { items: [], running_count: 12_345, pending_count: 67_890, open_attention_count: 4_321, has_more: false, user_job_types: ["harvest"] } }));
+  await page.route(/\/api\/v1\/settings$/, route => route.fulfill({ json: { gemini_engine_version: "gemini-x", gemini_engine_default: "gemini-x", gemini_engine_options: ["gemini-x", "deepseek-y"], ai_preprompt: "", ai_preprompt_default: "", deepseek_api_key_set: false, api_keys: {} } }));
   await page.route(/\/api\/v1\/metrics$/, route => route.fulfill({ json: metrics }));
   await page.route(/\/api\/v1\/storage\/rustfs$/, route => route.fulfill({ json: { enabled: true, endpoint: "x", console_url: "x", retention_policy: "x", health: { ok: true, url: "x", status_code: 200, error: null }, assets: [] } }));
 }

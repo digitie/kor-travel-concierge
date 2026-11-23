@@ -339,6 +339,17 @@
   }
 }
 
+/* 표의 첫 열 선택 체크박스는 md 미만에서 공통 after 터치 영역(44px)이 표 가로 스크롤 컨테이너에
+   잘리지 않도록 시작 쪽 여백을 둔다(체크박스 중심이 가장자리에서 22px 이상). 셀 padding utility(p-2)보다
+   특이도가 높아 utilities layer 안에서 이긴다. */
+@layer utilities {
+  @media (width < 48rem) {
+    :is([data-slot="table-cell"], [data-slot="table-head"]):first-child:has(> [data-slot="checkbox"]) {
+      padding-inline-start: 0.875rem;
+    }
+  }
+}
+
 @layer components {
   .ktc-workspace {
     min-width: 0;

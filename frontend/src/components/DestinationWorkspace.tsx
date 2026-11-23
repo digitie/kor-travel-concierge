@@ -1021,7 +1021,7 @@ function DestinationRows({
                 rowRefs.current.delete(place.place_id);
               }
             }}
-            className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-control border border-border bg-card p-2 transition-[color,background-color,border-color] duration-fast data-[selected=true]:border-brand data-[selected=true]:bg-brand-tint"
+            className="grid grid-cols-[auto_1fr_auto] items-start gap-2 rounded-control border border-border bg-card p-2 max-md:pl-3.5 transition-[color,background-color,border-color] duration-fast data-[selected=true]:border-brand data-[selected=true]:bg-brand-tint"
             data-selected={isSelected}
           >
             <Checkbox
