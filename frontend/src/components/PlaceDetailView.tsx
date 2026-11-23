@@ -369,7 +369,7 @@ function PlaceVideoEvidence({
               value={transcriptTab}
               onValueChange={(value) => setTranscriptTab(value ?? "raw")}
             >
-              <TabsList className="w-full">
+              <TabsList className="w-full max-md:group-data-horizontal/tabs:h-auto">
                 <TabsTrigger value="raw">타임스탬프 포함</TabsTrigger>
                 <TabsTrigger value="clean">정리본</TabsTrigger>
               </TabsList>

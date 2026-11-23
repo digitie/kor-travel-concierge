@@ -3,6 +3,8 @@ node_modules/
 node_modules.win-broken-*/
 .next/
 frontend/next-env.d.ts
+# predev/prebuild가 maplibre-gl에서 복사하는 worker(scripts/copy-maplibre-worker.mjs)
+frontend/public/maplibre/
 *.tsbuildinfo
 out/
 build/

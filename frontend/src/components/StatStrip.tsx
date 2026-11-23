@@ -64,7 +64,7 @@ function StatStrip({
         const loading = isLoading;
         const label = item.href ? (
           <Link
-            className="rounded-control no-underline underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            className="rounded-control no-underline underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus max-md:inline-flex max-md:items-center"
             href={item.href}
           >
             {item.label}
@@ -85,19 +85,20 @@ function StatStrip({
                   className={cn("size-1.5 shrink-0 rounded-full", TONE_DOT[item.tone])}
                 />
               ) : null}
-              <span className="truncate">{label}</span>
+              <span className="min-w-0 break-words">{label}</span>
               {item.help ? <HelpTip label={item.label}>{item.help}</HelpTip> : null}
             </dt>
             <dd className="flex min-w-0 flex-col gap-1">
               <span
                 aria-busy={loading || undefined}
                 className={cn(
-                  "flex items-baseline gap-1 font-semibold tabular-nums text-text-primary",
+                  "flex min-w-0 flex-wrap items-baseline gap-x-1 font-semibold tabular-nums text-text-primary",
                   size === "lg" ? "text-2xl" : "text-lg",
                   loading && "text-text-tertiary",
                 )}
               >
-                <span className="truncate">{valueText(item.value, loading)}</span>
+                {/* 핵심 숫자가 말줄임으로 사라지지 않도록 좁은 화면에서는 줄을 바꾼다. */}
+                <span className="min-w-0 break-words">{valueText(item.value, loading)}</span>
                 {item.unit && hasValue ? (
                   <span className="text-xs font-medium text-text-secondary">{item.unit}</span>
                 ) : null}

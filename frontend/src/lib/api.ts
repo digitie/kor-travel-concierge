@@ -1581,7 +1581,49 @@ export type CandidateDetail = {
 };
 
 export async function getCandidateDetail(id: number): Promise<CandidateDetail> {
-  return requestJson<CandidateDetail>(`/api/v1/destinations/candidates/${id}/detail`);
+  const detail = await requestJson<unknown>(`/api/v1/destinations/candidates/${id}/detail`);
+  if (!isCandidateDetailShape(detail)) throw new MalformedResponseError("검수 후보 상세");
+  return detail;
+}
+
+/** 상세 응답이 계약 모양이 아니면(예: `[]`) 화면 전체가 TypeError로 죽지 않도록 오류로 바꾼다. */
+export class MalformedResponseError extends Error {
+  constructor(subject: string) {
+    super(`${subject} 응답 형식이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.`);
+    this.name = "MalformedResponseError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRecordOrNull(value: unknown): boolean {
+  return value === null || value === undefined || isRecord(value);
+}
+
+export function isCandidateDetailShape(value: unknown): value is CandidateDetail {
+  return (
+    isRecord(value) &&
+    isRecord(value.list_item) &&
+    isRecord(value.candidate) &&
+    isRecordOrNull(value.video) &&
+    isRecordOrNull(value.source_run) &&
+    isRecordOrNull(value.provider_evidence) &&
+    Array.isArray(value.sibling_candidates)
+  );
+}
+
+export function isPlaceDetailShape(value: unknown): value is PlaceDetail {
+  return (
+    isRecord(value) &&
+    isRecord(value.place) &&
+    isRecord(value.stats) &&
+    Array.isArray(value.source_videos) &&
+    value.source_videos.every(
+      (video) => isRecord(video) && Array.isArray(video.mentions),
+    )
+  );
 }
 
 export type CandidateTranscript = {
@@ -1671,7 +1713,9 @@ export type PlaceDetail = {
 };
 
 export async function getPlaceDetail(placeId: number): Promise<PlaceDetail> {
-  return requestJson<PlaceDetail>(`/api/v1/destinations/${placeId}/detail`);
+  const detail = await requestJson<unknown>(`/api/v1/destinations/${placeId}/detail`);
+  if (!isPlaceDetailShape(detail)) throw new MalformedResponseError("장소 상세");
+  return detail;
 }
 
 export async function deletePlace(placeId: number): Promise<{

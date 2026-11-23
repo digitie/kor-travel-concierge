@@ -8,19 +8,40 @@ import type { MapLibreMap, MarkerProps, PopupProps, VWorldMapViewProps } from "v
 
 import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
 
+// maplibre-gl 6은 기본 worker URL을 import.meta.url로 계산하는데 `next build --webpack`이
+// 그 값을 빌드 때의 file:// 경로로 바꿔 빈 URL이 된다("Worker failed to load"). 그래서
+// predev/prebuild가 scripts/copy-maplibre-worker.mjs로 public/maplibre/에 복사한 worker를
+// 지도 생성 전에 가리킨다(Map admin과 같은 처방).
+const MAPLIBRE_WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
+
+let vworldMapWeb: Promise<typeof import("vworld-map-web")> | null = null;
+function loadVWorldMapWeb() {
+  vworldMapWeb ??= Promise.all([import("maplibre-gl"), import("vworld-map-web")])
+    .then(([maplibre, mod]) => {
+      maplibre.setWorkerUrl(MAPLIBRE_WORKER_URL);
+      return mod;
+    })
+    .catch((error: unknown) => {
+      // chunk 로드 실패는 다음 시도(지도 다시 불러오기)에서 새로 받는다.
+      vworldMapWeb = null;
+      throw error;
+    });
+  return vworldMapWeb;
+}
+
 // vworld-map-web은 브라우저 전용(DOM/WebGL)이라 SSR을 끄고 동적 import한다.
 // (kor-travel-map/pinvi의 vworld-map-web 소비 패턴과 동일. maplibre-gl CSS는
 // app/globals.css가 이미 전역으로 import한다.)
 const VWorldMapView = dynamic<VWorldMapViewProps>(
-  () => import("vworld-map-web").then((mod) => mod.VWorldMapView),
+  () => loadVWorldMapWeb().then((mod) => mod.VWorldMapView),
   { ssr: false, loading: () => <MapLoadingSkeleton /> },
 );
 const Marker = dynamic<MarkerProps>(
-  () => import("vworld-map-web").then((mod) => mod.Marker),
+  () => loadVWorldMapWeb().then((mod) => mod.Marker),
   { ssr: false },
 );
 const Popup = dynamic<PopupProps>(
-  () => import("vworld-map-web").then((mod) => mod.Popup),
+  () => loadVWorldMapWeb().then((mod) => mod.Popup),
   { ssr: false },
 );
 
