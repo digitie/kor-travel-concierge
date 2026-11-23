@@ -28,6 +28,8 @@ COPY --from=builder /app/tsconfig.json /app/next-env.d.ts ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/scripts ./scripts
+# prebuild가 복사한 MapLibre worker(public/maplibre)를 prebuilt start에서도 서빙한다.
+COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder /app/vendor ./vendor
 COPY --from=builder --chown=node:node /app/.next ./.next
 # 재빌드/ISR/image cache와 Next가 생성·갱신하는 설정 파일만 이미지 안에서 쓸 수 있다.

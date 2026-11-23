@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requestSessionStatus, sanitizeLocalPath } from "@/lib/auth";
-
-const PUBLIC_PATH_PREFIXES = ["/api/auth/", "/_next/", "/favicon.ico"];
+import { isPublicPath } from "@/lib/public-paths";
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -30,13 +29,6 @@ export async function proxy(request: NextRequest) {
   const loginUrl = new URL("/login", request.url);
   loginUrl.searchParams.set("next", nextPath);
   return NextResponse.redirect(loginUrl);
-}
-
-function isPublicPath(pathname: string): boolean {
-  return (
-    pathname === "/login" ||
-    PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))
-  );
 }
 
 export const config = {

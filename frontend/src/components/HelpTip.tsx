@@ -24,7 +24,7 @@ export function HelpTip({
         asChild><button
             type="button"
             aria-label={label}
-            className="relative inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-[color,background-color] duration-fast ease-out after:absolute after:-inset-2 hover:bg-surface-subtle hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            className="relative inline-flex size-5 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-[color,background-color] duration-fast ease-out after:absolute after:-inset-2 max-md:after:inset-0 hover:bg-surface-subtle hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
           >
             <CircleHelpIcon className="size-3.5" />
           </button></PopoverTrigger>

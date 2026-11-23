@@ -54,7 +54,8 @@ function StatStrip({
       aria-busy={isLoading || undefined}
       aria-label={ariaLabel}
       className={cn(
-        "grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-y-4 [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-border",
+        // sm 미만은 한 열로 쌓아 핵심 숫자가 좁은 열에서 중간에 끊기지 않게 한다(구분선은 위쪽).
+        "grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-y-4 [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-border max-sm:grid-cols-1 max-sm:gap-y-3 max-sm:[&>*:not(:first-child)]:border-l-0 max-sm:[&>*:not(:first-child)]:border-t max-sm:[&>*:not(:first-child)]:pt-3",
         framed && "rounded-panel border border-border bg-card px-2 py-4",
         className,
       )}
@@ -64,7 +65,7 @@ function StatStrip({
         const loading = isLoading;
         const label = item.href ? (
           <Link
-            className="rounded-control no-underline underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            className="rounded-control no-underline underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus max-md:inline-flex max-md:items-center"
             href={item.href}
           >
             {item.label}
@@ -75,7 +76,7 @@ function StatStrip({
         const hasValue = !loading && item.value !== null && item.value !== undefined;
         return (
           <div
-            className="flex min-w-0 flex-col gap-1 px-4 first:pl-0"
+            className="flex min-w-0 flex-col gap-1 px-4 first:pl-0 max-sm:px-0"
             key={item.key ?? item.label}
           >
             <dt className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
@@ -85,19 +86,20 @@ function StatStrip({
                   className={cn("size-1.5 shrink-0 rounded-full", TONE_DOT[item.tone])}
                 />
               ) : null}
-              <span className="truncate">{label}</span>
+              <span className="min-w-0 break-words">{label}</span>
               {item.help ? <HelpTip label={item.label}>{item.help}</HelpTip> : null}
             </dt>
             <dd className="flex min-w-0 flex-col gap-1">
               <span
                 aria-busy={loading || undefined}
                 className={cn(
-                  "flex items-baseline gap-1 font-semibold tabular-nums text-text-primary",
+                  "flex min-w-0 flex-wrap items-baseline gap-x-1 font-semibold tabular-nums text-text-primary",
                   size === "lg" ? "text-2xl" : "text-lg",
                   loading && "text-text-tertiary",
                 )}
               >
-                <span className="truncate">{valueText(item.value, loading)}</span>
+                {/* 핵심 숫자가 말줄임으로 사라지지 않도록 좁은 화면에서는 줄을 바꾼다. */}
+                <span className="min-w-0 break-keep [overflow-wrap:anywhere]">{valueText(item.value, loading)}</span>
                 {item.unit && hasValue ? (
                   <span className="text-xs font-medium text-text-secondary">{item.unit}</span>
                 ) : null}

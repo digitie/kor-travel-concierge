@@ -1,3 +1,14 @@
+## 2026-11-23 — 모바일 UI 결함 수정(포커스·터치 표적·상태 요약·지도 worker·상세 응답)
+
+- 출처: prod 이미지 0956fa6b 격리 점검(390/320/1440).
+- 입력·선택·여러 줄 포커스: 공통 `Input`·`NativeSelect`·`SelectTrigger`·`Textarea`가 `outline-none`+3px 반투명 ring+테두리 색 변화를 그리던 것을 Common ui 0.2.5(PR #81, catalog #82 ade7b3e)에서 Button과 같은 outline 2px·offset 2px 하나로 고쳤고 이를 채택했다. 0.2.4의 TabsTrigger 수정도 함께 들어와 `/review/1` 탭의 이중 포커스(1px outline+ring+테두리)가 사라진다. `--kt-focus`를 layer 밖 `:root`에 두어(tokens의 layer 밖 정의를 이기도록) portal 대화상자도 같은 브랜드 색이다. 도움말 아이콘은 md 미만에서 버튼 자체가 44px(after 확장 없음 — 이웃 입력을 덮지 않게). 전역 포커스 규칙은 `@layer base`의 `:focus-visible` 하나다.
+- 모바일 터치 표적: md(48rem) 미만에서 링크·버튼·입력·선택·탭·summary의 최소 크기를 44px로 올리는 `@layer components` 규칙 하나(`:where`로 특이도 0, 데스크톱 밀도 불변). 체크박스·스위치는 보이는 크기를 유지하고 ui 0.2.5 after 터치 영역 44px, 표·목록 첫 열 체크박스는 스크롤 컨테이너에 잘리지 않도록 md 미만 시작 여백. 도움말 아이콘 after 44px, 메뉴 링크 40px 축소는 md 이상만(모바일 drawer 44px), `/status` 라벨 링크 inline-flex. MapLibre 지도 안 컨트롤(29px)·마커는 라이브러리 배치를 깨지 않도록 제외했다.
+- `/status` 요약값: StatStrip 값·라벨의 `truncate`를 줄바꿈으로 바꿔 핵심 숫자가 말줄임되지 않는다.
+- 지도 콘솔 "Worker failed to load": 실제 결함. maplibre-gl 6은 worker URL을 `import.meta.url`로 계산하는데 `next build --webpack`이 이를 `file://`로 바꿔 빈 URL이 되고 `new Worker("")`가 HTML을 읽었다. Map admin과 같은 처방으로 `scripts/copy-maplibre-worker.mjs`(predev·prebuild)가 worker를 `public/maplibre/`에 복사하고 `setWorkerUrl`로 가리킨다. `/maplibre/`는 인증 예외, 런타임 이미지는 `public`을 node 소유로 싣는다(build 모드 재빌드 대비).
+- 복원력: 상세 응답 모양 가드(`[]` 등은 `MalformedResponseError`로 화면 오류 상태)와 `(admin)/error.tsx` 오류 경계(셸·메뉴 유지, 본문만 대체).
+- 시험: vitest(worker 배선·상세 가드), e2e `mobile-ui.spec.ts`(390/320/1440 포커스 단일 outline·상태 숫자·44px·지도 콘솔 오류 0·오류 경계).
+- 배포하지 않았다(다음 UI 이미지 회전에서 반영).
+
 ## 2026-11-20 — 관리자 셸을 레이아웃으로 올림(drawer 이동 뒤 본문 포커스)
 
 - 문제: #276은 `AppShell`(공통 `AdminShell`)을 페이지마다 그렸다. 경로를 바꾸면 셸이 통째로 다시 마운트되어, 모바일 drawer에서 메뉴로 이동한 뒤 `navigationKey`가 옮겨 주어야 할 `#main-content` 포커스가 사라졌다(셸이 유지된다는 전제의 로직).

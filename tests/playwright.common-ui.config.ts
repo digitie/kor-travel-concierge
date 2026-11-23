@@ -5,7 +5,7 @@ import { defineConfig } from "@playwright/test";
 process.env.KTC_COMMON_UI_TEST_PASSWORD ??= randomBytes(24).toString("hex");
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "common-ui.spec.ts",
+  testMatch: ["common-ui.spec.ts", "mobile-ui.spec.ts"],
   workers: 1,
   retries: 0,
   timeout: 45_000,

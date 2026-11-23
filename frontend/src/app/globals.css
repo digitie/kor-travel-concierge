@@ -336,6 +336,17 @@
   }
 }
 
+/* 표의 첫 열 선택 체크박스는 md 미만에서 공통 after 터치 영역(44px)이 표 가로 스크롤 컨테이너에
+   잘리지 않도록 시작 쪽 여백을 둔다(체크박스 중심이 가장자리에서 22px 이상). 셀 padding utility(p-2)보다
+   특이도가 높아 utilities layer 안에서 이긴다. */
+@layer utilities {
+  @media (width < 48rem) {
+    :is([data-slot="table-cell"], [data-slot="table-head"]):first-child:has(> [data-slot="checkbox"]) {
+      padding-inline-start: 0.875rem;
+    }
+  }
+}
+
 @layer components {
   .ktc-workspace {
     min-width: 0;
@@ -360,12 +371,28 @@
   .ktc-scroll-cue {
     scrollbar-color: color-mix(in srgb, var(--brand) 38%, transparent) transparent;
   }
+
+  /* 모바일 터치 표적(WCAG 2.5.5·Map #1532와 같은 44px 기준): md(48rem) 미만에서만 조작 요소의
+     최소 크기를 44px로 올리고 데스크톱 밀도는 그대로 둔다. 상태 스타일이 아니라 크기 하한만 둔다.
+     - :where()로 특이도 0 — 개별 utility(min-h-*·min-w-*)가 필요하면 이긴다.
+     - inline 텍스트 링크는 min-* 가 적용되지 않는다(WCAG inline 예외). 조작용 링크는 inline-flex 등으로 둔다.
+     - 체크박스·스위치·라디오는 보이는 크기를 유지하고 공통 after 터치 영역(ui 0.2.5)이 44px를 맡는다.
+     - MapLibre 지도 안의 컨트롤·마커는 라이브러리 배치를 깨지 않도록 제외한다. */
+  @media (width < 48rem) {
+    :where(a[href], button, select, summary, [role="button"], [role="tab"], input:not([type="checkbox"], [type="radio"], [type="hidden"], [type="range"], [type="file"])):where(:not([role="checkbox"], [role="switch"], [role="radio"], [role="slider"], .maplibregl-map *)) {
+      min-height: 2.75rem;
+      min-width: 2.75rem;
+    }
+  }
 }
 
 
-/* 공용 메뉴의 IA/aria를 재사용하며 기존 rail과 접힘 동작을 유지한다. */
+/* 공용 메뉴의 IA/aria를 재사용하며 기존 rail과 접힘 동작을 유지한다.
+   메뉴 링크는 공통 min-h-11(44px)을 따르고, 데스크톱(md 이상) rail만 기존 40px 밀도로 줄인다. */
 .concierge-common-menu [data-slot="app-menu-group-label"] { color: var(--shell-rail-muted); }
-.concierge-common-menu [data-slot="app-menu-link"] { min-height: 2.5rem; }
+@media (width >= 48rem) {
+  .concierge-common-menu [data-slot="app-menu-link"] { min-height: 2.5rem; }
+}
 
 /* 선택 전에는 실행 목록이 가용 폭을 모두 사용한다. */
 [data-testid="concierge-common-dagster"] .dagster-run-layout:not(:has([data-testid="concierge-selected-run"])) {
@@ -374,6 +401,11 @@
 [data-testid="concierge-common-dagster"] [data-slot="dagster-operations-run-detail"]:not(:has([data-testid="concierge-selected-run"])) {
   display: none;
 }
+
+/* 공통 컴포넌트(outline-kt-focus)의 포커스 색. 셸 밖으로 portal되는 대화상자·popover도 같은 색을 쓰도록
+   :root에 둔다. @kor-travel/tokens의 :root 정의가 layer 밖이라 이것도 layer 밖이어야 이긴다(값만, 상태 규칙 아님).
+   rail·drawer는 아래 셸 규칙이 흰색으로 덮는다. */
+:root { --kt-focus: var(--ktc-focus); }
 
 /* Common 셸의 구조/상호작용을 재사용하고 기존 Concierge 색상 토큰만 연결한다. */
 .concierge-admin-shell {

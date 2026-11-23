@@ -437,7 +437,7 @@ function HarvestFields({
       <Field>
         <label
           htmlFor="harvest-force"
-          className="flex items-center gap-2 text-sm font-medium"
+          className="flex items-center gap-2 text-sm font-medium max-md:min-h-11"
         >
           <Checkbox
             id="harvest-force"
@@ -458,7 +458,7 @@ function HarvestFields({
       <Field>
         <label
           htmlFor="harvest-repeat"
-          className="flex items-center gap-2 text-sm font-medium"
+          className="flex items-center gap-2 text-sm font-medium max-md:min-h-11"
         >
           <Checkbox
             id="harvest-repeat"

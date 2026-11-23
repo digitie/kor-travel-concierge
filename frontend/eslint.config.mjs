@@ -33,5 +33,5 @@ export default defineConfig([
       "jsx-a11y-x/role-supports-aria-props": "warn",
     },
   },
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**", "test-results/**"]),
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**", "test-results/**", "public/maplibre/**"]),
 ]);
