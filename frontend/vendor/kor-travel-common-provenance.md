@@ -1,4 +1,13 @@
-# 현재 Common 관리자 셸 정본
+# 현재 Common 입력·선택 포커스 정본(ui 0.2.5)
+
+UI0.2.5와 tokens0.1.6은 [Common producer fe14114](https://github.com/digitie/kor-travel-common/commit/fe141143cc8ba75e8fd0b6134e1c9e518e294fa2)의 main CI artifact14782962353 원본이다(PR #81 입력·선택 컨트롤 포커스 FS-7.8, 체크박스·스위치 md 미만 터치 영역 44px). 로컬 pack 재생성은 하지 않았다. Common catalog PR #82의 `frontend-artifacts.json` 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
+
+- ZIP digest: `sha256:065bfbdfed8a81c4538371d0515f2ff23cc5b67826f8d1f42a7db1431408ab72`
+- UI SHA256: `6f365a12f966d1b33d06219e003c30bf15eedf965d100543f2b2e06acf67d2f1`
+- tokens SHA256: `4a3256fa17f72ef3677b9c7e9489e8b27d566a3244b3dad1b3a672333a544be5`
+- 미사용 Toast는 설치하지 않는다. 기존 VWorld·Radix/LightningCSS 패치 bytes와 출처는 유지한다.
+
+# 이전 Common 관리자 셸 정본(ui 0.2.3)
 
 UI0.2.3와 tokens0.1.4는 [Common producer0e2a3f5](https://github.com/digitie/kor-travel-common/commit/0e2a3f5aa16323df0d009360802661c9bc496dc6)의 main CI artifact14500111373 원본이다. 로컬 pack 재생성은 하지 않았다. [catalogd644](https://github.com/digitie/kor-travel-common/blob/d644632ea9eaf2f6b6baa49305d65fae5bbc0bd4/frontend-artifacts.json)의 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
 
