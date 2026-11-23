@@ -154,6 +154,11 @@ for (const width of WIDTHS) {
       return { text: el.textContent ?? "", clipped: el.scrollWidth > el.clientWidth + 1, ellipsis: style.textOverflow === "ellipsis" && style.overflow !== "visible", right: rect.right, viewport: window.innerWidth };
     }));
     expect(values.length).toBe(4);
+    if (width < 640) {
+      // 좁은 화면은 한 열로 쌓는다 — 각 항목이 띠 전체 폭을 쓴다.
+      const widths = await strip.evaluate(el => Array.from(el.children).map(child => child.getBoundingClientRect().width / el.getBoundingClientRect().width));
+      for (const ratio of widths) expect(ratio).toBeGreaterThan(0.9);
+    }
     for (const value of values) {
       expect(value.clipped, `${value.text} clipped`).toBe(false);
       expect(value.ellipsis, `${value.text} ellipsis`).toBe(false);
