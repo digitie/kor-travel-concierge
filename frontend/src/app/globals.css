@@ -248,6 +248,9 @@
     --line: var(--ktc-line);
     --control-line: var(--ktc-control-line);
     --focus: var(--ktc-focus);
+    /* 공통 컴포넌트(outline-kt-focus)의 포커스 색. 셸 밖으로 portal되는 대화상자·popover도
+       같은 색을 쓰도록 :root에 둔다(rail·drawer는 아래 셸 규칙이 흰색으로 덮는다). */
+    --kt-focus: var(--ktc-focus);
     --overlay: var(--ktc-overlay);
     --info: var(--ktc-info);
     --info-tint: var(--ktc-info-tint);
