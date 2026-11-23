@@ -24,8 +24,8 @@
   },
   "dependencies": {
     "@hookform/resolvers": "7.0.5",
-    "@kor-travel/tokens": "file:vendor/kor-travel-tokens-0.1.4.tgz",
-    "@kor-travel/ui": "file:vendor/kor-travel-ui-0.2.3.tgz",
+    "@kor-travel/tokens": "file:vendor/kor-travel-tokens-0.1.6.tgz",
+    "@kor-travel/ui": "file:vendor/kor-travel-ui-0.2.5.tgz",
     "@radix-ui/react-focus-scope": "file:vendor/radix-ui-react-focus-scope-1.3.1+kortravel.fix.2.tgz",
     "@tanstack/react-query": "5.107.1",
     "class-variance-authority": "0.7.1",
