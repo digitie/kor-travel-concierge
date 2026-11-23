@@ -51,12 +51,18 @@ async function mockDetailAndStatus(page: Page) {
   await page.route(/\/api\/v1\/storage\/rustfs$/, route => route.fulfill({ json: { enabled: true, endpoint: "x", console_url: "x", retention_policy: "x", health: { ok: true, url: "x", status_code: 200, error: null }, assets: [] } }));
 }
 
-type FocusStyle = { border: string; borderColor: string; shadow: string; outlineStyle: string; outlineWidth: string; outlineOffset: string; outlineColor: string; focusColor: string; focusVisible: boolean };
+type FocusStyle = { border: string; borderColor: string; shadow: string; outlineStyle: string; outlineWidth: string; outlineOffset: string; outlineColor: string; focusColor: string; brandColor: string; focusVisible: boolean };
 async function focusStyle(target: Locator): Promise<FocusStyle> {
   return target.evaluate(el => {
     const style = getComputedStyle(el);
     const probe = document.createElement("span");
+    // 셸 안 재정의를 받도록 대상 옆에서 잰다. 브랜드 포커스 색(--ktc-focus)과도 비교한다.
     probe.style.color = "var(--kt-focus)";
+    const brand = document.createElement("span");
+    brand.style.color = "var(--ktc-focus)";
+    (el.parentElement ?? document.body).append(brand);
+    const brandColor = getComputedStyle(brand).color;
+    brand.remove();
     (el.parentElement ?? document.body).append(probe);
     const focusColor = getComputedStyle(probe).color;
     probe.remove();
@@ -64,7 +70,7 @@ async function focusStyle(target: Locator): Promise<FocusStyle> {
       border: ["top", "right", "bottom", "left"].map(side => style.getPropertyValue(`border-${side}-width`)).join(" "),
       borderColor: style.borderTopColor, shadow: style.boxShadow, outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset, outlineColor: style.outlineColor,
-      focusColor, focusVisible: el.matches(":focus-visible"),
+      focusColor, brandColor, focusVisible: el.matches(":focus-visible"),
     };
   });
 }
@@ -93,6 +99,7 @@ async function expectSingleFocusOutline(page: Page, target: Locator, name: strin
   expect(focus.outlineWidth, `${name} outline width`).toBe("2px");
   expect(focus.outlineOffset, `${name} outline offset`).toBe("2px");
   expect(focus.outlineColor, `${name} outline color`).toBe(focus.focusColor);
+  expect(focus.outlineColor, `${name} outline = 브랜드 포커스 색`).toBe(focus.brandColor);
   // 두 번째 표시(반투명 ring·테두리 색 변화·테두리 두께 변화)가 없다.
   expect(focus.shadow, `${name} focus ring`).toBe(rest.shadow);
   expect(focus.borderColor, `${name} focus border color`).toBe(rest.borderColor);
@@ -171,7 +178,8 @@ for (const width of WIDTHS) {
       const worker = page.waitForResponse(response => new URL(response.url()).pathname === "/maplibre/maplibre-gl-worker.mjs");
       await page.goto(path);
       const response = await worker;
-      expect(response.status(), `${path} worker status`).toBe(200);
+      // 같은 context의 두 번째 지도 화면은 재검증 304일 수 있다.
+      expect([200, 304], `${path} worker status`).toContain(response.status());
       expect(response.headers()["content-type"] ?? "", `${path} worker type`).toMatch(/javascript/);
       await expect(page.getByRole("region", { name: "VWorld 지도", exact: true }).first()).toBeVisible();
       // worker 오류는 생성 직후 비동기로 온다. 지도 준비 신호 뒤 잠시 더 기다린다.
@@ -257,6 +265,9 @@ for (const width of [390, 320] as const) {
       let last: string[] = [];
       await expect.poll(async () => (last = await smallTargets(page)), { timeout: 8_000, intervals: [250, 500, 1_000] }).toEqual([]).catch(() => undefined);
       failures.push(...last.map(item => `${path} ${item}`));
+      // 44px 하한이 좁은 화면에서 가로 넘침을 만들지 않는다.
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (overflow > 1) failures.push(`${path} 가로 넘침 ${overflow}px`);
       await page.screenshot({ path: shot(info, `${width}-${path === "/" ? "results" : path.slice(1).replaceAll("/", "_")}`), fullPage: true });
     }
     // drawer 메뉴 링크·로그아웃
@@ -315,7 +326,8 @@ for (const width of [390, 1440] as const) {
     }
     await expect(page).toHaveURL(/\/jobs$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("수집 파이프라인 - 작업");
-    expect(errors.filter(message => !/road_address|mention_count|toLocaleString|undefined/.test(message))).toEqual([]);
+    // 의도적으로 일으킨 렌더 오류(stats.mention_count 없음)만 허용한다.
+    expect(errors.filter(message => !/mention_count/.test(message))).toEqual([]);
     await context.close();
   });
 }
