@@ -1,6 +1,6 @@
 # 현재 Common 입력·선택 포커스 정본(ui 0.2.5)
 
-UI0.2.5와 tokens0.1.6은 [Common producer fe14114](https://github.com/digitie/kor-travel-common/commit/fe141143cc8ba75e8fd0b6134e1c9e518e294fa2)의 main CI artifact14782962353 원본이다(PR #81 입력·선택 컨트롤 포커스 FS-7.8, 체크박스·스위치 md 미만 터치 영역 44px). 로컬 pack 재생성은 하지 않았다. Common catalog PR #82의 `frontend-artifacts.json` 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
+UI0.2.5와 tokens0.1.6은 [Common producer fe14114](https://github.com/digitie/kor-travel-common/commit/fe141143cc8ba75e8fd0b6134e1c9e518e294fa2)의 main CI artifact14782962353 원본이다(PR #81 입력·선택 컨트롤 포커스 FS-7.8, 체크박스·스위치 md 미만 터치 영역 44px). 로컬 pack 재생성은 하지 않았다. [Common catalog ade7b3e](https://github.com/digitie/kor-travel-common/blob/ade7b3eb50c0197caad4a1c98fcb97cffbc2a8a4/frontend-artifacts.json)(PR #82)의 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
 
 - ZIP digest: `sha256:065bfbdfed8a81c4538371d0515f2ff23cc5b67826f8d1f42a7db1431408ab72`
 - UI SHA256: `6f365a12f966d1b33d06219e003c30bf15eedf965d100543f2b2e06acf67d2f1`
