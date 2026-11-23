@@ -253,7 +253,10 @@ for (const width of [390, 320] as const) {
         await expect(page.getByRole("checkbox").first()).toBeVisible();
       }
       if (path === "/") await expect(page.getByRole("checkbox").first()).toBeVisible();
-      failures.push(...(await smallTargets(page)).map(item => `${path} ${item}`));
+      // 목록 polling으로 표가 다시 그려지는 순간을 재지 않도록 안정될 때까지 다시 잰다(크기 결함은 계속 남는다).
+      let last: string[] = [];
+      await expect.poll(async () => (last = await smallTargets(page)), { timeout: 8_000, intervals: [250, 500, 1_000] }).toEqual([]).catch(() => undefined);
+      failures.push(...last.map(item => `${path} ${item}`));
       await page.screenshot({ path: shot(info, `${width}-${path === "/" ? "results" : path.slice(1).replaceAll("/", "_")}`), fullPage: true });
     }
     // drawer 메뉴 링크·로그아웃
