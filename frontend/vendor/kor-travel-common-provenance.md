@@ -1,4 +1,13 @@
-# 현재 Common 입력·선택 포커스 정본(ui 0.2.5)
+# 현재 Common 터치 영역·포커스·Dialog 제목 정본(ui 0.2.6)
+
+UI0.2.6과 tokens0.1.7은 [Common producer 05d7f91](https://github.com/digitie/kor-travel-common/commit/05d7f91a4151a69d72b8bf1dc0007291c6ab2a61)의 main CI artifact14803131043 원본이다(PR #83: VirtualTable md 미만 선택 칸 44px, AccordionContent 포커스 outline 잘림 수정, 닫기 버튼이 있는 DialogTitle의 `pr-7`·`wrap-anywhere`). 로컬 pack 재생성은 하지 않았다. [Common catalog 309b881](https://github.com/digitie/kor-travel-common/blob/309b881f8fd6d657b448f43b6fc61939fde742c2/frontend-artifacts.json)(PR #84)의 버전·파일명·SRI를 common-artifacts.json과 lock에 연결했다. artifact의 SHA256SUMS(`sha256sum -c` OK)·SRI와 내려받은 tgz의 sha512가 catalog와 같다.
+
+- ZIP digest: `sha256:76ba4636db7cc2deeaff2ec059820981da0e4619597155eb345f70b5c93ca54a`
+- UI SHA256: `14e9853ceb720b6db4a173ee3411bb07e9d3d9c445c3f8bb45719499d4036110`
+- tokens SHA256: `a0422f551331e521cfdc819d1edd0bca0b90f33507a178ab2d8baea3256e8b53`
+- lock은 두 tgz의 version·resolved·integrity와 ui peer(tokens 0.1.7)만 바뀐다(ui·tokens dependencies 목록 불변). 미사용 Toast 0.1.6은 설치하지 않는다. 기존 VWorld·Radix/LightningCSS 패치 bytes와 출처는 유지한다.
+
+# 이전 Common 입력·선택 포커스 정본(ui 0.2.5)
 
 UI0.2.5와 tokens0.1.6은 [Common producer fe14114](https://github.com/digitie/kor-travel-common/commit/fe141143cc8ba75e8fd0b6134e1c9e518e294fa2)의 main CI artifact14782962353 원본이다(PR #81 입력·선택 컨트롤 포커스 FS-7.8, 체크박스·스위치 md 미만 터치 영역 44px). 로컬 pack 재생성은 하지 않았다. [Common catalog ade7b3e](https://github.com/digitie/kor-travel-common/blob/ade7b3eb50c0197caad4a1c98fcb97cffbc2a8a4/frontend-artifacts.json)(PR #82)의 버전·파일명·SRI를 common-artifacts.json과 npm12 생성 lock에 연결했다.
 

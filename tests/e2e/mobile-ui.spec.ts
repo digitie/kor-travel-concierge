@@ -336,3 +336,63 @@ for (const width of [390, 1440] as const) {
     await context.close();
   });
 }
+
+// 공통 ui 0.2.6 DialogTitle: 공통 닫기 버튼(우상단 absolute)을 그리는 Dialog에서는 제목이 `pr-7`(28px)을
+// 비우고 `wrap-anywhere`로 줄바꿈한다. 띄어쓰기 없는 긴 제목도 가로로 넘치지 않고 닫기 버튼과 겹치지 않아야 한다.
+async function expectDialogTitleClearsClose(dialog: Locator) {
+  const title = dialog.locator('[data-slot="dialog-title"]');
+  const close = dialog.locator('[data-slot="dialog-close"]');
+  await expect(title).toBeVisible();
+  await expect(close).toBeVisible();
+  const style = await title.evaluate(el => {
+    const s = getComputedStyle(el);
+    return { wrap: s.overflowWrap, paddingRight: s.paddingRight };
+  });
+  expect(style).toEqual({ wrap: "anywhere", paddingRight: "28px" });
+  await title.evaluate(el => { el.textContent = "아주긴장소상세제목".repeat(30); });
+  const box = await title.evaluate(el => ({
+    overflow: el.scrollWidth - el.clientWidth,
+    height: el.getBoundingClientRect().height,
+    font: parseFloat(getComputedStyle(el).fontSize),
+  }));
+  expect(box.overflow).toBeLessThanOrEqual(0);
+  expect(box.height / box.font).toBeGreaterThan(1.8);
+  const t = (await title.boundingBox())!;
+  const c = (await close.boundingBox())!;
+  const d = (await dialog.boundingBox())!;
+  // 제목 글자 영역(오른쪽 여백 28px 제외)이 닫기 버튼과 겹치지 않는다.
+  const textRight = t.x + t.width - 28;
+  const overlaps = !(textRight <= c.x || c.x + c.width <= t.x || t.y + t.height <= c.y || c.y + c.height <= t.y);
+  expect(overlaps).toBe(false);
+  expect(t.x + t.width).toBeLessThanOrEqual(d.x + d.width + 0.5);
+}
+
+test("장소 상세 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 1440", async ({ browser }, info) => {
+  const context = await openContext(browser, 1440);
+  const page = await context.newPage();
+  await mockApi(page);
+  await login(page, "/");
+  await page.goto("/?place=7");
+  const dialog = page.getByRole("dialog", { name: "장소 상세" });
+  await expect(dialog).toBeVisible();
+  await expectDialogTitleClearsClose(dialog);
+  await page.screenshot({ path: shot(info, "1440-dialog-long-title") });
+  await context.close();
+});
+
+for (const width of [390, 320] as const) {
+  test(`수집 상세 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 ${width}`, async ({ browser }, info) => {
+    const context = await openContext(browser, width);
+    const page = await context.newPage();
+    await mockApi(page);
+    await login(page, "/collect");
+    const recurring = page.getByRole("table").filter({ hasText: "공통 반복 대상" });
+    await expect(recurring).toBeVisible();
+    await recurring.getByRole("button", { name: /공통 반복 대상/ }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expectDialogTitleClearsClose(dialog);
+    await page.screenshot({ path: shot(info, `${width}-dialog-long-title`) });
+    await context.close();
+  });
+}
