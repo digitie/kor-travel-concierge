@@ -336,3 +336,78 @@ for (const width of [390, 1440] as const) {
     await context.close();
   });
 }
+
+// 공통 ui 0.2.6 DialogTitle: 공통 닫기 버튼(우상단 absolute)을 그리는 Dialog에서는 제목이 오른쪽 여백을 비우고
+// `wrap-anywhere`로 줄바꿈한다. 데스크톱은 공통 pr-7(28px), md 미만은 44px 터치 하한으로 커진 닫기 버튼에 맞춰
+// globals.css가 44px로 늘린다. 띄어쓰기 없는 긴 제목도 가로로 넘치지 않고, 제목 글자 영역이 닫기 버튼
+// 상자+포커스 outline(4px)과 겹치지 않아야 한다.
+async function expectDialogTitleClearsClose(page: Page, paddingRight: string) {
+  const dialog = page.locator('[role="dialog"][data-slot="dialog-content"]');
+  const title = dialog.locator('[data-slot="dialog-title"]');
+  // 우상단 공통 닫기 버튼은 DialogContent의 직계 자식이다(푸터의 DialogClose asChild "취소"도 같은 data-slot).
+  const close = dialog.locator(':scope > [data-slot="dialog-close"]');
+  await expect(title).toBeVisible();
+  await expect(close).toBeVisible();
+  const style = await title.evaluate(el => {
+    const s = getComputedStyle(el);
+    return { wrap: s.overflowWrap, paddingRight: s.paddingRight };
+  });
+  expect(style).toEqual({ wrap: "anywhere", paddingRight });
+  await title.evaluate(el => { el.textContent = "아주긴장소상세제목".repeat(30); });
+  const g = await dialog.evaluate(el => {
+    const t = el.querySelector('[data-slot="dialog-title"]') as HTMLElement;
+    const c = el.querySelector(':scope > [data-slot="dialog-close"]') as HTMLElement;
+    const tr = t.getBoundingClientRect();
+    const cr = c.getBoundingClientRect();
+    const dr = el.getBoundingClientRect();
+    const ts = getComputedStyle(t);
+    return {
+      overflow: t.scrollWidth - t.clientWidth,
+      lines: tr.height / parseFloat(ts.fontSize),
+      textRight: tr.right - parseFloat(ts.paddingRight),
+      titleRight: tr.right,
+      titleTop: tr.top,
+      titleBottom: tr.bottom,
+      closeLeft: cr.left - 4,
+      closeTop: cr.top - 4,
+      closeBottom: cr.bottom + 4,
+      dialogRight: dr.right,
+    };
+  });
+  // 제목은 닫기 버튼 왼쪽에서 시작하므로, 글자 오른쪽 끝이 버튼(+outline) 왼쪽 끝을 넘고 세로로 겹치면 겹침이다.
+  const overlaps = g.textRight > g.closeLeft && g.titleBottom > g.closeTop && g.closeBottom > g.titleTop;
+  expect(g.overflow, JSON.stringify(g)).toBeLessThanOrEqual(0);
+  expect(g.lines, JSON.stringify(g)).toBeGreaterThan(1.8);
+  expect(overlaps, JSON.stringify(g)).toBe(false);
+  expect(g.titleRight, JSON.stringify(g)).toBeLessThanOrEqual(g.dialogRight + 0.5);
+}
+
+test("장소 상세 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 1440", async ({ browser }, info) => {
+  const context = await openContext(browser, 1440);
+  const page = await context.newPage();
+  await mockApi(page);
+  await login(page, "/");
+  await page.goto("/?place=7");
+  await expect(page.getByRole("dialog", { name: "장소 상세" })).toBeVisible();
+  await expectDialogTitleClearsClose(page, "28px");
+  await page.screenshot({ path: shot(info, "1440-dialog-long-title") });
+  await context.close();
+});
+
+for (const width of [390, 320] as const) {
+  test(`지금 실행 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 ${width}`, async ({ browser }, info) => {
+    const context = await openContext(browser, width);
+    const page = await context.newPage();
+    await mockApi(page);
+    await login(page, "/collect");
+    const recurring = page.getByRole("table").filter({ hasText: "공통 반복 대상" });
+    await expect(recurring).toBeVisible();
+    // 반복 대상 상세 모달은 md 미만에서 본문 표 때문에 grid 칸이 모달보다 넓어(기존 상태, 0.2.6 무관)
+    // 제목 상자도 함께 넓어진다. 제목 계약은 본문이 넘치지 않는 "지금 실행" 모달로 잰다.
+    await recurring.getByRole("button", { name: "실행", exact: true }).first().click();
+    await expect(page.getByRole("dialog", { name: "지금 실행" })).toBeVisible();
+    await expectDialogTitleClearsClose(page, "44px");
+    await page.screenshot({ path: shot(info, `${width}-dialog-long-title`) });
+    await context.close();
+  });
+}

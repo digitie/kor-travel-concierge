@@ -442,3 +442,13 @@
     overflow: hidden;
   }
 }
+
+/* 공통 ui 0.2.6 DialogTitle은 공통 닫기 버튼(icon-sm 28px, top-2 right-2) 자리로 pr-7을 비운다. md 미만에서는
+   위 44px 터치 하한이 닫기 버튼을 44px로 키우고(오른쪽 8px 고정, 왼쪽으로 커짐) 버튼 상자와 포커스
+   outline(2px+offset 2px)이 제목 글자 위로 8px 넘게 들어온다. md 미만에서만 제목 오른쪽 여백을 44px로 늘린다.
+   (콘텐츠 p-4 16px + 44px ≥ 버튼 왼쪽 끝 52px + outline 4px) */
+@media (width < 48rem) {
+  [data-slot="dialog-content"]:has(> [data-slot="dialog-close"]) [data-slot="dialog-title"] {
+    padding-right: 2.75rem;
+  }
+}
