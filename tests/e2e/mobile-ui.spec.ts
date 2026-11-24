@@ -394,15 +394,17 @@ test("장소 상세 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄�
 });
 
 for (const width of [390, 320] as const) {
-  test(`수집 상세 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 ${width}`, async ({ browser }, info) => {
+  test(`지금 실행 모달 긴 제목은 닫기 버튼과 겹치지 않게 줄바꿈한다 ${width}`, async ({ browser }, info) => {
     const context = await openContext(browser, width);
     const page = await context.newPage();
     await mockApi(page);
     await login(page, "/collect");
     const recurring = page.getByRole("table").filter({ hasText: "공통 반복 대상" });
     await expect(recurring).toBeVisible();
-    await recurring.getByRole("button", { name: /공통 반복 대상/ }).first().click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    // 반복 대상 상세 모달은 md 미만에서 본문 표 때문에 grid 칸이 모달보다 넓어(기존 상태, 0.2.6 무관)
+    // 제목 상자도 함께 넓어진다. 제목 계약은 본문이 넘치지 않는 "지금 실행" 모달로 잰다.
+    await recurring.getByRole("button", { name: "실행", exact: true }).first().click();
+    await expect(page.getByRole("dialog", { name: "지금 실행" })).toBeVisible();
     await expectDialogTitleClearsClose(page, "44px");
     await page.screenshot({ path: shot(info, `${width}-dialog-long-title`) });
     await context.close();
