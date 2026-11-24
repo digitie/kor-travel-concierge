@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: digitie/kor-travel-common
-          ref: 2a86f0d328793c0dec9e118eb7465903b2b7d1dc
+          ref: 120c749b7f87e5b5d3e63f43edd6a136cf421db7
           path: common
           fetch-depth: 0
           persist-credentials: false
@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = 2a86f0d328793c0dec9e118eb7465903b2b7d1dc
+          test "$(git -C "$GITHUB_WORKSPACE/common" rev-parse HEAD)" = 120c749b7f87e5b5d3e63f43edd6a136cf421db7
           python -B "$GITHUB_WORKSPACE/common/tools/check_versions.py" \
             "$GITHUB_WORKSPACE/consumer" \
             --repo kor-travel-concierge \
