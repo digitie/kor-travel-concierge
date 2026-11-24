@@ -344,7 +344,8 @@ for (const width of [390, 1440] as const) {
 async function expectDialogTitleClearsClose(page: Page, paddingRight: string) {
   const dialog = page.locator('[role="dialog"][data-slot="dialog-content"]');
   const title = dialog.locator('[data-slot="dialog-title"]');
-  const close = dialog.locator('[data-slot="dialog-close"]');
+  // 우상단 공통 닫기 버튼은 DialogContent의 직계 자식이다(푸터의 DialogClose asChild "취소"도 같은 data-slot).
+  const close = dialog.locator(':scope > [data-slot="dialog-close"]');
   await expect(title).toBeVisible();
   await expect(close).toBeVisible();
   const style = await title.evaluate(el => {
@@ -355,7 +356,7 @@ async function expectDialogTitleClearsClose(page: Page, paddingRight: string) {
   await title.evaluate(el => { el.textContent = "아주긴장소상세제목".repeat(30); });
   const g = await dialog.evaluate(el => {
     const t = el.querySelector('[data-slot="dialog-title"]') as HTMLElement;
-    const c = el.querySelector('[data-slot="dialog-close"]') as HTMLElement;
+    const c = el.querySelector(':scope > [data-slot="dialog-close"]') as HTMLElement;
     const tr = t.getBoundingClientRect();
     const cr = c.getBoundingClientRect();
     const dr = el.getBoundingClientRect();
