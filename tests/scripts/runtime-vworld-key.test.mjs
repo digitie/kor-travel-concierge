@@ -58,9 +58,10 @@ test('frontend 소스는 지도 키를 NEXT_PUBLIC 경로로 읽지 않는다', 
     for (const entry of readdirSync(dir)) {
       const target = join(dir, entry);
       if (statSync(target).isDirectory()) walk(target);
-      // 단위 시험(*.test.ts)은 옛 이름을 "읽지 않음"의 음성 입력으로 쓴다.
+      // env 접근(`process.env.NEXT_PUBLIC_VWORLD…`, `env["NEXT_PUBLIC_VWORLD…"]`)만 찾는다 — 경고 문구의 옛 이름 안내는
+      // 읽기가 아니다. 단위 시험(*.test.ts)은 옛 이름을 "읽지 않음"의 음성 입력으로 쓴다.
       else if (/\.(tsx?|mjs|js)$/.test(entry) && !/\.test\.tsx?$/.test(entry)
-        && /NEXT_PUBLIC_VWORLD/.test(readFileSync(target, 'utf8'))) offenders.push(target);
+        && /\benv\s*(?:\.\s*|\[\s*["'`])NEXT_PUBLIC_VWORLD/.test(readFileSync(target, 'utf8'))) offenders.push(target);
     }
   };
   walk(root('frontend/src'));
@@ -74,6 +75,13 @@ test('관리자 레이아웃은 요청 시점 렌더링으로 키를 읽는다(�
   const body = layout.slice(layout.indexOf('export default async function AdminLayout'));
   assert.ok(body.indexOf('await connection();') >= 0, 'connection() 호출이 없다');
   assert.ok(body.indexOf('await connection();') < body.indexOf('readVWorldBrowserKey()'), 'env는 connection() 뒤에 읽어야 한다');
+});
+
+test('proxy 인증 예외는 경로 prefix로만 정한다(확장자로 끝나는 관리자 경로가 인증을 건너뛰지 않게)', () => {
+  const proxy = read('frontend/src/proxy.ts');
+  const matcher = proxy.slice(proxy.indexOf('export const config'));
+  assert.match(matcher, /matcher: \["\/\(\(\?!_next\/static\/\|_next\/image\|favicon\\\\\.ico\$\|maplibre\/\)\.\*\)"\]/);
+  assert.doesNotMatch(matcher, /png|css|\bjs\b/);
 });
 
 test('Dockerfile·compose build에는 지도 키 입력이 없고 compose 실행 env로 넘긴다', () => {

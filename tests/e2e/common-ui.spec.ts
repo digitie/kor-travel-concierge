@@ -513,7 +513,7 @@ const BLANK_TILE = Buffer.from(
   "base64",
 );
 
-test("지도 키는 실행 env에서 로그인한 화면으로만 오고 JS 번들에는 없다(T-212)", async ({ browser, playwright }) => {
+test("지도 키는 실행 env에서 로그인한 화면으로만 오고 로그인 전 응답에는 없다(T-212)", async ({ browser, playwright }) => {
   const mapKey = process.env.KTC_COMMON_UI_MAP_KEY!;
   expect(mapKey).toMatch(/^ktc-runtime-map-key-/);
   const context = await browser.newContext({ baseURL: MAP_KEY_UI });
@@ -523,11 +523,6 @@ test("지도 키는 실행 env에서 로그인한 화면으로만 오고 JS 번�
   await page.route("https://api.vworld.kr/**", route => {
     tileUrls.push(route.request().url());
     return route.fulfill({ status: 200, contentType: "image/png", body: BLANK_TILE });
-  });
-  const scripts = new Set<string>();
-  page.on("response", response => {
-    const url = new URL(response.url());
-    if (url.origin === MAP_KEY_UI && url.pathname.startsWith("/_next/static/") && url.pathname.endsWith(".js")) scripts.add(url.href);
   });
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -540,22 +535,19 @@ test("지도 키는 실행 env에서 로그인한 화면으로만 오고 JS 번�
   // 실행 env의 키가 그대로 타일 URL에 실린다(vworld-map-core WMTS 경로).
   for (const url of tileUrls) expect(url).toContain(`/req/wmts/1.0.0/${mapKey}/Base/`);
 
-  // 키는 인증된 HTML(RSC payload)로만 온다 — 이 화면이 받은 JS chunk 어디에도 없다.
-  expect(scripts.size).toBeGreaterThan(0);
-  for (const url of scripts) {
-    const body = await (await context.request.get(url)).text();
-    expect(body.includes(mapKey), `${new URL(url).pathname}에 지도 키가 박혔다`).toBe(false);
-  }
-
-  // 로그인 전 응답(로그인 화면, 인증 redirect)에는 키가 없다.
+  // 키는 인증된 HTML(RSC payload)로만 온다. 로그인 전 응답에는 없다 — 로그인 화면, 인증 redirect, 그리고
+  // 동적 segment에 정적 파일 확장자를 붙인 경로(예전 proxy matcher가 인증 없이 관리자 레이아웃을 렌더하던 우회).
   const anonymous = await playwright.request.newContext({ baseURL: MAP_KEY_UI });
   try {
     const loginPage = await anonymous.get("/login");
     expect(loginPage.status()).toBe(200);
     expect((await loginPage.text()).includes(mapKey)).toBe(false);
-    const root = await anonymous.get("/", { maxRedirects: 0 });
-    expect(root.status()).toBeGreaterThanOrEqual(300);
-    expect((await root.text()).includes(mapKey)).toBe(false);
+    for (const path of ["/", "/review", "/place/x.png", "/place/1.js", "/review/1.css", "/jobs/a.map", "/review/1.svg", "/place/1.ico"]) {
+      const response = await anonymous.get(path, { maxRedirects: 0 });
+      expect(response.status(), `${path}는 로그인으로 보내야 한다`).toBe(307);
+      expect(new URL(response.headers()["location"] ?? "", MAP_KEY_UI).pathname, path).toBe("/login");
+      expect((await response.text()).includes(mapKey), `${path} 응답에 지도 키`).toBe(false);
+    }
   } finally {
     await anonymous.dispose();
   }

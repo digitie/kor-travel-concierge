@@ -4,6 +4,7 @@
 
 - Changed: 브라우저 지도용 VWorld 키를 이미지 build가 아니라 UI 서버 실행 시 `KTC_VWORLD_BROWSER_KEY`에서 읽는다. 키를 넣거나 바꿀 때 재빌드 없이 UI 컨테이너만 다시 만들면 된다. 키는 로그인한 관리자 화면에만 내려간다.
 - Removed: `NEXT_PUBLIC_VWORLD_SERVICE_KEY` build arg와 빈 키 빌드 실패 가드(`KTC_ALLOW_KEYLESS_MAP_BUILD`). frontend 이미지는 키 없이 빌드한다.
+- Security: `/place/x.png`처럼 관리자 동적 경로에 정적 파일 확장자를 붙이면 로그인 없이 관리자 화면 껍데기가 열리던 우회를 막았다(데이터는 원래 따로 인증했다).
 - 키가 비었거나 형식이 이상하면 지도는 전처럼 "VWorld 지도 키 없음"으로 뜨고, UI 서버 기동 로그에 경고가 한 줄 남는다(값은 출력하지 않는다).
 
 ## 2026-11-25

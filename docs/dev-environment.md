@@ -116,7 +116,7 @@ RustFS health 확인 후 `api` 컨테이너 안에서 `scripts/verify_rustfs.py`
    ```
    `.env` 파일을 편집기로 열고, 발급받은 VWorld 지도 서비스 API 키를 입력합니다:
    ```dotenv
-   KTC_VWORLD_BROWSER_KEY=your_vworld_api_key_here
+   KTC_VWORLD_BROWSER_KEY=발급받은_VWorld_키
    ```
    이 키는 build 입력이 아니다 — frontend 서버(`next dev`·`next start`)가 실행 시 읽어 로그인한 관리자
    화면에 내려준다. 비었거나 자리표시자 그대로면 지도가 "VWorld 지도 키 없음"으로 뜨고 서버 기동 로그에

@@ -4,8 +4,8 @@
 // 값은 인증된 관리자 화면의 서버 렌더 결과로만 브라우저에 간다((admin)/layout.tsx). 어디에도 값을 로그로 남기지 않는다.
 export const VWORLD_BROWSER_KEY_ENV = "KTC_VWORLD_BROWSER_KEY";
 
-// .env.example 자리표시자. 그대로 두면 키 없음으로 본다.
-const PLACEHOLDER = "your_vworld_browser_key_here";
+// .env.example·문서의 자리표시자(`your_..._here`). 그대로 두면 키 없음으로 본다.
+const PLACEHOLDER = /^your_[a-z0-9_]*_here$/i;
 // 타일 URL 경로에 들어가는 값이라 URL 안전 문자만 받는다(VWorld 키는 영숫자와 '-'뿐이다).
 const KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -16,7 +16,7 @@ export function parseVWorldBrowserKey(raw: string | undefined): VWorldBrowserKey
   // 앞뒤 공백·CR(.env CRLF)은 흔한 실수라 걷어 낸다. 그 밖에 형식이 다르면 키 없음으로 본다.
   const value = (raw ?? "").trim();
   if (!value) return { status: "missing", key: "" };
-  if (value === PLACEHOLDER) return { status: "placeholder", key: "" };
+  if (PLACEHOLDER.test(value)) return { status: "placeholder", key: "" };
   if (!KEY_PATTERN.test(value)) return { status: "malformed", key: "" };
   return { status: "ok", key: value };
 }
@@ -31,7 +31,8 @@ export function readVWorldBrowserKey(
 export function vworldBrowserKeyWarning(result: VWorldBrowserKey): string | null {
   const reason = {
     ok: null,
-    missing: "비어 있습니다",
+    // 옛 build 입력 이름에만 값을 둔 .env를 위한 안내. 옛 이름은 읽지 않는다.
+    missing: "비어 있습니다(옛 이름 NEXT_PUBLIC_VWORLD_SERVICE_KEY는 더 이상 읽지 않습니다)",
     placeholder: ".env.example 자리표시자 그대로입니다",
     malformed: "형식이 올바르지 않습니다(영숫자·'-'·'_'만 허용, 따옴표 금지)",
   }[result.status];

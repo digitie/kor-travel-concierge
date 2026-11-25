@@ -26,7 +26,9 @@ describe("브라우저 지도 키 실행 시 판정(T-212)", () => {
   it("빈 값·자리표시자·형식이 다른 값은 키 없음으로 본다", () => {
     expect(parseVWorldBrowserKey(undefined)).toEqual({ status: "missing", key: "" });
     expect(parseVWorldBrowserKey(" \t")).toEqual({ status: "missing", key: "" });
-    expect(parseVWorldBrowserKey("your_vworld_browser_key_here")).toEqual({ status: "placeholder", key: "" });
+    for (const placeholder of ["your_vworld_browser_key_here", "your_vworld_api_key_here", "YOUR_KEY_HERE"]) {
+      expect(parseVWorldBrowserKey(placeholder)).toEqual({ status: "placeholder", key: "" });
+    }
     for (const bad of [`"${KEY}"`, `'${KEY}'`, `${KEY} extra`, `${KEY}/../x`, `${KEY}?a=b`]) {
       expect(parseVWorldBrowserKey(bad)).toEqual({ status: "malformed", key: "" });
     }
@@ -47,5 +49,7 @@ describe("브라우저 지도 키 실행 시 판정(T-212)", () => {
       expect(warning).toMatch(/VWorld 지도 키 없음/);
       expect(warning).not.toContain(KEY);
     }
+    // 옛 build 입력 이름에만 값을 둔 .env를 위한 안내.
+    expect(vworldBrowserKeyWarning(parseVWorldBrowserKey(""))).toMatch(/옛 이름 NEXT_PUBLIC_VWORLD_SERVICE_KEY는 더 이상 읽지 않습니다/);
   });
 });
