@@ -324,7 +324,8 @@ test.describe('n150 live UI 셸 검증', () => {
 
     const placeRows = placeList.locator('div[data-selected]');
     if ((await placeRows.count()) > 1) {
-      await placeRows.nth(1).locator('button').first().click();
+      // 행의 첫 button은 내보내기 체크박스다. 장소 선택은 aria-pressed 버튼이다.
+      await placeRows.nth(1).locator('button[aria-pressed]').click();
       await expect
         .poll(async () => {
           const layout = await page.evaluate(() => {

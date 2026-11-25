@@ -164,6 +164,36 @@ test("장소 deep link는 데스크톱 모달과 모바일 상세 경로를 구�
   await context.close();
 });
 
+// 공통 Radix Dialog는 DialogTrigger로만 focus를 돌려준다. trigger 없이 state로 여는 대화상자도
+// 닫힌 뒤 연 버튼으로 돌아와야 키보드 사용자가 위치를 잃지 않는다.
+test("trigger 없는 장소 상세·검수 단축키 대화상자는 닫힌 뒤 연 버튼으로 focus를 돌려준다", async ({ page }) => {
+  await mockApi(page);
+  await login(page, "/");
+  const list = page.getByRole("region", { name: "장소 목록", exact: true });
+  const detail = list.getByRole("button", { name: "키 없는 지도 검증 장소 2 상세", exact: true });
+  await detail.click();
+  await expect(page.getByRole("dialog", { name: "장소 상세" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(detail).toBeFocused();
+
+  await page.goto("/review");
+  const help = page.getByRole("button", { name: "검수 단축키 도움말", exact: true });
+  await help.click();
+  await expect(page.getByRole("dialog", { name: "검수 단축키", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(help).toBeFocused();
+
+  // 행의 첫 button은 내보내기 체크박스다 — 장소 선택 버튼(aria-pressed)과 구분되는지 함께 고정한다.
+  await page.goto("/");
+  const row = list.locator("div[data-selected]").nth(1);
+  await expect(row).toHaveAttribute("data-selected", "false");
+  await row.locator("button[aria-pressed]").click();
+  await expect(row).toHaveAttribute("data-selected", "true");
+  await expect(row.getByRole("checkbox")).not.toBeChecked();
+});
+
 test("기존 사이드바 숫자 저장값을 복원하고 토글·재로드를 구독한다", async ({ page }) => {
   await mockApi(page);
   await login(page, "/jobs");

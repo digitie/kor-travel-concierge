@@ -31,6 +31,13 @@ async function login(page: Page) {
   }
 }
 
+// NEXT_PUBLIC_VWORLD_SERVICE_KEY는 build 때 번들에 박힌다. 키 없이 빌드한 이미지는 타일 요청 없이
+// 키 없는 style로 마커만 그리므로(data-status=fallback), 타일·지연 검증 실패의 원인을 바로 드러낸다.
+async function expectVWorldBuild(page: Page) {
+  await expect(page.locator('#vworld-map-container'), 'UI 이미지가 VWorld 키 없이 빌드됐다(build arg 누락)')
+    .toHaveAttribute('data-status', 'vworld');
+}
+
 async function ready(page: Page) {
   const map = page.locator('#vworld-map-container');
   await expect(map.locator('canvas')).toBeVisible();
@@ -44,7 +51,8 @@ async function selectPlace(page: Page) {
   const rows = page.getByRole('region', { name: '장소 목록', exact: true }).locator('div[data-selected]');
   await expect.poll(() => rows.count()).toBeGreaterThan(1);
   const row = rows.nth(1);
-  await row.locator('button').first().click();
+  // 행의 첫 button은 내보내기 체크박스(Radix checkbox도 button)다. 장소 선택은 aria-pressed 버튼이다.
+  await row.locator('button[aria-pressed]').click();
   await expect(row).toHaveAttribute('data-selected', 'true');
   const number = await row.locator('[data-marker-number]').getAttribute('data-marker-number');
   expect(number).toBeTruthy();
@@ -75,6 +83,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       }
     });
     await login(page);
+    await expectVWorldBuild(page);
     await ready(page);
     expect(tiles.some(status => status === 200)).toBe(true);
   });
@@ -89,6 +98,7 @@ test('응답 없는 지도는 지연을 알리고 수동 재시도로 복구한�
     else void route.continue();
   });
   await login(page);
+  await expectVWorldBuild(page);
   const map = page.locator('#vworld-map-container');
   await expect(map.getByText('지도 로딩 중', { exact: true })).toBeVisible();
   await expect(map.getByRole('status')).toContainText('지도 응답이 지연되고 있습니다.', { timeout: 25_000 });
@@ -117,6 +127,7 @@ test('WebGL 초기화 실패를 표시하고 지도만 다시 초기화한다', 
     } as typeof original;
   });
   await login(page);
+  await expectVWorldBuild(page); // 다시 시도 뒤 실제 VWorld 타일을 기다린다.
   const map = page.locator('#vworld-map-container');
   await expect(map.getByRole('alert')).toContainText('브라우저의 그래픽 가속 설정');
   await expect(map.locator('canvas')).toHaveCount(0); // 미완성 Map을 생성하지 않는다.
