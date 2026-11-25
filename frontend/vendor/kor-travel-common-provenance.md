@@ -6,6 +6,7 @@ UI0.2.6과 tokens0.1.7은 [Common producer 05d7f91](https://github.com/digitie/k
 - UI SHA256: `14e9853ceb720b6db4a173ee3411bb07e9d3d9c445c3f8bb45719499d4036110`
 - tokens SHA256: `a0422f551331e521cfdc819d1edd0bca0b90f33507a178ab2d8baea3256e8b53`
 - lock은 두 tgz의 version·resolved·integrity와 ui peer(tokens 0.1.7)만 바뀐다(ui·tokens dependencies 목록 불변). 미사용 Toast 0.1.6은 설치하지 않는다. 기존 VWorld·Radix/LightningCSS 패치 bytes와 출처는 유지한다.
+- 앱 로컬 정책(2026-11-25, T-211): `src/components/ui/dialog.tsx`·`alert-dialog.tsx`의 Content가 공개 prop(`onOpenAutoFocus`/`onCloseAutoFocus`)으로 trigger 없는 대화상자의 focus를 연 요소로 돌려준다(`src/lib/dialog-focus-return.ts`). 공통 bytes·focus trap은 바꾸지 않았고, Common 상류에 같은 동작이 들어오면 이 로컬 정책을 걷어낸다.
 
 # 이전 Common 입력·선택 포커스 정본(ui 0.2.5)
 

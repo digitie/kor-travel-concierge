@@ -1,7 +1,9 @@
 import { test, expect, login, choose, fault, allowed, noOverflow } from './live-ui-fixtures';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 const list = (page: Page) => page.getByRole('region', { name: '장소 목록', exact: true });
 const rows = (page: Page) => list(page).locator('div[data-selected]');
+// 행의 첫 button은 내보내기 체크박스(Radix checkbox도 button)다. 장소 선택은 aria-pressed 버튼이다.
+const selectButton = (row: Locator) => row.locator('button[aria-pressed]');
 async function results(page: Page) {
   const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/destinations');
   await login(page, '/'); const body = await (await response).json();
@@ -9,17 +11,20 @@ async function results(page: Page) {
 }
 for (const key of ['click', 'Enter', 'Space']) {
   test(`실제 장소 목록 선택과 마커 identity를 확인한다 ${key}`, async ({ page }) => {
-    const body = await results(page); const row = rows(page).first(); const select = row.locator('button').first();
+    // 첫 행은 목록 identity 변경 때 기본 선택되므로, 선택되지 않은 둘째 행으로 실제 전환을 확인한다.
+    const body = await results(page); const row = rows(page).nth(1); const select = selectButton(row);
+    await expect(row).toHaveAttribute('data-selected', 'false');
     if (key === 'click') await select.click(); else { await select.focus(); await page.keyboard.press(key); }
     await expect(row).toHaveAttribute('data-selected', 'true');
-    await expect(row).toContainText(body.items[0].name);
-    const marker = page.locator(`[data-interaction-id="1"]`);
+    await expect(rows(page).first()).toHaveAttribute('data-selected', 'false');
+    await expect(row).toContainText(body.items[1].name);
+    const marker = page.locator(`[data-interaction-id="2"]`);
     await expect(marker).toHaveAttribute('data-selected', 'true');
   });
 }
 test('실제 장소 검색·정렬 요청과 내보내기 선택이 독립적으로 유지된다', async ({ page }) => {
   const body = await results(page); const row = rows(page).first();
-  await row.locator('button').first().click(); await expect(row).toHaveAttribute('data-selected', 'true');
+  await selectButton(row).click(); await expect(row).toHaveAttribute('data-selected', 'true');
   await row.getByRole('checkbox').check(); await expect(list(page).getByRole('button', { name: '선택 1 내보내기', exact: true })).toBeVisible();
   for (const option of ['GPX','KML','XLSX']) { await choose(page, '내보내기 형식', option); await expect(page.getByLabel('내보내기 형식')).toContainText(option); }
   const response = page.waitForResponse(r => { const u = new URL(r.url()); return u.pathname === '/api/v1/destinations' && u.searchParams.get('q') === body.items[0].name; });
@@ -69,7 +74,7 @@ for (const warm of [false,true]) {
   });
 }
 test('장소의 빈 응답은 오류·이전 선택·이전 마커를 남기지 않는다', async ({ page },info) => {
-  fault(info); await results(page); await rows(page).first().locator('button').first().click(); await expect(rows(page).first()).toHaveAttribute('data-selected','true');
+  fault(info); await results(page); await selectButton(rows(page).nth(1)).click(); await expect(rows(page).nth(1)).toHaveAttribute('data-selected','true'); await expect(rows(page).first()).toHaveAttribute('data-selected','false');
   await page.route('**/api/v1/destinations?*', r => r.fulfill({json:{items:[],total:0,has_more:false,next_cursor:null}}));
   await page.getByLabel('장소 글자 검색').fill('E2E-empty');
   await expect(list(page).getByText('조건에 맞는 장소가 없습니다.')).toBeVisible();
@@ -115,7 +120,8 @@ test('검수 목록 첫 조회 오류를 표시하고 후보를 재조회한다'
 
 test('실제 다음 장소 page를 지연해 중복 요청·identity 중복·순번·선택 보존을 확인한다',async({page},info)=>{
   fault(info);const first=await results(page);expect(first.has_more).toBe(true);
-  await rows(page).first().locator('button').first().click();let attempts=0;let route:import('@playwright/test').Route|undefined;let next:any;
+  // 첫 행은 기본 선택이라 보존 검증이 헛통과한다 — 둘째 행을 고른다.
+  await selectButton(rows(page).nth(1)).click();await expect(rows(page).nth(1)).toHaveAttribute('data-selected','true');let attempts=0;let route:import('@playwright/test').Route|undefined;let next:any;
   await page.route('**/api/v1/destinations?*',async r=>{
     const u=new URL(r.request().url());if(!u.searchParams.has('cursor'))return r.fallback();
     attempts++;expect(u.searchParams.get('limit')).toBe('100');expect(u.searchParams.get('cursor')).toBe(first.next_cursor);
@@ -125,7 +131,7 @@ test('실제 다음 장소 page를 지연해 중복 요청·identity 중복·순
   const busy=list(page).getByRole('button',{name:'불러오는 중…',exact:true});await expect(busy).toBeDisabled();await busy.evaluate((b:HTMLButtonElement)=>b.click());
   await expect.poll(()=>!!route).toBe(true);expect(attempts).toBe(1);await route!.fulfill({json:next});
   const ids=[...first.items,...next.items].map((i:any)=>i.place_id);expect(new Set(ids).size).toBe(ids.length);
-  await expect(rows(page)).toHaveCount(ids.length);await expect(rows(page).first()).toHaveAttribute('data-selected','true');
+  await expect(rows(page)).toHaveCount(ids.length);await expect(rows(page).nth(1)).toHaveAttribute('data-selected','true');await expect(rows(page).first()).toHaveAttribute('data-selected','false');
   expect(await list(page).locator('[data-marker-number]').evaluateAll(nodes=>nodes.map(n=>Number(n.getAttribute('data-marker-number'))))).toEqual(ids.map((_:any,i:number)=>i+1));
 });
 test('검수 확정 폼의 숫자·빈 이름 경계를 검증하고 운영 저장을 보내지 않는다',async({page})=>{
