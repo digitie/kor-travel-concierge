@@ -64,6 +64,8 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
+- [ ] **T-210 운영 live UI e2e n150 자동 실행**: `scripts/n150-live-ui-e2e.sh`(root 0600 자격 파일·값 비노출·읽기 전용 설정 고정·gate 경유·요약)와 러너 계약 시험을 추가했다. 남은 일: 소유자가 `/root/.concierge-e2e.env`를 만든 뒤(명령은 `docs/live-ui-testing.md`) n150에서 91건 실행. e2e 전용 읽기 비밀번호는 제안만 했다.
+
 - [ ] **T-208 공통 관리자 UI·의존성 정렬**: C11 최초릴리스 정본·Scope fix.2를 채택했다. actual263파일·guard/canonical·새strict설치·unit396·lint/type·Doctor0·production build·전체browser10 PASS. source50 checkbox 회귀와 initial panel Shift+Tab도 PASS이며 슬롯1 반환 완료다. 원 A closure/소비자2리뷰·정확 HEAD CI·merge·부모 go·이미지 전환은 [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 추적한다.
 
 - 공개 UI 최종 검증: 운영 네 runtime과 기준선/동일 데이터 재실행 확인 후 91/91 PASS(재시도·생략 0). 최초 81/91, 브라우저 설정 보정 후 90/91 실패 기록을 보존했고 정확한 활성 자막 패널 검증으로 최종 통과했다. 자동 daemon 실행과 실수집 CPU/RSS 비교는 아직 완료가 아니다.

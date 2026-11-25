@@ -1,3 +1,11 @@
+## 2026-11-25 — 운영 live UI e2e를 n150에서 root 자격 파일로 실행 (T-210)
+
+- 출처: 소유자 결정(2026-11-25) — 로그인이 필요한 화면도 운영 배포 뒤 n150 live e2e로 자동 확인한다. PinVi admin live e2e의 Docker runner 방식을 따르되 자격은 root 소유 0600 파일에 둔다.
+- 인증 구조 확인: UI 로그인은 단일 관리자(`KTC_ADMIN_USERNAME` + `KTC_ADMIN_PASSWORD_HASH`, 세션 `sub`가 그 아이디와 같아야 유효)이고, BFF가 모든 로그인 세션을 관리자 proxy로 backend에 넘긴다. 다중 계정·역할이 없어 e2e 전용 계정을 만드는 정식 경로가 없다. 운영 변경 방지는 live fixture의 쓰기 차단이 맡는다. e2e 전용 읽기 비밀번호 env는 보안 영향만 검토해 `docs/live-ui-testing.md`에 제안으로 남겼다(구현 안 함).
+- 추가: `scripts/n150-live-ui-e2e.sh` — 자격 파일(기본 `/root/.concierge-e2e.env`)을 `sudo -n`으로 검사(root 소유 일반 파일·0600/0400·root 디렉터리에 group·other 쓰기 없음)한 뒤 읽고, 허용 키 3개만 받아 Playwright 공식 이미지 컨테이너에 환경변수 이름으로만 넘긴다. `bash -x` 거부, 인자는 `--list`·`--grep`·`--grep-invert`·`--max-failures`만, 설정은 `playwright.live-ui.config.ts` 고정, 컨테이너에는 `tests/`만 싣고 `npm ci --ignore-scripts`, Node 26.13.1 tarball SHA-256 검증, 출력·요약에서 비밀번호 값 가림, `~/gate-slot.sh` 경유, 끝에 `live_e2e_summary` 요약. 쓰기 스펙(`*.write.live.spec.ts`)은 `KTC_LIVE_E2E_WRITE=1`일 때만 수집하도록 live 설정에 자리를 냈다(현재 0건).
+- 시험: `tests/scripts/n150-live-ui-e2e.test.mjs`(node:test 7건 — xtrace 거부, 금지 인자, 권한·소유자·디렉터리·심볼릭 링크·없는 파일 거부, 허용 외 키·형식·중복·경로 있는 URL 거부, 값이 argv에 없고 env로만 전달, 기본 URL·쓰기 opt-in, gate 없음 거부, 모든 경우 출력에 비밀번호 없음)를 frontend CI에 붙였다. WSL Docker에서 root 소유 0600 더미 자격으로 실제 러너를 돌려 `--list` 91 tests in 5 files, 닿지 않는 대상 1건 실행 시 실패 요약·종료 코드 1·로그와 결과물에 비밀번호 없음을 확인했다.
+- 남은 것: 소유자가 자격 파일을 만든 뒤 n150 실제 91건 실행.
+
 ## 2026-11-24 — Dagster claim 전 실패 backoff·일시 오류 유한 재시도 (T-209, ADR-53)
 
 - 출처: 2026-11-23 수집 실패 감사(Map `docs/reports/2026-11-23-collection-failure-audit.md` §1.2·§1.3 P2·§0 #2). n150 Dagster storage와 앱 DB를 읽기 전용으로 다시 분류했다.
