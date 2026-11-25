@@ -118,6 +118,9 @@ RustFS health 확인 후 `api` 컨테이너 안에서 `scripts/verify_rustfs.py`
    ```dotenv
    NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_api_key_here
    ```
+   이 키가 비었거나 자리표시자 그대로면 Docker frontend 이미지 빌드(`docker compose up --build`,
+   `scripts/start-live.sh`, `scripts/verify-docker-compose.sh`)가 실패한다. 키 없이 지도 '키 없음' 상태로
+   띄우는 것이 맞을 때만 `.env`에 `KTC_ALLOW_KEYLESS_MAP_BUILD=1`을 둔다(`docs/frontend-toolchain.md`).
 
 2. `frontend` 디렉토리로 이동하여 Node.js 의존성 패키지를 설치합니다:
    ```bash

@@ -64,7 +64,7 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
-- [ ] **T-211 첫 운영 live UI e2e 실패 8건 정리**: 83 통과·8 실패를 원인별로 나눴다. 앱 회귀(trigger 없는 공통 Radix Dialog/AlertDialog가 닫힌 뒤 focus를 잃음)와 스펙 drift(장소 행 첫 button이 Radix 체크박스)는 수정했다. 남은 일: UI 이미지를 `NEXT_PUBLIC_VWORLD_SERVICE_KEY` build arg와 함께 다시 빌드·배포(11-20 이후 이미지에 키가 빠져 지도가 키 없는 style로 뜬다) 뒤 n150 재실행. 공통 Dialog의 focus 복귀는 Common 상류에 올리는 것이 정본 위치다.
+- [ ] **T-211 첫 운영 live UI e2e 실패 8건 정리**: 83 통과·8 실패를 원인별로 나눴다. 앱 회귀(trigger 없는 공통 Radix Dialog/AlertDialog가 닫힌 뒤 focus를 잃음)와 스펙 drift(장소 행 첫 button이 Radix 체크박스)는 수정했다. 2026-11-25 UI 이미지를 `56559d2`·VWorld 키 build arg로 다시 빌드·배포했고 n150 재실행 91/91 통과. 빈 키 Docker 빌드 실패 가드를 추가했다. 남은 일: 공통 Dialog의 focus 복귀를 Common 상류에 올리기, 실행 시 주입 전환 여부(소유자 결정).
 - [ ] **T-210 운영 live UI e2e n150 자동 실행**: `scripts/n150-live-ui-e2e.sh`(root 0600 자격 파일·값 비노출·읽기 전용 설정 고정·gate 경유·요약)와 러너 계약 시험을 추가했다. 2026-11-25 첫 실행 83/91 통과 — 실패 8건은 T-211.
 
 - [ ] **T-208 공통 관리자 UI·의존성 정렬**: C11 최초릴리스 정본·Scope fix.2를 채택했다. actual263파일·guard/canonical·새strict설치·unit396·lint/type·Doctor0·production build·전체browser10 PASS. source50 checkbox 회귀와 initial panel Shift+Tab도 PASS이며 슬롯1 반환 완료다. 원 A closure/소비자2리뷰·정확 HEAD CI·merge·부모 go·이미지 전환은 [최우선 handoff](reports/common-unification-20261111-handoff.md)에서 추적한다.
