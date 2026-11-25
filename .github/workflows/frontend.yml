@@ -1,10 +1,10 @@
 name: frontend
 on:
   pull_request:
-    paths: ["frontend/**", "tests/**", "scripts/n150-live-ui-e2e.sh", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
+    paths: ["frontend/**", "tests/**", "docker-compose.yml", "scripts/n150-live-ui-e2e.sh", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
   push:
     branches: [main]
-    paths: ["frontend/**", "tests/**", "scripts/n150-live-ui-e2e.sh", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
+    paths: ["frontend/**", "tests/**", "docker-compose.yml", "scripts/n150-live-ui-e2e.sh", ".github/workflows/frontend.yml", ".nvmrc", ".github/workflows/common-frontend-policy.yml"]
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -34,4 +34,5 @@ jobs:
       - run: npx --prefix ../tests playwright install --with-deps --only-shell chromium
       - run: npm --prefix ../tests run test:common-ui
       # 운영 live UI 러너(scripts/n150-live-ui-e2e.sh)의 자격 파일 검사·값 비노출 계약. 브라우저·운영 접속 없음.
-      - run: node --test ../tests/scripts/n150-live-ui-e2e.test.mjs
+      # UI 이미지 build의 빈 VWorld 키 실패 검사(frontend/scripts/require-vworld-build-key.mjs). Docker 없음.
+      - run: node --test ../tests/scripts/n150-live-ui-e2e.test.mjs ../tests/scripts/require-vworld-build-key.test.mjs

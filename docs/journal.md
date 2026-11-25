@@ -1,3 +1,13 @@
+## 2026-11-25 — UI 이미지 VWorld 키 재빌드·배포, 빈 키 빌드 실패 가드 (T-211)
+
+- 키가 빠진 지점: 11-18(`n26`)·11-20(`ui280`·`ui280b`·`ui280c`)·11-23(`ui282`)·11-24(`t1124`) UI 재배포 스크립트가 모두 `docker build … frontend`를 `--build-arg NEXT_PUBLIC_VWORLD_SERVICE_KEY` 없이 불렀다. Dockerfile ARG 기본값이 빈 문자열이라 빌드는 성공했고, 운영은 `prebuilt` 시작 모드라 컨테이너 실행 env의 키는 번들에 효과가 없다. Manager의 prebuilt 이미지 검사도 source·revision·명령·workdir만 본다. 번들 대조(키 값은 비교만, 출력 없음): 11-19 이미지 둘(`common-ui-6eec…`, `psycopg339-…`)은 키 1파일, 11-18 `n26`과 11-20 이후 셋(`shell2-0956fa6`, `mobile-3413ed2`, `common-ec5e168-4848355`)은 0파일.
+- 재빌드·배포(운영 n150): `56559d2`(PR #288 포함)의 frontend를 WSL에서 키를 환경변수에 두고 `--build-arg NEXT_PUBLIC_VWORLD_SERVICE_KEY`(값 없이 — argv에 값 없음)로 빌드했다. 최종 이미지 history·config에 키 0건, 번들 1파일. tar로 n150에 `docker load`하고 layer digest를 대조한 뒤 Manager root `.env`의 `KOR_TRAVEL_CONCIERGE_UI_IMAGE` 한 줄만 바꿔 concierge만 freeze→drain→`ktdctl compose-boundary activate-concierge --confirm`→unfreeze 했다. API·MCP·Dagster code server는 같은 이미지(`4848355`)로 재생성만 됐다 — 이번 차이(#286 Common Python 핀)는 UI와 무관해 따로 배포한다.
+- 확인: UI `/login`·공개 `/login` 200, 무인증 `/api/v1/runs` 401, code server healthy, 실행 중 UI 번들에 키 포함, Concierge 외 컨테이너 ID 불변, 사후 preflight PASS. n150 live UI e2e(`scripts/n150-live-ui-e2e.sh`, `56559d2` 소스) **91 통과·0 실패·flaky 0·건너뜀 0**(249초) — 첫 실행 83/91의 실패 8건이 모두 풀렸다.
+- 가드: builder 단계가 `npm run build` 직전에 `scripts/require-vworld-build-key.mjs`(판정 `vworld-build-key.mjs`)를 돌려 키가 비었거나 공백뿐이거나 앞뒤 공백·CR·따옴표가 섞였거나 `.env.example` 자리표시자면 빌드를 멈춘다. 키 없는 이미지가 맞을 때만 `KTC_ALLOW_KEYLESS_MAP_BUILD=1`(비우거나 1만 허용, 경고 출력). own Compose·`.env.example`·README·dev-environment에 같은 이름을 연결했다. 진입점은 늘 실행되는 파일로 두어 symlink 경로에서도 검사를 건너뛰지 않는다. 이름은 BuildKit `SecretsUsedInArgOrEnv` 경고를 피하도록 `_KEY`로 끝내지 않았다.
+- 시험: `tests/scripts/require-vworld-build-key.test.mjs`(node:test 9건 — 통과·빈 값·공백·CR·따옴표·자리표시자·허용 값 오타·symlink fail closed·Dockerfile builder 단계 배치·compose 연결, 모든 경우 값 비출력)를 frontend CI에 붙이고 workflow paths에 `docker-compose.yml`을 넣었다. WSL Docker에서 builder 단계 실제 빌드: 키 없음 rc=1, 자리표시자 rc=1, 허용(=1) rc=0+경고.
+- 적대 리뷰 2인(정확성·보안/운영) 모두 승인, minor 반영: 자리표시자·공백 값 거부, fail-closed 진입점 분리, ARG 이름 변경, workflow paths, 문서 표현(최종 이미지 밖 BuildKit 기록·cache·max provenance에는 남음, Manager `build` 시작 모드·Manager compose 수동 build는 이 가드 밖).
+- 근본 변경(실행 시 주입)은 하지 않았다. 설계안은 PR 본문에 남긴다.
+
 ## 2026-11-25 — 첫 운영 live UI e2e 실패 8건 원인 분리 (T-211)
 
 - 출처: T-210 러너의 첫 n150 실행(loopback UI) 83 통과·8 실패. 실패 8건만 `--grep`으로 다시 돌려 같은 8건이 같은 단언에서 실패함을 확인했다(flaky 아님).
