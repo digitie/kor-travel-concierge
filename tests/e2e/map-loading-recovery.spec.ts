@@ -4,12 +4,31 @@ test.skip(process.env.KTC_LIVE_E2E !== '1', 'live UI와 비공개 관리자 자�
 // 15초 준비 상한과 수동 재시도 뒤 실제 타일 응답 예산을 함께 확보한다.
 test.setTimeout(75_000);
 
+// live-write-guard: 이 파일은 지도 fault 주입 때문에 공통 관측 fixture(live-ui-fixtures)를 쓰지 않는다. 운영 write
+// 차단은 같은 규칙(모든 /api/v1 비-GET·export)을 context route로 따로 건다 — 페이지별 지도 route보다 뒤에 본다.
+let blockedWrites: string[] = [];
+test.beforeEach(async ({ context }) => {
+  blockedWrites = [];
+  await context.route('**/api/v1/**', async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (['GET', 'HEAD'].includes(request.method()) && path !== '/api/v1/destinations/export') await route.fallback();
+    else { blockedWrites.push(`${request.method()}:${path}`); await route.abort('blockedbyclient'); }
+  });
+});
+test.afterEach(() => { expect(blockedWrites, '예상하지 않은 운영 write 요청').toEqual([]); });
+
 async function login(page: Page) {
   await page.goto('/login?next=%2F', { waitUntil: 'domcontentloaded' });
   await page.getByLabel('아이디', { exact: true }).fill(process.env.E2E_ADMIN_USERNAME!);
   await page.getByLabel('비밀번호', { exact: true }).fill(process.env.E2E_ADMIN_PASSWORD!);
   await page.getByRole('button', { name: '로그인', exact: true }).click({ noWaitAfter: true });
-  await expect(page.locator('#vworld-map-container')).toBeVisible();
+  try {
+    await expect(page.locator('#vworld-map-container')).toBeVisible();
+  } finally {
+    await page.evaluate(() => document.querySelectorAll<HTMLInputElement>('input[type=password]')
+      .forEach(input => { input.value = ''; })).catch(() => undefined);
+  }
 }
 
 async function ready(page: Page) {

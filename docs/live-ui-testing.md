@@ -26,13 +26,13 @@ KTC_LIVE_E2E=1 npm run test:live-ui
 
 ### 소유자가 한 번 할 일 — 자격 파일
 
-n150에서 소유자가 직접 친다. 비밀번호는 `read -rsp`로 받아 화면·명령 이력에 남지 않고, `printf`는 bash 내장이라 프로세스 목록에도 실리지 않는다.
+n150에서 소유자가 직접 친다. 비밀번호는 `read -rsp`로 받아 화면·명령 이력에 남지 않고(`IFS=`를 붙여 앞뒤 공백도 그대로 받는다), `printf`는 bash 내장이라 프로세스 목록에도 실리지 않는다.
 
 ```bash
 sudo install -m 600 -o root -g root /dev/null /root/.concierge-e2e.env
-read -rp 'concierge 관리자 아이디: ' ktc_user
-read -rsp 'concierge 관리자 비밀번호(표시되지 않음): ' ktc_pw; echo
-read -rp '대상 URL(공개 https origin, 비우면 loopback UI): ' ktc_url
+IFS= read -rp 'concierge 관리자 아이디: ' ktc_user
+IFS= read -rsp 'concierge 관리자 비밀번호(표시되지 않음): ' ktc_pw; echo
+IFS= read -rp '대상 URL(공개 https origin, 비우면 loopback UI): ' ktc_url
 {
   printf "E2E_ADMIN_USERNAME='%s'\n" "$ktc_user"
   printf "E2E_ADMIN_PASSWORD='%s'\n" "$ktc_pw"
@@ -50,18 +50,20 @@ sudo stat -c '%U:%G %a' /root/.concierge-e2e.env   # root:root 600
 
 ```bash
 sudo -v                                   # 자격 파일은 sudo -n으로 읽는다
-scripts/n150-live-ui-e2e.sh --list        # 수집만(91 tests in 5 files)
+scripts/n150-live-ui-e2e.sh --list        # 수집만(91 tests in 5 files — 아래 범위 표는 90건 시절 기준)
 scripts/n150-live-ui-e2e.sh               # 전체 실행 + 요약
-scripts/n150-live-ui-e2e.sh --grep 로그인   # 일부만
+scripts/n150-live-ui-e2e.sh --grep '로그인'   # 일부만
 ```
 
 러너가 지키는 것:
 
-- 자격 파일은 root 소유 일반 파일이고 mode가 0600(또는 0400)이어야 하며, 담은 디렉터리도 root 소유에 group·other 쓰기가 없어야 한다. 아니면 읽지 않고 멈춘다(경로는 `KTC_LIVE_E2E_CREDENTIALS`로 바꿀 수 있다).
-- `bash -x`로 실행하면 자격을 읽기 전에 거부한다. 값은 docker argv에 싣지 않고 환경변수 이름만 넘긴다. Playwright 출력과 요약에서는 비밀번호 값을 `***`로 가린다.
+- 자격 파일은 root 소유 일반 파일이고 mode가 0600(또는 0400)이어야 하며, 경로에 심볼릭 링크가 끼지 않고, 담은 디렉터리도 root 소유에 group·other 쓰기가 없어야 한다. 아니면 읽지 않고 멈춘다(경로는 `KTC_LIVE_E2E_CREDENTIALS`로 바꿀 수 있다). 대상 URL은 loopback이 아니면 https여야 한다.
+- 시험 전에 사전 로그인(`tests/e2e/live-login-preflight.ts`, globalSetup)을 한 번만 해 보고 세션을 바로 회수한다. 자격이 틀리면(401)·잠겨 있으면(429) 실행 전체를 멈춘다 — 틀린 자격으로 91건이 저마다 실패해 운영 관리자 로그인(10분 5회)을 잠그지 않게 한다. `--list`는 사전 로그인을 하지 않는다.
+- `bash -x`로 실행하면 자격을 읽기 전에 거부한다. 값은 docker argv에 싣지 않고 환경변수 이름만 넘긴다 — 다만 실행 중에는 docker 그룹(=root 상당)이 `docker inspect`로 컨테이너 env를 볼 수 있다. Node 내려받기·`npm` 설치 단계와 브라우저 프로세스에는 자격 env를 넘기지 않는다. Playwright 출력·요약에서는 비밀번호 값(URL·base64 인코딩 포함)을 `***`로 가리고, 끝나면 결과 디렉터리의 글 파일(`error-context.md`·`report.json` 등)에서도 지운다. 실패 시 접근성 스냅샷(`PLAYWRIGHT_NO_COPY_PROMPT=1`)은 끄고, 로그인 helper는 제출 뒤 비밀번호 칸을 비운다.
 - 설정은 `tests/playwright.live-ui.config.ts`로 고정이고 인자는 `--list`·`--grep`·`--grep-invert`·`--max-failures`만 받는다. 쓰기 스펙(`*.write.live.spec.ts`)은 `KTC_LIVE_E2E_WRITE=1`을 줄 때만 수집한다 — 지금은 하나도 없다.
-- 공식 Playwright 이미지(`tests/package.json` 버전)에서 `.nvmrc`와 같은 Node를 SHA-256 검증해 쓰고, 컨테이너에는 `tests/`만 싣는다(배포 트리의 `.env`는 보이지 않는다). `npm ci`는 install script 없이 돈다.
-- 끝에 `live_e2e_summary 통과=… 실패=… flaky=… 건너뜀=… 소요=…초`와 실패한 시험의 위치·첫 오류 줄을 낸다. 실패 스크린샷은 `tests/test-results/live-ui/`(0700)에 남는다. 종료 코드는 Playwright 것이다.
+- 공식 Playwright 이미지(`tests/package.json` 버전)에서 `.nvmrc`와 같은 Node를 SHA-256 검증해 쓰고, 컨테이너에는 `tests/`만 싣는다(배포 트리의 `.env`는 보이지 않는다). `npm ci`는 install script 없이 돌고, 같은 저장소 러너가 겹치면 차례로 돈다. docker는 `/usr/bin/docker`를 쓴다.
+- live 설정이 수집하는 시험 파일은 모두 운영 write 차단을 건다(`live-ui-fixtures` 또는 `map-loading-recovery.spec.ts`의 같은 규칙 guard) — 러너 계약 시험이 이를 확인한다.
+- 끝에 `live_e2e_summary 통과=… 실패=… flaky=… 건너뜀=… 소요=…초`와 실패한 시험의 위치·첫 오류 줄을 낸다. 실패 스크린샷은 `tests/test-results/live-ui/`(0700, 실행자 소유로 되돌림)에 남는다. 종료 코드는 Playwright 것이다.
 
 ### 대안 검토 — e2e 전용 비밀번호(제안만, 구현하지 않음)
 

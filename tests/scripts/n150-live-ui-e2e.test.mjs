@@ -36,6 +36,7 @@ function run(box, { args = [], env = {}, bashFlags = [] } = {}) {
     env: {
       PATH: `${box.bin}:/usr/bin:/bin`, HOME: box.root,
       KTC_LIVE_E2E_CREDENTIALS: box.cred, KTC_LIVE_E2E_GATE: join(box.bin, 'gate'),
+      KTC_LIVE_E2E_DOCKER: join(box.bin, 'docker'),
       FAKE_DOCKER_ARGS: box.args, FAKE_DOCKER_ENV: box.env, ...env,
     },
   });
@@ -97,6 +98,7 @@ test('허용하지 않는 키·형식 오류·중복 키는 값 없이 행 번�
     [`${validFile}E2E_ADMIN_PASSWORD=${PASSWORD}\n`, /E2E_ADMIN_PASSWORD가 두 번/],
     ['E2E_ADMIN_USERNAME=admin\n', /E2E_ADMIN_PASSWORD가 없습니다/],
     [`${validFile}E2E_BASE_URL=https://example.test/login\n`, /경로 없이/],
+    [`${validFile}E2E_BASE_URL=http://concierge.example.test\n`, /loopback이 아니면 https/],
   ]) {
     writeFileSync(box.cred, content);
     const result = run(box);
@@ -119,6 +121,12 @@ test('정상 자격은 이름만 docker argv에 싣고 값은 환경변수로 �
   assert.match(argv, /^mcr\.microsoft\.com\/playwright:v[0-9.]+-noble$/m);
   assert.match(argv, /^--grep\n로그인$/m);
   assert.doesNotMatch(argv, /KTC_LIVE_E2E_WRITE/);
+  assert.match(argv, /^PLAYWRIGHT_NO_COPY_PROMPT=1$/m);
+  assert.match(argv, /^LIVE_E2E_SECRET_VARS=E2E_ADMIN_PASSWORD,E2E_ADMIN_USERNAME$/m);
+  assert.match(argv, /^--shm-size=1g$/m);
+  assert.doesNotMatch(argv, /--ipc=host/);
+  // 컨테이너에는 tests/만 싣는다.
+  assert.match(argv, /\/tests:\/work$/m);
   const env = readFileSync(box.env, 'utf8');
   assert.match(env, /^E2E_BASE_URL=https:\/\/concierge\.example\.test$/m);
   assert.match(env, /^E2E_ADMIN_USERNAME=admin$/m);
@@ -146,4 +154,32 @@ test('test gate가 없으면 실행하지 않는다', () => {
   assert.equal(result.status, 2);
   assert.match(result.output, /test gate/);
   assert.equal(existsSync(box.args), false);
+});
+
+test('경로 중간의 심볼릭 링크와 없는 docker 실행 파일은 거부한다', () => {
+  const box = sandbox();
+  writeFileSync(box.cred, validFile);
+  const linkedDir = join(box.root, 'linked');
+  symlinkSync(join(box.root, 'secret'), linkedDir);
+  const viaLink = run(box, { env: { KTC_LIVE_E2E_CREDENTIALS: join(linkedDir, 'concierge-e2e.env') } });
+  assert.equal(viaLink.status, 3);
+  assert.match(viaLink.output, /심볼릭 링크/);
+  const noDocker = run(box, { env: { KTC_LIVE_E2E_DOCKER: join(box.root, 'no-docker') } });
+  assert.equal(noDocker.status, 2);
+  assert.match(noDocker.output, /docker 실행 파일이 없습니다/);
+  assert.equal(existsSync(box.args), false);
+});
+
+test('live 설정의 모든 시험 파일은 운영 write 차단을 건다', () => {
+  const testsDir = fileURLToPath(new URL('..', import.meta.url));
+  const config = readFileSync(join(testsDir, 'playwright.live-ui.config.ts'), 'utf8');
+  assert.match(config, /globalSetup: '\.\/e2e\/live-login-preflight\.ts'/);
+  assert.match(config, /trace: 'off'/);
+  const files = [...config.matchAll(/'([\w-]+\.spec\.ts)'/g)].map(match => match[1]);
+  assert.equal(files.length, 5);
+  for (const file of files) {
+    const source = readFileSync(join(testsDir, 'e2e', file), 'utf8');
+    assert.ok(source.includes("from './live-ui-fixtures'") || source.includes('live-write-guard'), file);
+  }
+  assert.ok(readFileSync(join(testsDir, 'playwright.config.ts'), 'utf8').includes("testIgnore: ['**/*.write.live.spec.ts']"));
 });

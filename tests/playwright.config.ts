@@ -13,6 +13,8 @@ const skipWebServer =
 
 export default defineConfig({
   testDir: './e2e',
+  // 운영 상태를 바꾸는 live 시험은 playwright.live-ui.config.ts의 KTC_LIVE_E2E_WRITE=1 경로로만 돈다.
+  testIgnore: ['**/*.write.live.spec.ts'],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

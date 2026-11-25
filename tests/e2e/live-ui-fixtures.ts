@@ -52,10 +52,19 @@ export async function login(page: Page, path = '/dagster') {
   await page.getByLabel('아이디', { exact: true }).fill(process.env.E2E_ADMIN_USERNAME!);
   await page.getByLabel('비밀번호', { exact: true }).fill(process.env.E2E_ADMIN_PASSWORD!);
   const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/auth/login');
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ noWaitAfter: true });
-  expect((await response).status()).toBe(200);
+  try {
+    await page.getByRole('button', { name: '로그인', exact: true }).click({ noWaitAfter: true });
+    expect((await response).status()).toBe(200);
+  } finally {
+    // 로그인이 실패하면 입력값이 남은 화면이 실패 산출물(접근성 스냅샷)에 담긴다 — 비밀번호 칸을 비운다.
+    await clearPasswordFields(page);
+  }
   await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(path, 'https://local.invalid').pathname);
   await expect(page.locator('#main-content')).toBeVisible();
+}
+export async function clearPasswordFields(page: Page) {
+  await page.evaluate(() => document.querySelectorAll<HTMLInputElement>('input[type=password]')
+    .forEach(input => { input.value = ''; })).catch(() => undefined);
 }
 export async function choose(page: Page, label: string, option: string) {
   await page.getByLabel(label, { exact: true }).click();
