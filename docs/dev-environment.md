@@ -116,11 +116,11 @@ RustFS health 확인 후 `api` 컨테이너 안에서 `scripts/verify_rustfs.py`
    ```
    `.env` 파일을 편집기로 열고, 발급받은 VWorld 지도 서비스 API 키를 입력합니다:
    ```dotenv
-   NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_api_key_here
+   KTC_VWORLD_BROWSER_KEY=your_vworld_api_key_here
    ```
-   이 키가 비었거나 자리표시자 그대로면 Docker frontend 이미지 빌드(`docker compose up --build`,
-   `scripts/start-live.sh`, `scripts/verify-docker-compose.sh`)가 실패한다. 키 없이 지도 '키 없음' 상태로
-   띄우는 것이 맞을 때만 `.env`에 `KTC_ALLOW_KEYLESS_MAP_BUILD=1`을 둔다(`docs/frontend-toolchain.md`).
+   이 키는 build 입력이 아니다 — frontend 서버(`next dev`·`next start`)가 실행 시 읽어 로그인한 관리자
+   화면에 내려준다. 비었거나 자리표시자 그대로면 지도가 "VWorld 지도 키 없음"으로 뜨고 서버 기동 로그에
+   경고가 남는다(나머지 화면은 정상). 키를 바꾸면 서버만 다시 띄운다(`docs/frontend-toolchain.md`).
 
 2. `frontend` 디렉토리로 이동하여 Node.js 의존성 패키지를 설치합니다:
    ```bash
@@ -161,7 +161,7 @@ ETL 프로세스는 백엔드 가상환경이 활성화된 상태에서 별도 P
 | Gemini POI 추출·설명 보정·Deep Research | `GEMINI_API_KEY`, `GEMINI_ENGINE_VERSION` |
 | VWorld 지오코딩·역지오코딩 | `VWORLD_SERVICE_KEY` |
 | Kakao 키워드 장소 검색·Naver 보조 검증 | `KAKAO_REST_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` |
-| 브라우저 VWorld 지도 타일 | `NEXT_PUBLIC_VWORLD_SERVICE_KEY` |
+| 브라우저 VWorld 지도 타일 | `KTC_VWORLD_BROWSER_KEY` (frontend 실행 env) |
 | 실제 RustFS 계정값 검증 | `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY` |
 | 대표 프레임 추출 | `FFMPEG_PATH` |
 

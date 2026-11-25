@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     )
 
     # --- 1. 프론트엔드 (참조용, 백엔드에서는 사용하지 않음) ---
-    NEXT_PUBLIC_VWORLD_SERVICE_KEY: str = ""
+    KTC_VWORLD_BROWSER_KEY: str = ""
     NEXT_PUBLIC_API_BASE_URL: str = "http://localhost:12601"
     CORS_ALLOW_ORIGINS: str = (
         "http://localhost:12605,http://127.0.0.1:12605,"

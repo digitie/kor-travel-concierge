@@ -65,10 +65,8 @@ REST API는 `/api/v1` 프리픽스 아래에 노출되고(`/health`·`/`만 버�
 루트의 `.env.example`을 참고하여 `.env` 파일을 생성합니다.
 
 ```dotenv
-# 프론트엔드 — 이미지 build 때 번들에 박힌다. 비어 있으면 frontend 이미지 빌드가 실패한다
-NEXT_PUBLIC_VWORLD_SERVICE_KEY=your_vworld_browser_key_here
-# 키 없이(지도 '키 없음' 상태로) 빌드할 때만 1
-KTC_ALLOW_KEYLESS_MAP_BUILD=
+# 프론트엔드 지도 키 — build 입력이 아니다. frontend 서버가 실행 시 읽는다(바꾸면 컨테이너만 재생성)
+KTC_VWORLD_BROWSER_KEY=your_vworld_browser_key_here
 # 브라우저는 same-origin BFF(`/api/v1`)로 호출하므로 기본 빈 값. 백엔드 직접 호출 시에만 설정
 NEXT_PUBLIC_API_BASE_URL=
 # BFF 프록시 대상(서버 전용). Compose는 http://api:8000, 로컬 기본 http://localhost:12601

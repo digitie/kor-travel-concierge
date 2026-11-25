@@ -502,4 +502,63 @@ test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업
   await expect(map.getByText("키 없는 지도 검증 장소 2", { exact: true })).toBeVisible();
   expect(tileRequests).toEqual([]);
   expect(errors).toEqual([]);
+  await expect(map.getByText("VWorld 지도 키 없음", { exact: true })).toBeVisible();
+});
+
+// 같은 build를 실행 env(KTC_VWORLD_BROWSER_KEY)만 다르게 띄운 두 번째 격리 UI(playwright.common-ui.config.ts).
+const MAP_KEY_UI = "http://127.0.0.1:13120";
+// MapLibre가 디코드할 수 있는 1x1 투명 PNG. 실제 VWorld에는 나가지 않는다.
+const BLANK_TILE = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("지도 키는 실행 env에서 로그인한 화면으로만 오고 JS 번들에는 없다(T-212)", async ({ browser, playwright }) => {
+  const mapKey = process.env.KTC_COMMON_UI_MAP_KEY!;
+  expect(mapKey).toMatch(/^ktc-runtime-map-key-/);
+  const context = await browser.newContext({ baseURL: MAP_KEY_UI });
+  const page = await context.newPage();
+  await mockApi(page);
+  const tileUrls: string[] = [];
+  await page.route("https://api.vworld.kr/**", route => {
+    tileUrls.push(route.request().url());
+    return route.fulfill({ status: 200, contentType: "image/png", body: BLANK_TILE });
+  });
+  const scripts = new Set<string>();
+  page.on("response", response => {
+    const url = new URL(response.url());
+    if (url.origin === MAP_KEY_UI && url.pathname.startsWith("/_next/static/") && url.pathname.endsWith(".js")) scripts.add(url.href);
+  });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+
+  await login(page, "/");
+  const map = page.getByRole("region", { name: "VWorld 지도", exact: true });
+  await expect(map).toHaveAttribute("data-status", "vworld");
+  await expect(map.getByText("VWorld 지도 키 없음", { exact: true })).toHaveCount(0);
+  await expect.poll(() => tileUrls.length).toBeGreaterThan(0);
+  // 실행 env의 키가 그대로 타일 URL에 실린다(vworld-map-core WMTS 경로).
+  for (const url of tileUrls) expect(url).toContain(`/req/wmts/1.0.0/${mapKey}/Base/`);
+
+  // 키는 인증된 HTML(RSC payload)로만 온다 — 이 화면이 받은 JS chunk 어디에도 없다.
+  expect(scripts.size).toBeGreaterThan(0);
+  for (const url of scripts) {
+    const body = await (await context.request.get(url)).text();
+    expect(body.includes(mapKey), `${new URL(url).pathname}에 지도 키가 박혔다`).toBe(false);
+  }
+
+  // 로그인 전 응답(로그인 화면, 인증 redirect)에는 키가 없다.
+  const anonymous = await playwright.request.newContext({ baseURL: MAP_KEY_UI });
+  try {
+    const loginPage = await anonymous.get("/login");
+    expect(loginPage.status()).toBe(200);
+    expect((await loginPage.text()).includes(mapKey)).toBe(false);
+    const root = await anonymous.get("/", { maxRedirects: 0 });
+    expect(root.status()).toBeGreaterThanOrEqual(300);
+    expect((await root.text()).includes(mapKey)).toBe(false);
+  } finally {
+    await anonymous.dispose();
+  }
+  expect(errors).toEqual([]);
+  await context.close();
 });

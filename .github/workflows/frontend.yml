@@ -29,10 +29,17 @@ jobs:
       - run: npm run doctor
       - run: npm run type-check
       - run: npm test
+      # 지도 키는 실행 시 입력이다(T-212). build env에 sentinel을 두고 .next 어디에도 박히지 않았는지 본다 —
+      # 관리자 레이아웃이 정적 prerender로 돌아가면 build 때의 값이 HTML·RSC 파일에 남는다.
       - run: npm run build
+        env:
+          KTC_VWORLD_BROWSER_KEY: ktc-ci-build-time-sentinel-7d41c0de
+      - run: node scripts/assert-no-baked-map-key.mjs .next
+        env:
+          KTC_VWORLD_BROWSER_KEY: ktc-ci-build-time-sentinel-7d41c0de
       - run: npm ci --prefix ../tests --engine-strict --strict-peer-deps --no-audit --no-fund
       - run: npx --prefix ../tests playwright install --with-deps --only-shell chromium
       - run: npm --prefix ../tests run test:common-ui
       # 운영 live UI 러너(scripts/n150-live-ui-e2e.sh)의 자격 파일 검사·값 비노출 계약. 브라우저·운영 접속 없음.
-      # UI 이미지 build의 빈 VWorld 키 실패 검사(frontend/scripts/require-vworld-build-key.mjs). Docker 없음.
-      - run: node --test ../tests/scripts/n150-live-ui-e2e.test.mjs ../tests/scripts/require-vworld-build-key.test.mjs
+      # 실행 시 지도 키의 정적 계약(Dockerfile·compose·소스)과 build 산출물 검사 스크립트. Docker 없음.
+      - run: node --test ../tests/scripts/n150-live-ui-e2e.test.mjs ../tests/scripts/runtime-vworld-key.test.mjs
