@@ -502,4 +502,55 @@ test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업
   await expect(map.getByText("키 없는 지도 검증 장소 2", { exact: true })).toBeVisible();
   expect(tileRequests).toEqual([]);
   expect(errors).toEqual([]);
+  await expect(map.getByText("VWorld 지도 키 없음", { exact: true })).toBeVisible();
+});
+
+// 같은 build를 실행 env(KTC_VWORLD_BROWSER_KEY)만 다르게 띄운 두 번째 격리 UI(playwright.common-ui.config.ts).
+const MAP_KEY_UI = "http://127.0.0.1:13120";
+// MapLibre가 디코드할 수 있는 1x1 투명 PNG. 실제 VWorld에는 나가지 않는다.
+const BLANK_TILE = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("지도 키는 실행 env에서 로그인한 화면으로만 오고 로그인 전 응답에는 없다(T-212)", async ({ browser, playwright }) => {
+  const mapKey = process.env.KTC_COMMON_UI_MAP_KEY!;
+  expect(mapKey).toMatch(/^ktc-runtime-map-key-/);
+  const context = await browser.newContext({ baseURL: MAP_KEY_UI });
+  const page = await context.newPage();
+  await mockApi(page);
+  const tileUrls: string[] = [];
+  await page.route("https://api.vworld.kr/**", route => {
+    tileUrls.push(route.request().url());
+    return route.fulfill({ status: 200, contentType: "image/png", body: BLANK_TILE });
+  });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+
+  await login(page, "/");
+  const map = page.getByRole("region", { name: "VWorld 지도", exact: true });
+  await expect(map).toHaveAttribute("data-status", "vworld");
+  await expect(map.getByText("VWorld 지도 키 없음", { exact: true })).toHaveCount(0);
+  await expect.poll(() => tileUrls.length).toBeGreaterThan(0);
+  // 실행 env의 키가 그대로 타일 URL에 실린다(vworld-map-core WMTS 경로).
+  for (const url of tileUrls) expect(url).toContain(`/req/wmts/1.0.0/${mapKey}/Base/`);
+
+  // 키는 인증된 HTML(RSC payload)로만 온다. 로그인 전 응답에는 없다 — 로그인 화면, 인증 redirect, 그리고
+  // 동적 segment에 정적 파일 확장자를 붙인 경로(예전 proxy matcher가 인증 없이 관리자 레이아웃을 렌더하던 우회).
+  const anonymous = await playwright.request.newContext({ baseURL: MAP_KEY_UI });
+  try {
+    const loginPage = await anonymous.get("/login");
+    expect(loginPage.status()).toBe(200);
+    expect((await loginPage.text()).includes(mapKey)).toBe(false);
+    for (const path of ["/", "/review", "/place/x.png", "/place/1.js", "/review/1.css", "/jobs/a.map", "/review/1.svg", "/place/1.ico"]) {
+      const response = await anonymous.get(path, { maxRedirects: 0 });
+      expect(response.status(), `${path}는 로그인으로 보내야 한다`).toBe(307);
+      expect(new URL(response.headers()["location"] ?? "", MAP_KEY_UI).pathname, path).toBe("/login");
+      expect((await response.text()).includes(mapKey), `${path} 응답에 지도 키`).toBe(false);
+    }
+  } finally {
+    await anonymous.dispose();
+  }
+  expect(errors).toEqual([]);
+  await context.close();
 });

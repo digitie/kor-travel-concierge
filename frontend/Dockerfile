@@ -11,15 +11,11 @@ RUN npm ci --engine-strict
 
 FROM dependencies AS builder
 # NEXT_PUBLIC 값만 client build 입력이다. server-only 인증값은 ARG로 전달하지 않는다.
+# 브라우저 지도용 VWorld 키는 build 입력이 아니다 — UI 서버가 실행 시 KTC_VWORLD_BROWSER_KEY를 읽는다(T-212).
 ARG NEXT_PUBLIC_API_BASE_URL=""
-ARG NEXT_PUBLIC_VWORLD_SERVICE_KEY=""
-# 지도 키 없이 빌드하는 것을 명시적으로 허용할 때만 1(로컬 확인·지도 없는 시험 이미지). 운영 이미지는 비운다.
-ARG KTC_ALLOW_KEYLESS_MAP_BUILD=""
-ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
-    NEXT_PUBLIC_VWORLD_SERVICE_KEY=${NEXT_PUBLIC_VWORLD_SERVICE_KEY}
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 COPY . .
-# 빈 VWorld 키는 빌드 실패다(scripts/require-vworld-build-key.mjs) — 키 없는 번들이 조용히 만들어지지 않게.
-RUN node scripts/require-vworld-build-key.mjs && npm run build
+RUN npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production

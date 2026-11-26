@@ -18,7 +18,8 @@ const e2eAdminPasswordHash =
   process.env.KTC_E2E_ADMIN_PASSWORD_HASH ??
   "pbkdf2_sha256$310000$a29yLXRyYXZlbC1jb25jaWVyZ2UtZTJlLXNhbHQ$Y0tGbvmqUxgWO8uumrRi27UGDXF2tb0w7RHtilooFAg";
 const command = process.execPath;
-process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY = "";
+// 이 dev 서버 e2e는 키 없는 지도(data-status=fallback)를 본다. 상위 셸의 실행 시 지도 키(T-212)를 비운다.
+process.env.KTC_VWORLD_BROWSER_KEY = "";
 const args = [
   path.join(frontendDir, "node_modules", "next", "dist", "bin", "next"),
   "dev",

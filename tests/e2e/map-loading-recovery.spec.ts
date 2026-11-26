@@ -31,10 +31,10 @@ async function login(page: Page) {
   }
 }
 
-// NEXT_PUBLIC_VWORLD_SERVICE_KEY는 build 때 번들에 박힌다. 키 없이 빌드한 이미지는 타일 요청 없이
+// 지도 키는 UI 서버가 실행 시 env(KTC_VWORLD_BROWSER_KEY)에서 읽는다(T-212). 키가 없으면 타일 요청 없이
 // 키 없는 style로 마커만 그리므로(data-status=fallback), 타일·지연 검증 실패의 원인을 바로 드러낸다.
 async function expectVWorldBuild(page: Page) {
-  await expect(page.locator('#vworld-map-container'), 'UI 이미지가 VWorld 키 없이 빌드됐다(build arg 누락)')
+  await expect(page.locator('#vworld-map-container'), 'UI 컨테이너 실행 env에 VWorld 지도 키가 없다(KTC_VWORLD_BROWSER_KEY)')
     .toHaveAttribute('data-status', 'vworld');
 }
 

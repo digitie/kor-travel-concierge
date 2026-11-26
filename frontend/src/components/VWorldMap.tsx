@@ -6,7 +6,8 @@ import { createMapCameraStore } from "@/lib/map-camera";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { MapLibreMap, MarkerProps, PopupProps, VWorldMapViewProps } from "vworld-map-web";
 
-import { type DestinationSummary, VWORLD_SERVICE_KEY } from "@/lib/api";
+import { useVWorldBrowserKey } from "@/components/VWorldKeyProvider";
+import type { DestinationSummary } from "@/lib/api";
 
 // maplibre-gl 6은 기본 worker URL을 import.meta.url로 계산하는데 `next build --webpack`이
 // 그 값을 빌드 때의 file:// 경로로 바꿔 빈 URL이 된다("Worker failed to load"). 그래서
@@ -82,6 +83,8 @@ export function VWorldMap({
   onSelectPlace,
   focusKey = 0,
 }: VWorldMapProps) {
+  // 실행 시 서버 env에서 받은 키(T-212). 비면 키 없는 style로 마커만 그린다.
+  const vworldKey = useVWorldBrowserKey();
   const [mapAttempt, setMapAttempt] = useState(0);
   const retryMap = useCallback(() => setMapAttempt((attempt) => attempt + 1), []);
   const [camera] = useState(() => createMapCameraStore(INITIAL_ZOOM, FOCUS_ZOOM));
@@ -124,13 +127,13 @@ export function VWorldMap({
       id="vworld-map-container"
       role="region"
       aria-label="VWorld 지도"
-      data-status={VWORLD_SERVICE_KEY ? "vworld" : "fallback"}
+      data-status={vworldKey ? "vworld" : "fallback"}
       className="relative h-full w-full"
     >
       <MapWebGLGuard key={mapAttempt} onRetry={retryMap}>
         <VWorldMapView
-          apiKey={VWORLD_SERVICE_KEY}
-          mapStyle={VWORLD_SERVICE_KEY ? undefined : KEYLESS_MAP_STYLE}
+          apiKey={vworldKey}
+          mapStyle={vworldKey ? undefined : KEYLESS_MAP_STYLE}
           layerType="Base"
           center={KOREA_CENTER}
           zoom={INITIAL_ZOOM}
@@ -172,7 +175,7 @@ export function VWorldMap({
           ) : null}
         </VWorldMapView>
       </MapWebGLGuard>
-      {!VWORLD_SERVICE_KEY ? (
+      {!vworldKey ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-muted/70 text-sm text-muted-foreground">
           VWorld 지도 키 없음
         </div>

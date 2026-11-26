@@ -7,9 +7,8 @@ export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace
   "",
 );
 
-// VWorld 지도 서비스 키 (브라우저 직접 로드).
-export const VWORLD_SERVICE_KEY =
-  process.env.NEXT_PUBLIC_VWORLD_SERVICE_KEY ?? "";
+// 브라우저 지도용 VWorld 키는 build 입력이 아니다 — UI 서버가 실행 시 env에서 읽어 내려준다
+// (lib/vworld-browser-key.ts, components/VWorldKeyProvider.tsx, T-212).
 
 export type HarvestTargetType =
   | "auto"
