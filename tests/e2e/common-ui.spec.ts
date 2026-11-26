@@ -486,10 +486,10 @@ for (const width of [1280, 390]) {
 }
 
 // T-212로 관리자 화면이 요청 시점 렌더링(ƒ)이 되면서, 검색 매개변수를 읽는 본문(useSearchParams)이 서버에서도
-// 그려지게 됐다(정적 prerender 때는 가까운 Suspense까지 client 렌더로 넘어갔다). 서버가 그 Suspense 본문을 늦게
-// 흘려보내는 동안 이미 hydrate된 헤더 JobStatusLink가 같은 queue query를 채우면, 본문의 첫 client 렌더("불러오는
-// 중" 대신 목록)가 서버 HTML과 달라 React #418이 난다(n150 live e2e /jobs 간헐 실패, 2026-11-26). 스트리밍 순서는
-// 격리 환경에서 재현되지 않아 계약 자체를 본다: 두 본문은 서버 HTML에 없고(fallback만) hydration 뒤에만 그려진다.
+// 그려지게 됐다(정적 prerender 때는 가까운 Suspense까지 client 렌더로 넘어갔다). 그 Suspense 경계는 root commit
+// 뒤 따로 hydrate되므로, 그 사이 먼저 hydrate된 헤더 JobStatusLink가 같은 queue query를 채우면 본문의 첫 client
+// 렌더("불러오는 중" 대신 목록)가 서버 HTML과 달라 React #418이 난다(n150 live e2e /jobs 간헐 실패, 2026-11-26).
+// 경쟁 순서는 즉시 응답하는 격리 mock에서 재현되지 않아 계약 자체를 본다: 두 본문은 서버 HTML에 없고(fallback만) hydration 뒤에만 그려진다.
 test("검색 매개변수를 읽는 작업·검수 본문은 서버에서 그리지 않고 hydration 뒤에만 그린다", async ({ page }) => {
   await mockApi(page);
   const errors: string[] = [];
