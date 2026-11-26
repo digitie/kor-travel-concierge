@@ -1,3 +1,10 @@
+## 2026-11-26 — T-212 수정 이미지 재배포·live e2e 91/91
+
+- #291 merge `e188c45`의 frontend를 WSL에서 지도 키 없이 빌드한 `kor-travel-concierge-ui:runtimekey-e188c45bca05`(`sha256:ad4bb339…`)을 n150에 load(layer digest 일치)하고, Manager root `.env`의 `KOR_TRAVEL_CONCIERGE_UI_IMAGE` 한 줄만 lock 아래 바꾼 뒤(바뀐 줄 1, inode·mode 유지) concierge만 freeze→drain→`activate-concierge`→unfreeze. Manager(`0fc669c`)는 그대로.
+- 확인: 실행 env 새 이름 있음·옛 이름 없음, 실행 번들 키 0파일, 기동 키 경고 0줄, 로컬·공개 `/login` 200, 무인증 `/`·`/place/x.png` 307, 무인증 `/api/v1/runs` 401, Concierge 외 컨테이너 불변, preflight PASS.
+- n150 live UI e2e(`e188c45` 소스, `scripts/n150-live-ui-e2e.sh`): **91 통과·0 실패·flaky 0·건너뜀 0**(238초). 지도 live 시험(`map-loading-recovery`)이 `data-status=vworld`와 실제 VWorld 타일 응답을 확인했다 — 키 없이 빌드한 이미지에서 지도가 정상이다.
+- 롤백: (1) UI만 — root `.env`의 UI 이미지 줄을 직전 `sha256:bd9b547a…`(T-212 첫 배포) 또는 T-212 이전 `sha256:46eb4c03…`(키가 build에 박힌 `vworld-56559d21302a`, 새 Manager에서도 `prebuilt`로 동작)로 되돌리고 `activate-concierge`. 백업은 n150 root 홈의 `ktdm-env-backup-t212-a`·`-b`. (2) Manager까지 — 직전 `ac0e28c`를 `install-mgr.sh`→`pin rebind-execution`→`pin verify`로 설치하고 UI도 T-212 이전 이미지로 함께 되돌린다(옛 Manager는 옛 이름으로 키를 넘긴다).
+
 ## 2026-11-26 — T-212 운영 배포와 요청 시점 렌더링 hydration 회귀 수정
 
 - 배포(운영 n150): Manager #652 merge `0fc669c`를 설치(`install-mgr.sh`→`pin rebind-execution`→`pin verify`=0, 직전 `ac0e28c`)한 뒤, `beb714f`(#290)의 frontend를 WSL에서 **지도 키 없이** 빌드한 `kor-travel-concierge-ui:runtimekey-beb714fa5237`(`sha256:bd9b547a…`)을 `docker save | ssh n150 docker load`로 옮겨 layer digest를 대조했다(16 layer 일치). Manager root `.env`의 `KOR_TRAVEL_CONCIERGE_UI_IMAGE` 한 줄만 mutation lock 아래 바꾸고(백업, inode·mode 유지, 바뀐 줄 1) concierge만 freeze→drain→`activate-concierge`→unfreeze.
