@@ -485,6 +485,28 @@ for (const width of [1280, 390]) {
   });
 }
 
+// T-212로 관리자 화면이 요청 시점 렌더링(ƒ)이 되면서, 검색 매개변수를 읽는 본문(useSearchParams)이 서버에서도
+// 그려지게 됐다(정적 prerender 때는 가까운 Suspense까지 client 렌더로 넘어갔다). 서버가 그 Suspense 본문을 늦게
+// 흘려보내는 동안 이미 hydrate된 헤더 JobStatusLink가 같은 queue query를 채우면, 본문의 첫 client 렌더("불러오는
+// 중" 대신 목록)가 서버 HTML과 달라 React #418이 난다(n150 live e2e /jobs 간헐 실패, 2026-11-26). 스트리밍 순서는
+// 격리 환경에서 재현되지 않아 계약 자체를 본다: 두 본문은 서버 HTML에 없고(fallback만) hydration 뒤에만 그려진다.
+test("검색 매개변수를 읽는 작업·검수 본문은 서버에서 그리지 않고 hydration 뒤에만 그린다", async ({ page }) => {
+  await mockApi(page);
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(`${new URL(page.url()).pathname} ${error.message.slice(0, 80)}`));
+  await login(page, "/status");
+  await page.goto("/jobs", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("진행 중·대기 작업과 종료된 작업 이력을 한 곳에서 관리합니다.")).toBeVisible();
+  await page.goto("/review", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "목록/관리", exact: true })).toBeVisible();
+  const jobsHtml = await (await page.context().request.get("/jobs")).text();
+  expect(jobsHtml.includes("진행 중·대기 작업과 종료된 작업 이력을 한 곳에서 관리합니다."), "/jobs 서버 HTML에 본문이 있다").toBe(false);
+  const reviewHtml = await (await page.context().request.get("/review")).text();
+  expect(reviewHtml.includes("목록/관리"), "/review 서버 HTML에 본문이 있다").toBe(false);
+  expect(reviewHtml.includes("검수 큐를 준비하는 중"), "/review 서버 HTML에는 fallback이 있다").toBe(true);
+  expect(errors).toEqual([]);
+});
+
 test("키 없는 공개 mapStyle은 VWorld 요청 없이 실제 마커와 팝업을 연결한다", async ({ page }) => {
   await mockApi(page);
   const tileRequests: string[] = [];

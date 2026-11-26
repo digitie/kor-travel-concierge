@@ -64,7 +64,7 @@ Map adapter→실제 저장 3건으로 확인했다. 부분 성공 전파·최�
 
 ## 진행 중
 
-- [ ] **T-212 브라우저 지도 VWorld 키 실행 시 주입**: 소유자 결정(2026-11-26)으로 키를 build arg 대신 UI 서버 실행 env `KTC_VWORLD_BROWSER_KEY`에서 읽는다. `(admin)/layout.tsx`가 `connection()` 뒤 env를 읽어 client context로 내려주고, 키 없음은 "VWorld 지도 키 없음" 표시 + 서버 기동 경고(값 비출력). Dockerfile VWorld ARG·빈 키 build 가드(T-211)·`NEXT_PUBLIC_VWORLD_SERVICE_KEY` 의존 제거, CI build env sentinel로 `.next` 미포함 검사, 격리 UI e2e에 실행 env 키 서버 추가. 남은 일: Manager UI env 이름 짝 PR, 키 없이 빌드한 이미지로 n150 배포, live UI e2e 재실행.
+- [ ] **T-212 브라우저 지도 VWorld 키 실행 시 주입**: 소유자 결정(2026-11-26)으로 키를 build arg 대신 UI 서버 실행 env `KTC_VWORLD_BROWSER_KEY`에서 읽는다. `(admin)/layout.tsx`가 `connection()` 뒤 env를 읽어 client context로 내려주고, 키 없음은 "VWorld 지도 키 없음" 표시 + 서버 기동 경고(값 비출력). Dockerfile VWorld ARG·빈 키 build 가드(T-211)·`NEXT_PUBLIC_VWORLD_SERVICE_KEY` 의존 제거, CI build env sentinel로 `.next` 미포함 검사, 격리 UI e2e에 실행 env 키 서버 추가. Manager #652와 함께 n150에 배포했다(키 없이 빌드한 이미지, 번들 키 0건). 첫 live e2e 89/91의 `/jobs` hydration 회귀(#418)를 `HydratedOnly`로 고쳤다. 남은 일: 수정 이미지 재배포 뒤 live e2e 91/91 확인.
 - [ ] **T-211 첫 운영 live UI e2e 실패 8건 정리**: 83 통과·8 실패를 원인별로 나눴다. 앱 회귀(trigger 없는 공통 Radix Dialog/AlertDialog가 닫힌 뒤 focus를 잃음)와 스펙 drift(장소 행 첫 button이 Radix 체크박스)는 수정했다. 2026-11-25 UI 이미지를 `56559d2`·VWorld 키 build arg로 다시 빌드·배포했고 n150 재실행 91/91 통과. 빈 키 Docker 빌드 실패 가드를 추가했다. 남은 일: 공통 Dialog의 focus 복귀를 Common 상류에 올리기. (실행 시 주입 전환은 소유자가 결정해 T-212로 옮겼고, 빈 키 build 가드는 그때 없앴다.)
 - [ ] **T-210 운영 live UI e2e n150 자동 실행**: `scripts/n150-live-ui-e2e.sh`(root 0600 자격 파일·값 비노출·읽기 전용 설정 고정·gate 경유·요약)와 러너 계약 시험을 추가했다. 2026-11-25 첫 실행 83/91 통과 — 실패 8건은 T-211.
 
